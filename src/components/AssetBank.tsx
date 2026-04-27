@@ -22,10 +22,10 @@ import {
 import { AssetModel, MaterialAsset } from '../types';
 
 const MOCK_ASSETS: AssetModel[] = [
-  { id: '1', name: '现代主义住宅 A-01', thumbnail: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&q=80&w=200', type: 'Revit 2024', vertices: '1.2M', size: '45MB', date: '2024-04-20', tags: ['Modern', 'Residential'] },
-  { id: '2', name: '极简办公空间 B-04', thumbnail: 'https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&q=80&w=200', type: 'Revit 2023', vertices: '850K', size: '22MB', date: '2024-04-18', tags: ['Minimalist', 'Office'] },
-  { id: '3', name: '商业综合体 C-12', thumbnail: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&q=80&w=200', type: 'IFC 4.0', vertices: '4.5M', size: '120MB', date: '2024-04-15', tags: ['Commercial', 'Mixed-use'] },
-  { id: '4', name: '工业风改造项目', thumbnail: 'https://images.unsplash.com/photo-1503387762-5929c3674681?auto=format&fit=crop&q=80&w=200', type: 'RVT / FBX', vertices: '2.1M', size: '68MB', date: '2024-04-12', tags: ['Industrial', 'Renovation'] },
+  { id: '1', name: '现代主义住宅 一号', thumbnail: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&q=80&w=200', type: '三维模型 2024', vertices: '120万', size: '45 兆字节', date: '2024-04-20', tags: ['现代', '住宅'] },
+  { id: '2', name: '极简办公空间 四号', thumbnail: 'https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&q=80&w=200', type: '三维模型 2023', vertices: '85万', size: '22 兆字节', date: '2024-04-18', tags: ['极简', '办公'] },
+  { id: '3', name: '商业综合体 十二号', thumbnail: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&q=80&w=200', type: '通用交换 4.0', vertices: '450万', size: '120 兆字节', date: '2024-04-15', tags: ['商业', '综合体'] },
+  { id: '4', name: '工业风改造项目', thumbnail: 'https://images.unsplash.com/photo-1503387762-5929c3674681?auto=format&fit=crop&q=80&w=200', type: '模型 / 动画', vertices: '210万', size: '68 兆字节', date: '2024-04-12', tags: ['工业', '改造'] },
 ];
 
 function Scene() {
@@ -91,9 +91,9 @@ export function AssetBank() {
           id: Date.now().toString(),
           name: file.name.split('.')[0],
           thumbnail: 'https://images.unsplash.com/photo-1504384308090-c894fdcc538d?auto=format&fit=crop&q=80&w=200',
-          type: file.name.split('.').pop()?.toUpperCase() || 'N/A',
-          vertices: 'Pending',
-          size: `${(file.size / (1024 * 1024)).toFixed(1)}MB`,
+          type: file.name.split('.').pop()?.toUpperCase() || '未知',
+          vertices: '待处理',
+          size: `${(file.size / (1024 * 1024)).toFixed(1)} 兆字节`,
           date: new Date().toISOString().split('T')[0],
           tags: []
         };
@@ -148,7 +148,7 @@ export function AssetBank() {
           <div className="flex items-center justify-between gap-2">
             <div className="flex flex-col gap-1">
                <h2 className="text-lg font-bold text-slate-900 tracking-tight">资产管理</h2>
-               <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Model Bank</p>
+               <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">模型库</p>
             </div>
             <button 
               onClick={handleFileUpload}
@@ -267,7 +267,7 @@ export function AssetBank() {
                 <Suspense fallback={
                   <div className="w-full h-full flex flex-col items-center justify-center gap-4 bg-slate-50">
                     <div className="w-12 h-12 border-4 border-blue-100 border-t-blue-500 rounded-full animate-spin" />
-                    <span className="text-xs font-mono text-slate-400 uppercase tracking-widest">Initialising 3D Engine...</span>
+                    <span className="text-xs font-mono text-slate-400 uppercase tracking-widest">正在初始化三维引擎...</span>
                   </div>
                 }>
                   <Canvas shadows dpr={[1, 2]}>
@@ -293,25 +293,25 @@ export function AssetBank() {
                     
                     <div className="grid grid-cols-2 gap-4">
                        <div className="space-y-1">
-                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Vertices</p>
+                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">顶点数</p>
                          <p className="text-sm font-mono font-bold text-slate-700">{selectedAsset.vertices}</p>
                        </div>
                        <div className="space-y-1">
-                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Format</p>
+                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">格式</p>
                          <p className="text-sm font-mono font-bold text-slate-700">{selectedAsset.type}</p>
                        </div>
                        <div className="space-y-1">
-                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Last Update</p>
+                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">最近更新</p>
                          <p className="text-sm font-mono font-bold text-slate-700">{selectedAsset.date}</p>
                        </div>
                        <div className="space-y-1">
-                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">File Size</p>
+                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">文件大小</p>
                          <p className="text-sm font-mono font-bold text-slate-700">{selectedAsset.size}</p>
                        </div>
                     </div>
 
                     <div className="mt-4 pt-4 border-t border-slate-100">
-                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-2">Tags</p>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-2">标签</p>
                       <div className="flex flex-wrap gap-1.5 mb-2">
                         {selectedAsset.tags?.map(tag => (
                           <span key={tag} className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] flex items-center gap-1">
@@ -322,7 +322,7 @@ export function AssetBank() {
                       </div>
                       <input 
                         type="text" 
-                        placeholder="Add tag and press Enter..." 
+                        placeholder="输入标签并按回车..." 
                         value={tagInput}
                         onChange={(e) => setTagInput(e.target.value)}
                         onKeyDown={handleAddTag}
@@ -346,7 +346,7 @@ export function AssetBank() {
               <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-slate-900/90 backdrop-blur text-white px-4 py-2 rounded-full shadow-2xl border border-white/10 z-10">
                  <button className="p-2 hover:bg-white/10 rounded-full transition-colors"><Torus className="w-4 h-4" /></button>
                  <div className="w-px h-4 bg-white/20 mx-1" />
-                 <span className="text-[10px] font-mono font-bold px-2">FPS: 60 | GPU: 32%</span>
+                 <span className="text-[10px] font-mono font-bold px-2">帧率: 60 | 图形处理: 32%</span>
               </div>
             </div>
           </>

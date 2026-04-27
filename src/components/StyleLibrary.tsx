@@ -24,16 +24,16 @@ interface StyleLibraryProps {
 
 export function StyleLibrary({ isOpen, onClose, onSelect, selectedId }: StyleLibraryProps) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeCategory, setActiveCategory] = useState<string>('All');
+  const [activeCategory, setActiveCategory] = useState<string>('全部');
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  const categories = ['All', ...Array.from(new Set(MOCK_FURNITURE_STYLES.map(s => s.category)))];
+  const categories = ['全部', ...Array.from(new Set(MOCK_FURNITURE_STYLES.map(s => s.category)))];
 
   const filteredStyles = MOCK_FURNITURE_STYLES.filter(s => {
     const matchesSearch = s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
                          s.tags?.some(t => t.toLowerCase().includes(searchQuery.toLowerCase())) ||
                          s.style.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesCategory = activeCategory === 'All' || s.category === activeCategory;
+    const matchesCategory = activeCategory === '全部' || s.category === activeCategory;
     return matchesSearch && matchesCategory;
   });
 

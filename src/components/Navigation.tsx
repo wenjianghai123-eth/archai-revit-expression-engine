@@ -18,7 +18,7 @@ interface SidebarProps {
 
 export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
   const tabs = [
-    { id: 'generate', icon: LayoutDashboard, label: 'AI 生成' },
+    { id: 'generate', icon: LayoutDashboard, label: '智能生成' },
     { id: 'assets', icon: Database, label: '资产库' },
     { id: 'templates', icon: Layers, label: '模型模板' },
     { id: 'history', icon: History, label: '生成记录' },
@@ -79,8 +79,8 @@ export function Stepper({ currentStep, onStepChange }: { currentStep: Generation
   return (
     <div className="flex items-center h-16 border-b border-slate-200 bg-white sticky top-0 z-10 w-full px-6 shrink-0">
       <div className="flex items-center gap-3 mr-auto">
-        <span className="font-bold tracking-tight text-lg text-slate-900 hidden md:inline">ArchAI 建筑生成器 <span className="text-slate-400 font-normal">v2.0</span></span>
-        <span className="font-bold tracking-tight text-lg text-slate-900 md:hidden">ArchAI</span>
+        <span className="font-bold tracking-tight text-lg text-slate-900 hidden md:inline">建筑智能生成器 <span className="text-slate-400 font-normal">版本 2.0</span></span>
+        <span className="font-bold tracking-tight text-lg text-slate-900 md:hidden">建筑智能</span>
       </div>
 
       <nav className="flex items-center gap-4 md:gap-6">
@@ -114,7 +114,7 @@ export function Stepper({ currentStep, onStepChange }: { currentStep: Generation
 
       <div className="ml-auto flex items-center gap-4 pl-6 border-l border-slate-100">
         <div className="text-xs text-right hidden sm:block">
-          <p className="font-bold text-slate-800 uppercase tracking-tighter">PROJECT_A01.rvt</p>
+          <p className="font-bold text-slate-800 uppercase tracking-tighter">项目一号</p>
           <p className="text-slate-400 font-mono">首层平面图</p>
         </div>
         <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 overflow-hidden">

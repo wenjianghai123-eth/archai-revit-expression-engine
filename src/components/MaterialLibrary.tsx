@@ -24,15 +24,15 @@ interface MaterialLibraryProps {
 
 export function MaterialLibrary({ isOpen, onClose, onSelect, selectedId }: MaterialLibraryProps) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeCategory, setActiveCategory] = useState<string>('All');
+  const [activeCategory, setActiveCategory] = useState<string>('全部');
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  const categories = ['All', ...Array.from(new Set(MOCK_MATERIALS.map(m => m.category)))];
+  const categories = ['全部', ...Array.from(new Set(MOCK_MATERIALS.map(m => m.category)))];
 
   const filteredMaterials = MOCK_MATERIALS.filter(m => {
     const matchesSearch = m.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
                          m.tags?.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()));
-    const matchesCategory = activeCategory === 'All' || m.category === activeCategory;
+    const matchesCategory = activeCategory === '全部' || m.category === activeCategory;
     return matchesSearch && matchesCategory;
   });
 
@@ -152,18 +152,18 @@ export function MaterialLibrary({ isOpen, onClose, onSelect, selectedId }: Mater
 
                     <div className="grid grid-cols-3 gap-3">
                       <div className="aspect-square rounded-xl bg-slate-50 border border-slate-100 overflow-hidden">
-                        <img src={selectedMaterial.thumbnail} className="w-full h-full object-cover opacity-60 grayscale" alt="Map 1" referrerPolicy="no-referrer" />
-                        <span className="absolute bottom-1 right-1 text-[8px] font-bold text-slate-400 uppercase">Diffuse</span>
+                        <img src={selectedMaterial.thumbnail} className="w-full h-full object-cover opacity-60 grayscale" alt="贴图一" referrerPolicy="no-referrer" />
+                        <span className="absolute bottom-1 right-1 text-[8px] font-bold text-slate-400 uppercase">漫反射</span>
                       </div>
                       <div className="aspect-square rounded-xl bg-slate-50 border border-slate-100 overflow-hidden relative">
                          <div className="absolute inset-0 bg-slate-400 mix-blend-multiply opacity-20" />
-                         <img src={selectedMaterial.thumbnail} className="w-full h-full object-cover opacity-60 grayscale brightness-125" alt="Map 2" referrerPolicy="no-referrer" />
-                         <span className="absolute bottom-1 right-1 text-[8px] font-bold text-slate-400 uppercase">Normal</span>
+                         <img src={selectedMaterial.thumbnail} className="w-full h-full object-cover opacity-60 grayscale brightness-125" alt="贴图二" referrerPolicy="no-referrer" />
+                         <span className="absolute bottom-1 right-1 text-[8px] font-bold text-slate-400 uppercase">法线</span>
                       </div>
                       <div className="aspect-square rounded-xl bg-slate-50 border border-slate-100 overflow-hidden relative">
                          <div className="absolute inset-0 bg-blue-400 mix-blend-color opacity-20" />
-                         <img src={selectedMaterial.thumbnail} className="w-full h-full object-cover opacity-40 brightness-50" alt="Map 3" referrerPolicy="no-referrer" />
-                         <span className="absolute bottom-1 right-1 text-[8px] font-bold text-slate-400 uppercase">Roughness</span>
+                         <img src={selectedMaterial.thumbnail} className="w-full h-full object-cover opacity-40 brightness-50" alt="贴图三" referrerPolicy="no-referrer" />
+                         <span className="absolute bottom-1 right-1 text-[8px] font-bold text-slate-400 uppercase">粗糙度</span>
                       </div>
                     </div>
                   </div>
@@ -189,25 +189,25 @@ export function MaterialLibrary({ isOpen, onClose, onSelect, selectedId }: Mater
                                 <span className="text-[10px] text-slate-400 flex items-center gap-1.5 uppercase tracking-tighter">
                                    <Maximize2 className="w-3 h-3" /> 分辨率
                                 </span>
-                                <p className="text-sm font-bold text-slate-800 tracking-tight">4096 x 4096 (4K)</p>
+                                <p className="text-sm font-bold text-slate-800 tracking-tight">4096 × 4096（四千级）</p>
                              </div>
                              <div className="space-y-1">
                                 <span className="text-[10px] text-slate-400 flex items-center gap-1.5 uppercase tracking-tighter">
                                    <Palette className="w-3 h-3" /> 贴图通道
                                 </span>
-                                <p className="text-sm font-bold text-slate-800 tracking-tight">PBR Metallic / Roughness</p>
+                                <p className="text-sm font-bold text-slate-800 tracking-tight">物理金属 / 粗糙度</p>
                              </div>
                              <div className="space-y-1">
                                 <span className="text-[10px] text-slate-400 flex items-center gap-1.5 uppercase tracking-tighter">
                                    <Layers className="w-3 h-3" /> 源工程
                                 </span>
-                                <p className="text-sm font-bold text-slate-800 tracking-tight">Native V-Ray / Corona</p>
+                                <p className="text-sm font-bold text-slate-800 tracking-tight">原生渲染工程</p>
                              </div>
                              <div className="space-y-1">
                                 <span className="text-[10px] text-slate-400 flex items-center gap-1.5 uppercase tracking-tighter">
                                    <Download className="w-3 h-3" /> 文件大小
                                 </span>
-                                <p className="text-sm font-bold text-slate-800 tracking-tight">45.2 MB</p>
+                                <p className="text-sm font-bold text-slate-800 tracking-tight">45.2 兆字节</p>
                              </div>
                           </div>
                         </div>

@@ -38,13 +38,13 @@ export function MainWorkspace({ step, state, onUpdateConfig, onGenerate, onNextS
         return (
           <>
             <div className="space-y-4">
-              <label className="text-[10px] uppercase font-bold tracking-widest text-slate-400">1. 上传平面图 (Floor Plan)</label>
+              <label className="text-[10px] uppercase font-bold tracking-widest text-slate-400">1. 上传平面图</label>
               <div className="aspect-[4/3] bg-slate-50 border border-slate-200 rounded-xl overflow-hidden flex items-center justify-center relative group cursor-pointer shadow-sm hover:shadow-md transition-all">
                 <div className="absolute inset-0 opacity-10 pointer-events-none">
                   <div className="w-full h-full" style={{ backgroundImage: 'linear-gradient(#000 1px, transparent 1px), linear-gradient(90deg, #000 1px, transparent 1px)', backgroundSize: '20px 20px' }}></div>
                 </div>
                 {state.inputImage ? (
-                  <img src={state.inputImage} className="w-full h-full object-contain relative z-10" alt="Input" referrerPolicy="no-referrer" />
+                  <img src={state.inputImage} className="w-full h-full object-contain relative z-10" alt="输入图片" referrerPolicy="no-referrer" />
                 ) : (
                   <div className="flex flex-col items-center gap-2 relative z-10">
                     <Upload className="w-8 h-8 text-slate-300 group-hover:text-blue-500 transition-colors" />
@@ -55,10 +55,10 @@ export function MainWorkspace({ step, state, onUpdateConfig, onGenerate, onNextS
             </div>
 
             <div className="space-y-4">
-              <label className="text-[10px] uppercase font-bold tracking-widest text-slate-400">2. 上传参考材质 (Optional)</label>
+              <label className="text-[10px] uppercase font-bold tracking-widest text-slate-400">2. 上传参考材质（可选）</label>
               <div className="aspect-[16/6] bg-slate-50 border border-slate-200 border-dashed rounded-xl overflow-hidden flex items-center justify-center relative group cursor-pointer hover:bg-slate-100 transition-all">
                 {materialImage ? (
-                  <img src={materialImage} className="w-full h-full object-cover" alt="Material" referrerPolicy="no-referrer" />
+                  <img src={materialImage} className="w-full h-full object-cover" alt="材质图片" referrerPolicy="no-referrer" />
                 ) : (
                   <div className="flex items-center gap-3 text-slate-400">
                     <ImageIcon className="w-5 h-5" />
@@ -101,7 +101,7 @@ export function MainWorkspace({ step, state, onUpdateConfig, onGenerate, onNextS
               {selectedMaterial && (
                 <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 flex items-center gap-3 animate-in slide-in-from-top-2 duration-300">
                   <div className="w-10 h-10 rounded-lg overflow-hidden shrink-0 border border-white shadow-sm cursor-pointer hover:ring-2 hover:ring-blue-400 transition-all" onClick={() => setIsLibraryOpen(true)}>
-                    <img src={selectedMaterial.thumbnail} className="w-full h-full object-cover" alt="Selected" referrerPolicy="no-referrer" />
+                    <img src={selectedMaterial.thumbnail} className="w-full h-full object-cover" alt="已选材质" referrerPolicy="no-referrer" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-[10px] font-bold text-slate-900 truncate">{selectedMaterial.name}</p>
@@ -145,7 +145,7 @@ export function MainWorkspace({ step, state, onUpdateConfig, onGenerate, onNextS
               {selectedFurnitureStyle && (
                 <div className="bg-emerald-50/50 p-3 rounded-xl border border-emerald-100 flex items-center gap-3 animate-in slide-in-from-top-2 duration-300">
                   <div className="w-10 h-10 rounded-lg overflow-hidden shrink-0 border border-white shadow-sm cursor-pointer hover:ring-2 hover:ring-emerald-400 transition-all" onClick={() => setIsStyleLibraryOpen(true)}>
-                    <img src={selectedFurnitureStyle.thumbnail} className="w-full h-full object-cover" alt="Selected" referrerPolicy="no-referrer" />
+                    <img src={selectedFurnitureStyle.thumbnail} className="w-full h-full object-cover" alt="已选风格" referrerPolicy="no-referrer" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-[10px] font-bold text-emerald-900 truncate">{selectedFurnitureStyle.name}</p>
@@ -162,7 +162,7 @@ export function MainWorkspace({ step, state, onUpdateConfig, onGenerate, onNextS
               <label className="text-[10px] uppercase font-bold tracking-widest text-slate-400">3. 上传需修饰图片</label>
               <div className="aspect-[16/9] bg-slate-50 border border-slate-200 rounded-xl overflow-hidden flex items-center justify-center relative group cursor-pointer shadow-sm hover:shadow-md transition-all">
                 {state.inputImage ? (
-                  <img src={state.inputImage} className="w-full h-full object-contain relative z-10" alt="Input" referrerPolicy="no-referrer" />
+                  <img src={state.inputImage} className="w-full h-full object-contain relative z-10" alt="输入图片" referrerPolicy="no-referrer" />
                 ) : (
                   <div className="flex flex-col items-center gap-2 relative z-10">
                     <Upload className="w-6 h-6 text-slate-300 group-hover:text-blue-500 transition-colors" />
@@ -183,7 +183,7 @@ export function MainWorkspace({ step, state, onUpdateConfig, onGenerate, onNextS
         <div className="p-5 border-b border-slate-100 flex items-center justify-between">
           <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">输入配置</span>
           <div className="flex items-center gap-2">
-            <span className="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-bold">V2.4</span>
+            <span className="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-bold">版本 2.4</span>
           </div>
         </div>
         
@@ -196,14 +196,14 @@ export function MainWorkspace({ step, state, onUpdateConfig, onGenerate, onNextS
               value={state.config.prompt}
               onChange={(e) => onUpdateConfig({ prompt: e.target.value })}
               className="w-full p-4 bg-blue-50/50 border border-blue-100 rounded-xl text-xs leading-relaxed text-blue-900 italic font-medium shadow-inner outline-none focus:border-blue-200 transition-all resize-none h-24"
-              placeholder="输入材质替换或修饰Prompt..."
+              placeholder="输入材质替换或修饰提示词..."
             />
           </div>
 
           <div className="space-y-2">
              <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 mb-2">
                 <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(37,99,235,0.5)]" />
-                <span>当前引擎: ARCH-V2</span>
+                <span>当前引擎: 建筑引擎二代</span>
              </div>
              <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
                {step === GenerationStep.FloorplanTo3D && "正在将矢量边界转化为体量空间几何体。"}
@@ -278,7 +278,7 @@ export function MainWorkspace({ step, state, onUpdateConfig, onGenerate, onNextS
                   animate={{ opacity: 1, scale: 1 }}
                   className="w-full h-full relative"
                 >
-                  <img src={state.outputImage!} className="w-full h-full object-cover" alt="Generated" referrerPolicy="no-referrer" />
+                  <img src={state.outputImage!} className="w-full h-full object-cover" alt="生成结果" referrerPolicy="no-referrer" />
                 </motion.div>
               )}
             </AnimatePresence>
