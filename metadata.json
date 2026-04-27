@@ -1,0 +1,6 @@
+{
+  "name": "ArchAI: Revit expression engine",
+  "description": "An AI-powered architectural visualization tool for Revit, featuring a multi-step workflow from floor plans to axonometric renderings and localized refinements.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
