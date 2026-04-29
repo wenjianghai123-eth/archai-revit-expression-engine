@@ -17,10 +17,51 @@ export interface GenerationConfig {
 
 export interface StepState {
   config: GenerationConfig;
-  inputImage: string | null;
+  inputImage: UploadedImage | null;
+  materialImage: UploadedImage | null;
+  maskImage: UploadedImage | null;
+  useFullImageMask: boolean;
   outputImage: string | null;
   isGenerating: boolean;
+  generationStatus: 'ready' | 'uploading' | 'generating' | 'success' | 'error';
+  generationError: string | null;
+  generationWarnings: string[];
+  generationProvider: 'mock' | 'gemini' | null;
+  generationResultId: string | null;
+  generationCreatedAt: string | null;
   viewMode: 'original' | 'after' | 'compare';
+}
+
+export interface UploadedImage {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  dataUrl: string;
+}
+
+export interface PromptTemplate {
+  id: string;
+  title: string;
+  category: string;
+  description: string;
+  config: Partial<GenerationConfig>;
+}
+
+export interface GenerationHistoryItem {
+  id: string;
+  step: GenerationStep;
+  prompt: string;
+  style: string;
+  createdAt: string;
+  provider: 'mock' | 'gemini';
+  outputImage: string;
+  config?: GenerationConfig;
+  inputImageName?: string;
+  materialImageName?: string;
+  maskImageName?: string;
+  resultStored?: boolean;
+  storageWarning?: string;
 }
 
 export interface AssetModel {
@@ -32,6 +73,12 @@ export interface AssetModel {
   size: string;
   date: string;
   tags?: string[];
+  source?: 'sample' | 'local';
+  modelUrl?: string;
+  fileName?: string;
+  fileType?: 'glb' | 'gltf' | 'obj' | 'unknown';
+  previewable?: boolean;
+  storageWarning?: string;
 }
 
 export interface MaterialAsset {

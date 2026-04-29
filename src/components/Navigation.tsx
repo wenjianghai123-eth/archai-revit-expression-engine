@@ -6,21 +6,21 @@ import {
   Zap, 
   LayoutDashboard,
   Database,
-  Layers,
-  CheckCircle2
+  Layers
 } from 'lucide-react';
 import { GenerationStep } from '../types';
 
 interface SidebarProps {
   activeTab: string;
   onTabChange: (id: string) => void;
+  onSettingsOpen: () => void;
 }
 
-export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
+export function Sidebar({ activeTab, onTabChange, onSettingsOpen }: SidebarProps) {
   const tabs = [
     { id: 'generate', icon: LayoutDashboard, label: '智能生成' },
     { id: 'assets', icon: Database, label: '资产库' },
-    { id: 'templates', icon: Layers, label: '模型模板' },
+    { id: 'templates', icon: Layers, label: '提示词模板' },
     { id: 'history', icon: History, label: '生成记录' },
   ];
 
@@ -58,7 +58,7 @@ export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
       </nav>
 
       <div className="p-6 mt-auto">
-        <button className="text-slate-500 hover:text-white transition-colors">
+        <button onClick={onSettingsOpen} className="text-slate-500 hover:text-white transition-colors" title="设置">
           <Settings className="w-6 h-6" />
         </button>
       </div>
@@ -79,15 +79,13 @@ export function Stepper({ currentStep, onStepChange }: { currentStep: Generation
   return (
     <div className="flex items-center h-16 border-b border-slate-200 bg-white sticky top-0 z-10 w-full px-6 shrink-0">
       <div className="flex items-center gap-3 mr-auto">
-        <span className="font-bold tracking-tight text-lg text-slate-900 hidden md:inline">建筑智能生成器 <span className="text-slate-400 font-normal">版本 2.0</span></span>
-        <span className="font-bold tracking-tight text-lg text-slate-900 md:hidden">建筑智能</span>
+        <span className="font-bold tracking-tight text-lg text-slate-900 hidden md:inline">ArchAI Expression Engine MVP 0.1</span>
+        <span className="font-bold tracking-tight text-lg text-slate-900 md:hidden">ArchAI MVP 0.1</span>
       </div>
 
       <nav className="flex items-center gap-4 md:gap-6">
         {steps.map((step, index) => {
           const isActive = currentStep === step.id;
-          const isCompleted = currentStep > step.id;
-
           return (
             <React.Fragment key={step.id}>
               <button 
