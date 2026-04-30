@@ -73,6 +73,7 @@ interface StepperProps {
 export function Stepper({ currentStep, onStepChange }: { currentStep: GenerationStep, onStepChange: (step: GenerationStep) => void }) {
   const steps = [
     { id: GenerationStep.FloorplanTo3D, title: '平面 → 三维' },
+    { id: GenerationStep.StyleRender, title: '风格渲染' },
     { id: GenerationStep.LocalInpainting, title: '局部修饰' },
   ];
 

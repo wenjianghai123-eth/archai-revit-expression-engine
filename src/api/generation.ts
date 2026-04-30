@@ -20,6 +20,10 @@ export function generateFloorplanTo3D(request: GenerationRequest): Promise<Gener
   return postGeneration('/api/generate/floorplan', request);
 }
 
+export function generateStyleRender(request: GenerationRequest): Promise<GenerationResponse> {
+  return postGeneration('/api/generate/style-render', request);
+}
+
 export function generateInpainting(request: GenerationRequest): Promise<GenerationResponse> {
   return postGeneration('/api/generate/inpaint', request);
 }

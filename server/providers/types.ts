@@ -1,4 +1,4 @@
-export type GenerationMode = 'floorplan' | 'inpaint';
+export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint';
 export type ProviderName = 'mock' | 'gemini' | 'grsai-nano-banana';
 
 export interface GenerateImageInput {

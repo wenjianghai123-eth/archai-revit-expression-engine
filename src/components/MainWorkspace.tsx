@@ -38,6 +38,7 @@ interface WorkspaceProps {
 type UploadTarget = 'input' | 'material';
 
 const acceptedImageTypes = 'image/png,image/jpeg,image/webp';
+const styleRenderOptions = ['现代极简', '日式侘寂', '北欧温暖', '意式轻奢', '工业风', '新中式', '参数化未来感', '商业展示风'];
 
 export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage, onUpdateMaterialImage, onUpdateMaskImage, onGenerate, onNextStep, onReset, backendProvider }: WorkspaceProps) {
   const [selectedMaterial, setSelectedMaterial] = useState<MaterialAsset | null>(MOCK_MATERIALS[0]);
@@ -204,6 +205,63 @@ export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage,
                 )}
               </div>
               {renderUploadError('material')}
+            </div>
+          </>
+        );
+      case GenerationStep.StyleRender:
+        return (
+          <>
+            <div className="space-y-4">
+              <label className="text-[10px] uppercase font-bold tracking-widest text-slate-400">1. 上传参考图</label>
+              <div
+                onClick={() => handleUploadClick('input')}
+                className="aspect-[4/3] bg-slate-50 border border-slate-200 rounded-xl overflow-hidden flex items-center justify-center relative group cursor-pointer shadow-sm hover:shadow-md transition-all"
+                role="button"
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') handleUploadClick('input');
+                }}
+              >
+                {state.inputImage ? (
+                  <>
+                    <img src={state.inputImage.dataUrl} className="w-full h-full object-contain relative z-10" alt={state.inputImage.name} referrerPolicy="no-referrer" />
+                    <button
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleClearUpload('input');
+                      }}
+                      className="absolute right-3 top-3 z-20 flex h-7 w-7 items-center justify-center rounded-full bg-white/90 text-slate-500 shadow-lg transition-colors hover:text-red-600"
+                      title="移除参考图"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                    <div className="absolute bottom-3 left-3 right-3 z-20 rounded bg-white/90 px-3 py-2 text-[10px] font-bold text-slate-600 shadow-sm">
+                      {state.inputImage.name}
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center gap-2 relative z-10">
+                    <Upload className="w-8 h-8 text-slate-300 group-hover:text-blue-500 transition-colors" />
+                    <span className="text-xs text-slate-400 font-mono">支持 PNG / JPG / WEBP</span>
+                  </div>
+                )}
+              </div>
+              {renderUploadError('input')}
+            </div>
+
+            <div className="space-y-4">
+              <label className="text-[10px] uppercase font-bold tracking-widest text-slate-400">2. 选择渲染风格</label>
+              <div className="grid grid-cols-2 gap-2">
+                {styleRenderOptions.map(styleName => (
+                  <button
+                    key={styleName}
+                    onClick={() => onUpdateConfig({ style: styleName })}
+                    className={`px-3 py-2 text-[10px] font-bold rounded-lg border-2 transition-all ${state.config.style === styleName ? 'bg-blue-50 border-blue-600 text-blue-700' : 'bg-white border-slate-100 text-slate-500 hover:border-slate-200'}`}
+                  >
+                    {styleName}
+                  </button>
+                ))}
+              </div>
             </div>
           </>
         );
@@ -384,18 +442,25 @@ export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage,
 
           <div className="space-y-3">
             <label className="text-[10px] uppercase font-bold tracking-widest text-slate-400">
-              {step === GenerationStep.FloorplanTo3D ? '4. 附加要求（可选）' : '4. 配置生成提示词'}
+              {step === GenerationStep.FloorplanTo3D && '4. 附加要求（可选）'}
+              {step === GenerationStep.StyleRender && '3. 渲染提示词'}
+              {step === GenerationStep.LocalInpainting && '4. 配置生成提示词'}
             </label>
             {step === GenerationStep.FloorplanTo3D && (
               <p className="text-[11px] leading-5 text-slate-500">
                 系统会自动注入建筑彩平生成提示词，这里只需要填写额外补充要求。
               </p>
             )}
+            {step === GenerationStep.StyleRender && (
+              <p className="text-[11px] leading-5 text-slate-500">
+                系统会结合上传参考图、所选风格和你的提示词生成渲染效果。
+              </p>
+            )}
             <textarea 
               value={state.config.prompt}
               onChange={(e) => onUpdateConfig({ prompt: e.target.value })}
               className="w-full p-4 bg-blue-50/50 border border-blue-100 rounded-xl text-xs leading-relaxed text-blue-900 italic font-medium shadow-inner outline-none focus:border-blue-200 transition-all resize-none h-24"
-              placeholder={step === GenerationStep.FloorplanTo3D ? '例如：整体偏暖木风，客厅更明亮，增加绿植，厨房区域使用浅灰石材。' : '输入材质替换或修饰提示词...'}
+              placeholder={getPromptPlaceholder(step)}
             />
           </div>
 
@@ -406,6 +471,7 @@ export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage,
              </div>
              <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
                {step === GenerationStep.FloorplanTo3D && "将黑白平面图转换为彩色三维效果平面预览。"}
+               {step === GenerationStep.StyleRender && "基于参考图生成指定风格的建筑或室内渲染效果。"}
                {step === GenerationStep.LocalInpainting && "对现有图像进行局部材质与细节优化。"}
              </p>
           </div>
@@ -541,11 +607,11 @@ export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage,
           <div className="space-y-6">
             <div className="space-y-4">
               <label className="text-[11px] font-bold text-slate-800 flex justify-between uppercase tracking-tight">
-                <span>建筑风格</span>
+                <span>{step === GenerationStep.StyleRender ? '渲染风格' : '建筑风格'}</span>
                 <span className="text-blue-600 font-bold">{state.config.style}</span>
               </label>
               <div className="grid grid-cols-2 gap-2">
-                {['现代主义', '粗犷主义', '北欧风格', '极简风格'].map(s => (
+                {(step === GenerationStep.StyleRender ? styleRenderOptions : ['现代主义', '粗犷主义', '北欧风格', '极简风格']).map(s => (
                   <button 
                     key={s}
                     onClick={() => onUpdateConfig({ style: s })}
@@ -684,4 +750,16 @@ function getDataUrlExtension(dataUrl: string): string {
     default:
       return 'png';
   }
+}
+
+function getPromptPlaceholder(step: GenerationStep): string {
+  if (step === GenerationStep.FloorplanTo3D) {
+    return '例如：整体偏暖木风，客厅更明亮，增加绿植，厨房区域使用浅灰石材。';
+  }
+
+  if (step === GenerationStep.StyleRender) {
+    return '例如：将这张空间参考图渲染成温暖木质风格，增加柔和自然光、绿植和高级材质细节。';
+  }
+
+  return '输入材质替换或修饰提示词...';
 }

@@ -1,6 +1,7 @@
 export enum GenerationStep {
   FloorplanTo3D = 1, // 平面转三维
-  LocalInpainting = 2, // 局部重绘
+  StyleRender = 2, // 风格渲染
+  LocalInpainting = 3, // 局部重绘
 }
 
 export type GenerationProvider = 'mock' | 'gemini' | 'grsai-nano-banana';

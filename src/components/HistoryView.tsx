@@ -11,6 +11,7 @@ interface HistoryViewProps {
 
 const stepLabels: Record<GenerationStep, string> = {
   [GenerationStep.FloorplanTo3D]: '平面转效果图',
+  [GenerationStep.StyleRender]: '风格渲染',
   [GenerationStep.LocalInpainting]: '局部修饰',
 };
 

@@ -12,7 +12,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { TemplatesLibrary } from './components/TemplatesLibrary';
 import { GenerationStep, StepState, GenerationConfig, GenerationHistoryItem, PromptTemplate, UploadedImage } from './types';
 import { DEFAULT_CONFIGS } from './constants';
-import { generateFloorplanTo3D, generateInpainting } from './api/generation';
+import { generateFloorplanTo3D, generateInpainting, generateStyleRender } from './api/generation';
 import { BackendHealth, getBackendHealth } from './api/health';
 import { clearGenerationHistory, deleteGenerationRecord, listGenerationRecords, saveGenerationRecord } from './storage/history';
 import { motion, AnimatePresence } from 'motion/react';
@@ -90,6 +90,22 @@ export default function App() {
   const [stepStates, setStepStates] = useState<Record<GenerationStep, StepState>>({
     [GenerationStep.FloorplanTo3D]: {
       config: DEFAULT_CONFIGS[GenerationStep.FloorplanTo3D],
+      inputImage: null,
+      materialImage: null,
+      maskImage: null,
+      useFullImageMask: false,
+      outputImage: null,
+      isGenerating: false,
+      generationStatus: 'ready',
+      generationError: null,
+      generationWarnings: [],
+      generationProvider: null,
+      generationResultId: null,
+      generationCreatedAt: null,
+      viewMode: 'original'
+    },
+    [GenerationStep.StyleRender]: {
+      config: DEFAULT_CONFIGS[GenerationStep.StyleRender],
       inputImage: null,
       materialImage: null,
       maskImage: null,
@@ -335,19 +351,35 @@ export default function App() {
     }));
 
     try {
-      const response = currentStep === GenerationStep.FloorplanTo3D
-        ? await generateFloorplanTo3D({
+      let response;
+
+      switch (currentStep) {
+        case GenerationStep.FloorplanTo3D:
+          response = await generateFloorplanTo3D({
             inputImageDataUrl: stateAtStart.inputImage.dataUrl,
             materialImageDataUrl: stateAtStart.materialImage?.dataUrl,
             prompt: stateAtStart.config.prompt,
             config: stateAtStart.config,
-          })
-        : await generateInpainting({
+          });
+          break;
+
+        case GenerationStep.StyleRender:
+          response = await generateStyleRender({
+            inputImageDataUrl: stateAtStart.inputImage.dataUrl,
+            prompt: stateAtStart.config.prompt,
+            config: stateAtStart.config,
+          });
+          break;
+
+        case GenerationStep.LocalInpainting:
+          response = await generateInpainting({
             inputImageDataUrl: stateAtStart.inputImage.dataUrl,
             maskImageDataUrl: stateAtStart.maskImage?.dataUrl,
             prompt: stateAtStart.config.prompt,
             config: stateAtStart.config,
           });
+          break;
+      }
 
       setStepStates(prev => {
       const currentState = prev[currentStep];
@@ -397,7 +429,7 @@ export default function App() {
 
   const handleNextStep = useCallback(() => {
     const nextStep = currentStep + 1;
-    if (nextStep <= 2) {
+    if (nextStep <= 3) {
       // Pass the current output as the next step's input
       const currentOutput = stepStates[currentStep].outputImage;
       const generatedInput: UploadedImage | null = currentOutput

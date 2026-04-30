@@ -45,12 +45,14 @@ export function createGrsaiNanoBananaProvider(options: GrsaiProviderOptions): Im
   return {
     name: providerName,
     async generateImage(input: GenerateImageInput): Promise<GenerateImageOutput> {
-      if (input.mode !== 'floorplan') {
-        throw new Error('Grsai Nano Banana provider 当前仅用于平面转三维。');
+      if (input.mode !== 'floorplan' && input.mode !== 'style-render') {
+        throw new Error('Grsai Nano Banana provider 当前仅用于平面转三维和风格渲染。');
       }
 
       const warnings: string[] = [];
-      const finalPrompt = buildNanoBananaFloorplanPrompt(input, warnings);
+      const finalPrompt = input.mode === 'style-render'
+        ? buildNanoBananaStyleRenderPrompt(input)
+        : buildNanoBananaFloorplanPrompt(input, warnings);
 
       const taskId = await createTask({
         apiKey: options.apiKey,
@@ -109,6 +111,49 @@ export function createGrsaiNanoBananaProvider(options: GrsaiProviderOptions): Im
       };
     },
   };
+}
+
+export function buildNanoBananaStyleRenderPrompt(input: GenerateImageInput): string {
+  const config = input.config || {};
+
+  const style = typeof config.style === 'string' && config.style.trim()
+    ? config.style.trim()
+    : '现代建筑可视化';
+
+  const lighting = typeof config.lighting === 'string' && config.lighting.trim()
+    ? config.lighting.trim()
+    : '自然均匀日光';
+
+  const materialStrength = typeof config.materialStrength === 'number'
+    ? config.materialStrength
+    : 0.8;
+
+  const userPrompt = input.prompt && input.prompt.trim()
+    ? input.prompt.trim()
+    : '无额外要求。';
+
+  return [
+    '你是一名专业建筑与室内空间可视化设计助手。',
+    '',
+    '任务：',
+    '请基于用户上传的参考图，生成指定风格的高质量渲染效果图。',
+    '',
+    '严格要求：',
+    '1. 保持参考图中的主体对象、空间构图、视角关系、比例关系和主要轮廓，不要随意改变结构。',
+    '2. 根据所选风格重塑材质、色彩、光影、软装和氛围。',
+    '3. 如果参考图是建筑空间，请保持空间功能逻辑合理。',
+    '4. 如果参考图是室内空间，请合理优化家具、墙地面材质、灯光和装饰细节。',
+    '5. 输出应为高质量设计表达图，真实、干净、专业。',
+    '6. 不要生成文字、水印、尺寸标注、边框或额外 UI 元素。',
+    '',
+    '控制项：',
+    `- 目标风格：${style}`,
+    `- 光照氛围：${lighting}`,
+    `- 风格/材质影响强度：${materialStrength}`,
+    '',
+    '用户提示词：',
+    userPrompt,
+  ].join('\n');
 }
 
 export function buildNanoBananaFloorplanPrompt(input: GenerateImageInput, warnings: string[]): string {

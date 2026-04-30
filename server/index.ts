@@ -48,6 +48,20 @@ app.post('/api/generate/floorplan', async (req: Request, res: Response, next: Ne
   }
 });
 
+app.post('/api/generate/style-render', async (req: Request, res: Response, next: NextFunction) => {
+  const body = validateGenerateBody(req.body);
+  if (body.ok === false) {
+    res.status(400).json({ error: body.error });
+    return;
+  }
+
+  try {
+    res.json(await generateWithFallback({ ...body.value, mode: 'style-render' }));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/generate/inpaint', async (req: Request, res: Response, next: NextFunction) => {
   const body = validateGenerateBody(req.body, { promptRequired: true });
   if (body.ok === false) {
@@ -84,7 +98,7 @@ app.listen(port, () => {
 
 function validateGenerateBody(
   body: unknown,
-  options: { promptRequired: boolean },
+  options: { promptRequired: boolean } = { promptRequired: false },
 ): { ok: true; value: GenerateRequestBody } | { ok: false; error: string } {
   if (!isRecord(body)) {
     return { ok: false, error: '请求体必须是 JSON 对象。' };
@@ -169,6 +183,12 @@ async function generateWithFallback(input: GenerateImageInput): Promise<Generate
   }
 
   if (provider.name === 'grsai-nano-banana') {
+    if (input.mode === 'inpaint') {
+      return createMockGeneration(input, [
+        'Grsai Nano Banana provider 暂未接入局部修饰，已自动回退到 mock provider。',
+      ]);
+    }
+
     return provider.generateImage(input);
   }
 

@@ -75,6 +75,17 @@ function buildRequestParts(input: GenerateImageInput, warnings: string[]): Part[
 }
 
 function buildPrompt(input: GenerateImageInput): string {
+  if (input.mode === 'style-render') {
+    return [
+      'Generate a high-quality architectural, interior, or spatial rendering from the uploaded reference image.',
+      'Preserve the subject, composition, spatial relationships, perspective, proportions, and main outlines from the reference image.',
+      'Transform materials, lighting, color palette, furniture, details, and atmosphere according to the selected style and user prompt.',
+      'Return an image as the primary output. Do not add text, watermarks, labels, borders, or UI elements.',
+      `User prompt: ${input.prompt}`,
+      `Generation config JSON: ${JSON.stringify(input.config)}`,
+    ].join('\n');
+  }
+
   return [
     input.mode === 'floorplan'
       ? 'Generate an architectural visual expression from the uploaded floorplan image.'

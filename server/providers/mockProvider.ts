@@ -32,8 +32,12 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
   };
 }
 
-function createMockImageDataUrl(mode: 'floorplan' | 'inpaint', prompt: string, createdAt: string): string {
-  const title = mode === 'floorplan' ? 'Mock Floorplan Generation' : 'Mock Inpaint Generation';
+function createMockImageDataUrl(mode: 'floorplan' | 'style-render' | 'inpaint', prompt: string, createdAt: string): string {
+  const title = {
+    floorplan: 'Mock Floorplan Generation',
+    'style-render': 'Mock Style Render Generation',
+    inpaint: 'Mock Inpaint Generation',
+  }[mode];
   const promptPreview = prompt.length > 90 ? `${prompt.slice(0, 90)}...` : prompt;
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
