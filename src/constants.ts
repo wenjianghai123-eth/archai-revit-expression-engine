@@ -98,7 +98,7 @@ export const MOCK_FURNITURE_STYLES: FurnitureStyle[] = [
 
 export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   [GenerationStep.FloorplanTo3D]: {
-    prompt: "将黑白建筑平面图转换为高质量三维建筑外观效果图，保持原始空间布局与比例关系，自动识别墙体、开窗、门、结构轮廓，生成真实材质（混凝土、玻璃、木材等），增加自然光照与环境光影，视角：人视或轻微俯视，风格：现代建筑表现图，质量：四千级，照片级真实感，高细节。",
+    prompt: "",
     style: "现代主义",
     lighting: "黄金时刻 (室外)",
     materialStrength: 0.8,

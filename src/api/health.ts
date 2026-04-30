@@ -1,7 +1,9 @@
+import { GenerationProvider } from '../types';
+
 export interface BackendHealth {
   ok: boolean;
   version: string;
-  provider: 'mock' | 'gemini';
+  provider: GenerationProvider;
 }
 
 export async function getBackendHealth(): Promise<BackendHealth> {
@@ -27,7 +29,7 @@ function parseBackendHealth(value: unknown): BackendHealth {
   if (
     value.ok !== true ||
     typeof value.version !== 'string' ||
-    (value.provider !== 'mock' && value.provider !== 'gemini')
+    !isGenerationProvider(value.provider)
   ) {
     throw new Error('后端健康检查字段不完整。');
   }
@@ -41,4 +43,8 @@ function parseBackendHealth(value: unknown): BackendHealth {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isGenerationProvider(value: unknown): value is GenerationProvider {
+  return value === 'mock' || value === 'gemini' || value === 'grsai-nano-banana';
 }

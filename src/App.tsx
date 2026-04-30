@@ -469,6 +469,7 @@ export default function App() {
                       onGenerate={handleGenerate}
                       onNextStep={handleNextStep}
                       onReset={handleResetConfig}
+                      backendProvider={backendHealth.data?.provider || null}
                     />
                   </motion.div>
                 </AnimatePresence>
@@ -523,7 +524,7 @@ export default function App() {
         isOpen={isSettingsOpen}
         providerMode={backendHealth.data?.provider || '未知'}
         backendHealth={backendHealth.message}
-        providerSource={backendHealth.data?.provider === 'gemini' ? 'Real provider' : backendHealth.data?.provider === 'mock' ? 'Mock provider' : '未知（后端未连接）'}
+        providerSource={backendHealth.data?.provider === 'gemini' || backendHealth.data?.provider === 'grsai-nano-banana' ? 'Real provider' : backendHealth.data?.provider === 'mock' ? 'Mock provider' : '未知（后端未连接）'}
         isChecking={backendHealth.status === 'checking'}
         onRefresh={refreshBackendHealth}
         onClose={() => setIsSettingsOpen(false)}

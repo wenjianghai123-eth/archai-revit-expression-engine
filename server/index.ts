@@ -1,8 +1,9 @@
 import 'dotenv/config';
 import express, { NextFunction, Request, Response } from 'express';
 import { createGeminiProvider } from './providers/geminiProvider';
+import { createGrsaiNanoBananaProvider } from './providers/grsaiNanoBananaProvider';
 import { createMockGeneration, mockProvider } from './providers/mockProvider';
-import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider } from './providers/types';
+import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider, ProviderName } from './providers/types';
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -21,7 +22,7 @@ interface GenerateRequestBody {
 
 interface GenerateResponseBody {
   id: string;
-  provider: 'mock' | 'gemini';
+  provider: ProviderName;
   imageDataUrl: string;
   createdAt: string;
   warnings: string[];
@@ -34,7 +35,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
 });
 
 app.post('/api/generate/floorplan', async (req: Request, res: Response, next: NextFunction) => {
-  const body = validateGenerateBody(req.body);
+  const body = validateGenerateBody(req.body, { promptRequired: false });
   if (body.ok === false) {
     res.status(400).json({ error: body.error });
     return;
@@ -48,7 +49,7 @@ app.post('/api/generate/floorplan', async (req: Request, res: Response, next: Ne
 });
 
 app.post('/api/generate/inpaint', async (req: Request, res: Response, next: NextFunction) => {
-  const body = validateGenerateBody(req.body);
+  const body = validateGenerateBody(req.body, { promptRequired: true });
   if (body.ok === false) {
     res.status(400).json({ error: body.error });
     return;
@@ -81,7 +82,10 @@ app.listen(port, () => {
   console.log(`ArchAI Expression Engine API listening on http://localhost:${port} using ${provider.name} provider`);
 });
 
-function validateGenerateBody(body: unknown): { ok: true; value: GenerateRequestBody } | { ok: false; error: string } {
+function validateGenerateBody(
+  body: unknown,
+  options: { promptRequired: boolean },
+): { ok: true; value: GenerateRequestBody } | { ok: false; error: string } {
   if (!isRecord(body)) {
     return { ok: false, error: '请求体必须是 JSON 对象。' };
   }
@@ -95,8 +99,12 @@ function validateGenerateBody(body: unknown): { ok: true; value: GenerateRequest
     return { ok: false, error: inputImageError };
   }
 
-  if (!isNonEmptyString(body.prompt)) {
+  if (options.promptRequired && !isNonEmptyString(body.prompt)) {
     return { ok: false, error: 'prompt 为必填项。' };
+  }
+
+  if (typeof body.prompt !== 'string') {
+    return { ok: false, error: 'prompt 必须是字符串。' };
   }
 
   if (!isRecord(body.config)) {
@@ -148,26 +156,43 @@ async function generateWithFallback(input: GenerateImageInput): Promise<Generate
     return provider.generateImage(input);
   }
 
-  try {
-    return await provider.generateImage(input);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Gemini provider 生成失败。';
-    return createMockGeneration(input, [
-      `Gemini provider 未能完成本次生成：${message}`,
-      '已自动回退到 mock provider，避免请求中断。',
-    ]);
+  if (provider.name === 'gemini') {
+    try {
+      return await provider.generateImage(input);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Gemini provider 生成失败。';
+      return createMockGeneration(input, [
+        `Gemini provider 未能完成本次生成：${message}`,
+        '已自动回退到 mock provider，避免请求中断。',
+      ]);
+    }
   }
+
+  if (provider.name === 'grsai-nano-banana') {
+    return provider.generateImage(input);
+  }
+
+  return provider.generateImage(input);
 }
 
 function selectProvider(): ImageGenerationProvider {
   const requestedProvider = process.env.AI_PROVIDER || 'mock';
-  const apiKey = process.env.GEMINI_API_KEY;
+  const geminiApiKey = process.env.GEMINI_API_KEY;
+  const grsaiApiKey = process.env.GRSAI_API_KEY;
 
-  if (requestedProvider === 'gemini' && apiKey) {
-    return createGeminiProvider(apiKey);
+  if (requestedProvider === 'grsai-nano-banana' && grsaiApiKey) {
+    return createGrsaiNanoBananaProvider({ apiKey: grsaiApiKey });
   }
 
-  if (requestedProvider === 'gemini' && !apiKey) {
+  if (requestedProvider === 'grsai-nano-banana' && !grsaiApiKey) {
+    console.warn('AI_PROVIDER=grsai-nano-banana 但未设置 GRSAI_API_KEY，已回退到 mock provider。');
+  }
+
+  if (requestedProvider === 'gemini' && geminiApiKey) {
+    return createGeminiProvider(geminiApiKey);
+  }
+
+  if (requestedProvider === 'gemini' && !geminiApiKey) {
     console.warn('AI_PROVIDER=gemini 但未设置 GEMINI_API_KEY，已回退到 mock provider。');
   }
 

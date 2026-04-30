@@ -1,4 +1,4 @@
-import { GenerationConfig } from '../types';
+import { GenerationConfig, GenerationProvider } from '../types';
 
 interface GenerationRequest {
   inputImageDataUrl: string;
@@ -10,7 +10,7 @@ interface GenerationRequest {
 
 export interface GenerationResponse {
   id: string;
-  provider: 'mock' | 'gemini';
+  provider: GenerationProvider;
   imageDataUrl: string;
   createdAt: string;
   warnings: string[];
@@ -65,7 +65,7 @@ function parseGenerationResponse(value: unknown): GenerationResponse {
 
   if (
     typeof value.id !== 'string' ||
-    (value.provider !== 'mock' && value.provider !== 'gemini') ||
+    !isGenerationProvider(value.provider) ||
     typeof value.imageDataUrl !== 'string' ||
     typeof value.createdAt !== 'string' ||
     !Array.isArray(value.warnings) ||
@@ -85,4 +85,8 @@ function parseGenerationResponse(value: unknown): GenerationResponse {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isGenerationProvider(value: unknown): value is GenerationProvider {
+  return value === 'mock' || value === 'gemini' || value === 'grsai-nano-banana';
 }

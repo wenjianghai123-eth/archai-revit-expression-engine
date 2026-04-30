@@ -3,6 +3,8 @@ export enum GenerationStep {
   LocalInpainting = 2, // 局部重绘
 }
 
+export type GenerationProvider = 'mock' | 'gemini' | 'grsai-nano-banana';
+
 export interface GenerationConfig {
   prompt: string;
   style: string;
@@ -26,7 +28,7 @@ export interface StepState {
   generationStatus: 'ready' | 'uploading' | 'generating' | 'success' | 'error';
   generationError: string | null;
   generationWarnings: string[];
-  generationProvider: 'mock' | 'gemini' | null;
+  generationProvider: GenerationProvider | null;
   generationResultId: string | null;
   generationCreatedAt: string | null;
   viewMode: 'original' | 'after' | 'compare';
@@ -54,7 +56,7 @@ export interface GenerationHistoryItem {
   prompt: string;
   style: string;
   createdAt: string;
-  provider: 'mock' | 'gemini';
+  provider: GenerationProvider;
   outputImage: string;
   config?: GenerationConfig;
   inputImageName?: string;

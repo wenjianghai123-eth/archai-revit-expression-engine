@@ -14,7 +14,7 @@ import {
   Grid,
   X
 } from 'lucide-react';
-import { GenerationStep, GenerationConfig, StepState, MaterialAsset, FurnitureStyle, UploadedImage } from '../types';
+import { GenerationStep, GenerationConfig, StepState, MaterialAsset, FurnitureStyle, UploadedImage, GenerationProvider } from '../types';
 import { MOCK_MATERIALS, MOCK_FURNITURE_STYLES } from '../constants';
 import { MaterialLibrary } from './MaterialLibrary';
 import { MaskEditor } from './MaskEditor';
@@ -32,13 +32,14 @@ interface WorkspaceProps {
   onGenerate: () => void;
   onNextStep: () => void;
   onReset: () => void;
+  backendProvider: GenerationProvider | null;
 }
 
 type UploadTarget = 'input' | 'material';
 
 const acceptedImageTypes = 'image/png,image/jpeg,image/webp';
 
-export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage, onUpdateMaterialImage, onUpdateMaskImage, onGenerate, onNextStep, onReset }: WorkspaceProps) {
+export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage, onUpdateMaterialImage, onUpdateMaskImage, onGenerate, onNextStep, onReset, backendProvider }: WorkspaceProps) {
   const [selectedMaterial, setSelectedMaterial] = useState<MaterialAsset | null>(MOCK_MATERIALS[0]);
   const [selectedFurnitureStyle, setSelectedFurnitureStyle] = useState<FurnitureStyle | null>(MOCK_FURNITURE_STYLES[0]);
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
@@ -51,6 +52,10 @@ export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage,
   const materialFileRef = useRef<HTMLInputElement>(null);
   const hasRequiredMask = step !== GenerationStep.LocalInpainting || Boolean(state.maskImage) || state.useFullImageMask;
   const canGenerate = Boolean(state.inputImage) && hasRequiredMask && !state.isGenerating;
+  const providerForStatus = backendProvider || state.generationProvider;
+  const modeLabel = providerForStatus === 'grsai-nano-banana'
+    ? 'Grsai Nano Banana 生成服务'
+    : 'Express 后端生成服务';
   const statusCopy = {
     ready: 'ready / 等待生成指令',
     uploading: 'uploading / 正在上传到后端',
@@ -377,23 +382,30 @@ export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage,
         <div className="p-5 space-y-6">
           {renderStepSpecificInputs()}
 
-            <div className="space-y-3">
-            <label className="text-[10px] uppercase font-bold tracking-widest text-slate-400">4. 配置生成提示词</label>
+          <div className="space-y-3">
+            <label className="text-[10px] uppercase font-bold tracking-widest text-slate-400">
+              {step === GenerationStep.FloorplanTo3D ? '4. 附加要求（可选）' : '4. 配置生成提示词'}
+            </label>
+            {step === GenerationStep.FloorplanTo3D && (
+              <p className="text-[11px] leading-5 text-slate-500">
+                系统会自动注入建筑彩平生成提示词，这里只需要填写额外补充要求。
+              </p>
+            )}
             <textarea 
               value={state.config.prompt}
               onChange={(e) => onUpdateConfig({ prompt: e.target.value })}
               className="w-full p-4 bg-blue-50/50 border border-blue-100 rounded-xl text-xs leading-relaxed text-blue-900 italic font-medium shadow-inner outline-none focus:border-blue-200 transition-all resize-none h-24"
-              placeholder="输入材质替换或修饰提示词..."
+              placeholder={step === GenerationStep.FloorplanTo3D ? '例如：整体偏暖木风，客厅更明亮，增加绿植，厨房区域使用浅灰石材。' : '输入材质替换或修饰提示词...'}
             />
           </div>
 
           <div className="space-y-2">
              <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 mb-2">
                 <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(37,99,235,0.5)]" />
-                <span>当前模式: Express 后端生成服务</span>
+                <span>当前模式: {modeLabel}</span>
              </div>
              <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
-               {step === GenerationStep.FloorplanTo3D && "将平面关系转换为建筑视觉表达预览。"}
+               {step === GenerationStep.FloorplanTo3D && "将黑白平面图转换为彩色三维效果平面预览。"}
                {step === GenerationStep.LocalInpainting && "对现有图像进行局部材质与细节优化。"}
              </p>
           </div>
