@@ -1,4 +1,7 @@
 import 'dotenv/config';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express, { NextFunction, Request, Response } from 'express';
 import { createGeminiProvider } from './providers/geminiProvider';
 import { createGrsaiNanoBananaProvider } from './providers/grsaiNanoBananaProvider';
@@ -7,10 +10,14 @@ import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider, Provi
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
+const host = process.env.HOST || '0.0.0.0';
 const version = '0.1.0';
 const maxImageMb = Number(process.env.MAX_IMAGE_MB || 10);
 const jsonLimit = `${Math.max(maxImageMb * 3, 15)}mb`;
 const provider = selectProvider();
+const serverDir = path.dirname(fileURLToPath(import.meta.url));
+const distDir = path.resolve(serverDir, '..', 'dist');
+const distIndexPath = path.join(distDir, 'index.html');
 
 interface GenerateRequestBody {
   inputImageDataUrl: string;
@@ -76,6 +83,19 @@ app.post('/api/generate/inpaint', async (req: Request, res: Response, next: Next
   }
 });
 
+app.use('/api', (_req: Request, res: Response) => {
+  res.status(404).json({ error: 'API route not found.' });
+});
+
+if (existsSync(distIndexPath)) {
+  app.use(express.static(distDir));
+  app.get('*', (_req: Request, res: Response) => {
+    res.sendFile(distIndexPath);
+  });
+} else {
+  console.warn(`Production frontend build not found at ${distDir}. Run npm run build before npm run start.`);
+}
+
 app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
   if (!isPayloadTooLargeError(error)) {
     next(error);
@@ -92,8 +112,8 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ error: '服务器处理失败，请稍后重试。' });
 });
 
-app.listen(port, () => {
-  console.log(`ArchAI Expression Engine API listening on http://localhost:${port} using ${provider.name} provider`);
+app.listen(port, host, () => {
+  console.log(`ArchAI Expression Engine listening on http://${host}:${port} using ${provider.name} provider`);
 });
 
 function validateGenerateBody(
