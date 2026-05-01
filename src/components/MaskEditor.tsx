@@ -440,8 +440,8 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, useFullI
   });
 
   return (
-    <div className="space-y-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
-      <div className="flex items-start justify-between gap-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-2 rounded-xl border border-slate-100 bg-slate-50 p-3">
+      <div className="flex shrink-0 items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">4. 选择局部 mask</p>
           <p className="truncate text-[10px] font-medium text-slate-500">{imageName}</p>
@@ -462,7 +462,7 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, useFullI
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
         <label className="flex flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-bold text-slate-500">
           画笔
           <input
@@ -496,7 +496,7 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, useFullI
         </ToolButton>
       </div>
 
-      <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-bold text-slate-500">
+      <label className="flex shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-bold text-slate-500">
         羽化
         <input
           type="range"
@@ -510,7 +510,7 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, useFullI
         <span className="w-10 text-right font-mono">{feather}px</span>
       </label>
 
-      <div className="flex h-[clamp(480px,68vh,720px)] items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white p-3">
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white p-2 lg:h-[clamp(360px,52vh,620px)]">
         <div
           className="relative max-h-full max-w-full overflow-hidden rounded bg-slate-50 shadow-inner"
           style={{

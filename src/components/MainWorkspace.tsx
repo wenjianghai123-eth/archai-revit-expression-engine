@@ -441,15 +441,17 @@ export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage,
   };
 
   const renderFeatureBar = () => (
-    <div className="border-b border-slate-200 bg-white px-5 py-4 shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+    <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full bg-slate-900 px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-white">AI Workbench</span>
             <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{stepWorkbenchCopy.input} → {stepWorkbenchCopy.output}</span>
           </div>
-          <h2 className="mt-2 text-lg font-bold text-slate-950">{stepWorkbenchCopy.title}</h2>
-          <p className="mt-1 text-sm text-slate-500">{stepWorkbenchCopy.description}</p>
+          <div className="mt-1 flex flex-wrap items-baseline gap-2">
+            <h2 className="text-base font-bold text-slate-950">{stepWorkbenchCopy.title}</h2>
+            <p className="text-xs text-slate-500">{stepWorkbenchCopy.description}</p>
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className={`rounded-full border px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide ${statusTone}`}>
@@ -575,13 +577,13 @@ export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage,
         {renderFeatureBar()}
 
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-          <main className="flex min-w-0 flex-1 flex-col overflow-y-auto p-4 lg:basis-[68%] lg:p-6 custom-scrollbar">
+          <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto p-3 lg:basis-[68%] lg:p-4 custom-scrollbar">
             {state.inputImage ? (
-              <div className="space-y-4">
+              <div className="flex h-full min-h-0 flex-col gap-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">局部修饰工作区</p>
-                    <h2 className="mt-1 text-lg font-bold text-slate-900">绘制需要重绘的区域</h2>
+                    <h2 className="mt-1 text-base font-bold text-slate-900">绘制需要重绘的区域</h2>
                   </div>
                   <button
                     onClick={() => handleUploadClick('input')}
@@ -601,8 +603,8 @@ export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage,
             ) : (
               <div className="flex min-h-full items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center">
                 <div className="max-w-md">
-                  <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-blue-50">
-                    <ImageIcon className="h-9 w-9 text-blue-500" />
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-50">
+                    <ImageIcon className="h-8 w-8 text-blue-500" />
                   </div>
                   <h2 className="text-xl font-bold text-slate-900">上传需要局部修饰的图片</h2>
                   <p className="mt-3 text-sm leading-6 text-slate-500">
@@ -622,7 +624,7 @@ export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage,
           </main>
 
           <aside className="flex min-h-0 w-full shrink-0 flex-col border-t border-slate-200 bg-white lg:w-[360px] lg:border-l lg:border-t-0">
-            <div className="flex items-center justify-between border-b border-slate-100 p-5">
+            <div className="flex shrink-0 items-center justify-between border-b border-slate-100 p-4">
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">局部修饰控制</p>
                 <p className="mt-1 text-xs text-slate-500">{modeLabel}</p>
@@ -630,7 +632,7 @@ export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage,
               <Settings2 className="h-4 w-4 text-slate-300" />
             </div>
 
-            <div className="flex-1 space-y-5 overflow-y-auto p-5 custom-scrollbar">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 custom-scrollbar">
               <button
                 onClick={() => handleUploadClick('input')}
                 className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-blue-200 bg-blue-50 py-3 text-xs font-bold text-blue-700 hover:bg-blue-100"
@@ -660,12 +662,12 @@ export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage,
                 <textarea
                   value={state.config.prompt}
                   onChange={(event) => onUpdateConfig({ prompt: event.target.value })}
-                  className="h-32 w-full resize-none rounded-xl border border-blue-100 bg-blue-50/50 p-4 text-xs font-medium italic leading-relaxed text-blue-900 outline-none transition-all focus:border-blue-200"
+                  className="h-24 w-full resize-none rounded-xl border border-blue-100 bg-blue-50/50 p-3 text-xs font-medium italic leading-relaxed text-blue-900 outline-none transition-all focus:border-blue-200"
                   placeholder={getPromptPlaceholder(step)}
                 />
               </div>
 
-              <div className="space-y-4 rounded-xl border border-slate-100 bg-slate-50 p-4">
+              <div className="space-y-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
                 <div className="space-y-2">
                   <div className="flex justify-between text-[11px] font-bold uppercase tracking-tight text-slate-800">
                     <span>局部重绘强度</span>
@@ -709,7 +711,7 @@ export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage,
               <button
                 onClick={onGenerate}
                 disabled={!canGenerate}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 py-3.5 text-sm font-bold text-white shadow-lg shadow-black/10 transition-all hover:bg-black disabled:opacity-50"
+                className="sticky bottom-0 z-10 flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 py-3 text-sm font-bold text-white shadow-lg shadow-black/10 transition-all hover:bg-black disabled:opacity-50"
               >
                 {state.isGenerating ? <RefreshCw className="h-4 w-4 animate-spin" /> : <><Zap className="h-4 w-4 fill-current text-blue-400" />生成预览</>}
               </button>
@@ -764,7 +766,7 @@ export function MainWorkspace({ step, state, onUpdateConfig, onUpdateInputImage,
               {renderWarningsPanel()}
             </div>
 
-            <div className="border-t border-slate-200 bg-white p-5">
+            <div className="shrink-0 border-t border-slate-200 bg-white p-4">
               <button onClick={onReset} disabled={state.isGenerating} className="w-full rounded-lg py-2.5 text-[11px] font-bold uppercase tracking-widest text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-600 disabled:opacity-40">
                 重置局部修饰
               </button>

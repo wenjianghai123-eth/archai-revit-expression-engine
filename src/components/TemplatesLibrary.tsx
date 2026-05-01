@@ -188,15 +188,15 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[#f5f7fb]">
       <div className="flex h-full min-h-0 flex-col">
-        <div className="border-b border-slate-200/70 bg-white p-5 md:p-6">
-          <div className="mx-auto max-w-7xl space-y-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="shrink-0 border-b border-slate-200/70 bg-white p-4">
+          <div className="mx-auto max-w-7xl space-y-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-lg shadow-slate-200">
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-lg shadow-slate-200">
                   <Layers className="h-5 w-5" />
                 </div>
                 <div>
-                  <h1 className="text-2xl font-bold tracking-tight text-slate-900">提示词模板库</h1>
+                  <h1 className="text-xl font-bold tracking-tight text-slate-900">提示词模板库</h1>
                   <p className="mt-1 text-sm text-slate-500">参考效果图与对应提示词，快速复用建筑表达风格</p>
                 </div>
               </div>
@@ -208,7 +208,7 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
                   placeholder="搜索模板名称、分类、风格或关键词..."
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm outline-none transition-all placeholder:text-slate-400 focus:border-blue-300 focus:bg-white"
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-sm outline-none transition-all placeholder:text-slate-400 focus:border-blue-300 focus:bg-white"
                 />
               </div>
             </div>
@@ -219,7 +219,7 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                   <button
                     key={filter.value}
                     onClick={() => setFeatureFilter(filter.value)}
-                    className={`shrink-0 rounded-full border px-3.5 py-2 text-xs font-bold transition-all ${
+                    className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold transition-all ${
                       featureFilter === filter.value
                         ? 'border-blue-600 bg-blue-600 text-white'
                         : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
@@ -230,7 +230,7 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                 ))}
                 <button
                   onClick={() => setFavoritesOnly((value) => !value)}
-                  className={`shrink-0 rounded-full border px-3.5 py-2 text-xs font-bold transition-all ${
+                  className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold transition-all ${
                     favoritesOnly
                       ? 'border-rose-500 bg-rose-500 text-white'
                       : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
@@ -245,7 +245,7 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                   <button
                     key={category}
                     onClick={() => setCategoryFilter(category)}
-                    className={`shrink-0 rounded-full border px-3.5 py-2 text-[11px] font-bold transition-all ${
+                    className={`shrink-0 rounded-full border px-3 py-1.5 text-[11px] font-bold transition-all ${
                       categoryFilter === category
                         ? 'border-slate-900 bg-slate-900 text-white'
                         : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
@@ -259,8 +259,8 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-5 md:p-6 custom-scrollbar">
-          <div className="mx-auto max-w-7xl space-y-6">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
+          <div className="mx-auto max-w-7xl space-y-4">
             <section className="space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
@@ -319,7 +319,7 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                 <p className="mt-2 max-w-sm text-sm text-slate-500">没有找到匹配的模板，请尝试更换关键词或筛选条件。</p>
               </div>
             ) : (
-              <div className="columns-1 gap-5 md:columns-2 xl:columns-3">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {filteredTemplates.map((template) => {
                   const isActive = currentConfig.prompt === template.config.prompt;
                   const isFavorite = favoriteIds.includes(template.id);
@@ -327,11 +327,11 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                   return (
                     <article
                       key={template.id}
-                      className={`arch-card mb-5 break-inside-avoid p-2 ${
+                      className={`arch-card p-2 ${
                         isActive ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200'
                       }`}
                     >
-                      <div className="relative aspect-[4/3] overflow-hidden rounded-2xl bg-slate-100">
+                      <div className="relative h-36 overflow-hidden rounded-2xl bg-slate-100">
                         <img src={template.previewImage} alt={template.title} className="h-full w-full object-cover transition-transform duration-500 hover:scale-105" referrerPolicy="no-referrer" />
                         <div className="absolute left-3 top-3 flex gap-2">
                           <span className="rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-bold text-slate-700 backdrop-blur">
@@ -360,28 +360,27 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                         </button>
                       </div>
 
-                      <div className="flex min-h-80 flex-col p-4">
+                      <div className="flex h-44 flex-col p-3">
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{template.category}</p>
-                            <h2 className="mt-1 text-base font-bold text-slate-900">{template.title}</h2>
+                            <h2 className="mt-1 truncate text-sm font-bold text-slate-900">{template.title}</h2>
                           </div>
                         </div>
 
-                        <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-500">{template.description}</p>
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{template.description}</p>
 
-                        <div className="mt-3 flex flex-wrap gap-1.5">
+                        <div className="mt-2 flex flex-wrap gap-1.5">
                           {(template.tags || []).slice(0, 4).map((tagValue) => (
                             <TemplateTag key={tagValue}>#{tagValue}</TemplateTag>
                           ))}
                         </div>
 
-                        <div className="mt-4 rounded-2xl bg-slate-50 p-3">
-                          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Prompt 摘要</p>
-                          <p className="mt-2 line-clamp-4 text-xs leading-5 text-slate-600">{promptSummary(template.promptText)}</p>
+                        <div className="mt-2 rounded-xl bg-slate-50 p-2">
+                          <p className="line-clamp-2 text-[11px] leading-4 text-slate-600">{promptSummary(template.promptText)}</p>
                         </div>
 
-                        <div className="mt-auto grid grid-cols-3 gap-2 border-t border-slate-100 pt-4">
+                        <div className="mt-auto grid grid-cols-3 gap-1.5 border-t border-slate-100 pt-2">
                           <button
                             onClick={() => handleApply(template)}
                             className="arch-button-primary rounded-xl py-2 text-xs"

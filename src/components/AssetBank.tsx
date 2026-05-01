@@ -480,21 +480,21 @@ export function AssetBank() {
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[#f5f7fb] animate-in fade-in duration-500">
       <div className="flex h-full min-h-0 flex-col">
-        <header className="border-b border-slate-200 bg-white px-5 py-5 md:px-6">
-          <div className="mx-auto max-w-7xl space-y-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <header className="shrink-0 border-b border-slate-200 bg-white px-4 py-4">
+          <div className="mx-auto max-w-7xl space-y-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex items-center gap-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-lg shadow-slate-200">
-                  <Box className="h-6 w-6" />
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-lg shadow-slate-200">
+                  <Box className="h-5 w-5" />
                 </div>
                 <div>
-                  <h2 className="text-2xl font-bold tracking-tight text-slate-950">三维模型资产库</h2>
+                  <h2 className="text-xl font-bold tracking-tight text-slate-950">三维模型资产库</h2>
                   <p className="mt-1 text-sm text-slate-500">管理由参考图生成或手动上传的 GLB/GLTF/OBJ 模型资产</p>
                 </div>
               </div>
               <button
                 onClick={handleFileUpload}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-blue-100 transition-colors hover:bg-blue-700"
+                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-100 transition-colors hover:bg-blue-700"
               >
                 <Upload className="h-4 w-4" />
                 上传模型
@@ -516,7 +516,7 @@ export function AssetBank() {
                   placeholder="搜索模型名称、来源图或标签..."
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm outline-none transition-all placeholder:text-slate-400 focus:border-blue-300 focus:bg-white"
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-2.5 pl-11 pr-4 text-sm outline-none transition-all placeholder:text-slate-400 focus:border-blue-300 focus:bg-white"
                 />
               </div>
               <div className="flex flex-wrap gap-2">
@@ -524,7 +524,7 @@ export function AssetBank() {
                   <button
                     key={category}
                     onClick={() => setCategoryFilter(category)}
-                    className={`shrink-0 rounded-full border px-3.5 py-2 text-xs font-bold transition-all ${
+                    className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold transition-all ${
                       categoryFilter === category
                         ? 'border-slate-950 bg-slate-950 text-white'
                         : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
@@ -555,10 +555,10 @@ export function AssetBank() {
           </div>
         </header>
 
-        <main className="relative min-h-0 flex-1 overflow-y-auto p-5 md:p-6 custom-scrollbar">
+        <main className="relative min-h-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
           <div className="mx-auto max-w-7xl">
             {filteredAssets.length > 0 ? (
-              <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {filteredAssets.map((item) => {
                   const isSelected = previewAsset?.id === item.id;
                   const qualityTone = item.qualityStatus === 'usable' ? 'green' : item.qualityStatus === 'error' ? 'red' : item.qualityStatus === 'warning' ? 'amber' : 'slate';
@@ -576,7 +576,7 @@ export function AssetBank() {
                           setSelectedAsset(item);
                           setDetailAsset(item);
                         }}
-                        className="relative block aspect-[4/3] w-full overflow-hidden rounded-2xl bg-slate-100 text-left"
+                        className="relative block h-36 w-full overflow-hidden rounded-2xl bg-slate-100 text-left"
                         title="预览模型"
                       >
                         <img src={item.thumbnail} className="h-full w-full object-cover transition-transform duration-500 hover:scale-105" alt={item.name} referrerPolicy="no-referrer" />
@@ -590,14 +590,14 @@ export function AssetBank() {
                         </div>
                       </button>
 
-                      <div className="flex min-h-72 flex-col p-4">
+                      <div className="flex h-44 flex-col p-3">
                         <div className="flex flex-wrap gap-1.5">
                           <AssetBadge>{item.category || '未分类'}</AssetBadge>
                           <AssetBadge>{sourceLabel(item.source)}</AssetBadge>
                           <AssetBadge>{statusLabel(item.status)}</AssetBadge>
                         </div>
 
-                        <div className="mt-4 grid grid-cols-2 gap-3 rounded-2xl bg-slate-50 p-3 text-[11px] text-slate-500">
+                        <div className="mt-3 grid grid-cols-2 gap-2 rounded-2xl bg-slate-50 p-2 text-[11px] text-slate-500">
                           <span className="flex items-center gap-1.5">
                             <HardDrive className="h-3.5 w-3.5" />
                             {item.size}
@@ -611,7 +611,7 @@ export function AssetBank() {
                           </span>
                         </div>
 
-                        <div className="mt-3 flex flex-wrap gap-1.5">
+                        <div className="mt-2 flex flex-wrap gap-1.5">
                           {(item.tags || []).slice(0, 4).map((tagValue) => (
                             <span key={tagValue} className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-500">
                               #{tagValue}
@@ -619,7 +619,7 @@ export function AssetBank() {
                           ))}
                         </div>
 
-                        <div className="mt-auto grid grid-cols-4 gap-2 border-t border-slate-100 pt-4">
+                        <div className="mt-auto grid grid-cols-4 gap-1.5 border-t border-slate-100 pt-2">
                           <button
                             onClick={() => {
                               setSelectedAsset(item);
@@ -649,9 +649,9 @@ export function AssetBank() {
                 })}
               </div>
             ) : (
-              <div className="flex min-h-[520px] flex-col items-center justify-center rounded-[24px] border border-dashed border-slate-200 bg-white p-10 text-center shadow-sm">
-                <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-3xl bg-blue-50">
-                  <FileBox className="h-10 w-10 text-blue-500" />
+              <div className="flex min-h-[320px] flex-col items-center justify-center rounded-[24px] border border-dashed border-slate-200 bg-white p-6 text-center shadow-sm">
+                <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-3xl bg-blue-50">
+                  <FileBox className="h-8 w-8 text-blue-500" />
                 </div>
                 <h3 className="text-lg font-bold text-slate-950">
                   {hasAnyAsset ? '没有符合筛选条件的三维模型资产' : '还没有三维模型资产'}
@@ -671,7 +671,7 @@ export function AssetBank() {
 
           {detailAsset && (
             <div className="fixed inset-y-0 right-0 z-40 flex w-full max-w-xl flex-col border-l border-slate-200 bg-white shadow-2xl">
-              <div className="flex items-center justify-between border-b border-slate-100 p-5">
+              <div className="flex items-center justify-between border-b border-slate-100 p-4">
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">模型详情</p>
                   <h3 className="mt-1 text-lg font-bold text-slate-900">{detailAsset.name}</h3>
@@ -681,8 +681,8 @@ export function AssetBank() {
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-5 custom-scrollbar">
-                <div className="h-64 overflow-hidden rounded-xl border border-slate-100 bg-slate-50">
+              <div className="min-h-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
+                <div className="h-52 overflow-hidden rounded-xl border border-slate-100 bg-slate-50">
                   <ModelPreview asset={detailAsset} />
                 </div>
 
@@ -751,7 +751,7 @@ export function AssetBank() {
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-3 border-t border-slate-100 p-5">
+              <div className="grid shrink-0 grid-cols-2 gap-3 border-t border-slate-100 p-4">
                 <button onClick={() => handleDownloadAsset(detailAsset)} className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 py-2.5 text-sm font-bold text-white hover:bg-blue-700">
                   <Download className="h-4 w-4" />
                   下载

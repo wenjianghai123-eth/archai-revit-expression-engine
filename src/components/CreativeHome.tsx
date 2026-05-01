@@ -51,8 +51,8 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
 
   return (
     <div className="arch-page">
-      <div className="arch-page-inner space-y-8">
-        <section className="relative overflow-hidden rounded-[28px] bg-slate-950 text-white shadow-2xl">
+      <div className="arch-page-inner">
+        <section className="relative shrink-0 overflow-hidden rounded-2xl bg-slate-950 text-white shadow-xl">
           <img
             src="https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&q=80&w=1600"
             alt="建筑 AI 创作背景"
@@ -60,17 +60,17 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
             referrerPolicy="no-referrer"
           />
           <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/90 to-slate-950/35" />
-          <div className="relative grid gap-8 p-6 md:p-10 lg:grid-cols-[1fr_420px] lg:p-12">
-            <div className="flex min-h-[360px] flex-col justify-center">
-              <div className="mb-5 flex w-fit items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-bold text-blue-100">
+          <div className="relative grid gap-4 p-4 lg:grid-cols-[1fr_280px] lg:p-5">
+            <div className="flex min-h-[168px] flex-col justify-center">
+              <div className="mb-3 flex w-fit items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-[11px] font-bold text-blue-100">
                 <Sparkles className="h-4 w-4" />
                 Architectural AI Creative Platform
               </div>
-              <h1 className="max-w-3xl text-4xl font-bold leading-tight tracking-tight md:text-5xl">ArchAI 建筑 AI 创作工作台</h1>
-              <p className="mt-5 max-w-2xl text-base leading-8 text-slate-300">
+              <h1 className="max-w-3xl text-2xl font-bold leading-tight tracking-tight md:text-3xl">ArchAI 建筑 AI 创作工作台</h1>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">
                 上传平面、参考图或效果图，快速生成彩平、风格渲染和局部修饰结果
               </p>
-              <div className="mt-8 flex flex-wrap gap-3">
+              <div className="mt-4 flex flex-wrap gap-2">
                 <button
                   onClick={() => onStartCreate(GenerationStep.FloorplanTo3D)}
                   className="arch-button-primary"
@@ -87,8 +87,8 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
               </div>
             </div>
 
-            <div className="rounded-[24px] border border-white/10 bg-white/10 p-4 backdrop-blur-md">
-              <div className="grid gap-3">
+            <div className="hidden rounded-2xl border border-white/10 bg-white/10 p-3 backdrop-blur-md lg:block">
+              <div className="grid gap-2">
                 <PreviewCard label="Before" image="https://images.unsplash.com/photo-1600607687644-c7171b42498f?auto=format&fit=crop&q=80&w=800" />
                 <PreviewCard label="After" image="https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?auto=format&fit=crop&q=80&w=800" featured />
               </div>
@@ -96,28 +96,28 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
           </div>
         </section>
 
-        <section className="grid gap-5 lg:grid-cols-3">
+        <section className="grid shrink-0 gap-4 lg:grid-cols-3">
           {toolCards.map((tool) => {
             const Icon = tool.icon;
             return (
               <article key={tool.step} className="arch-card">
-                <div className="relative h-44">
+                <div className="relative h-28">
                   <img src={tool.image} alt={tool.title} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
                   <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 to-transparent" />
-                  <div className="absolute bottom-4 left-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-white text-blue-600 shadow-lg">
-                    <Icon className="h-5 w-5" />
+                  <div className="absolute bottom-3 left-3 flex h-9 w-9 items-center justify-center rounded-xl bg-white text-blue-600 shadow-lg">
+                    <Icon className="h-4 w-4" />
                   </div>
                 </div>
-                <div className="p-5">
-                  <h2 className="text-lg font-bold text-slate-900">{tool.title}</h2>
-                  <p className="mt-2 min-h-12 text-sm leading-6 text-slate-500">{tool.desc}</p>
-                  <div className="mt-4 grid grid-cols-2 gap-2 text-xs font-bold text-slate-500">
-                    <span className="rounded-full bg-slate-50 px-3 py-2">{tool.input}</span>
-                    <span className="rounded-full bg-slate-50 px-3 py-2">{tool.output}</span>
+                <div className="p-4">
+                  <h2 className="text-base font-bold text-slate-900">{tool.title}</h2>
+                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{tool.desc}</p>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] font-bold text-slate-500">
+                    <span className="rounded-full bg-slate-50 px-2.5 py-1.5">{tool.input}</span>
+                    <span className="rounded-full bg-slate-50 px-2.5 py-1.5">{tool.output}</span>
                   </div>
                   <button
                     onClick={() => onStartCreate(tool.step)}
-                    className="arch-button-primary mt-5 w-full"
+                    className="arch-button-primary mt-3 w-full py-2 text-xs"
                   >
                     立即使用
                     <ArrowRight className="h-4 w-4" />
@@ -128,7 +128,7 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
           })}
         </section>
 
-        <section className="grid gap-5 xl:grid-cols-3">
+        <section className="grid min-h-0 flex-1 gap-4 xl:grid-cols-3">
           <HomeModule title="推荐提示词模板" icon={Layers} action="查看全部" onAction={onOpenTemplates}>
             {recommendedTemplates.length > 0 ? (
               recommendedTemplates.slice(0, 3).map((template) => (
@@ -171,7 +171,7 @@ function PreviewCard({ label, image, featured = false }: { label: string; image:
         <span className="text-xs font-bold uppercase tracking-widest text-slate-300">{label}</span>
         {featured && <span className="rounded-full bg-blue-500 px-2 py-1 text-[10px] font-bold text-white">AI Result</span>}
       </div>
-      <img src={image} alt={label} className="h-36 w-full object-cover" referrerPolicy="no-referrer" />
+      <img src={image} alt={label} className="h-16 w-full object-cover" referrerPolicy="no-referrer" />
     </div>
   );
 }
@@ -190,10 +190,10 @@ function HomeModule({
   children: React.ReactNode;
 }) {
   return (
-    <div className="arch-card p-5">
-      <div className="mb-4 flex items-center justify-between gap-3">
+    <div className="arch-card flex min-h-0 flex-col p-4">
+      <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
             <Icon className="h-4 w-4" />
           </div>
           <h2 className="text-base font-bold text-slate-900">{title}</h2>
@@ -202,7 +202,7 @@ function HomeModule({
           {action}
         </button>
       </div>
-      <div className="space-y-3">{children}</div>
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto custom-scrollbar">{children}</div>
     </div>
   );
 }

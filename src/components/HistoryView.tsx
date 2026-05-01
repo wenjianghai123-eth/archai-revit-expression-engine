@@ -21,7 +21,7 @@ export function HistoryView({ items, onReuse, onDelete, onClear }: HistoryViewPr
       <div className="arch-page-inner">
         <div className="arch-page-header flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">生成记录</h1>
+            <h1 className="text-xl font-bold tracking-tight text-slate-900">生成记录</h1>
             <p className="mt-1 text-sm text-slate-500">本地生成历史会保存在当前浏览器中。</p>
           </div>
           {items.length > 0 && (
@@ -36,7 +36,7 @@ export function HistoryView({ items, onReuse, onDelete, onClear }: HistoryViewPr
         </div>
 
         {items.length === 0 ? (
-          <div className="arch-empty">
+          <div className="arch-empty flex-1">
             <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-50">
               <Clock className="h-8 w-8 text-blue-500" />
             </div>
@@ -44,10 +44,11 @@ export function HistoryView({ items, onReuse, onDelete, onClear }: HistoryViewPr
             <p className="mt-2 max-w-sm text-sm leading-6 text-slate-500">完成一次生成后，记录会自动保存到 localStorage。</p>
           </div>
         ) : (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {items.map((item) => (
               <article key={item.id} className="arch-card">
-                <div className="aspect-[16/10] bg-slate-100">
+                <div className="h-32 bg-slate-100">
                   {item.outputImage ? (
                     <img src={item.outputImage} alt="历史生成结果" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
                   ) : (
@@ -56,7 +57,7 @@ export function HistoryView({ items, onReuse, onDelete, onClear }: HistoryViewPr
                     </div>
                   )}
                 </div>
-                <div className="space-y-3 p-4">
+                <div className="space-y-2 p-3">
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                       <span className="arch-pill bg-blue-50 text-blue-700">{stepLabels[item.step]}</span>
@@ -66,7 +67,7 @@ export function HistoryView({ items, onReuse, onDelete, onClear }: HistoryViewPr
                   </div>
                   <div>
                     <p className="text-xs font-bold text-slate-900">{item.style}</p>
-                    <p className="mt-1 line-clamp-3 text-xs leading-5 text-slate-500">{item.prompt}</p>
+                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{item.prompt}</p>
                     {(item.inputImageName || item.storageWarning) && (
                       <p className="mt-2 line-clamp-2 text-[10px] leading-4 text-slate-400">
                         {item.inputImageName ? `输入: ${item.inputImageName}` : ''}
@@ -94,6 +95,7 @@ export function HistoryView({ items, onReuse, onDelete, onClear }: HistoryViewPr
                 </div>
               </article>
             ))}
+          </div>
           </div>
         )}
       </div>
