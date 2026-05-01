@@ -36,8 +36,31 @@ export function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
+function getImageDimensions(dataUrl: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+
+    image.onload = () => {
+      resolve({ width: image.naturalWidth, height: image.naturalHeight });
+    };
+
+    image.onerror = () => {
+      reject(new Error('无法读取图片尺寸。'));
+    };
+
+    image.src = dataUrl;
+  });
+}
+
 export async function createUploadedImage(file: File): Promise<UploadedImage> {
   const dataUrl = await readFileAsDataUrl(file);
+  let dimensions: { width: number; height: number } | null = null;
+
+  try {
+    dimensions = await getImageDimensions(dataUrl);
+  } catch {
+    dimensions = null;
+  }
 
   return {
     id: `${Date.now()}-${file.name}`,
@@ -45,5 +68,7 @@ export async function createUploadedImage(file: File): Promise<UploadedImage> {
     type: file.type,
     size: file.size,
     dataUrl,
+    width: dimensions?.width,
+    height: dimensions?.height,
   };
 }

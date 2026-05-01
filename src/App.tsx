@@ -10,65 +10,13 @@ import { AssetBank } from './components/AssetBank';
 import { HistoryView } from './components/HistoryView';
 import { SettingsModal } from './components/SettingsModal';
 import { TemplatesLibrary } from './components/TemplatesLibrary';
+import { CreativeHome } from './components/CreativeHome';
 import { GenerationStep, StepState, GenerationConfig, GenerationHistoryItem, PromptTemplate, UploadedImage } from './types';
-import { DEFAULT_CONFIGS } from './constants';
+import { DEFAULT_CONFIGS, PROMPT_TEMPLATES } from './constants';
 import { generateFloorplanTo3D, generateInpainting, generateStyleRender } from './api/generation';
 import { BackendHealth, getBackendHealth } from './api/health';
 import { clearGenerationHistory, deleteGenerationRecord, listGenerationRecords, saveGenerationRecord } from './storage/history';
 import { motion, AnimatePresence } from 'motion/react';
-
-const PROMPT_TEMPLATES: PromptTemplate[] = [
-  {
-    id: 'courtyard-housing',
-    title: '现代庭院住宅',
-    category: '住宅',
-    description: '将平面关系转化为低层庭院住宅效果图，强调体块、院落、自然采光与温润材料。',
-    config: {
-      prompt: '基于当前平面关系生成现代庭院住宅建筑表达，保留主要空间比例和流线，形成清晰的内院、灰空间、开窗和入口关系。材质以浅色混凝土、木饰面、玻璃为主，画面真实、安静、细节克制。',
-      style: '现代主义',
-      lighting: '黄金时刻 (室外)',
-      materialStrength: 0.8,
-    },
-  },
-  {
-    id: 'urban-gallery',
-    title: '城市展廊立面',
-    category: '公共建筑',
-    description: '适合小型美术馆、展厅和街区公共空间，突出通透立面与城市界面。',
-    config: {
-      prompt: '将当前建筑布局发展为城市展廊效果图，强化街道界面、连续檐口、开放首层和大面积玻璃立面。整体风格简洁，局部加入金属格栅、清水混凝土与温暖室内灯光。',
-      style: '极简风格',
-      lighting: '夜间照明',
-      materialStrength: 0.7,
-    },
-  },
-  {
-    id: 'adaptive-industrial',
-    title: '工业改造空间',
-    category: '改造',
-    description: '保留旧建筑肌理，生成带有新旧对比的空间更新表达。',
-    config: {
-      prompt: '生成工业建筑改造视觉表达，保留原有结构秩序和粗粝材质，加入新的玻璃盒子、钢构连廊、公共活动空间和景观植入。强调新旧对比、真实材质和可读的建筑构造。',
-      style: '粗犷主义',
-      lighting: '阴天氛围',
-      materialStrength: 0.9,
-    },
-  },
-  {
-    id: 'interior-refine',
-    title: '室内局部优化',
-    category: '局部修饰',
-    description: '用于对现有效果图中的局部区域做材质、家具和光影细节优化。',
-    config: {
-      prompt: '仅优化当前选定区域，保持原图构图、透视和整体色调不变。提升局部材质细节、家具质感和光影层次，使新内容与周围空间自然融合，不改变未选区域。',
-      style: '匹配原图',
-      lighting: '匹配原图',
-      materialStrength: 0.75,
-      inpaintingStrength: 'medium',
-      keepOriginalMaterial: true,
-    },
-  },
-];
 
 interface BackendHealthState {
   status: 'checking' | 'online' | 'offline';
@@ -78,7 +26,7 @@ interface BackendHealthState {
 
 export default function App() {
   const [currentStep, setCurrentStep] = useState<GenerationStep>(GenerationStep.FloorplanTo3D);
-  const [activeTab, setActiveTab] = useState('generate');
+  const [activeTab, setActiveTab] = useState('home');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<GenerationHistoryItem[]>(() => listGenerationRecords());
   const [backendHealth, setBackendHealth] = useState<BackendHealthState>({
@@ -227,15 +175,23 @@ export default function App() {
   }, [currentStep]);
 
   const handleApplyTemplate = useCallback((template: PromptTemplate) => {
+    const targetStep =
+      template.feature === 'floorplan'
+        ? GenerationStep.FloorplanTo3D
+        : template.feature === 'style-render'
+          ? GenerationStep.StyleRender
+          : GenerationStep.LocalInpainting;
+
     setStepStates(prev => ({
       ...prev,
-      [currentStep]: {
-        ...prev[currentStep],
-        config: { ...prev[currentStep].config, ...template.config }
+      [targetStep]: {
+        ...prev[targetStep],
+        config: { ...prev[targetStep].config, ...template.config }
       }
     }));
+    setCurrentStep(targetStep);
     setActiveTab('generate');
-  }, [currentStep]);
+  }, []);
 
   const refreshBackendHealth = useCallback(async () => {
     setBackendHealth(prev => ({
@@ -463,25 +419,47 @@ export default function App() {
     }
   }, [currentStep, stepStates]);
 
+  const handleStartCreate = useCallback((step: GenerationStep = GenerationStep.FloorplanTo3D) => {
+    setCurrentStep(step);
+    setActiveTab('generate');
+  }, []);
+
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-arch-bg text-white selection:bg-arch-accent selection:text-arch-bg">
+    <div className="flex h-screen w-full overflow-hidden bg-slate-100 text-slate-900 selection:bg-arch-accent selection:text-arch-bg">
       {/* Sidebar */}
       <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onSettingsOpen={() => setIsSettingsOpen(true)} />
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col min-w-0">
+      <main className="flex min-h-0 flex-1 flex-col overflow-hidden min-w-0 pb-20 lg:pb-0">
         <AnimatePresence mode="wait">
-          {activeTab === 'generate' ? (
+          {activeTab === 'home' ? (
+            <motion.div
+              key="home"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="min-h-0 flex-1 overflow-hidden"
+            >
+              <CreativeHome
+                templates={PROMPT_TEMPLATES}
+                historyItems={historyItems}
+                onStartCreate={handleStartCreate}
+                onOpenTemplates={() => setActiveTab('templates')}
+                onOpenAssets={() => setActiveTab('assets')}
+                onOpenHistory={() => setActiveTab('history')}
+              />
+            </motion.div>
+          ) : activeTab === 'generate' ? (
             <motion.div 
               key="generate"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex-1 flex flex-col min-w-0"
+              className="flex min-h-0 flex-1 flex-col overflow-hidden min-w-0"
             >
               <Stepper currentStep={currentStep} onStepChange={setCurrentStep} />
               
-              <div className="flex-1 relative overflow-hidden">
+              <div className="relative min-h-0 flex-1 overflow-hidden">
                 <AnimatePresence mode="wait">
                   <motion.div
                     key={currentStep}
@@ -489,7 +467,7 @@ export default function App() {
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: -20 }}
                     transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-                    className="absolute inset-0"
+                    className="absolute inset-0 flex min-h-0 flex-col overflow-hidden"
                   >
                     <MainWorkspace 
                       step={currentStep}
@@ -513,7 +491,7 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex-1"
+              className="min-h-0 flex-1 overflow-hidden"
             >
               <AssetBank />
             </motion.div>
@@ -523,7 +501,7 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex-1"
+              className="min-h-0 flex-1 overflow-hidden"
             >
               <TemplatesLibrary templates={PROMPT_TEMPLATES} currentConfig={stepStates[currentStep].config} onApply={handleApplyTemplate} />
             </motion.div>
@@ -533,7 +511,7 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex-1"
+              className="min-h-0 flex-1 overflow-hidden"
             >
               <HistoryView
                 items={historyItems}

@@ -41,13 +41,24 @@ export interface UploadedImage {
   type: string;
   size: number;
   dataUrl: string;
+  width?: number;
+  height?: number;
 }
 
 export interface PromptTemplate {
   id: string;
   title: string;
   category: string;
+  feature: 'floorplan' | 'style-render' | 'inpaint';
   description: string;
+  previewImage: string;
+  promptText: string;
+  tags?: string[];
+  recommendedStyle?: string;
+  recommendedLighting?: string;
+  recommendedMaterialStrength?: number;
+  useCase?: string;
+  suitableImages?: string[];
   config: Partial<GenerationConfig>;
 }
 
@@ -70,18 +81,28 @@ export interface GenerationHistoryItem {
 export interface AssetModel {
   id: string;
   name: string;
+  fileName: string;
+  fileType: 'glb' | 'gltf' | 'obj' | 'unknown';
+  modelUrl?: string;
   thumbnail: string;
-  type: string;
-  vertices: string;
   size: string;
   date: string;
+  source: 'generated' | 'uploaded' | 'sample';
+  sourceImageName?: string;
+  sourceImageDataUrl?: string;
+  prompt?: string;
+  provider?: string;
+  status?: 'ready' | 'generating' | 'failed' | 'optimizing';
+  qualityStatus?: 'usable' | 'warning' | 'error' | 'unknown';
+  vertices?: string;
+  triangles?: string;
+  materials?: string;
+  textures?: string;
   tags?: string[];
-  source?: 'sample' | 'local';
-  modelUrl?: string;
-  fileName?: string;
-  fileType?: 'glb' | 'gltf' | 'obj' | 'unknown';
-  previewable?: boolean;
+  category?: '家具' | '建筑构件' | '景观构件' | '灯具' | '植物' | '装饰品' | '未分类';
   storageWarning?: string;
+  type?: string;
+  previewable?: boolean;
 }
 
 export interface MaterialAsset {
