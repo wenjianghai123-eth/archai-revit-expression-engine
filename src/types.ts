@@ -5,6 +5,7 @@ export enum GenerationStep {
 }
 
 export type GenerationProvider = 'mock' | 'gemini' | 'grsai-nano-banana';
+export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface GenerationConfig {
   prompt: string;
@@ -15,7 +16,20 @@ export interface GenerationConfig {
   enhanceInterior?: boolean;
   addCharacters?: boolean;
   inpaintingStrength?: 'weak' | 'medium' | 'strong';
+  strength?: 'weak' | 'medium' | 'strong';
   keepOriginalMaterial?: boolean;
+  preserveStructure?: boolean;
+  feather?: number;
+  batchCount?: 1 | 2 | 4;
+}
+
+export interface GenerationResultOption {
+  id: string;
+  imageUrl: string;
+  assetId?: string;
+  isSelected: boolean;
+  isFavorite: boolean;
+  createdAt?: string;
 }
 
 export interface StepState {
@@ -25,6 +39,8 @@ export interface StepState {
   maskImage: UploadedImage | null;
   useFullImageMask: boolean;
   outputImage: string | null;
+  generationResults: GenerationResultOption[];
+  selectedGenerationResultId: string | null;
   isGenerating: boolean;
   generationStatus: 'ready' | 'uploading' | 'generating' | 'success' | 'error';
   generationError: string | null;
@@ -32,6 +48,10 @@ export interface StepState {
   generationProvider: GenerationProvider | null;
   generationResultId: string | null;
   generationCreatedAt: string | null;
+  generationJobId: string | null;
+  generationJobStatus: AsyncGenerationStatus | null;
+  generationProgress: number;
+  generationLogs: string[];
   viewMode: 'original' | 'after' | 'compare';
 }
 
@@ -41,6 +61,8 @@ export interface UploadedImage {
   type: string;
   size: number;
   dataUrl: string;
+  url?: string;
+  assetId?: string;
   width?: number;
   height?: number;
 }

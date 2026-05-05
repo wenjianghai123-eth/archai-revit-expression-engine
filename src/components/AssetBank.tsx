@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { AssetModel } from '../types';
 import { downloadDataUrl } from '../utils/download';
+import { deleteModelAsset, listModelAssets, ModelAssetRecord, uploadModelAsset } from '../lib/api';
 
 type ModelCategory = NonNullable<AssetModel['category']>;
 type StatusFilter = '全部' | '可用' | '待优化' | '失败';
@@ -151,6 +152,33 @@ function createModelThumbnail(fileType: AssetModel['fileType']): string {
       <text x="180" y="196" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" font-weight="700" fill="#0f172a">${label}</text>
     </svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function mapModelAssetRecord(asset: ModelAssetRecord): AssetModel {
+  const previewable = PREVIEWABLE_TYPES.has(asset.fileType);
+
+  return {
+    id: asset.id,
+    name: asset.originalFilename.replace(/\.[^.]+$/, ''),
+    fileName: asset.originalFilename,
+    fileType: asset.fileType,
+    modelUrl: asset.url,
+    thumbnail: createModelThumbnail(asset.fileType),
+    size: formatFileSize(asset.size),
+    date: asset.createdAt.slice(0, 10),
+    source: 'uploaded',
+    provider: '本地后端',
+    status: 'ready',
+    qualityStatus: asset.fileType === 'obj' ? 'unknown' : 'usable',
+    vertices: '待分析',
+    triangles: '待分析',
+    materials: '待分析',
+    textures: '待分析',
+    tags: previewable ? ['后端上传', '可预览'] : ['后端上传', 'OBJ 元数据'],
+    category: '未分类',
+    previewable,
+    storageWarning: asset.fileType === 'obj' ? 'OBJ 当前暂不支持在线预览，已作为模型元数据保存。' : undefined,
+  };
 }
 
 function readStoredAssets(): AssetModel[] {
@@ -339,6 +367,35 @@ export function AssetBank() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('全部');
   const [tagInput, setTagInput] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isLoadingAssets, setIsLoadingAssets] = useState(true);
+  const [isUploadingModel, setIsUploadingModel] = useState(false);
+
+  const refreshBackendAssets = async () => {
+    setIsLoadingAssets(true);
+    try {
+      const backendAssets = (await listModelAssets()).map(mapModelAssetRecord);
+      setModels(backendAssets);
+      setSelectedAsset(current => {
+        if (current && backendAssets.some(asset => asset.id === current.id)) return current;
+        return backendAssets[0] || null;
+      });
+      setDetailAsset(current => {
+        if (current && backendAssets.some(asset => asset.id === current.id)) return current;
+        return null;
+      });
+      setUploadError(null);
+    } catch (error) {
+      setUploadError(error instanceof Error ? `后端资产库暂不可用，已使用本地缓存：${error.message}` : '后端资产库暂不可用，已使用本地缓存。');
+      setModels(readStoredAssets());
+      setSelectedAsset(readStoredAssets()[0] || null);
+    } finally {
+      setIsLoadingAssets(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshBackendAssets();
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -402,6 +459,54 @@ export function AssetBank() {
         return;
       }
 
+      setIsUploadingModel(true);
+      void uploadModelAsset(file)
+        .then(async (asset) => {
+          const newModel = mapModelAssetRecord(asset);
+          setUploadError(null);
+          await refreshBackendAssets();
+          setSelectedAsset(newModel);
+          setDetailAsset(newModel);
+        })
+        .catch((uploadFailure) => {
+          const fileType = getFileExtension(file.name);
+          const previewable = PREVIEWABLE_TYPES.has(fileType);
+          const modelUrl = previewable ? URL.createObjectURL(file) : undefined;
+
+          if (modelUrl) {
+            objectUrlsRef.current.add(modelUrl);
+          }
+
+          const newModel: AssetModel = {
+            id: `uploaded-${Date.now()}`,
+            name: file.name.replace(/\.[^.]+$/, ''),
+            fileName: file.name,
+            fileType,
+            modelUrl,
+            thumbnail: createModelThumbnail(fileType),
+            size: formatFileSize(file.size),
+            date: new Date().toISOString().slice(0, 10),
+            source: 'uploaded',
+            status: 'ready',
+            qualityStatus: 'unknown',
+            vertices: '待分析',
+            triangles: '待分析',
+            materials: '待分析',
+            textures: '待分析',
+            tags: previewable ? ['本地上传', '可预览'] : ['本地上传', 'OBJ 元数据'],
+            category: '未分类',
+            previewable,
+            storageWarning: '后端上传失败，已临时保留在当前浏览器会话。刷新后可能只保留元数据。',
+          };
+
+          setUploadError(uploadFailure instanceof Error ? `后端上传失败，已使用本地 fallback：${uploadFailure.message}` : '后端上传失败，已使用本地 fallback。');
+          setModels((previous) => [newModel, ...previous]);
+          setSelectedAsset(newModel);
+          setDetailAsset(newModel);
+        })
+        .finally(() => setIsUploadingModel(false));
+      return;
+
       const fileType = getFileExtension(file.name);
       const previewable = PREVIEWABLE_TYPES.has(fileType);
       const modelUrl = previewable ? URL.createObjectURL(file) : undefined;
@@ -441,6 +546,15 @@ export function AssetBank() {
   };
 
   const handleDeleteAsset = (assetId: string) => {
+    if (assetId.startsWith('model_')) {
+      void deleteModelAsset(assetId)
+        .then(() => refreshBackendAssets())
+        .catch((error) => {
+          setUploadError(error instanceof Error ? error.message : '后端模型删除失败。');
+        });
+      return;
+    }
+
     setModels((previous) => {
       const targetAsset = previous.find((asset) => asset.id === assetId);
       if (targetAsset?.modelUrl?.startsWith('blob:')) {
@@ -494,10 +608,11 @@ export function AssetBank() {
               </div>
               <button
                 onClick={handleFileUpload}
+                disabled={isUploadingModel}
                 className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-100 transition-colors hover:bg-blue-700"
               >
                 <Upload className="h-4 w-4" />
-                上传模型
+                {isUploadingModel ? '上传中...' : '上传模型'}
               </button>
             </div>
 
@@ -505,6 +620,12 @@ export function AssetBank() {
               <div className="flex items-start gap-2 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-700">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{uploadError}</span>
+              </div>
+            )}
+
+            {isLoadingAssets && (
+              <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-bold text-blue-700">
+                正在从后端资产库加载模型列表...
               </div>
             )}
 

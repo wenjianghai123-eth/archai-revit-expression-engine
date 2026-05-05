@@ -1,0 +1,437 @@
+import { getSupabaseAccessToken } from './supabase';
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  role: 'admin' | 'member';
+  createdAt: string;
+}
+
+export interface Project {
+  id: string;
+  userId: string;
+  name: string;
+  description: string;
+  status: 'active' | 'archived';
+  coverImageUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string | null;
+}
+
+export interface ProjectInput {
+  name: string;
+  description?: string;
+  status?: Project['status'];
+  coverImageUrl?: string | null;
+}
+
+export interface GenerationRecord {
+  id: string;
+  userId: string;
+  projectId: string;
+  jobId?: string | null;
+  mode: 'floorplan' | 'style-render' | 'inpaint';
+  prompt: string;
+  inputImageUrl?: string | null;
+  inputImageDataPreview?: string | null;
+  outputImageUrl?: string | null;
+  outputImageDataPreview?: string | null;
+  provider: string;
+  status: 'succeeded' | 'failed';
+  createdAt: string;
+  updatedAt: string;
+  results?: GenerationResult[];
+}
+
+export interface GenerationResult {
+  id: string;
+  userId: string;
+  projectId: string;
+  jobId: string;
+  assetId: string;
+  imageUrl: string;
+  isSelected: boolean;
+  isFavorite: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GenerationRecordInput {
+  mode: GenerationRecord['mode'];
+  prompt: string;
+  inputImageUrl?: string | null;
+  inputImageDataPreview?: string | null;
+  outputImageUrl?: string | null;
+  outputImageDataPreview?: string | null;
+  provider: string;
+  status?: GenerationRecord['status'];
+}
+
+export interface ImageAsset {
+  id: string;
+  userId: string;
+  url: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+}
+
+export interface ModelAssetRecord {
+  id: string;
+  userId: string;
+  url: string;
+  filename: string;
+  originalFilename: string;
+  fileType: 'glb' | 'gltf' | 'obj';
+  mimeType: string;
+  size: number;
+  createdAt: string;
+  deletedAt?: string | null;
+}
+
+export interface GenerationJob {
+  id: string;
+  userId: string;
+  projectId: string;
+  mode: 'floorplan' | 'style-render' | 'inpaint';
+  prompt: string;
+  config: Record<string, unknown>;
+  inputAssetIds: string[];
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  progress: number;
+  provider: string;
+  outputAssetId: string | null;
+  outputAssetIds?: string[];
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  results?: GenerationResult[];
+}
+
+export interface GenerationJobInput {
+  projectId: string;
+  mode: GenerationJob['mode'];
+  prompt: string;
+  config: Record<string, unknown>;
+  inputAssetIds: string[];
+}
+
+export interface ShareLink {
+  id: string;
+  projectId: string;
+  token: string;
+  permission: 'view';
+  expiresAt: string;
+  createdAt: string;
+  revokedAt?: string | null;
+}
+
+export interface PublicSharePayload {
+  link: {
+    permission: ShareLink['permission'];
+    expiresAt: string;
+    createdAt: string;
+  };
+  project: {
+    name: string;
+    description: string;
+  };
+  generations: PublicShareGeneration[];
+}
+
+export interface PublicShareGeneration {
+  id: string;
+  mode: GenerationRecord['mode'];
+  prompt: string;
+  inputImageUrl: string | null;
+  inputImageDataPreview: string | null;
+  outputImageUrl: string | null;
+  outputImageDataPreview: string | null;
+  createdAt: string;
+  results: PublicShareGenerationResult[];
+}
+
+export interface PublicShareGenerationResult {
+  id: string;
+  imageUrl: string;
+  isSelected: boolean;
+  isFavorite: boolean;
+  createdAt: string;
+}
+
+export interface CreditBalance {
+  userId: string;
+  balance: number;
+  updatedAt: string;
+}
+
+export interface CreditTransaction {
+  id: string;
+  userId: string;
+  type: 'grant' | 'debit' | 'refund';
+  amount: number;
+  balanceAfter: number;
+  reason: string;
+  referenceType?: 'generation_job' | 'system' | null;
+  referenceId?: string | null;
+  createdAt: string;
+}
+
+export interface AdminDashboard {
+  stats: {
+    userCount: number;
+    projectCount: number;
+    generationJobCount: number;
+    succeededJobCount: number;
+    failedJobCount: number;
+    totalCreditsConsumed: number;
+  };
+  recentJobs: GenerationJob[];
+  recentErrorJobs: GenerationJob[];
+}
+
+export async function updateGenerationResult(
+  id: string,
+  input: Partial<Pick<GenerationResult, 'isSelected' | 'isFavorite'>>,
+): Promise<GenerationResult> {
+  const response = await request<{ result: GenerationResult }>(`/api/generation-results/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+  return response.result;
+}
+
+type ApiResponse<T> = { ok: true; data: T } | { ok: false; error: { message: string; code: string } };
+
+export async function getCurrentUser(): Promise<AuthUser> {
+  const response = await request<{ user: AuthUser }>('/api/auth/me');
+  return response.user;
+}
+
+export async function getCreditBalance(): Promise<CreditBalance> {
+  const response = await request<{ balance: CreditBalance }>('/api/billing/credits');
+  return response.balance;
+}
+
+export async function listCreditTransactions(): Promise<CreditTransaction[]> {
+  const response = await request<{ transactions: CreditTransaction[] }>('/api/billing/transactions');
+  return response.transactions;
+}
+
+export async function getAdminDashboard(): Promise<AdminDashboard> {
+  const response = await request<{ dashboard: AdminDashboard }>('/api/admin/dashboard');
+  return response.dashboard;
+}
+
+export async function grantUserCredits(input: { userId: string; amount: number; reason?: string }): Promise<{ balance: CreditBalance; transaction: CreditTransaction }> {
+  return request<{ balance: CreditBalance; transaction: CreditTransaction }>('/api/admin/credits/grant', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function listProjects(): Promise<Project[]> {
+  const response = await request<{ projects: Project[] }>('/api/projects');
+  return response.projects;
+}
+
+export async function createProject(input: ProjectInput): Promise<Project> {
+  const response = await request<{ project: Project }>('/api/projects', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  return response.project;
+}
+
+export async function getProject(id: string): Promise<Project> {
+  const response = await request<{ project: Project }>(`/api/projects/${encodeURIComponent(id)}`);
+  return response.project;
+}
+
+export async function updateProject(id: string, input: Partial<ProjectInput>): Promise<Project> {
+  const response = await request<{ project: Project }>(`/api/projects/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+  return response.project;
+}
+
+export async function deleteProject(id: string): Promise<Project> {
+  const response = await request<{ project: Project }>(`/api/projects/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  return response.project;
+}
+
+export async function listProjectGenerations(projectId: string): Promise<GenerationRecord[]> {
+  const response = await request<{ generations: GenerationRecord[] }>(
+    `/api/projects/${encodeURIComponent(projectId)}/generations`,
+  );
+  return response.generations;
+}
+
+export async function createProjectGeneration(projectId: string, input: GenerationRecordInput): Promise<GenerationRecord> {
+  const response = await request<{ generation: GenerationRecord }>(
+    `/api/projects/${encodeURIComponent(projectId)}/generations`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  );
+  return response.generation;
+}
+
+export async function uploadImageAsset(file: Blob, filename = 'image.png'): Promise<ImageAsset> {
+  const formData = new FormData();
+  formData.append('file', file, filename);
+
+  const response = await request<{ asset: ImageAsset }>('/api/assets/images', {
+    method: 'POST',
+    body: formData,
+  });
+  return response.asset;
+}
+
+export async function getImageAsset(id: string): Promise<ImageAsset> {
+  const response = await request<{ asset: ImageAsset }>(`/api/assets/images/${encodeURIComponent(id)}`);
+  return response.asset;
+}
+
+export async function createGenerationJob(input: GenerationJobInput): Promise<GenerationJob> {
+  const response = await request<{ job: GenerationJob }>('/api/generation-jobs', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  return response.job;
+}
+
+export async function getGenerationJob(id: string): Promise<GenerationJob> {
+  const response = await request<{ job: GenerationJob }>(`/api/generation-jobs/${encodeURIComponent(id)}`);
+  return response.job;
+}
+
+export async function cancelGenerationJob(id: string): Promise<GenerationJob> {
+  const response = await request<{ job: GenerationJob }>(`/api/generation-jobs/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST',
+  });
+  return response.job;
+}
+
+export async function listModelAssets(): Promise<ModelAssetRecord[]> {
+  const response = await request<{ assets: ModelAssetRecord[] }>('/api/assets/models');
+  return response.assets;
+}
+
+export async function getModelAsset(id: string): Promise<ModelAssetRecord> {
+  const response = await request<{ asset: ModelAssetRecord }>(`/api/assets/models/${encodeURIComponent(id)}`);
+  return response.asset;
+}
+
+export async function uploadModelAsset(file: File): Promise<ModelAssetRecord> {
+  const formData = new FormData();
+  formData.append('file', file, file.name);
+
+  const response = await request<{ asset: ModelAssetRecord }>('/api/assets/models', {
+    method: 'POST',
+    body: formData,
+  });
+  return response.asset;
+}
+
+export async function deleteModelAsset(id: string): Promise<ModelAssetRecord> {
+  const response = await request<{ asset: ModelAssetRecord }>(`/api/assets/models/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  return response.asset;
+}
+
+export async function createShareLink(projectId: string, expiresAt?: string): Promise<{ shareLink: ShareLink; url: string }> {
+  return request<{ shareLink: ShareLink; url: string }>(`/api/projects/${encodeURIComponent(projectId)}/share-links`, {
+    method: 'POST',
+    body: JSON.stringify({ expiresAt }),
+  });
+}
+
+export async function revokeShareLink(projectId: string, shareLinkId: string): Promise<ShareLink> {
+  const response = await request<{ shareLink: ShareLink }>(
+    `/api/projects/${encodeURIComponent(projectId)}/share-links/${encodeURIComponent(shareLinkId)}`,
+    { method: 'DELETE' },
+  );
+  return response.shareLink;
+}
+
+export async function getPublicShare(token: string): Promise<PublicSharePayload> {
+  const response = await request<{ share: PublicSharePayload }>(`/api/share/${encodeURIComponent(token)}`);
+  return response.share;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let response: Response;
+  const accessToken = await getSupabaseAccessToken();
+  const headers = new Headers(init.headers);
+
+  if (!(init.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  if (accessToken && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${accessToken}`);
+  }
+
+  try {
+    response = await fetch(path, {
+      ...init,
+      headers,
+    });
+  } catch {
+    throw new Error('无法连接后端服务，请确认 npm run dev:server 已启动。');
+  }
+
+  const body = await readJson(response);
+
+  if (!response.ok || !isApiResponse<T>(body)) {
+    throw new Error(readApiError(body) || `请求失败（HTTP ${response.status}）。`);
+  }
+
+  if (body.ok === false) {
+    throw new Error(body.error.message);
+  }
+
+  return body.data;
+}
+
+async function readJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+function isApiResponse<T>(value: unknown): value is ApiResponse<T> {
+  if (!isRecord(value) || typeof value.ok !== 'boolean') {
+    return false;
+  }
+
+  if (value.ok === true) {
+    return 'data' in value;
+  }
+
+  return isRecord(value.error) && typeof value.error.message === 'string';
+}
+
+function readApiError(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.error === 'string') return value.error;
+  if (isRecord(value.error) && typeof value.error.message === 'string') return value.error.message;
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

@@ -23,6 +23,10 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
     warnings.push('未提供 maskImageDataUrl，mock 结果未进行真实局部区域约束。');
   }
 
+  if (input.mode === 'inpaint' && input.maskImageDataUrl) {
+    warnings.push('Mock inpaint 已接收 maskImageDataUrl，仅用于开发占位，不代表真实局部重绘能力。');
+  }
+
   return {
     id: crypto.randomUUID(),
     provider: 'mock',
@@ -49,6 +53,7 @@ function createMockImageDataUrl(mode: 'floorplan' | 'style-render' | 'inpaint', 
       </defs>
       <rect width="1200" height="800" fill="url(#bg)"/>
       <rect x="96" y="96" width="1008" height="608" rx="18" fill="#ffffff" opacity="0.82"/>
+      ${mode === 'inpaint' ? '<rect x="360" y="310" width="480" height="230" rx="28" fill="#fb7185" opacity="0.28"/><rect x="380" y="330" width="440" height="190" rx="22" fill="none" stroke="#be123c" stroke-width="8" stroke-dasharray="18 14"/>' : ''}
       <path d="M220 560 L360 360 L520 480 L680 260 L980 560 Z" fill="#2563eb" opacity="0.18"/>
       <path d="M220 560 L360 360 L520 480 L680 260 L980 560" fill="none" stroke="#2563eb" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
       <text x="140" y="180" fill="#0f172a" font-family="Arial, sans-serif" font-size="44" font-weight="700">${escapeSvg(title)}</text>

@@ -84,3 +84,149 @@
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: rgba(100, 116, 139, 0.65);
 }
+
+.pdf-report-print {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+
+  body {
+    background: #ffffff !important;
+  }
+
+  .print-hidden {
+    display: none !important;
+  }
+
+  .pdf-report-print {
+    display: block !important;
+    color: #0f172a;
+    font-family: "Inter", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", ui-sans-serif, system-ui, sans-serif;
+  }
+
+  .pdf-report-header {
+    border-bottom: 2px solid #0f172a;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+  }
+
+  .pdf-report-kicker {
+    color: #2563eb;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.18em;
+    margin: 0 0 8px;
+    text-transform: uppercase;
+  }
+
+  .pdf-report-header h1 {
+    font-size: 28px;
+    line-height: 1.2;
+    margin: 0;
+  }
+
+  .pdf-report-header p {
+    color: #475569;
+    font-size: 12px;
+    line-height: 1.7;
+    margin: 8px 0 0;
+  }
+
+  .pdf-report-meta {
+    color: #64748b;
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 10px;
+    gap: 12px;
+    margin-top: 10px;
+  }
+
+  .pdf-report-item {
+    break-inside: avoid;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    margin-bottom: 14px;
+    padding: 12px;
+  }
+
+  .pdf-report-item-title {
+    align-items: center;
+    display: flex;
+    font-size: 12px;
+    font-weight: 800;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+
+  .pdf-report-item-title span:last-child {
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  .pdf-report-images {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .pdf-report-images figure {
+    margin: 0;
+  }
+
+  .pdf-report-image-frame {
+    align-items: center;
+    aspect-ratio: 4 / 3;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    display: flex;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  .pdf-report-image-frame img {
+    height: 100%;
+    object-fit: contain;
+    width: 100%;
+  }
+
+  .pdf-report-image-frame span {
+    color: #94a3b8;
+    font-size: 11px;
+  }
+
+  .pdf-report-images figcaption {
+    color: #475569;
+    font-size: 10px;
+    font-weight: 700;
+    margin-top: 5px;
+  }
+
+  .pdf-report-prompt {
+    background: #f8fafc;
+    border-radius: 8px;
+    margin-top: 10px;
+    padding: 10px;
+  }
+
+  .pdf-report-prompt strong {
+    display: block;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    margin-bottom: 5px;
+    text-transform: uppercase;
+  }
+
+  .pdf-report-prompt p {
+    color: #334155;
+    font-size: 11px;
+    line-height: 1.7;
+    margin: 0;
+  }
+}

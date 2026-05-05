@@ -8,4 +8,9 @@ coverage/
 .env
 .env.local
 uploads/
+e2e-data/
+e2e-uploads/
+test-results/
+playwright-report/
+data/app-db.json
 !.env.example

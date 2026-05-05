@@ -6,6 +6,7 @@ import {
   Zap, 
   LayoutDashboard,
   Database,
+  FolderKanban,
   Layers,
   Wand2,
   Paintbrush,
@@ -26,6 +27,7 @@ export function Sidebar({ activeTab, onTabChange, onSettingsOpen }: SidebarProps
       title: '创作',
       items: [
         { id: 'home', icon: Sparkles, label: '首页', desc: '创作台概览' },
+        { id: 'projects', icon: FolderKanban, label: '项目', desc: '方案项目管理' },
         { id: 'generate', icon: LayoutDashboard, label: 'AI 生成', desc: '图像生成工作台' },
       ],
     },

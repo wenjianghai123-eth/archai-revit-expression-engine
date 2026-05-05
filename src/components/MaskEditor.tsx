@@ -6,7 +6,7 @@ interface MaskEditorProps {
   imageName: string;
   maskImageDataUrl: string | null;
   useFullImage: boolean;
-  onMaskChange: (maskDataUrl: string | null, useFullImage: boolean) => void;
+  onMaskChange: (maskDataUrl: string | null, useFullImage: boolean, feather?: number) => void;
 }
 
 type MaskTool = 'brush' | 'eraser' | 'rectangle' | 'lasso';
@@ -166,7 +166,7 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, useFullI
   const finishMaskEdit = () => {
     const percent = updateSelectionStats();
     renderPreview();
-    onMaskChange(percent > 0 ? exportMaskDataUrl() : null, false);
+    onMaskChange(percent > 0 ? exportMaskDataUrl() : null, false, feather);
   };
 
   const drawStroke = (from: Point, to: Point) => {
@@ -312,7 +312,7 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, useFullI
       context.drawImage(image, 0, 0, imageSize.width, imageSize.height);
       const percent = updateSelectionStats();
       renderPreview();
-      onMaskChange(percent > 0 ? exportMaskDataUrl() : null, false);
+      onMaskChange(percent > 0 ? exportMaskDataUrl() : null, false, feather);
     };
     image.src = previousDataUrl;
   };
@@ -329,7 +329,7 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, useFullI
     setEditorMessage('尚未绘制局部区域');
     setDraftRect(null);
     setDraftLassoPoints([]);
-    onMaskChange(null, false);
+    onMaskChange(null, false, feather);
   };
 
   const handleUseFullImage = () => {
@@ -341,7 +341,7 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, useFullI
     context.fillRect(0, 0, imageSize.width, imageSize.height);
     renderPreview();
     updateSelectionStats();
-    onMaskChange(exportMaskDataUrl(), true);
+    onMaskChange(exportMaskDataUrl(), true, feather);
   };
 
   const handleCancelFullImage = () => {
@@ -354,7 +354,7 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, useFullI
     setHasMask(false);
     setSelectionPercent(0);
     setEditorMessage('尚未绘制局部区域');
-    onMaskChange(null, false);
+    onMaskChange(null, false, feather);
   };
 
   const handleInvert = () => {
@@ -504,7 +504,11 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, useFullI
           max="30"
           step="1"
           value={feather}
-          onChange={(event) => setFeather(Number(event.target.value))}
+          onChange={(event) => {
+            const nextFeather = Number(event.target.value);
+            setFeather(nextFeather);
+            onMaskChange(maskImageDataUrl, useFullImage, nextFeather);
+          }}
           className="min-w-28 flex-1 accent-blue-600"
         />
         <span className="w-10 text-right font-mono">{feather}px</span>

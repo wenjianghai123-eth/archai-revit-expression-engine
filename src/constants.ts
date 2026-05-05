@@ -102,20 +102,26 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
     style: "现代主义",
     lighting: "黄金时刻 (室外)",
     materialStrength: 0.8,
+    batchCount: 1,
   },
   [GenerationStep.StyleRender]: {
     prompt: "",
     style: "现代建筑可视化",
     lighting: "自然均匀日光",
     materialStrength: 0.8,
+    batchCount: 1,
   },
   [GenerationStep.LocalInpainting]: {
     prompt: "仅对选定区域进行局部重绘，保持整体图像风格一致，优化该区域的材质、光影与细节表现，确保与周围区域无缝融合，提升真实感与表现力，输出高分辨率细节优化结果。",
     style: "匹配原图",
     lighting: "匹配原图",
     materialStrength: 0.8,
+    batchCount: 1,
     inpaintingStrength: 'medium',
+    strength: 'medium',
     keepOriginalMaterial: true,
+    preserveStructure: true,
+    feather: 0,
   },
 };
 

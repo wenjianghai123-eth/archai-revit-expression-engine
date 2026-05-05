@@ -1,17 +1,32 @@
 import React from 'react';
-import { Activity, RefreshCw, Server, ShieldCheck, X, type LucideIcon } from 'lucide-react';
+import { Activity, LogOut, RefreshCw, Server, ShieldCheck, UserCircle, X, type LucideIcon } from 'lucide-react';
+import { AuthUser } from '../lib/api';
 
 interface SettingsModalProps {
   isOpen: boolean;
   providerMode: string;
   backendHealth: string;
   providerSource: string;
+  currentUser: AuthUser | null;
+  currentUserStatus: string;
+  onSignOut: () => void;
   isChecking: boolean;
   onRefresh: () => void;
   onClose: () => void;
 }
 
-export function SettingsModal({ isOpen, providerMode, backendHealth, providerSource, isChecking, onRefresh, onClose }: SettingsModalProps) {
+export function SettingsModal({
+  isOpen,
+  providerMode,
+  backendHealth,
+  providerSource,
+  currentUser,
+  currentUserStatus,
+  onSignOut,
+  isChecking,
+  onRefresh,
+  onClose,
+}: SettingsModalProps) {
   if (!isOpen) return null;
 
   return (
@@ -28,6 +43,20 @@ export function SettingsModal({ isOpen, providerMode, backendHealth, providerSou
         </div>
 
         <div className="space-y-3 p-5">
+          <StatusRow
+            icon={UserCircle}
+            label="Current user"
+            value={currentUser ? `${currentUser.name} · ${currentUser.email}` : currentUserStatus}
+          />
+          {currentUser && (
+            <button
+              onClick={onSignOut}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:border-rose-200 hover:text-rose-700"
+            >
+              <LogOut className="h-4 w-4" />
+              退出登录
+            </button>
+          )}
           <StatusRow icon={Server} label="Provider mode" value={providerMode} />
           <StatusRow icon={Activity} label="Backend health" value={backendHealth} />
           <StatusRow icon={ShieldCheck} label="Provider source" value={providerSource} />
