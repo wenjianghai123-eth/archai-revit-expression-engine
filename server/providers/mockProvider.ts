@@ -19,7 +19,9 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
     warnings.push('未提供参考材质图，mock 结果使用默认材质语义。');
   }
 
-  if (input.mode === 'inpaint' && !input.maskImageDataUrl) {
+  if (input.mode === 'inpaint' && input.maskMode === 'full-image') {
+    warnings.push('Mock inpaint 已明确使用整图重绘 mask。');
+  } else if (input.mode === 'inpaint' && !input.maskImageDataUrl) {
     warnings.push('未提供 maskImageDataUrl，mock 结果未进行真实局部区域约束。');
   }
 
@@ -30,7 +32,8 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
   return {
     id: crypto.randomUUID(),
     provider: 'mock',
-    imageDataUrl: createMockImageDataUrl(input.mode, input.prompt, createdAt),
+    dataUrl: createMockImageDataUrl(input.mode, input.prompt, createdAt),
+    mimeType: 'image/svg+xml',
     createdAt,
     warnings,
   };

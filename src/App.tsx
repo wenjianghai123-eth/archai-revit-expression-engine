@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Sidebar, Stepper } from './components/Navigation';
 import { MainWorkspace } from './components/MainWorkspace';
 import { AssetBank } from './components/AssetBank';
@@ -16,30 +16,25 @@ import { ProjectDetail } from './components/ProjectDetail';
 import { ProjectList } from './components/ProjectList';
 import { PublicSharePreview } from './components/PublicSharePreview';
 import { AdminPage } from './components/AdminPage';
-import { GenerationStep, StepState, GenerationConfig, GenerationHistoryItem, GenerationProvider, PromptTemplate, UploadedImage } from './types';
-import { DEFAULT_CONFIGS, PROMPT_TEMPLATES } from './constants';
+import { GenerationConfig, GenerationStep, GenerationHistoryItem, GenerationProvider, StepState, UploadedImage } from './types';
+import { PROMPT_TEMPLATES } from './constants';
 import { generateFloorplanTo3D, generateInpainting, generateStyleRender } from './api/generation';
-import { BackendHealth, getBackendHealth } from './api/health';
 import {
   cancelGenerationJob,
   createGenerationJob,
   createProjectGeneration,
-  CreditBalance,
-  getCreditBalance,
   getGenerationJob,
   getImageAsset,
   updateGenerationResult,
   uploadImageAsset,
 } from './lib/api';
 import { useCurrentUser } from './hooks/useCurrentUser';
+import { useBackendHealth } from './hooks/useBackendHealth';
+import { useCreditBalance } from './hooks/useCreditBalance';
+import { useGenerationWorkflow } from './hooks/useGenerationWorkflow';
+import { useProjectSelection } from './hooks/useProjectSelection';
 import { clearGenerationHistory, deleteGenerationRecord, listGenerationRecords, saveGenerationRecord } from './storage/history';
 import { motion, AnimatePresence } from 'motion/react';
-
-interface BackendHealthState {
-  status: 'checking' | 'online' | 'offline';
-  data: BackendHealth | null;
-  message: string;
-}
 
 export default function App() {
   const {
@@ -52,262 +47,32 @@ export default function App() {
     signInWithEmail,
     signOut,
   } = useCurrentUser();
-  const [currentStep, setCurrentStep] = useState<GenerationStep>(GenerationStep.FloorplanTo3D);
-  const [activeTab, setActiveTab] = useState('home');
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const {
+    activeTab,
+    setActiveTab,
+    selectedProjectId,
+    openProject: handleOpenProject,
+    backToProjects: handleBackToProjects,
+    startCreate,
+  } = useProjectSelection();
+  const {
+    currentStep,
+    setCurrentStep,
+    stepStates,
+    setStepStates,
+    handleUpdateConfig,
+    handleUpdateInputImage,
+    handleUpdateMaterialImage,
+    handleUpdateMaskImage,
+    handleResetConfig,
+    handleApplyTemplate,
+  } = useGenerationWorkflow(() => setActiveTab('generate'));
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<GenerationHistoryItem[]>(() => listGenerationRecords());
-  const [backendHealth, setBackendHealth] = useState<BackendHealthState>({
-    status: 'checking',
-    data: null,
-    message: '等待后端健康检查。',
-  });
-  const [creditBalance, setCreditBalance] = useState<CreditBalance | null>(null);
-  const [creditError, setCreditError] = useState<string | null>(null);
+  const { backendHealth, refreshBackendHealth } = useBackendHealth(isSettingsOpen);
+  const { creditBalance, creditError, refreshCreditBalance } = useCreditBalance(Boolean(currentUser));
   const publicShareToken = readPublicShareToken();
   const isAdminPath = window.location.pathname === '/admin';
-  
-  const [stepStates, setStepStates] = useState<Record<GenerationStep, StepState>>({
-    [GenerationStep.FloorplanTo3D]: {
-      config: DEFAULT_CONFIGS[GenerationStep.FloorplanTo3D],
-      inputImage: null,
-      materialImage: null,
-      maskImage: null,
-      useFullImageMask: false,
-      outputImage: null,
-      generationResults: [],
-      selectedGenerationResultId: null,
-      isGenerating: false,
-      generationStatus: 'ready',
-      generationError: null,
-      generationWarnings: [],
-      generationProvider: null,
-      generationResultId: null,
-      generationCreatedAt: null,
-      generationJobId: null,
-      generationJobStatus: null,
-      generationProgress: 0,
-      generationLogs: [],
-      viewMode: 'original'
-    },
-    [GenerationStep.StyleRender]: {
-      config: DEFAULT_CONFIGS[GenerationStep.StyleRender],
-      inputImage: null,
-      materialImage: null,
-      maskImage: null,
-      useFullImageMask: false,
-      outputImage: null,
-      generationResults: [],
-      selectedGenerationResultId: null,
-      isGenerating: false,
-      generationStatus: 'ready',
-      generationError: null,
-      generationWarnings: [],
-      generationProvider: null,
-      generationResultId: null,
-      generationCreatedAt: null,
-      generationJobId: null,
-      generationJobStatus: null,
-      generationProgress: 0,
-      generationLogs: [],
-      viewMode: 'original'
-    },
-    [GenerationStep.LocalInpainting]: {
-      config: DEFAULT_CONFIGS[GenerationStep.LocalInpainting],
-      inputImage: null,
-      materialImage: null,
-      maskImage: null,
-      useFullImageMask: false,
-      outputImage: null,
-      generationResults: [],
-      selectedGenerationResultId: null,
-      isGenerating: false,
-      generationStatus: 'ready',
-      generationError: null,
-      generationWarnings: [],
-      generationProvider: null,
-      generationResultId: null,
-      generationCreatedAt: null,
-      generationJobId: null,
-      generationJobStatus: null,
-      generationProgress: 0,
-      generationLogs: [],
-      viewMode: 'original'
-    }
-  });
-
-  const handleUpdateConfig = useCallback((config: Partial<GenerationConfig>) => {
-    setStepStates(prev => ({
-      ...prev,
-      [currentStep]: {
-        ...prev[currentStep],
-        config: { ...prev[currentStep].config, ...config }
-      }
-    }));
-  }, [currentStep]);
-
-  const handleUpdateInputImage = useCallback((image: UploadedImage | null) => {
-    setStepStates(prev => ({
-      ...prev,
-      [currentStep]: {
-        ...prev[currentStep],
-        inputImage: image,
-        maskImage: null,
-        useFullImageMask: false,
-        outputImage: image ? prev[currentStep].outputImage : null,
-        generationResults: image ? prev[currentStep].generationResults : [],
-        selectedGenerationResultId: image ? prev[currentStep].selectedGenerationResultId : null,
-        generationStatus: 'ready',
-        generationError: null,
-        generationWarnings: [],
-        generationProvider: null,
-        generationResultId: null,
-        generationCreatedAt: null,
-        generationJobId: null,
-        generationJobStatus: null,
-        generationProgress: 0,
-        generationLogs: [],
-        viewMode: image ? prev[currentStep].viewMode : 'original',
-      }
-    }));
-  }, [currentStep]);
-
-  const handleUpdateMaterialImage = useCallback((image: UploadedImage | null) => {
-    setStepStates(prev => ({
-      ...prev,
-      [currentStep]: {
-        ...prev[currentStep],
-        materialImage: image,
-      }
-    }));
-  }, [currentStep]);
-
-  const handleUpdateMaskImage = useCallback((maskDataUrl: string | null, useFullImage: boolean, feather = 0) => {
-    setStepStates(prev => ({
-      ...prev,
-      [currentStep]: {
-        ...prev[currentStep],
-        maskImage: maskDataUrl
-          ? {
-              id: `mask-${Date.now()}`,
-              name: useFullImage ? '鏁村浘 mask' : '鐭╁舰 mask',
-              type: 'image/png',
-              size: 0,
-              dataUrl: maskDataUrl,
-            }
-          : null,
-        useFullImageMask: useFullImage,
-        config: {
-          ...prev[currentStep].config,
-          feather,
-        },
-        generationStatus: 'ready',
-        generationError: null,
-        generationWarnings: [],
-        generationProvider: null,
-        generationResultId: null,
-        generationCreatedAt: null,
-        generationJobId: null,
-        generationJobStatus: null,
-        generationProgress: 0,
-        generationLogs: [],
-      }
-    }));
-  }, [currentStep]);
-
-  const handleResetConfig = useCallback(() => {
-    setStepStates(prev => ({
-      ...prev,
-      [currentStep]: {
-          ...prev[currentStep],
-          config: DEFAULT_CONFIGS[currentStep],
-          inputImage: null,
-          materialImage: null,
-          maskImage: null,
-          useFullImageMask: false,
-          outputImage: null,
-          generationResults: [],
-          selectedGenerationResultId: null,
-          isGenerating: false,
-          generationStatus: 'ready',
-          generationError: null,
-          generationWarnings: [],
-          generationProvider: null,
-          generationResultId: null,
-          generationCreatedAt: null,
-          generationJobId: null,
-          generationJobStatus: null,
-          generationProgress: 0,
-          generationLogs: [],
-          viewMode: 'original'
-      }
-    }));
-  }, [currentStep]);
-
-  const handleApplyTemplate = useCallback((template: PromptTemplate) => {
-    const targetStep =
-      template.feature === 'floorplan'
-        ? GenerationStep.FloorplanTo3D
-        : template.feature === 'style-render'
-          ? GenerationStep.StyleRender
-          : GenerationStep.LocalInpainting;
-
-    setStepStates(prev => ({
-      ...prev,
-      [targetStep]: {
-        ...prev[targetStep],
-        config: { ...prev[targetStep].config, ...template.config }
-      }
-    }));
-    setCurrentStep(targetStep);
-    setActiveTab('generate');
-  }, []);
-
-  const refreshBackendHealth = useCallback(async () => {
-    setBackendHealth(prev => ({
-      status: 'checking',
-      data: prev.data,
-      message: '姝ｅ湪妫€鏌ュ悗绔仴搴风姸鎬?..',
-    }));
-
-    try {
-      const health = await getBackendHealth();
-      setBackendHealth({
-        status: 'online',
-        data: health,
-        message: `后端在线，版本 ${health.version}，当前 provider: ${health.provider}。`,
-      });
-    } catch (error) {
-      setBackendHealth({
-        status: 'offline',
-        data: null,
-        message: error instanceof Error ? error.message : '后端健康检查失败。',
-      });
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!isSettingsOpen) {
-      return;
-    }
-
-    void refreshBackendHealth();
-  }, [isSettingsOpen, refreshBackendHealth]);
-
-  const refreshCreditBalance = useCallback(async () => {
-    if (!currentUser) return;
-
-    try {
-      setCreditBalance(await getCreditBalance());
-      setCreditError(null);
-    } catch (error) {
-      setCreditError(error instanceof Error ? error.message : '额度读取失败。');
-    }
-  }, [currentUser]);
-
-  useEffect(() => {
-    void refreshCreditBalance();
-  }, [refreshCreditBalance]);
 
   const handleReuseHistory = useCallback((item: GenerationHistoryItem) => {
     setCurrentStep(item.step);
@@ -435,7 +200,10 @@ export default function App() {
           ...(stateAtStart.materialImage?.assetId ? [stateAtStart.materialImage.assetId] : []),
         ];
         let maskAssetId: string | undefined;
-        if (currentStep === GenerationStep.LocalInpainting && stateAtStart.maskImage?.dataUrl) {
+        const maskMode = currentStep === GenerationStep.LocalInpainting
+          ? stateAtStart.useFullImageMask ? 'full-image' : 'asset-mask'
+          : undefined;
+        if (currentStep === GenerationStep.LocalInpainting && maskMode === 'asset-mask' && stateAtStart.maskImage?.dataUrl) {
           const maskFile = dataUrlToFile(stateAtStart.maskImage.dataUrl, `archai-mask-${Date.now()}`);
           const maskAsset = await uploadImageAsset(maskFile, maskFile.name);
           maskAssetId = maskAsset.id;
@@ -450,6 +218,7 @@ export default function App() {
             strength: stateAtStart.config.strength || stateAtStart.config.inpaintingStrength || 'medium',
             preserveStructure: Boolean(stateAtStart.config.preserveStructure ?? stateAtStart.config.keepOriginalMaterial),
             feather: stateAtStart.config.feather ?? 0,
+            maskMode,
             maskAssetId,
           },
           inputAssetIds,
@@ -482,7 +251,7 @@ export default function App() {
               generationProgress: latestJob.progress,
               generationLogs: [
                 ...prev[currentStep].generationLogs,
-                `${latestJob.status}: 浠诲姟杩涘害 ${latestJob.progress}%`,
+                `${latestJob.status}: 任务进度 ${latestJob.progress}%`,
               ].slice(-8),
             },
           }));
@@ -582,6 +351,21 @@ export default function App() {
           return;
         }
 
+        if (!isLegacyGenerationFallbackEnabled()) {
+          setStepStates(prev => ({
+            ...prev,
+            [currentStep]: {
+              ...prev[currentStep],
+              isGenerating: false,
+              generationStatus: 'error',
+              generationError: `异步生成任务不可用：${jobErrorMessage}`,
+              generationLogs: [...prev[currentStep].generationLogs, 'error: 旧生成接口 fallback 已禁用。'].slice(-8),
+            },
+          }));
+          void refreshCreditBalance();
+          return;
+        }
+
         setStepStates(prev => ({
           ...prev,
           [currentStep]: {
@@ -594,6 +378,20 @@ export default function App() {
           },
         }));
       }
+    }
+
+    if (!isLegacyGenerationFallbackEnabled()) {
+      setStepStates(prev => ({
+        ...prev,
+        [currentStep]: {
+          ...prev[currentStep],
+          isGenerating: false,
+          generationStatus: 'error',
+          generationError: '当前环境已禁用旧生成接口。请先选择项目并上传输入图，以便通过任务系统生成。',
+          generationLogs: [...prev[currentStep].generationLogs, 'error: 旧生成接口 fallback 已禁用。'].slice(-8),
+        },
+      }));
+      return;
     }
 
     try {
@@ -654,7 +452,7 @@ export default function App() {
         } catch (saveError) {
           const message = saveError instanceof Error ? saveError.message : '项目生成记录保存失败。';
           projectSaveWarning = projectSaveWarning
-            ? `${projectSaveWarning}锛涢」鐩褰曚繚瀛樺け璐ワ細${message}`
+            ? `${projectSaveWarning}；项目记录保存失败：${message}`
             : `生成已完成，但未能写入项目记录：${message}`;
         }
       }
@@ -841,18 +639,8 @@ export default function App() {
   }, [creditBalance, currentStep, refreshCreditBalance, selectedProjectId, stepStates]);
 
   const handleStartCreate = useCallback((step: GenerationStep = GenerationStep.FloorplanTo3D) => {
-    setCurrentStep(step);
-    setActiveTab('generate');
-  }, []);
-
-  const handleOpenProject = useCallback((projectId: string) => {
-    setSelectedProjectId(projectId);
-    setActiveTab('project-detail');
-  }, []);
-
-  const handleBackToProjects = useCallback(() => {
-    setActiveTab('projects');
-  }, []);
+    startCreate(setCurrentStep, step);
+  }, [setCurrentStep, startCreate]);
 
   if (publicShareToken) {
     return <PublicSharePreview token={publicShareToken} />;
@@ -1014,14 +802,14 @@ export default function App() {
               key="fallback"
               className="flex-1 flex items-center justify-center text-slate-400 bg-slate-50"
             >
-              姝ｅ湪寮€鍙戜腑...
+              正在开发中...
             </motion.div>
           )}
         </AnimatePresence>
       </main>
       <SettingsModal
         isOpen={isSettingsOpen}
-        providerMode={backendHealth.data?.provider || '鏈煡'}
+        providerMode={backendHealth.data?.provider || '未知'}
         backendHealth={backendHealth.message}
         providerSource={backendHealth.data?.provider === 'gemini' || backendHealth.data?.provider === 'grsai-nano-banana' ? 'Real provider' : backendHealth.data?.provider === 'mock' ? 'Mock provider' : '未知（后端未连接）'}
         currentUser={currentUser}
@@ -1078,6 +866,10 @@ function getImageExtension(mimeType: string): string {
   if (mimeType === 'image/jpeg') return 'jpg';
   if (mimeType === 'image/webp') return 'webp';
   return 'png';
+}
+
+function isLegacyGenerationFallbackEnabled(): boolean {
+  return import.meta.env.DEV && import.meta.env.VITE_ENABLE_LEGACY_GENERATION_FALLBACK === 'true';
 }
 
 function readPublicShareToken(): string | null {

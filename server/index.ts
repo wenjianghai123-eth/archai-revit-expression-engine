@@ -1,14 +1,9 @@
 ﻿import 'dotenv/config';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { NextFunction, Request, Response } from 'express';
-import { createGeminiProvider } from './providers/geminiProvider';
-import { createGrsaiNanoBananaProvider } from './providers/grsaiNanoBananaProvider';
-import { createMockGeneration, mockProvider } from './providers/mockProvider';
-import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider, ProviderName } from './providers/types';
 import { attachAuthUser, getCurrentUser, getRequiredCurrentUser, requireAuth } from './auth';
 import { createStoredFilename, fileStorageProvider, uploadsDir } from './fileStorage';
 import {
@@ -52,8 +47,40 @@ import {
   updateGenerationResult,
   updateProject,
 } from './storage';
+import {
+  ApiError,
+  ApiResponse,
+  apiError,
+  apiOk,
+  configureCors,
+  createErrorHandler,
+  createGenerationJobRateLimiter,
+  requireAdmin,
+  sanitizeLogText,
+} from './http';
+import {
+  getDefaultModelMimeType,
+  getImageExtension,
+  getModelFileType,
+  isAllowedModelMimeType,
+  readMultipartFile,
+  readMultipartImage,
+  sniffModelFile,
+} from './upload';
+import {
+  calculateGenerationCreditsCost,
+  enqueueGenerationJob,
+  generateWithFallbackResponse,
+  getGenerationProviderName,
+  isGenerationWorkerDisabled,
+  isLegacyGenerationEndpointEnabled,
+  refundGenerationJobCredits,
+  removeQueuedGenerationJob,
+  restorePendingGenerationJobs,
+} from './generationService';
+import { createAssetsRouter } from './routes/assets';
 
-const app = express();
+export const app = express();
 const port = Number(process.env.PORT || 8787);
 const host = process.env.HOST || '0.0.0.0';
 const version = '0.1.0';
@@ -61,7 +88,6 @@ const maxImageMb = Number(process.env.MAX_IMAGE_MB || 10);
 const maxModelMb = Number(process.env.MAX_MODEL_MB || 50);
 const jsonLimit = `${Math.max(maxImageMb * 3, 15)}mb`;
 const generationJobRateLimitPerMinute = Number(process.env.GENERATION_JOB_RATE_LIMIT_PER_MINUTE || 10);
-const provider = selectProvider();
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(serverDir, '..', 'dist');
 const distIndexPath = path.join(distDir, 'index.html');
@@ -74,20 +100,7 @@ interface GenerateRequestBody {
   config: Record<string, unknown>;
 }
 
-interface GenerateResponseBody {
-  id: string;
-  provider: ProviderName;
-  imageDataUrl: string;
-  createdAt: string;
-  warnings: string[];
-}
-
-type ApiResponse<T> = { ok: true; data: T } | { ok: false; error: ApiError };
-
-interface ApiError {
-  message: string;
-  code: string;
-}
+type MaskMode = 'asset-mask' | 'full-image';
 
 interface PublicSharePayload {
   link: {
@@ -124,7 +137,7 @@ interface PublicGenerationResult {
 
 const queuedGenerationJobIds: string[] = [];
 let isGenerationWorkerRunning = false;
-const generationJobRateLimitBuckets = new Map<string, { count: number; windowStartedAt: number }>();
+const rateLimitGenerationJobCreate = createGenerationJobRateLimiter(generationJobRateLimitPerMinute);
 
 app.use(configureCors);
 app.use(express.json({ limit: jsonLimit }));
@@ -132,7 +145,7 @@ app.use('/uploads', express.static(uploadsDir));
 app.use(attachAuthUser);
 
 app.get('/api/health', (_req: Request, res: Response) => {
-  res.json({ ok: true, version, provider: provider.name });
+  res.json({ ok: true, version, provider: getGenerationProviderName() });
 });
 
 app.get('/api/auth/me', (req: Request, res: Response) => {
@@ -144,6 +157,8 @@ app.get('/api/auth/me', (req: Request, res: Response) => {
 
   res.json(apiOk({ user }));
 });
+
+app.use('/api/assets', createAssetsRouter({ maxImageMb, maxModelMb }));
 
 app.get('/api/billing/credits', requireAuth, async (
   req: Request,
@@ -213,151 +228,6 @@ app.post('/api/admin/credits/grant', requireAuth, requireAdmin, async (
   }
 });
 
-app.post('/api/assets/images', requireAuth, async (
-  req: Request,
-  res: Response<ApiResponse<{ asset: ImageAsset }>>,
-  next: NextFunction,
-) => {
-  try {
-    const uploadedFile = await readMultipartImage(req);
-    if (uploadedFile.ok === false) {
-      res.status(uploadedFile.status).json(apiError(uploadedFile.error.message, uploadedFile.error.code));
-      return;
-    }
-
-    const extension = getImageExtension(uploadedFile.value.mimeType);
-    const storedFile = await fileStorageProvider.uploadImage({
-      content: uploadedFile.value.content,
-      filename: createStoredFilename(extension),
-      mimeType: uploadedFile.value.mimeType,
-    });
-
-    const asset = await createImageAsset({
-      userId: getRequiredCurrentUser(req).id,
-      url: storedFile.url,
-      filename: storedFile.filename,
-      mimeType: storedFile.mimeType,
-      size: storedFile.size,
-    });
-
-    res.status(201).json(apiOk({ asset }));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get('/api/assets/images/:id', requireAuth, async (
-  req: Request,
-  res: Response<ApiResponse<{ asset: ImageAsset }>>,
-  next: NextFunction,
-) => {
-  try {
-    const asset = await getImageAsset(req.params.id, getRequiredCurrentUser(req).id);
-    if (!asset) {
-      res.status(404).json(apiError('Image asset not found.', 'IMAGE_ASSET_NOT_FOUND'));
-      return;
-    }
-
-    res.json(apiOk({ asset }));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get('/api/assets/models', requireAuth, async (
-  req: Request,
-  res: Response<ApiResponse<{ assets: ModelAsset[] }>>,
-  next: NextFunction,
-) => {
-  try {
-    res.json(apiOk({ assets: await listModelAssets(getRequiredCurrentUser(req).id) }));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post('/api/assets/models', requireAuth, async (
-  req: Request,
-  res: Response<ApiResponse<{ asset: ModelAsset }>>,
-  next: NextFunction,
-) => {
-  try {
-    const uploadedFile = await readMultipartFile(req, maxModelMb * 1024 * 1024 + 1024 * 1024, maxModelMb);
-    if (uploadedFile.ok === false) {
-      res.status(uploadedFile.status).json(apiError(uploadedFile.error.message, uploadedFile.error.code));
-      return;
-    }
-
-    const fileType = getModelFileType(uploadedFile.value.originalFilename);
-    if (!fileType) {
-      res.status(400).json(apiError('Only GLB, GLTF, and OBJ model files are supported.', 'MODEL_ASSET_TYPE_INVALID'));
-      return;
-    }
-
-    if (uploadedFile.value.content.length > maxModelMb * 1024 * 1024) {
-      res.status(413).json(apiError(`Model file cannot exceed ${maxModelMb}MB.`, 'MODEL_ASSET_TOO_LARGE'));
-      return;
-    }
-
-    const storedFile = await fileStorageProvider.uploadModel({
-      content: uploadedFile.value.content,
-      filename: createStoredFilename(fileType),
-      mimeType: uploadedFile.value.mimeType || getDefaultModelMimeType(fileType),
-    });
-
-    const asset = await createModelAsset({
-      userId: getRequiredCurrentUser(req).id,
-      url: storedFile.url,
-      filename: storedFile.filename,
-      originalFilename: uploadedFile.value.originalFilename,
-      fileType,
-      mimeType: storedFile.mimeType,
-      size: storedFile.size,
-    });
-
-    res.status(201).json(apiOk({ asset }));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get('/api/assets/models/:id', requireAuth, async (
-  req: Request,
-  res: Response<ApiResponse<{ asset: ModelAsset }>>,
-  next: NextFunction,
-) => {
-  try {
-    const asset = await getModelAsset(req.params.id, getRequiredCurrentUser(req).id);
-    if (!asset) {
-      res.status(404).json(apiError('Model asset not found.', 'MODEL_ASSET_NOT_FOUND'));
-      return;
-    }
-
-    res.json(apiOk({ asset }));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.delete('/api/assets/models/:id', requireAuth, async (
-  req: Request,
-  res: Response<ApiResponse<{ asset: ModelAsset }>>,
-  next: NextFunction,
-) => {
-  try {
-    const asset = await deleteModelAsset(req.params.id, getRequiredCurrentUser(req).id);
-    if (!asset) {
-      res.status(404).json(apiError('Model asset not found.', 'MODEL_ASSET_NOT_FOUND'));
-      return;
-    }
-
-    await fileStorageProvider.deleteFile(asset.filename);
-    res.json(apiOk({ asset }));
-  } catch (error) {
-    next(error);
-  }
-});
-
 app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, async (
   req: Request,
   res: Response<ApiResponse<{ job: GenerationJob }>>,
@@ -377,17 +247,14 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
       return;
     }
 
-    const creditsCost = calculateGenerationCreditsCost(body.value.mode, body.value.config);
-    const balance = await getCreditBalance(user.id);
-    if (balance.balance < creditsCost) {
-      res.status(402).json(apiError(
-        `Credits are insufficient. This job requires ${creditsCost} credits, but only ${balance.balance} remain.`,
-        'CREDITS_INSUFFICIENT',
-      ));
+    const assetValidation = await validateGenerationJobAssets(body.value.inputAssetIds, body.value.mode, body.value.config, user.id);
+    if (assetValidation.ok === false) {
+      res.status(404).json(apiError(assetValidation.error.message, assetValidation.error.code));
       return;
     }
 
-    const job = await createGenerationJob({ ...body.value, userId: user.id, provider: provider.name });
+    const creditsCost = calculateGenerationCreditsCost(body.value.mode, body.value.config);
+    const job = await createGenerationJob({ ...body.value, userId: user.id, provider: getGenerationProviderName() });
     if (!job) {
       res.status(404).json(apiError('Project not found.', 'PROJECT_NOT_FOUND'));
       return;
@@ -412,7 +279,9 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
       return;
     }
 
-    enqueueGenerationJob(job.id);
+    if (!isGenerationWorkerDisabled()) {
+      enqueueGenerationJob(job.id);
+    }
     res.status(201).json(apiOk({ job }));
   } catch (error) {
     next(error);
@@ -484,6 +353,11 @@ app.patch('/api/generation-results/:id', requireAuth, async (
 });
 
 app.post('/api/generate/floorplan', async (req: Request, res: Response, next: NextFunction) => {
+  if (!isLegacyGenerationEndpointEnabled()) {
+    res.status(404).json(apiError('Legacy generation endpoints are disabled. Use /api/generation-jobs instead.', 'LEGACY_GENERATION_ENDPOINT_DISABLED'));
+    return;
+  }
+
   const body = validateGenerateBody(req.body, { promptRequired: false });
   if (body.ok === false) {
     res.status(400).json(apiError(body.error, 'INVALID_GENERATE_REQUEST'));
@@ -491,13 +365,18 @@ app.post('/api/generate/floorplan', async (req: Request, res: Response, next: Ne
   }
 
   try {
-    res.json(await generateWithFallback({ ...body.value, mode: 'floorplan' }));
+    res.json(await generateWithFallbackResponse({ ...body.value, mode: 'floorplan' }));
   } catch (error) {
     next(error);
   }
 });
 
 app.post('/api/generate/style-render', async (req: Request, res: Response, next: NextFunction) => {
+  if (!isLegacyGenerationEndpointEnabled()) {
+    res.status(404).json(apiError('Legacy generation endpoints are disabled. Use /api/generation-jobs instead.', 'LEGACY_GENERATION_ENDPOINT_DISABLED'));
+    return;
+  }
+
   const body = validateGenerateBody(req.body);
   if (body.ok === false) {
     res.status(400).json(apiError(body.error, 'INVALID_GENERATE_REQUEST'));
@@ -505,13 +384,18 @@ app.post('/api/generate/style-render', async (req: Request, res: Response, next:
   }
 
   try {
-    res.json(await generateWithFallback({ ...body.value, mode: 'style-render' }));
+    res.json(await generateWithFallbackResponse({ ...body.value, mode: 'style-render' }));
   } catch (error) {
     next(error);
   }
 });
 
 app.post('/api/generate/inpaint', async (req: Request, res: Response, next: NextFunction) => {
+  if (!isLegacyGenerationEndpointEnabled()) {
+    res.status(404).json(apiError('Legacy generation endpoints are disabled. Use /api/generation-jobs instead.', 'LEGACY_GENERATION_ENDPOINT_DISABLED'));
+    return;
+  }
+
   const body = validateGenerateBody(req.body, { promptRequired: true });
   if (body.ok === false) {
     res.status(400).json(apiError(body.error, 'INVALID_GENERATE_REQUEST'));
@@ -519,7 +403,7 @@ app.post('/api/generate/inpaint', async (req: Request, res: Response, next: Next
   }
 
   try {
-    res.json(await generateWithFallback({ ...body.value, mode: 'inpaint' }));
+    res.json(await generateWithFallbackResponse({ ...body.value, mode: 'inpaint' }));
   } catch (error) {
     next(error);
   }
@@ -734,111 +618,20 @@ if (existsSync(distIndexPath)) {
   console.warn(`Production frontend build not found at ${distDir}. Run npm run build before npm run start.`);
 }
 
-app.use((error: unknown, req: Request, res: Response<ApiResponse<never>>, _next: NextFunction) => {
-  const requestId = req.headers['x-request-id'];
-  const safeRequestId = typeof requestId === 'string' ? sanitizeLogText(requestId) : undefined;
-  console.error('API error', {
-    requestId: safeRequestId,
-    method: req.method,
-    path: req.path,
-    error: sanitizeErrorForLog(error),
+app.use(createErrorHandler(jsonLimit));
+
+export async function startServer(): Promise<void> {
+  await ensureAppDatabase();
+  await fileStorageProvider.ensureReady();
+  await restorePendingGenerationJobs();
+
+  app.listen(port, host, () => {
+    console.log(`ArchAI Expression Engine listening on http://${host}:${port} using ${getGenerationProviderName()} provider`);
   });
-
-  if (isPayloadTooLargeError(error)) {
-    res.status(413).json(apiError(`Request body is too large. Current API limit is ${jsonLimit}.`, 'REQUEST_BODY_TOO_LARGE'));
-    return;
-  }
-
-  if (isJsonParseError(error)) {
-    res.status(400).json(apiError('Request body must be valid JSON.', 'INVALID_JSON_BODY'));
-    return;
-  }
-
-  res.status(500).json(apiError('Server failed to process the request. Please try again later.', 'INTERNAL_SERVER_ERROR'));
-});
-
-await ensureAppDatabase();
-await fileStorageProvider.ensureReady();
-await restorePendingGenerationJobs();
-
-app.listen(port, host, () => {
-  console.log(`ArchAI Expression Engine listening on http://${host}:${port} using ${provider.name} provider`);
-});
-
-function requireAdmin(req: Request, res: Response, next: NextFunction): void {
-  const user = getCurrentUser(req);
-  if (user?.role === 'admin') {
-    next();
-    return;
-  }
-
-  res.status(403).json(apiError('Admin permission is required.', 'ADMIN_FORBIDDEN'));
 }
 
-function configureCors(req: Request, res: Response, next: NextFunction): void {
-  const origin = req.headers.origin;
-  const allowedOrigins = readAllowedCorsOrigins();
-
-  if (origin && isCorsOriginAllowed(origin, allowedOrigins)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-  } else if (!origin && allowedOrigins.includes('*')) {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-  }
-
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Request-Id');
-  res.setHeader('Access-Control-Max-Age', '86400');
-
-  if (req.method === 'OPTIONS') {
-    res.status(204).end();
-    return;
-  }
-
-  next();
-}
-
-function readAllowedCorsOrigins(): string[] {
-  const rawValue = process.env.CORS_ORIGIN || process.env.CORS_ORIGINS;
-  if (!rawValue || rawValue.trim().length === 0) {
-    return ['http://localhost:3000', 'http://127.0.0.1:3000'];
-  }
-
-  return rawValue.split(',').map(item => item.trim()).filter(Boolean);
-}
-
-function isCorsOriginAllowed(origin: string, allowedOrigins: string[]): boolean {
-  return allowedOrigins.includes('*') || allowedOrigins.includes(origin);
-}
-
-function rateLimitGenerationJobCreate(req: Request, res: Response<ApiResponse<never>>, next: NextFunction): void {
-  const user = getCurrentUser(req);
-  if (!user) {
-    res.status(401).json(apiError('Authentication is required before creating a generation job.', 'AUTH_REQUIRED'));
-    return;
-  }
-
-  const now = Date.now();
-  const windowMs = 60 * 1000;
-  const bucket = generationJobRateLimitBuckets.get(user.id);
-
-  if (!bucket || now - bucket.windowStartedAt >= windowMs) {
-    generationJobRateLimitBuckets.set(user.id, { count: 1, windowStartedAt: now });
-    next();
-    return;
-  }
-
-  if (bucket.count >= generationJobRateLimitPerMinute) {
-    res.status(429).json(apiError(
-      `Generation job limit reached. Please wait a minute and try again.`,
-      'GENERATION_JOB_RATE_LIMITED',
-    ));
-    return;
-  }
-
-  bucket.count += 1;
-  next();
+if (process.env.NODE_ENV !== 'test') {
+  await startServer();
 }
 
 function validateGenerateBody(
@@ -908,225 +701,6 @@ function validateGenerateBody(
       config: body.config,
     },
   };
-}
-
-async function readMultipartImage(
-  req: Request,
-): Promise<
-  | { ok: true; value: { content: Buffer; mimeType: string; originalFilename: string } }
-  | { ok: false; status: number; error: ApiError }
-> {
-  const parsed = await readMultipartFile(req, maxImageMb * 1024 * 1024 + 1024 * 1024, maxImageMb);
-  if (parsed.ok === false) return parsed;
-
-  if (parsed.value.content.length > maxImageMb * 1024 * 1024) {
-    return {
-      ok: false,
-      status: 413,
-      error: { message: `Image file cannot exceed ${maxImageMb}MB.`, code: 'UPLOAD_FILE_TOO_LARGE' },
-    };
-  }
-
-  const sniffedMimeType = sniffImageMimeType(parsed.value.content);
-  if (!sniffedMimeType || sniffedMimeType !== parsed.value.mimeType) {
-    return {
-      ok: false,
-      status: 400,
-      error: { message: 'Only PNG, JPG, JPEG, and WEBP images are supported.', code: 'UPLOAD_IMAGE_TYPE_INVALID' },
-    };
-  }
-
-  return {
-    ok: true,
-    value: {
-      content: parsed.value.content,
-      mimeType: sniffedMimeType,
-      originalFilename: parsed.value.originalFilename,
-    },
-  };
-}
-
-async function readMultipartFile(
-  req: Request,
-  maxBytes: number,
-  displayMaxMb: number,
-): Promise<
-  | { ok: true; value: { content: Buffer; mimeType: string; originalFilename: string } }
-  | { ok: false; status: number; error: ApiError }
-> {
-  const contentType = req.headers['content-type'];
-  if (typeof contentType !== 'string' || !contentType.includes('multipart/form-data')) {
-    return {
-      ok: false,
-      status: 415,
-      error: { message: 'Upload must use multipart/form-data.', code: 'UPLOAD_CONTENT_TYPE_INVALID' },
-    };
-  }
-
-  const boundaryMatch = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
-  const boundary = boundaryMatch?.[1] || boundaryMatch?.[2];
-  if (!boundary) {
-    return {
-      ok: false,
-      status: 400,
-      error: { message: 'Upload boundary is missing.', code: 'UPLOAD_BOUNDARY_MISSING' },
-    };
-  }
-
-  const body = await readRequestBuffer(req, maxBytes, displayMaxMb);
-  if (body.ok === false) {
-    return body;
-  }
-
-  const parsed = parseMultipartFile(body.value, boundary);
-  if (!parsed) {
-    return {
-      ok: false,
-      status: 400,
-      error: { message: 'No file was found in the upload.', code: 'UPLOAD_FILE_MISSING' },
-    };
-  }
-
-  return { ok: true, value: parsed };
-}
-
-function readRequestBuffer(
-  req: Request,
-  maxBytes: number,
-  displayMaxMb: number,
-): Promise<{ ok: true; value: Buffer } | { ok: false; status: number; error: ApiError }> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let totalBytes = 0;
-    let resolved = false;
-
-    req.on('data', (chunk: Buffer) => {
-      totalBytes += chunk.length;
-      if (totalBytes > maxBytes) {
-        resolved = true;
-        req.destroy();
-        resolve({
-          ok: false,
-          status: 413,
-          error: { message: `Upload request cannot exceed ${displayMaxMb}MB.`, code: 'UPLOAD_TOO_LARGE' },
-        });
-        return;
-      }
-
-      chunks.push(chunk);
-    });
-
-    req.on('end', () => {
-      if (!resolved) {
-        resolve({ ok: true, value: Buffer.concat(chunks) });
-      }
-    });
-
-    req.on('error', error => {
-      if (!resolved) {
-        reject(error);
-      }
-    });
-  });
-}
-
-function parseMultipartFile(
-  body: Buffer,
-  boundary: string,
-): { content: Buffer; mimeType: string; originalFilename: string } | null {
-  const delimiter = Buffer.from(`--${boundary}`);
-  let offset = 0;
-
-  while (offset < body.length) {
-    const start = body.indexOf(delimiter, offset);
-    if (start === -1) break;
-
-    const partStart = start + delimiter.length;
-    if (body.slice(partStart, partStart + 2).toString('ascii') === '--') break;
-
-    const contentStart = body.indexOf(Buffer.from('\r\n\r\n'), partStart);
-    if (contentStart === -1) break;
-
-    const headers = body.slice(partStart + 2, contentStart).toString('utf8');
-    const nextBoundary = body.indexOf(delimiter, contentStart + 4);
-    if (nextBoundary === -1) break;
-
-    let content = body.slice(contentStart + 4, nextBoundary);
-    if (content.slice(-2).toString('ascii') === '\r\n') {
-      content = content.slice(0, -2);
-    }
-
-    const disposition = /content-disposition:[^\r\n]+/i.exec(headers)?.[0] || '';
-    const filename = /filename="([^"]+)"/i.exec(disposition)?.[1];
-    const contentType = /content-type:\s*([^\r\n]+)/i.exec(headers)?.[1]?.trim().toLowerCase();
-
-    if (filename && contentType) {
-      return {
-        content,
-        mimeType: normalizeImageMimeType(contentType),
-        originalFilename: path.basename(filename),
-      };
-    }
-
-    offset = nextBoundary;
-  }
-
-  return null;
-}
-
-function normalizeImageMimeType(mimeType: string): string {
-  return mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
-}
-
-function sniffImageMimeType(content: Buffer): string | null {
-  if (
-    content.length >= 8 &&
-    content[0] === 0x89 &&
-    content[1] === 0x50 &&
-    content[2] === 0x4e &&
-    content[3] === 0x47 &&
-    content[4] === 0x0d &&
-    content[5] === 0x0a &&
-    content[6] === 0x1a &&
-    content[7] === 0x0a
-  ) {
-    return 'image/png';
-  }
-
-  if (content.length >= 3 && content[0] === 0xff && content[1] === 0xd8 && content[2] === 0xff) {
-    return 'image/jpeg';
-  }
-
-  if (
-    content.length >= 12 &&
-    content.slice(0, 4).toString('ascii') === 'RIFF' &&
-    content.slice(8, 12).toString('ascii') === 'WEBP'
-  ) {
-    return 'image/webp';
-  }
-
-  return null;
-}
-
-function getImageExtension(mimeType: string): string {
-  if (mimeType === 'image/png') return 'png';
-  if (mimeType === 'image/webp') return 'webp';
-  return 'jpg';
-}
-
-function getModelFileType(filename: string): ModelAsset['fileType'] | null {
-  const extension = filename.split('.').pop()?.toLowerCase();
-  if (extension === 'glb' || extension === 'gltf' || extension === 'obj') {
-    return extension;
-  }
-
-  return null;
-}
-
-function getDefaultModelMimeType(fileType: ModelAsset['fileType']): string {
-  if (fileType === 'glb') return 'model/gltf-binary';
-  if (fileType === 'gltf') return 'model/gltf+json';
-  return 'model/obj';
 }
 
 function validateProjectCreateBody(
@@ -1357,14 +931,33 @@ function validateGenerationJobCreateBody(
     return { ok: false, error: { message: 'batchCount must be 1, 2, or 4.', code: 'GENERATION_JOB_BATCH_COUNT_INVALID' } };
   }
 
+  const config: Record<string, unknown> = { ...body.config };
+  if (body.mode === 'inpaint') {
+    if (!isMaskMode(config.maskMode)) {
+      return { ok: false, error: { message: 'maskMode must be asset-mask or full-image for inpaint jobs.', code: 'GENERATION_JOB_MASK_MODE_REQUIRED' } };
+    }
+
+    if (config.maskMode === 'asset-mask') {
+      if (!isNonEmptyString(config.maskAssetId)) {
+        return { ok: false, error: { message: 'maskAssetId is required when maskMode is asset-mask.', code: 'GENERATION_JOB_MASK_ASSET_REQUIRED' } };
+      }
+      config.maskAssetId = config.maskAssetId.trim();
+    } else {
+      delete config.maskAssetId;
+    }
+  } else {
+    delete config.maskMode;
+    delete config.maskAssetId;
+  }
+
   return {
     ok: true,
     value: {
       projectId: body.projectId.trim(),
       mode: body.mode,
       prompt: body.prompt,
-      config: body.config,
-      inputAssetIds: body.inputAssetIds,
+      config,
+      inputAssetIds: body.inputAssetIds.map(item => item.trim()),
     },
   };
 }
@@ -1396,64 +989,6 @@ function validateGenerationResultUpdateBody(
   }
 
   return { ok: true, value };
-}
-
-function apiOk<T>(data: T): ApiResponse<T> {
-  return { ok: true, data };
-}
-
-function apiError(message: string, code: string): ApiResponse<never> {
-  return { ok: false, error: { message, code } };
-}
-
-function sanitizeErrorForLog(error: unknown): { name: string; message: string; code?: string } {
-  if (error instanceof Error) {
-    const maybeCode = isRecord(error) && typeof error.code === 'string' ? error.code : undefined;
-    return {
-      name: error.name,
-      message: sanitizeLogText(error.message),
-      code: maybeCode,
-    };
-  }
-
-  return {
-    name: 'UnknownError',
-    message: sanitizeLogText(String(error)),
-  };
-}
-
-function sanitizeLogText(value: string): string {
-  return value
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, 'Bearer [redacted]')
-    .replace(/(api[_-]?key|token|jwt|authorization|password|secret)=([^&\s]+)/giu, '$1=[redacted]')
-    .replace(/data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/giu, 'data:image/[redacted];base64,[redacted]')
-    .replace(/[A-Za-z0-9+/]{120,}={0,2}/gu, '[base64-redacted]')
-    .slice(0, 1000);
-}
-
-function calculateGenerationCreditsCost(mode: GenerationRecord['mode'], config: Record<string, unknown>): number {
-  const baseCost = mode === 'inpaint' ? 8 : 10;
-  return baseCost * readBatchCount(config.batchCount);
-}
-
-async function refundGenerationJobCredits(jobId: string): Promise<void> {
-  const job = await getGenerationJob(jobId);
-  if (!job) return;
-
-  const debit = await getCreditTransactionByReference(job.userId, 'debit', job.id);
-  if (!debit) return;
-
-  const existingRefund = await getCreditTransactionByReference(job.userId, 'refund', job.id);
-  if (existingRefund) return;
-
-  await adjustCredits({
-    userId: job.userId,
-    type: 'refund',
-    amount: Math.abs(debit.amount),
-    reason: `Refund for ${job.status} generation job`,
-    referenceType: 'generation_job',
-    referenceId: job.id,
-  });
 }
 
 function createShareToken(): string {
@@ -1519,12 +1054,54 @@ function isGenerationStatus(value: unknown): value is GenerationRecord['status']
   return value === 'succeeded' || value === 'failed';
 }
 
+function isMaskMode(value: unknown): value is MaskMode {
+  return value === 'asset-mask' || value === 'full-image';
+}
+
 function isBatchCount(value: unknown): value is 1 | 2 | 4 {
   return value === 1 || value === 2 || value === 4;
 }
 
 function readBatchCount(value: unknown): 1 | 2 | 4 {
   return isBatchCount(value) ? value : 1;
+}
+
+async function validateGenerationJobAssets(
+  inputAssetIds: string[],
+  mode: GenerationRecord['mode'],
+  config: Record<string, unknown>,
+  userId: string,
+): Promise<{ ok: true } | { ok: false; error: ApiError }> {
+  for (const assetId of inputAssetIds) {
+    const asset = await getImageAsset(assetId, userId);
+    if (!asset) {
+      return {
+        ok: false,
+        error: {
+          message: 'Input image asset not found.',
+          code: 'GENERATION_JOB_INPUT_ASSET_NOT_FOUND',
+        },
+      };
+    }
+  }
+
+  const maskAssetId = mode === 'inpaint' && config.maskMode === 'asset-mask' && typeof config.maskAssetId === 'string'
+    ? config.maskAssetId.trim()
+    : '';
+  if (maskAssetId.length > 0) {
+    const maskAsset = await getImageAsset(maskAssetId, userId);
+    if (!maskAsset) {
+      return {
+        ok: false,
+        error: {
+          message: 'Mask image asset not found.',
+          code: 'GENERATION_JOB_MASK_ASSET_NOT_FOUND',
+        },
+      };
+    }
+  }
+
+  return { ok: true };
 }
 
 function readOptionalNullableString(
@@ -1540,296 +1117,6 @@ function readOptionalNullableString(
   }
 
   return { ok: false, error: { message: 'Generation image field must be a string or null.', code } };
-}
-
-async function restorePendingGenerationJobs(): Promise<void> {
-  const jobs = await listRunnableGenerationJobs();
-  for (const job of jobs) {
-    if (job.status === 'running') {
-      await updateGenerationJob(job.id, { status: 'queued', progress: 0, startedAt: null, errorMessage: null });
-    }
-    enqueueGenerationJob(job.id);
-  }
-}
-
-function enqueueGenerationJob(jobId: string): void {
-  if (!queuedGenerationJobIds.includes(jobId)) {
-    queuedGenerationJobIds.push(jobId);
-  }
-
-  setTimeout(() => {
-    void runGenerationWorker();
-  }, 0);
-}
-
-function removeQueuedGenerationJob(jobId: string): void {
-  const index = queuedGenerationJobIds.indexOf(jobId);
-  if (index !== -1) {
-    queuedGenerationJobIds.splice(index, 1);
-  }
-}
-
-async function runGenerationWorker(): Promise<void> {
-  if (isGenerationWorkerRunning) return;
-  isGenerationWorkerRunning = true;
-
-  try {
-    while (queuedGenerationJobIds.length > 0) {
-      const jobId = queuedGenerationJobIds.shift();
-      if (!jobId) continue;
-      await processGenerationJob(jobId);
-    }
-  } finally {
-    isGenerationWorkerRunning = false;
-  }
-}
-
-async function processGenerationJob(jobId: string): Promise<void> {
-  const job = await getGenerationJob(jobId);
-  if (!job || job.status === 'cancelled' || job.status === 'succeeded' || job.status === 'failed') {
-    return;
-  }
-
-  const startedAt = new Date().toISOString();
-  await updateGenerationJob(job.id, {
-    status: 'running',
-    progress: 10,
-    startedAt,
-    errorMessage: null,
-  });
-
-  try {
-    const latestBeforeGenerate = await getGenerationJob(job.id);
-    if (latestBeforeGenerate?.status === 'cancelled') return;
-
-    const input = await buildGenerateInputFromJob(job);
-    const batchCount = readBatchCount(job.config.batchCount);
-    await updateGenerationJob(job.id, { progress: 20 });
-
-    const outputAssetIds: string[] = [];
-    let firstOutput: GenerateImageOutput | null = null;
-    let firstOutputAsset: ImageAsset | null = null;
-
-    for (let index = 0; index < batchCount; index += 1) {
-      const latestBeforeItem = await getGenerationJob(job.id);
-      if (latestBeforeItem?.status === 'cancelled') return;
-
-      const output = await generateWithFallback({
-        ...input,
-        config: { ...input.config, batchIndex: index + 1, batchCount },
-      });
-      if (!firstOutput) firstOutput = output;
-
-      const progress = 25 + Math.round(((index + 1) / batchCount) * 55);
-      await updateGenerationJob(job.id, { progress });
-
-      const outputAsset = await saveGeneratedDataUrl(job.userId, output.imageDataUrl, `generation-${job.id}-${index + 1}`);
-      if (!firstOutputAsset) firstOutputAsset = outputAsset;
-      outputAssetIds.push(outputAsset.id);
-
-      await createGenerationResult({
-        userId: job.userId,
-        projectId: job.projectId,
-        jobId: job.id,
-        assetId: outputAsset.id,
-        imageUrl: outputAsset.url,
-        isSelected: index === 0,
-      });
-    }
-
-    const latestAfterGenerate = await getGenerationJob(job.id);
-    if (latestAfterGenerate?.status === 'cancelled') return;
-
-    if (!firstOutput || !firstOutputAsset) {
-      throw new Error('Generation job did not produce any result.');
-    }
-
-    await updateGenerationJob(job.id, { progress: 85 });
-    await createGenerationRecord({
-      userId: job.userId,
-      projectId: job.projectId,
-      jobId: job.id,
-      mode: job.mode,
-      prompt: job.prompt,
-      inputImageUrl: await getInputAssetUrl(job.inputAssetIds[0]),
-      outputImageUrl: firstOutputAsset.url,
-      provider: firstOutput.provider,
-      status: 'succeeded',
-    });
-
-    await updateGenerationJob(job.id, {
-      status: 'succeeded',
-      progress: 100,
-      outputAssetId: firstOutputAsset.id,
-      outputAssetIds,
-      finishedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Generation job failed.';
-    const latest = await getGenerationJob(job.id);
-    if (latest?.status === 'cancelled') return;
-
-    await updateGenerationJob(job.id, {
-      status: 'failed',
-      progress: 100,
-      errorMessage: message,
-      finishedAt: new Date().toISOString(),
-    });
-    await refundGenerationJobCredits(job.id);
-  }
-}
-
-async function buildGenerateInputFromJob(job: GenerationJob): Promise<GenerateImageInput> {
-  const inputImageDataUrl = await getImageAssetDataUrl(job.inputAssetIds[0]);
-  if (!inputImageDataUrl) {
-    throw new Error('Input image asset was not found.');
-  }
-
-  const materialImageDataUrl = job.inputAssetIds[1] ? await getImageAssetDataUrl(job.inputAssetIds[1]) : undefined;
-  const maskAssetId = typeof job.config.maskAssetId === 'string' ? job.config.maskAssetId : null;
-  const maskImageDataUrl = maskAssetId ? await getImageAssetDataUrl(maskAssetId) : undefined;
-
-  return {
-    mode: job.mode,
-    inputImageDataUrl,
-    materialImageDataUrl,
-    maskImageDataUrl,
-    prompt: job.prompt,
-    config: job.config,
-  };
-}
-
-async function getImageAssetDataUrl(assetId: string | undefined): Promise<string | undefined> {
-  if (!assetId) return undefined;
-  const asset = await getImageAsset(assetId);
-  if (!asset) return undefined;
-
-  if (!asset.url.startsWith('/uploads/')) {
-    const response = await fetch(asset.url);
-    if (!response.ok) {
-      throw new Error(`Unable to read remote image asset: HTTP ${response.status}`);
-    }
-
-    const content = Buffer.from(await response.arrayBuffer());
-    return `data:${asset.mimeType};base64,${content.toString('base64')}`;
-  }
-
-  const filePath = resolveUploadUrlToPath(asset.url);
-  const content = await readFile(filePath);
-  return `data:${asset.mimeType};base64,${content.toString('base64')}`;
-}
-
-async function getInputAssetUrl(assetId: string | undefined): Promise<string | null> {
-  if (!assetId) return null;
-  const asset = await getImageAsset(assetId);
-  return asset?.url ?? null;
-}
-
-async function saveGeneratedDataUrl(userId: string, dataUrl: string, basename: string): Promise<ImageAsset> {
-  const parsed = parseDataUrl(dataUrl);
-  const extension = getExtensionForMimeType(parsed.mimeType);
-  const storedFile = await fileStorageProvider.uploadImage({
-    content: parsed.content,
-    filename: `generated/${createStoredFilename(extension, basename)}`,
-    mimeType: parsed.mimeType,
-  });
-
-  return createImageAsset({
-    userId,
-    url: storedFile.url,
-    filename: storedFile.filename,
-    mimeType: storedFile.mimeType,
-    size: storedFile.size,
-  });
-}
-
-function parseDataUrl(dataUrl: string): { mimeType: string; content: Buffer } {
-  const match = /^data:([^;,]+)((?:;[^,]*)?),(.*)$/u.exec(dataUrl);
-  if (!match) {
-    throw new Error('Provider returned an invalid data URL.');
-  }
-
-  const mimeType = match[1];
-  const isBase64 = match[2].includes(';base64');
-  const payload = match[3];
-  const content = isBase64 ? Buffer.from(payload, 'base64') : Buffer.from(decodeURIComponent(payload), 'utf8');
-  return { mimeType, content };
-}
-
-function getExtensionForMimeType(mimeType: string): string {
-  if (mimeType === 'image/png') return 'png';
-  if (mimeType === 'image/jpeg') return 'jpg';
-  if (mimeType === 'image/webp') return 'webp';
-  if (mimeType === 'image/svg+xml') return 'svg';
-  return 'bin';
-}
-
-function resolveUploadUrlToPath(url: string): string {
-  if (!url.startsWith('/uploads/')) {
-    throw new Error('Asset URL is not a local upload.');
-  }
-
-  const relativePath = url.replace(/^\/uploads\//u, '');
-  const resolvedPath = path.resolve(uploadsDir, relativePath);
-  if (!resolvedPath.startsWith(uploadsDir)) {
-    throw new Error('Asset URL resolved outside upload directory.');
-  }
-
-  return resolvedPath;
-}
-
-async function generateWithFallback(input: GenerateImageInput): Promise<GenerateResponseBody> {
-  if (provider.name === 'mock') {
-    return provider.generateImage(input);
-  }
-
-  if (provider.name === 'gemini') {
-    try {
-      return await provider.generateImage(input);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Gemini provider failed.';
-      return createMockGeneration(input, [
-        `Gemini provider failed to complete this generation: ${message}`,
-        '已自动回退到 mock provider，避免请求中断。',
-      ]);
-    }
-  }
-
-  if (provider.name === 'grsai-nano-banana') {
-    if (input.mode === 'inpaint') {
-      return createMockGeneration(input, [
-        '当前 provider 暂未支持真实局部重绘，已使用 mock 结果。',
-      ]);
-    }
-
-    return provider.generateImage(input);
-  }
-
-  return provider.generateImage(input);
-}
-
-function selectProvider(): ImageGenerationProvider {
-  const requestedProvider = process.env.AI_PROVIDER || 'mock';
-  const geminiApiKey = process.env.GEMINI_API_KEY;
-  const grsaiApiKey = process.env.GRSAI_API_KEY;
-
-  if (requestedProvider === 'grsai-nano-banana' && grsaiApiKey) {
-    return createGrsaiNanoBananaProvider({ apiKey: grsaiApiKey });
-  }
-
-  if (requestedProvider === 'grsai-nano-banana' && !grsaiApiKey) {
-    console.warn('AI_PROVIDER=grsai-nano-banana but GRSAI_API_KEY is missing; falling back to mock provider.');
-  }
-
-  if (requestedProvider === 'gemini' && geminiApiKey) {
-    return createGeminiProvider(geminiApiKey);
-  }
-
-  if (requestedProvider === 'gemini' && !geminiApiKey) {
-    console.warn('AI_PROVIDER=gemini but GEMINI_API_KEY is missing; falling back to mock provider.');
-  }
-
-  return mockProvider;
 }
 
 function validateDataUrlSize(fieldName: string, dataUrl: string): string | null {
@@ -1855,13 +1142,5 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
-}
-
-function isPayloadTooLargeError(error: unknown): boolean {
-  return isRecord(error) && error.type === 'entity.too.large';
-}
-
-function isJsonParseError(error: unknown): boolean {
-  return isRecord(error) && error.type === 'entity.parse.failed';
 }
 

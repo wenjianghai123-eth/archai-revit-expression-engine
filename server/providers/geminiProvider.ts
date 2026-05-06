@@ -33,7 +33,8 @@ export function createGeminiProvider(apiKey: string): ImageGenerationProvider {
       return {
         id: response.responseId || crypto.randomUUID(),
         provider: 'gemini',
-        imageDataUrl: image,
+        dataUrl: image.dataUrl,
+        mimeType: image.mimeType,
         createdAt: response.createTime || new Date().toISOString(),
         warnings,
       };
@@ -62,7 +63,9 @@ function buildRequestParts(input: GenerateImageInput, warnings: string[]): Part[
 
   if (input.maskImageDataUrl) {
     parts.push({
-      text: 'Mask image for inpainting. If this model cannot use a mask directly, preserve unmasked areas as much as possible:',
+      text: input.maskMode === 'full-image'
+        ? 'Full-image inpainting mask. The user explicitly wants the whole image eligible for repainting:'
+        : 'Mask image for inpainting. If this model cannot use a mask directly, preserve unmasked areas as much as possible:',
     });
     parts.push({
       inlineData: toInlineData(input.maskImageDataUrl),
@@ -116,11 +119,14 @@ function parseDataUrl(dataUrl: string): DataUrlParts {
   };
 }
 
-function extractImageDataUrl(parts: Part[] | undefined): string | null {
+function extractImageDataUrl(parts: Part[] | undefined): { dataUrl: string; mimeType: string } | null {
   const imagePart = parts?.find(part => part.inlineData?.data && part.inlineData.mimeType?.startsWith('image/'));
   if (!imagePart?.inlineData?.data || !imagePart.inlineData.mimeType) {
     return null;
   }
 
-  return `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
+  return {
+    dataUrl: `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`,
+    mimeType: imagePart.inlineData.mimeType,
+  };
 }

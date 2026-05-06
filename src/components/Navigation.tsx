@@ -47,8 +47,8 @@ export function Sidebar({ activeTab, onTabChange, onSettingsOpen }: SidebarProps
     <div className="hidden h-screen w-72 shrink-0 flex-col border-r border-white/10 bg-[#070b16] text-white shadow-2xl lg:flex">
       <div className="border-b border-white/10 p-6">
         <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-lg shadow-blue-950/40">
-            <Zap className="h-5 w-5 fill-current text-white" />
+          <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl bg-white shadow-lg shadow-blue-950/40">
+            <img src="/gtlogo.png" alt="ArchAI Logo" className="h-full w-full object-cover" />
           </div>
           <div className="min-w-0">
             <p className="text-xl font-black tracking-tight">ArchAI</p>
@@ -56,8 +56,8 @@ export function Sidebar({ activeTab, onTabChange, onSettingsOpen }: SidebarProps
           </div>
         </div>
         <div className="mt-4 flex gap-2">
-          <span className="rounded-full border border-blue-400/30 bg-blue-500/10 px-2.5 py-1 text-[10px] font-bold text-blue-200">MVP</span>
-          <span className="rounded-full border border-violet-400/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-bold text-violet-200">AI Studio</span>
+          <span className="rounded-full border border-blue-400/30 bg-blue-500/10 px-2.5 py-1 text-[10px] font-bold text-blue-200">AI渲图</span>
+          <span className="rounded-full border border-violet-400/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-bold text-violet-200">烛照AI</span>
         </div>
         <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
           <p className="text-[10px] font-bold uppercase tracking-widest text-blue-300">当前项目</p>

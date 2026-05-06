@@ -138,6 +138,21 @@ type CreditTransactionRow = {
   created_at: string;
 };
 
+type CreditAdjustmentRpcRow = {
+  balance_user_id: string;
+  balance: number;
+  balance_updated_at: string;
+  transaction_id: string;
+  transaction_user_id: string;
+  transaction_type: CreditTransaction['type'];
+  transaction_amount: number;
+  transaction_balance_after: number;
+  transaction_reason: string;
+  transaction_reference_type: CreditTransaction['referenceType'];
+  transaction_reference_id: string | null;
+  transaction_created_at: string;
+};
+
 export class SupabaseStorageAdapter implements StorageAdapter {
   private readonly client: SupabaseClient;
 
@@ -592,43 +607,21 @@ export class SupabaseStorageAdapter implements StorageAdapter {
   }
 
   async adjustCredits(input: CreditTransactionInput): Promise<{ balance: CreditBalance; transaction: CreditTransaction } | null> {
-    const current = await this.getCreditBalance(input.userId);
-    const nextBalance = current.balance + input.amount;
-    if (nextBalance < 0) return null;
+    const { data, error } = await this.client.rpc('adjust_credits_atomic', {
+      p_user_id: input.userId,
+      p_type: input.type,
+      p_amount: input.amount,
+      p_reason: input.reason,
+      p_reference_type: input.referenceType ?? null,
+      p_reference_id: input.referenceId ?? null,
+    });
 
-    const now = new Date().toISOString();
-    const balanceRow: CreditBalanceRow = {
-      user_id: input.userId,
-      balance: nextBalance,
-      updated_at: now,
-    };
+    assertNoSupabaseError(error, 'adjusting credits atomically');
 
-    const balanceResult = await this.client
-      .from('credit_balances')
-      .upsert(balanceRow, { onConflict: 'user_id' })
-      .select('*')
-      .single();
-    assertNoSupabaseError(balanceResult.error, 'updating credit balance');
+    const row = Array.isArray(data) ? data[0] as CreditAdjustmentRpcRow | undefined : data as CreditAdjustmentRpcRow | null;
+    if (!row) return null;
 
-    const transactionRow: CreditTransactionRow = {
-      id: `credit_tx_${randomUUID()}`,
-      user_id: input.userId,
-      type: input.type,
-      amount: input.amount,
-      balance_after: nextBalance,
-      reason: input.reason,
-      reference_type: input.referenceType ?? null,
-      reference_id: input.referenceId ?? null,
-      created_at: now,
-    };
-
-    const transactionResult = await this.client.from('credit_transactions').insert(transactionRow).select('*').single();
-    assertNoSupabaseError(transactionResult.error, 'creating credit transaction');
-
-    return {
-      balance: mapCreditBalanceRow(balanceResult.data as CreditBalanceRow),
-      transaction: mapCreditTransactionRow(transactionResult.data as CreditTransactionRow),
-    };
+    return mapCreditAdjustmentRpcRow(row);
   }
 
   async getCreditTransactionByReference(
@@ -821,6 +814,27 @@ function mapCreditTransactionRow(row: CreditTransactionRow): CreditTransaction {
     referenceType: row.reference_type,
     referenceId: row.reference_id,
     createdAt: row.created_at,
+  };
+}
+
+function mapCreditAdjustmentRpcRow(row: CreditAdjustmentRpcRow): { balance: CreditBalance; transaction: CreditTransaction } {
+  return {
+    balance: {
+      userId: row.balance_user_id,
+      balance: row.balance,
+      updatedAt: row.balance_updated_at,
+    },
+    transaction: {
+      id: row.transaction_id,
+      userId: row.transaction_user_id,
+      type: row.transaction_type,
+      amount: row.transaction_amount,
+      balanceAfter: row.transaction_balance_after,
+      reason: row.transaction_reason,
+      referenceType: row.transaction_reference_type,
+      referenceId: row.transaction_reference_id,
+      createdAt: row.transaction_created_at,
+    },
   };
 }
 

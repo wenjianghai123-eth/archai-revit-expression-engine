@@ -628,6 +628,20 @@ async function listCreditTransactions(userId: string): Promise<CreditTransaction
 async function adjustCredits(input: CreditTransactionInput): Promise<{ balance: CreditBalance; transaction: CreditTransaction } | null> {
   const db = await readDatabase();
   const balance = ensureCreditBalance(db, input.userId);
+
+  if (input.referenceId) {
+    const existingTransaction = db.creditTransactions.find(transaction => (
+      transaction.userId === input.userId &&
+      transaction.type === input.type &&
+      transaction.referenceId === input.referenceId
+    ));
+
+    if (existingTransaction) {
+      await writeDatabase(db);
+      return { balance, transaction: existingTransaction };
+    }
+  }
+
   const nextBalance = balance.balance + input.amount;
 
   if (nextBalance < 0) {

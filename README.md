@@ -1,6 +1,18 @@
 # ArchAI Expression Engine MVP 0.1
 
-ArchAI Expression Engine is an MVP for architectural image expression workflows. It provides a Vite + React frontend for prompt templates, generation controls, image preview, session history, and asset browsing, with AI/model calls intended to run through an Express backend.
+ArchAI Expression Engine is an MVP for architectural image expression workflows. It provides a Vite + React frontend for prompt templates, generation controls, upload/mask workflows, generated-result review, local history, project views, and asset browsing. AI/model calls run through an Express backend.
+
+Current backend capabilities include:
+
+- Development auth and optional Supabase Auth.
+- JSON metadata storage for local development and optional Supabase DB storage.
+- Local file storage and optional Supabase Storage for image, mask, model, and generated-result files.
+- Authenticated project, asset, generation job, credit, share-link, and admin APIs.
+- Async generation jobs with project/asset ownership checks, credit debit/refund, persisted output assets, generation results, and project generation records.
+- Provider adapters for `mock`, Gemini, and Grsai Nano Banana, with runtime output validation before generated assets are saved.
+- Legacy direct `/api/generate/*` endpoints for explicit local dev/mock debugging only.
+
+This is still an MVP. Supabase modes are usable as optional deployment building blocks, but production hardening still needs external job workers/queues, monitoring, operational rate limits, database backups, provider observability, and a real billing/payment system.
 
 ## Local Setup
 
@@ -21,7 +33,7 @@ Run the frontend:
 npm run dev:client
 ```
 
-Run the backend when server routes are present:
+Run the backend:
 
 ```bash
 npm run dev:server
@@ -47,11 +59,16 @@ After `npm run build`, Express serves the generated `dist` frontend and continue
 
 Create a local `.env` or `.env.local` file for development secrets. These files are ignored by git.
 
-- `AI_PROVIDER`: `mock` by default. Set to `grsai-nano-banana` to attempt real Grsai Nano Banana image generation.
+- `AI_PROVIDER`: `mock` by default. Set to `gemini` or `grsai-nano-banana` to attempt real image generation through the backend.
+- `GEMINI_API_KEY`: backend-only Gemini API key. Required only when `AI_PROVIDER=gemini`.
+- `GEMINI_IMAGE_MODEL`: optional Gemini image model. Defaults in code to `gemini-2.5-flash-image-preview`.
 - `AUTH_MODE`: `dev` by default. Use `supabase` in production to require Supabase Auth JWTs for project, asset, and generation job APIs.
 - `DATA_BACKEND`: `json` by default. Set to `supabase` to store metadata in Supabase tables.
 - `FILE_STORAGE`: `local` by default. Set to `supabase` to store uploaded images, models, and generated results in Supabase Storage.
-- `SUPABASE_URL`: backend-only Supabase project URL for server adapters.
+- `ENABLE_LEGACY_GENERATION_ENDPOINTS`: controls old `/api/generate/*` endpoints. Defaults to enabled outside production and disabled in production. Production keeps these endpoints disabled even if this flag is set.
+- `VITE_ENABLE_LEGACY_GENERATION_FALLBACK`: frontend fallback to old `/api/generate/*` endpoints. Set to `true` only for local dev/mock debugging. Production builds ignore this fallback.
+- `ENABLE_PROVIDER_FALLBACK`: controls backend fallback from a real provider to mock when the provider fails. Defaults to `true` outside production and `false` in production.
+- `SUPABASE_URL`: server-side Supabase project URL for backend adapters. This URL is not a secret, but keep service-role keys backend-only.
 - `SUPABASE_STORAGE_BUCKET`: Supabase Storage bucket name used when `FILE_STORAGE=supabase`.
 - `VITE_SUPABASE_URL`: Supabase project URL for the browser client. Required when using Supabase Auth.
 - `VITE_SUPABASE_ANON_KEY`: Supabase anon key for the browser client. Required when using Supabase Auth.
@@ -60,10 +77,15 @@ Create a local `.env` or `.env.local` file for development secrets. These files 
 - `GRSAI_BASE_URL`: optional Grsai API base URL. Defaults to `https://grsai.dakka.com.cn`.
 - `GRSAI_MODEL`: optional Grsai model name. Defaults to `nano-banana-fast`.
 - `PORT`: Express backend port. Defaults to `8787`.
+- `HOST`: Express bind host. Defaults to `0.0.0.0`.
+- `DATA_DIR`: JSON backend directory. Defaults to `data`.
+- `UPLOADS_DIR`: local file storage directory. Defaults to `uploads`.
 - `MAX_IMAGE_MB`: per-image server validation limit. Defaults to `10`.
 - `MAX_MODEL_MB`: per-model server validation limit. Defaults to `50`.
 - `GENERATION_JOB_RATE_LIMIT_PER_MINUTE`: per-user generation job creation limit. Defaults to `10`.
+- `ARCHAI_DISABLE_GENERATION_WORKER`: test/dev switch. Set to `true` to stop the in-process generation worker from automatically processing queued jobs.
 - `CORS_ORIGIN`: comma-separated browser origins allowed to call the backend. Defaults to local Vite origins.
+- `CORS_ORIGINS`: alternate comma-separated CORS variable name; `CORS_ORIGIN` takes precedence.
 
 All AI/model calls must go through the Express backend. The frontend should only call backend API routes.
 
@@ -74,6 +96,9 @@ AI_PROVIDER=mock
 AUTH_MODE=dev
 DATA_BACKEND=json
 FILE_STORAGE=local
+ENABLE_LEGACY_GENERATION_ENDPOINTS=true
+VITE_ENABLE_LEGACY_GENERATION_FALLBACK=true
+ENABLE_PROVIDER_FALLBACK=true
 GRSAI_API_KEY=
 PORT=8787
 MAX_IMAGE_MB=10
@@ -86,6 +111,9 @@ AI_PROVIDER=mock
 AUTH_MODE=supabase
 DATA_BACKEND=supabase
 FILE_STORAGE=supabase
+ENABLE_LEGACY_GENERATION_ENDPOINTS=false
+VITE_ENABLE_LEGACY_GENERATION_FALLBACK=false
+ENABLE_PROVIDER_FALLBACK=false
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_STORAGE_BUCKET=archai-assets
 VITE_SUPABASE_URL=https://your-project.supabase.co
@@ -95,6 +123,8 @@ PORT=8787
 MAX_IMAGE_MB=10
 ```
 
+Before using `DATA_BACKEND=supabase`, run the SQL in `docs/SUPABASE_SETUP.md`. Before using `FILE_STORAGE=supabase`, create the configured bucket and apply the storage policy guidance in that document.
+
 Example `.env` for Grsai Nano Banana:
 
 ```bash
@@ -102,6 +132,8 @@ AI_PROVIDER=grsai-nano-banana
 AUTH_MODE=dev
 DATA_BACKEND=json
 FILE_STORAGE=local
+ENABLE_LEGACY_GENERATION_ENDPOINTS=false
+ENABLE_PROVIDER_FALLBACK=false
 GRSAI_API_KEY=your_backend_only_key
 GRSAI_BASE_URL=https://grsai.dakka.com.cn
 GRSAI_MODEL=nano-banana-fast
@@ -109,7 +141,15 @@ PORT=8787
 MAX_IMAGE_MB=10
 ```
 
-When a real provider is selected but unavailable, unsupported, or unable to return an image, the backend falls back to the mock provider and includes a warning in the response instead of crashing.
+When a real provider is selected but unavailable, unsupported, or unable to return an image, the backend falls back to the mock provider only when `ENABLE_PROVIDER_FALLBACK=true` or when running outside production without an explicit fallback setting. In production, provider fallback defaults to disabled so failed real-provider jobs fail clearly and refund through the generation job flow.
+
+Provider implementations must return a valid image `dataUrl` internally before generated assets are saved. If a provider returns a remote image URL, the backend downloads it and converts it to a data URL first; a failed download is treated as provider failure, never saved as if it were image data.
+
+## Generation APIs
+
+Production generation should use `/api/generation-jobs`. That path requires auth, checks project and asset ownership, deducts credits, runs async generation, stores results, and records history.
+
+The old `/api/generate/floorplan`, `/api/generate/style-render`, and `/api/generate/inpaint` endpoints are legacy development helpers for direct mock generation. They do not create jobs or deduct credits, so they are disabled by default in production. The frontend only falls back to them when `VITE_ENABLE_LEGACY_GENERATION_FALLBACK=true` in a Vite development build.
 
 ## Authentication
 
@@ -159,3 +199,4 @@ An optional Playwright E2E job is also configured. It installs the Playwright Ed
 - Real Revit plugin support is not included.
 - Production priorities are upload, generation, mask selection, download, history, backend-only model calls, and deployability.
 - UI polish should not take priority over working MVP flows.
+- The in-process worker and JSON storage are not designed for concurrent multi-instance production traffic. Use Supabase RPC-backed credits for stronger credit consistency, and add durable queues plus monitoring before serious production usage.

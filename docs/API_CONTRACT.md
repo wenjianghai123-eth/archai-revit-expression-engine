@@ -1,48 +1,80 @@
 # ArchAI API Contract
 
-This document defines the backend API contract for ArchAI as it grows from the current MVP into a mature commercial product. All AI/model calls must go through backend APIs. API keys must never be exposed to frontend code.
+This document reflects the current Express API. All AI/model calls go through the backend; provider keys and Supabase service-role keys must never be exposed to frontend code.
 
 ## Conventions
 
 - Base path: `/api`
 - Request format: JSON unless the endpoint explicitly uses `multipart/form-data`.
-- Response format: JSON.
-- Authentication: commercial APIs use bearer session tokens or secure cookies. MVP APIs may run without authentication.
-- Timestamps: ISO 8601 strings.
-- IDs: opaque strings.
+- Response envelope: successful API responses use `{ "ok": true, "data": ... }`; errors use `{ "ok": false, "error": { "message": "...", "code": "..." } }`.
+- Auth: most APIs require an authenticated user. Local development uses `AUTH_MODE=dev`; Supabase deployments use Bearer JWTs with `AUTH_MODE=supabase`.
+- Storage: metadata can use `DATA_BACKEND=json` or `DATA_BACKEND=supabase`; files can use `FILE_STORAGE=local` or `FILE_STORAGE=supabase`.
+- IDs are opaque strings. Timestamps are ISO 8601 strings.
 
-Standard error response:
+## Health And Auth
+
+### `GET /api/health`
+
+Public. Returns backend version and selected provider.
 
 ```json
 {
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "Readable error message.",
-    "details": {}
+  "ok": true,
+  "version": "0.1.0",
+  "provider": "mock"
+}
+```
+
+### `GET /api/auth/me`
+
+Requires login. In `AUTH_MODE=dev`, the backend injects the development user. In `AUTH_MODE=supabase`, the request must include a valid Supabase JWT.
+
+```json
+{
+  "ok": true,
+  "data": {
+    "user": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "email": "dev@archai.local",
+      "name": "ArchAI Dev",
+      "role": "admin"
+    }
   }
 }
 ```
 
-## MVP Priority Interfaces
+## Projects
 
-### List Projects
+All project endpoints require login and are scoped to the current user.
 
-| Field | Value |
-| --- | --- |
-| Method | `GET` |
-| Path | `/api/projects` |
-| Requires Login | No for MVP, Yes later |
-| MVP Implemented | Planned |
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/projects` | List current user's non-deleted projects. |
+| `POST` | `/api/projects` | Create a project. |
+| `GET` | `/api/projects/:id` | Read one owned project. |
+| `PATCH` | `/api/projects/:id` | Update `name`, `description`, `status`, or `coverImageUrl`. |
+| `DELETE` | `/api/projects/:id` | Soft-delete one owned project. |
 
-Request body: none.
-
-Response body:
+Create request:
 
 ```json
 {
-  "projects": [
-    {
+  "name": "Office Lobby Concept",
+  "description": "Warm material exploration",
+  "status": "active",
+  "coverImageUrl": null
+}
+```
+
+Project response shape:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "project": {
       "id": "project_123",
+      "userId": "user_123",
       "name": "Office Lobby Concept",
       "description": "Warm material exploration",
       "status": "active",
@@ -50,538 +82,340 @@ Response body:
       "createdAt": "2026-05-02T12:00:00.000Z",
       "updatedAt": "2026-05-02T12:00:00.000Z"
     }
-  ]
-}
-```
-
-Error response:
-
-```json
-{
-  "error": {
-    "code": "PROJECT_LIST_FAILED",
-    "message": "Unable to load projects.",
-    "details": {}
   }
 }
 ```
 
-### Create Project
+Valid project statuses are `active` and `archived`.
 
-| Field | Value |
-| --- | --- |
-| Method | `POST` |
-| Path | `/api/projects` |
-| Requires Login | No for MVP, Yes later |
-| MVP Implemented | Planned |
+## Assets
 
-Request body:
+Image and model asset APIs require login. They only return assets owned by the current user.
 
-```json
-{
-  "name": "Office Lobby Concept",
-  "description": "Warm material exploration",
-  "clientName": "Example Client"
-}
-```
+### `POST /api/assets/images`
 
-Response body:
+Uploads an image asset. Request is `multipart/form-data` with one `file` field. Supported image content is PNG, JPEG/JPG, and WEBP. The backend validates size, MIME type, extension-derived storage name, and image magic bytes.
 
 ```json
 {
-  "project": {
-    "id": "project_123",
-    "name": "Office Lobby Concept",
-    "description": "Warm material exploration",
-    "clientName": "Example Client",
-    "status": "active",
-    "createdAt": "2026-05-02T12:00:00.000Z",
-    "updatedAt": "2026-05-02T12:00:00.000Z"
-  }
-}
-```
-
-Error response:
-
-```json
-{
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "Project name is required.",
-    "details": {
-      "field": "name"
+  "ok": true,
+  "data": {
+    "asset": {
+      "id": "image_123",
+      "userId": "user_123",
+      "url": "/uploads/1710000000000-id.png",
+      "filename": "1710000000000-id.png",
+      "mimeType": "image/png",
+      "size": 102400,
+      "createdAt": "2026-05-02T12:00:00.000Z"
     }
   }
 }
 ```
 
-### Get Project
+Common errors: `UPLOAD_CONTENT_TYPE_INVALID`, `UPLOAD_BOUNDARY_MISSING`, `UPLOAD_FILE_MISSING`, `UPLOAD_FILE_TOO_LARGE`, `UPLOAD_IMAGE_TYPE_INVALID`, `UPLOAD_MULTIPART_INVALID`.
 
-| Field | Value |
-| --- | --- |
-| Method | `GET` |
-| Path | `/api/projects/:id` |
-| Requires Login | No for MVP, Yes later |
-| MVP Implemented | Planned |
+### Image Reads
 
-Request body: none.
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/assets/images/:id` | Return one owned image asset record. |
 
-Response body:
+The API returns metadata and the storage URL. It does not provide a separate `/file` endpoint; local files are served from `/uploads/...`, and Supabase Storage returns public bucket URLs.
 
-```json
-{
-  "project": {
-    "id": "project_123",
-    "name": "Office Lobby Concept",
-    "description": "Warm material exploration",
-    "clientName": "Example Client",
-    "status": "active",
-    "createdAt": "2026-05-02T12:00:00.000Z",
-    "updatedAt": "2026-05-02T12:00:00.000Z"
-  }
-}
-```
+### Model Assets
 
-Error response:
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/assets/models` | List owned model assets. |
+| `POST` | `/api/assets/models` | Upload a model asset with `multipart/form-data` field `file`. |
+| `GET` | `/api/assets/models/:id` | Return one owned model asset. |
+| `DELETE` | `/api/assets/models/:id` | Soft-delete one owned model asset and remove the stored file when possible. |
+
+Supported model extensions are `glb`, `gltf`, and `obj`. The backend validates size, extension, MIME type, and basic file content sniffing.
 
 ```json
 {
-  "error": {
-    "code": "PROJECT_NOT_FOUND",
-    "message": "Project not found.",
-    "details": {
-      "id": "project_123"
+  "ok": true,
+  "data": {
+    "asset": {
+      "id": "model_123",
+      "userId": "user_123",
+      "url": "/uploads/models/1710000000000-id.glb",
+      "filename": "models/1710000000000-id.glb",
+      "originalFilename": "concept.glb",
+      "fileType": "glb",
+      "mimeType": "model/gltf-binary",
+      "size": 2048000,
+      "createdAt": "2026-05-02T12:00:00.000Z"
     }
   }
 }
 ```
 
-### Update Project
+## Generation Jobs
 
-| Field | Value |
-| --- | --- |
-| Method | `PATCH` |
-| Path | `/api/projects/:id` |
-| Requires Login | No for MVP, Yes later |
-| MVP Implemented | Planned |
+`/api/generation-jobs` is the main generation path. It requires auth, verifies project ownership, verifies all input image assets and mask assets belong to the current user, debits credits, queues async work, stores generated output assets, writes generation results, and creates project generation history.
 
-Request body:
-
-```json
-{
-  "name": "Office Lobby Concept V2",
-  "description": "Updated direction",
-  "status": "review"
-}
-```
-
-Response body:
-
-```json
-{
-  "project": {
-    "id": "project_123",
-    "name": "Office Lobby Concept V2",
-    "description": "Updated direction",
-    "status": "review",
-    "updatedAt": "2026-05-02T13:00:00.000Z"
-  }
-}
-```
-
-Error response:
-
-```json
-{
-  "error": {
-    "code": "PROJECT_UPDATE_FAILED",
-    "message": "Unable to update project.",
-    "details": {}
-  }
-}
-```
-
-### Delete Project
-
-| Field | Value |
-| --- | --- |
-| Method | `DELETE` |
-| Path | `/api/projects/:id` |
-| Requires Login | No for MVP, Yes later |
-| MVP Implemented | Planned |
-
-Request body: none.
-
-Response body:
-
-```json
-{
-  "deleted": true,
-  "id": "project_123"
-}
-```
-
-Error response:
-
-```json
-{
-  "error": {
-    "code": "PROJECT_DELETE_FAILED",
-    "message": "Unable to delete project.",
-    "details": {}
-  }
-}
-```
-
-### Create Generation Job
-
-| Field | Value |
-| --- | --- |
-| Method | `POST` |
-| Path | `/api/generation-jobs` |
-| Requires Login | No for MVP, Yes later |
-| MVP Implemented | Planned |
-
-Request body:
+### `POST /api/generation-jobs`
 
 ```json
 {
   "projectId": "project_123",
-  "mode": "floorplan",
-  "prompt": "Create a warm modern architectural presentation plan.",
+  "mode": "inpaint",
+  "prompt": "Replace the sofa with a wood bench.",
   "config": {
     "style": "modern",
-    "lighting": "golden hour",
-    "materialStrength": 0.8
+    "lighting": "soft daylight",
+    "materialStrength": 0.8,
+    "batchCount": 2,
+    "maskMode": "asset-mask",
+    "maskAssetId": "image_mask_123"
   },
-  "inputImageAssetIds": ["image_123"],
-  "maskImageAssetId": null,
-  "modelAssetId": null,
-  "promptTemplateId": null
+  "inputAssetIds": ["image_input_123"]
 }
 ```
 
-Response body:
+Rules:
+
+- `projectId` must belong to the current user.
+- Every `inputAssetIds` item must be an existing image asset owned by the current user.
+- `mode` is one of `floorplan`, `style-render`, or `inpaint`.
+- `config.batchCount` can be `1`, `2`, or `4`; omitted means `1`.
+- For `inpaint`, `config.maskMode` is required:
+  - `full-image`: no `maskAssetId`; backend generates an explicit full-image mask for the provider.
+  - `asset-mask`: `maskAssetId` is required and must be an owned image asset.
+- For non-inpaint jobs, `maskMode` and `maskAssetId` are ignored/removed.
+- Insufficient credits returns `402` with `CREDITS_INSUFFICIENT`.
+
+Response:
 
 ```json
 {
-  "job": {
-    "id": "job_123",
-    "projectId": "project_123",
-    "mode": "floorplan",
-    "provider": "mock",
-    "status": "queued",
-    "prompt": "Create a warm modern architectural presentation plan.",
-    "config": {
-      "style": "modern",
-      "lighting": "golden hour",
-      "materialStrength": 0.8
-    },
-    "warnings": [],
-    "createdAt": "2026-05-02T12:00:00.000Z"
-  }
-}
-```
-
-Error response:
-
-```json
-{
-  "error": {
-    "code": "GENERATION_JOB_INVALID",
-    "message": "At least one input image is required.",
-    "details": {
-      "field": "inputImageAssetIds"
+  "ok": true,
+  "data": {
+    "job": {
+      "id": "job_123",
+      "userId": "user_123",
+      "projectId": "project_123",
+      "mode": "inpaint",
+      "prompt": "Replace the sofa with a wood bench.",
+      "config": {
+        "style": "modern",
+        "maskMode": "asset-mask",
+        "maskAssetId": "image_mask_123"
+      },
+      "inputAssetIds": ["image_input_123"],
+      "status": "queued",
+      "progress": 0,
+      "provider": "mock",
+      "outputAssetId": null,
+      "outputAssetIds": [],
+      "errorMessage": null,
+      "createdAt": "2026-05-02T12:00:00.000Z",
+      "updatedAt": "2026-05-02T12:00:00.000Z",
+      "startedAt": null,
+      "finishedAt": null
     }
   }
 }
 ```
 
-### Get Generation Job
+### Job Reads And Cancellation
 
-| Field | Value |
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/generation-jobs/:id` | Return one owned job with `results`. |
+| `POST` | `/api/generation-jobs/:id/cancel` | Cancel a queued/running owned job and refund its debit once. |
+| `PATCH` | `/api/generation-results/:id` | Update `isSelected` or `isFavorite` on an owned result. |
+
+Generation result shape:
+
+```json
+{
+  "id": "result_123",
+  "userId": "user_123",
+  "projectId": "project_123",
+  "jobId": "job_123",
+  "assetId": "image_output_123",
+  "imageUrl": "/uploads/generated/result.png",
+  "isSelected": true,
+  "isFavorite": false,
+  "createdAt": "2026-05-02T12:01:00.000Z",
+  "updatedAt": "2026-05-02T12:01:00.000Z"
+}
+```
+
+### Legacy Generation Endpoints
+
+| Method | Path |
 | --- | --- |
-| Method | `GET` |
-| Path | `/api/generation-jobs/:id` |
-| Requires Login | No for MVP, Yes later |
-| MVP Implemented | Planned |
+| `POST` | `/api/generate/floorplan` |
+| `POST` | `/api/generate/style-render` |
+| `POST` | `/api/generate/inpaint` |
 
-Request body: none.
-
-Response body:
+These endpoints are legacy development helpers for direct generation responses:
 
 ```json
 {
-  "job": {
-    "id": "job_123",
-    "projectId": "project_123",
-    "mode": "floorplan",
-    "provider": "mock",
-    "status": "succeeded",
-    "prompt": "Create a warm modern architectural presentation plan.",
-    "config": {
-      "style": "modern"
-    },
-    "warnings": [],
-    "createdAt": "2026-05-02T12:00:00.000Z",
-    "completedAt": "2026-05-02T12:01:00.000Z"
-  },
-  "results": [
-    {
-      "id": "result_123",
-      "jobId": "job_123",
-      "imageAssetId": "image_result_123",
-      "imageUrl": "/api/assets/images/image_result_123/file",
-      "createdAt": "2026-05-02T12:01:00.000Z"
-    }
-  ]
+  "id": "generation_123",
+  "provider": "mock",
+  "imageDataUrl": "data:image/svg+xml,...",
+  "createdAt": "2026-05-02T12:00:00.000Z",
+  "warnings": []
 }
 ```
 
-Error response:
+They do not create generation jobs, do not debit credits, and do not persist job results. They are disabled by default in production via `ENABLE_LEGACY_GENERATION_ENDPOINTS=false` behavior and should only be enabled for explicit local dev/mock debugging.
+
+## Project Generation Records
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/projects/:id/generations` | List generation records for an owned project. |
+| `POST` | `/api/projects/:id/generations` | Create a manual/legacy generation record for an owned project. |
+
+Current generation record shape:
 
 ```json
 {
-  "error": {
-    "code": "GENERATION_JOB_NOT_FOUND",
-    "message": "Generation job not found.",
-    "details": {
-      "id": "job_123"
+  "id": "generation_123",
+  "userId": "user_123",
+  "projectId": "project_123",
+  "jobId": "job_123",
+  "mode": "style-render",
+  "prompt": "A bright interior rendering.",
+  "inputImageUrl": "/uploads/input.png",
+  "inputImageDataPreview": null,
+  "outputImageUrl": "/uploads/generated/output.png",
+  "outputImageDataPreview": null,
+  "provider": "mock",
+  "status": "succeeded",
+  "createdAt": "2026-05-02T12:00:00.000Z",
+  "updatedAt": "2026-05-02T12:00:00.000Z",
+  "results": []
+}
+```
+
+## Billing And Credits
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/billing/credits` | Return current user's credit balance. |
+| `GET` | `/api/billing/transactions` | Return current user's credit transaction history. |
+
+Generation jobs debit credits on creation. Failed jobs and cancelled queued/running jobs refund the debit once using the job id as the refund reference.
+
+```json
+{
+  "ok": true,
+  "data": {
+    "balance": {
+      "userId": "user_123",
+      "balance": 990,
+      "updatedAt": "2026-05-02T12:00:00.000Z"
     }
   }
 }
 ```
 
-### List Project Generations
+There is no payment checkout or subscription system in the current MVP.
 
-| Field | Value |
-| --- | --- |
-| Method | `GET` |
-| Path | `/api/projects/:id/generations` |
-| Requires Login | No for MVP, Yes later |
-| MVP Implemented | Planned |
+## Admin
 
-Request body: none.
+Admin APIs require an authenticated user with `role: "admin"`.
 
-Response body:
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/admin/dashboard` | Return aggregate counts, recent jobs, and recent error jobs. |
+| `POST` | `/api/admin/credits/grant` | Grant credits to a user. |
+
+Credit grant request:
 
 ```json
 {
-  "generations": [
-    {
-      "job": {
-        "id": "job_123",
-        "projectId": "project_123",
-        "mode": "floorplan",
-        "provider": "mock",
-        "status": "succeeded",
-        "prompt": "Create a warm modern architectural presentation plan.",
+  "userId": "user_123",
+  "amount": 100,
+  "reason": "Manual support adjustment"
+}
+```
+
+## Share Links
+
+Share-link creation and revocation require login and project ownership. Public share reads do not require login but only work with a valid, non-revoked, non-expired token.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/projects/:id/share-links` | Create a view-only share link. |
+| `DELETE` | `/api/projects/:id/share-links/:shareLinkId` | Revoke a share link. |
+| `GET` | `/api/share/:token` | Read public share payload. |
+
+Create request:
+
+```json
+{
+  "expiresAt": "2026-06-01T00:00:00.000Z"
+}
+```
+
+`expiresAt` is optional. If omitted, the backend creates a link valid for 14 days.
+
+Public share response intentionally omits internal user ids and storage adapter details:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "share": {
+      "link": {
+        "permission": "view",
+        "expiresAt": "2026-06-01T00:00:00.000Z",
         "createdAt": "2026-05-02T12:00:00.000Z"
       },
-      "results": [
+      "project": {
+        "name": "Office Lobby Concept",
+        "description": "Warm material exploration"
+      },
+      "generations": [
         {
-          "id": "result_123",
-          "imageAssetId": "image_result_123",
-          "imageUrl": "/api/assets/images/image_result_123/file",
-          "createdAt": "2026-05-02T12:01:00.000Z"
+          "id": "generation_123",
+          "mode": "style-render",
+          "prompt": "A bright interior rendering.",
+          "inputImageUrl": "/uploads/input.png",
+          "inputImageDataPreview": null,
+          "outputImageUrl": "/uploads/generated/output.png",
+          "outputImageDataPreview": null,
+          "createdAt": "2026-05-02T12:00:00.000Z",
+          "results": []
         }
       ]
     }
-  ]
-}
-```
-
-Error response:
-
-```json
-{
-  "error": {
-    "code": "PROJECT_NOT_FOUND",
-    "message": "Project not found.",
-    "details": {
-      "id": "project_123"
-    }
   }
 }
 ```
 
-### Upload Image Asset
+## Provider Output Contract
 
-| Field | Value |
-| --- | --- |
-| Method | `POST` |
-| Path | `/api/assets/images` |
-| Requires Login | No for MVP, Yes later |
-| MVP Implemented | Planned |
+Backend provider adapters normalize output before the server saves a generated asset:
 
-Request body: `multipart/form-data`
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `file` | file | Yes |
-| `projectId` | string | No for MVP, Yes later |
-| `source` | `upload` \| `mask` | No |
-
-Response body:
-
-```json
+```ts
 {
-  "asset": {
-    "id": "image_123",
-    "projectId": "project_123",
-    "source": "upload",
-    "name": "floorplan.png",
-    "mimeType": "image/png",
-    "sizeBytes": 102400,
-    "width": 1600,
-    "height": 1000,
-    "url": "/api/assets/images/image_123/file",
-    "createdAt": "2026-05-02T12:00:00.000Z"
-  }
+  id: string;
+  provider: 'mock' | 'gemini' | 'grsai-nano-banana';
+  dataUrl: string;
+  createdAt: string;
+  warnings: string[];
+  remoteUrl?: string;
+  mimeType?: string;
+  metadata?: Record<string, unknown>;
 }
 ```
 
-Error response:
+`dataUrl` must be a valid image data URL. If a provider returns a remote image URL, the backend must download it and convert it first. A remote URL is never saved as if it were a data URL.
 
-```json
-{
-  "error": {
-    "code": "IMAGE_ASSET_INVALID",
-    "message": "Only PNG, JPG, and WEBP images are supported.",
-    "details": {
-      "allowedTypes": ["image/png", "image/jpeg", "image/webp"]
-    }
-  }
-}
-```
+## Not Implemented
 
-### Upload Model Asset
-
-| Field | Value |
-| --- | --- |
-| Method | `POST` |
-| Path | `/api/assets/models` |
-| Requires Login | No for MVP, Yes later |
-| MVP Implemented | Planned |
-
-Request body: `multipart/form-data`
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `file` | file | Yes |
-| `projectId` | string | No for MVP, Yes later |
-
-Response body:
-
-```json
-{
-  "asset": {
-    "id": "model_123",
-    "projectId": "project_123",
-    "name": "concept.glb",
-    "format": "glb",
-    "mimeType": "model/gltf-binary",
-    "sizeBytes": 2048000,
-    "isPreviewSupported": true,
-    "metadata": {
-      "source": "upload"
-    },
-    "createdAt": "2026-05-02T12:00:00.000Z"
-  }
-}
-```
-
-Error response:
-
-```json
-{
-  "error": {
-    "code": "MODEL_ASSET_INVALID",
-    "message": "Only GLB, GLTF, and OBJ model files are supported in MVP.",
-    "details": {
-      "allowedExtensions": ["glb", "gltf", "obj"]
-    }
-  }
-}
-```
-
-## Auth API
-
-| Method | Path | Request Body | Response Body | Error Response | Requires Login | MVP Implemented |
-| --- | --- | --- | --- | --- | --- | --- |
-| `POST` | `/api/auth/register` | `{ "email": "user@example.com", "password": "secret", "name": "Designer" }` | `{ "user": {}, "workspace": {}, "token": "..." }` | `AUTH_REGISTER_FAILED` | No | No |
-| `POST` | `/api/auth/login` | `{ "email": "user@example.com", "password": "secret" }` | `{ "user": {}, "token": "..." }` | `AUTH_INVALID_CREDENTIALS` | No | No |
-| `POST` | `/api/auth/logout` | none | `{ "ok": true }` | `AUTH_LOGOUT_FAILED` | Yes | No |
-| `GET` | `/api/auth/me` | none | `{ "user": {}, "workspaces": [] }` | `AUTH_REQUIRED` | Yes | No |
-| `POST` | `/api/auth/invitations/accept` | `{ "token": "invite_token" }` | `{ "user": {}, "workspace": {} }` | `INVITATION_INVALID` | No | No |
-
-## Project API
-
-| Method | Path | Request Body | Response Body | Error Response | Requires Login | MVP Implemented |
-| --- | --- | --- | --- | --- | --- | --- |
-| `GET` | `/api/projects` | none | `{ "projects": [] }` | `PROJECT_LIST_FAILED` | No for MVP, Yes later | Planned |
-| `POST` | `/api/projects` | `{ "name": "...", "description": "...", "clientName": "..." }` | `{ "project": {} }` | `VALIDATION_ERROR` | No for MVP, Yes later | Planned |
-| `GET` | `/api/projects/:id` | none | `{ "project": {} }` | `PROJECT_NOT_FOUND` | No for MVP, Yes later | Planned |
-| `PATCH` | `/api/projects/:id` | `{ "name": "...", "description": "...", "status": "review" }` | `{ "project": {} }` | `PROJECT_UPDATE_FAILED` | No for MVP, Yes later | Planned |
-| `DELETE` | `/api/projects/:id` | none | `{ "deleted": true, "id": "..." }` | `PROJECT_DELETE_FAILED` | No for MVP, Yes later | Planned |
-| `GET` | `/api/projects/:id/generations` | none | `{ "generations": [] }` | `PROJECT_NOT_FOUND` | No for MVP, Yes later | Planned |
-
-## Generation Job API
-
-| Method | Path | Request Body | Response Body | Error Response | Requires Login | MVP Implemented |
-| --- | --- | --- | --- | --- | --- | --- |
-| `POST` | `/api/generation-jobs` | `{ "projectId": "...", "mode": "floorplan", "prompt": "...", "config": {}, "inputImageAssetIds": [] }` | `{ "job": {} }` | `GENERATION_JOB_INVALID` | No for MVP, Yes later | Planned |
-| `GET` | `/api/generation-jobs/:id` | none | `{ "job": {}, "results": [] }` | `GENERATION_JOB_NOT_FOUND` | No for MVP, Yes later | Planned |
-| `POST` | `/api/generation-jobs/:id/cancel` | none | `{ "job": {} }` | `GENERATION_JOB_CANCEL_FAILED` | Yes | No |
-| `POST` | `/api/generate/floorplan` | `{ "inputImageDataUrl": "...", "materialImageDataUrl": "...", "prompt": "...", "config": {} }` | `{ "id": "...", "provider": "mock", "imageDataUrl": "...", "warnings": [] }` | `{ "error": "..." }` | No | Yes |
-| `POST` | `/api/generate/style-render` | `{ "inputImageDataUrl": "...", "prompt": "...", "config": {} }` | `{ "id": "...", "provider": "mock", "imageDataUrl": "...", "warnings": [] }` | `{ "error": "..." }` | No | Yes |
-| `POST` | `/api/generate/inpaint` | `{ "inputImageDataUrl": "...", "maskImageDataUrl": "...", "prompt": "...", "config": {} }` | `{ "id": "...", "provider": "mock", "imageDataUrl": "...", "warnings": [] }` | `{ "error": "..." }` | No | Yes |
-
-## Asset API
-
-| Method | Path | Request Body | Response Body | Error Response | Requires Login | MVP Implemented |
-| --- | --- | --- | --- | --- | --- | --- |
-| `POST` | `/api/assets/images` | `multipart/form-data` with `file`, optional `projectId`, optional `source` | `{ "asset": {} }` | `IMAGE_ASSET_INVALID` | No for MVP, Yes later | Planned |
-| `POST` | `/api/assets/models` | `multipart/form-data` with `file`, optional `projectId` | `{ "asset": {} }` | `MODEL_ASSET_INVALID` | No for MVP, Yes later | Planned |
-| `GET` | `/api/assets/images/:id/file` | none | image binary | `ASSET_NOT_FOUND` | No for MVP, Yes later | Planned |
-| `GET` | `/api/assets/models/:id/file` | none | model binary | `ASSET_NOT_FOUND` | No for MVP, Yes later | Planned |
-| `DELETE` | `/api/assets/:id` | none | `{ "deleted": true, "id": "..." }` | `ASSET_DELETE_FAILED` | Yes | No |
-
-## Share API
-
-| Method | Path | Request Body | Response Body | Error Response | Requires Login | MVP Implemented |
-| --- | --- | --- | --- | --- | --- | --- |
-| `POST` | `/api/share-links` | `{ "projectId": "...", "scope": "project", "resultIds": [], "allowDownload": true, "expiresAt": null }` | `{ "shareLink": { "url": "..." } }` | `SHARE_LINK_CREATE_FAILED` | Yes | No |
-| `GET` | `/api/share-links/:id` | none | `{ "shareLink": {} }` | `SHARE_LINK_NOT_FOUND` | Yes | No |
-| `PATCH` | `/api/share-links/:id` | `{ "isActive": false, "allowDownload": false }` | `{ "shareLink": {} }` | `SHARE_LINK_UPDATE_FAILED` | Yes | No |
-| `GET` | `/api/public/shares/:token` | none | `{ "project": {}, "results": [] }` | `SHARE_LINK_INVALID` | No | No |
-
-## Billing / Credits API
-
-| Method | Path | Request Body | Response Body | Error Response | Requires Login | MVP Implemented |
-| --- | --- | --- | --- | --- | --- | --- |
-| `GET` | `/api/billing/usage` | none | `{ "usage": [], "summary": {} }` | `BILLING_USAGE_FAILED` | Yes | No |
-| `GET` | `/api/billing/credits` | none | `{ "creditBalance": 100, "transactions": [] }` | `CREDITS_LOAD_FAILED` | Yes | No |
-| `POST` | `/api/billing/checkout` | `{ "plan": "pro", "creditPackId": "credits_100" }` | `{ "checkoutUrl": "..." }` | `CHECKOUT_CREATE_FAILED` | Yes | No |
-| `POST` | `/api/billing/webhooks` | provider payload | `{ "received": true }` | `WEBHOOK_INVALID` | No, signed webhook | No |
-
-## Admin API
-
-| Method | Path | Request Body | Response Body | Error Response | Requires Login | MVP Implemented |
-| --- | --- | --- | --- | --- | --- | --- |
-| `GET` | `/api/admin/health` | none | `{ "ok": true, "version": "0.1.0", "provider": "mock" }` | `ADMIN_HEALTH_FAILED` | Admin | No |
-| `GET` | `/api/admin/audit-logs` | none | `{ "auditLogs": [] }` | `AUDIT_LOG_LIST_FAILED` | Admin | No |
-| `GET` | `/api/admin/provider-status` | none | `{ "providers": [] }` | `PROVIDER_STATUS_FAILED` | Admin | No |
-| `PATCH` | `/api/admin/workspaces/:id` | `{ "status": "suspended", "plan": "team" }` | `{ "workspace": {} }` | `WORKSPACE_UPDATE_FAILED` | Admin | No |
-
-Current MVP health endpoint:
-
-| Field | Value |
-| --- | --- |
-| Method | `GET` |
-| Path | `/api/health` |
-| Request Body | none |
-| Response Body | `{ "ok": true, "version": "0.1.0", "provider": "mock" }` |
-| Error Response | `{ "error": "..." }` |
-| Requires Login | No |
-| MVP Implemented | Yes |
+- Password registration/login endpoints; Supabase Auth handles production login.
+- Payment checkout, billing webhooks, subscriptions, and packs.
+- Audit logs and provider-status admin endpoints.
+- Real Revit plugin APIs.

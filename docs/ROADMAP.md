@@ -1,37 +1,57 @@
 # ArchAI Expression Engine Roadmap
 
-## Current MVP Scope
+## Current / Done
 
 - Vite + React + TypeScript frontend for architectural image expression workflows.
-- Express backend API for health checks and image generation requests.
-- Mock provider by default, with optional Gemini provider behind the backend only.
-- Floorplan image upload, validation, preview, and generation request flow.
-- Optional material reference image upload.
-- Local inpainting workflow with rectangular mask selection.
-- Download generated image and export project metadata JSON.
-- Browser-local generation history with size-aware storage safeguards.
-- AssetBank with sample assets and local GLB/GLTF preview; OBJ is metadata-only.
-- Settings modal showing provider mode, backend health, and mock/real provider status.
+- Express backend serving `/api` routes and production `dist` builds.
+- Development auth (`AUTH_MODE=dev`) and optional Supabase Auth (`AUTH_MODE=supabase`).
+- JSON metadata backend for local development and optional Supabase DB backend.
+- Local file storage and optional Supabase Storage for image, model, mask, and generated-result assets.
+- Image upload with multipart parsing, size limits, MIME checks, and magic-byte sniffing.
+- Model upload for GLB, GLTF, and OBJ with extension/MIME/content validation.
+- Project CRUD with ownership checks.
+- Generation jobs with project ownership, input asset ownership, mask asset ownership, credit debit, async processing, generated assets, generation results, project history, cancellation, and refund handling.
+- Explicit inpaint mask modes: `asset-mask` and `full-image`.
+- Credit balance and transaction APIs, including atomic Supabase RPC for credit adjustments.
+- Admin dashboard and manual credit grants for admin users.
+- Public share links with limited public payloads.
+- Provider adapters for mock, Gemini, and Grsai Nano Banana behind the backend.
+- Provider output validation so remote image URLs are downloaded/converted before saving.
+- Legacy `/api/generate/*` endpoints retained only as dev/mock helpers and disabled by default in production.
+- Focused Vitest coverage for ownership, uploads, credits, legacy endpoint safety, provider output validation, and share-link data exposure.
 
-## Current MVP Boundaries
+## Current Boundaries
 
-- No authentication.
-- No payment or billing.
-- No backend database.
-- No cloud object storage.
+- This is still an MVP, not a fully hardened production platform.
+- No custom password auth; production login relies on Supabase Auth.
+- No payment checkout, subscriptions, invoices, or billing webhooks.
+- No database migration framework; Supabase is initialized from `docs/SUPABASE_SETUP.md`.
+- The generation worker is in-process. It is acceptable for local/dev and simple deployments, but not a durable production queue.
+- Rate limiting is lightweight per-process generation job limiting, not distributed abuse protection.
+- Local file storage serves `/uploads/...` directly. Sensitive deployments should use private object storage plus signed URL support.
 - No real Revit plugin support.
 - No IFC/RVT import.
 - No collaborative editing.
-- No persistence for large uploaded model files.
+- No provider observability dashboard beyond basic admin job summaries.
 
-## Post-MVP Roadmap
+## Next
+
+- Extract the remaining backend routes into smaller route modules after the first `server/index.ts` thinning pass.
+- Finish frontend workflow extraction by moving the async generation runner out of `src/App.tsx`.
+- Add a durable queue/worker model for generation jobs, retries, cancellation, and job recovery.
+- Add structured audit logs for admin actions, credits changes, share-link changes, and generation job lifecycle events.
+- Add stronger production rate limits and abuse protection across API routes.
+- Add provider health checks, timeout budgets, retry policy, and operational alerts.
+- Add private Supabase Storage support with signed URL generation.
+- Add database migration/versioning workflow instead of manual SQL copy-paste.
+- Add payment and subscription integration once product packaging is defined.
+- Expand Playwright E2E coverage for upload, mask selection, async generation, result selection, project history, and share links.
+
+## Post-MVP
 
 - Real Revit plugin for sending views, sheets, geometry context, and generated outputs between Revit and ArchAI.
 - IFC/RVT import pipeline with model parsing, geometry simplification, and metadata extraction.
-- User accounts, organization workspaces, and role-based access control.
-- Cloud storage for uploads, generated results, model assets, masks, and project packages.
-- Collaboration features including shared projects, comments, review status, and version history.
-- Billing, usage metering, quota management, and subscription administration.
-- Production provider management with per-provider health, retries, rate-limit handling, and observability.
-- Richer model asset pipeline for OBJ materials, GLTF external resources, thumbnails, and persistent previews.
-- Automated browser QA covering upload, generation, masking, download, history, and AssetBank flows.
+- Organization workspaces, teams, invitations, and role-based access control beyond the current admin flag.
+- Collaboration features including comments, review status, version history, and shared project workspaces.
+- Richer model asset pipeline for OBJ materials, GLTF external resources, thumbnails, optimization, and persistent previews.
+- Production billing, usage metering, quota packages, invoices, and subscription administration.

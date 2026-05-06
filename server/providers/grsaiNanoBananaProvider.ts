@@ -74,17 +74,15 @@ export function createGrsaiNanoBananaProvider(options: GrsaiProviderOptions): Im
         warnings.push(`Grsai returned text: ${resultContent}`);
       }
 
-      let imageDataUrl = imageUrl;
-      try {
-        imageDataUrl = await remoteImageToDataUrl(imageUrl);
-      } catch (error) {
-        warnings.push(`Failed to download Grsai result image; using remote URL directly: ${error instanceof Error ? error.message : 'unknown error'}`);
-      }
+      const normalizedImage = await normalizeResultImage(imageUrl);
 
       return {
         id: result.id || taskId || crypto.randomUUID(),
         provider: providerName,
-        imageDataUrl,
+        dataUrl: normalizedImage.dataUrl,
+        remoteUrl: normalizedImage.remoteUrl,
+        mimeType: normalizedImage.mimeType,
+        metadata: { taskId },
         createdAt: new Date().toISOString(),
         warnings,
       };
@@ -171,15 +169,36 @@ async function pollTaskResult(input: { apiKey: string; baseUrl: string; taskId: 
   throw new Error(`Grsai task timed out after ${pollTimeoutMs}ms.`);
 }
 
-async function remoteImageToDataUrl(url: string): Promise<string> {
+async function normalizeResultImage(value: string): Promise<{ dataUrl: string; remoteUrl?: string; mimeType: string }> {
+  if (value.startsWith('data:')) {
+    const mimeType = readDataUrlMimeType(value);
+    return { dataUrl: value, mimeType };
+  }
+
+  if (!isHttpUrl(value)) {
+    throw new Error('Grsai returned an unsupported image reference.');
+  }
+
+  const downloaded = await remoteImageToDataUrl(value);
+  return { ...downloaded, remoteUrl: value };
+}
+
+async function remoteImageToDataUrl(url: string): Promise<{ dataUrl: string; mimeType: string }> {
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
   }
 
   const contentType = response.headers.get('content-type') || 'image/png';
+  if (!contentType.toLowerCase().startsWith('image/')) {
+    throw new Error(`Remote result is not an image: ${contentType}`);
+  }
+
   const content = Buffer.from(await response.arrayBuffer());
-  return `data:${contentType};base64,${content.toString('base64')}`;
+  return {
+    dataUrl: `data:${contentType};base64,${content.toString('base64')}`,
+    mimeType: contentType,
+  };
 }
 
 function normalizeTaskResult(value: unknown): TaskResult {
@@ -224,6 +243,18 @@ function normalizeBaseUrl(value: string): string {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//iu.test(value);
+}
+
+function readDataUrlMimeType(dataUrl: string): string {
+  const match = /^data:([^;,]+)(?:;[^,]*)?,/u.exec(dataUrl);
+  if (!match || !match[1].startsWith('image/')) {
+    throw new Error('Grsai returned an invalid image data URL.');
+  }
+  return match[1];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

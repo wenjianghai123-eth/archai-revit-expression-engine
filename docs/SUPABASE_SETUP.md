@@ -1,6 +1,8 @@
 # Supabase Setup
 
-This document describes the Supabase tables required by `SupabaseStorageAdapter`.
+This document describes the Supabase Auth, database, RPC, RLS, and Storage setup used by the current backend adapters.
+
+The app does not use direct frontend table writes. The Express backend uses `SUPABASE_SERVICE_ROLE_KEY` for storage adapter writes and still performs project/asset/user checks in application code. RLS policies are included as a defense-in-depth baseline and for future browser read features.
 
 ## Environment
 
@@ -16,19 +18,29 @@ Production storage can use Supabase:
 ```bash
 DATA_BACKEND=supabase
 AUTH_MODE=supabase
+FILE_STORAGE=supabase
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your_backend_only_service_role_key
+SUPABASE_STORAGE_BUCKET=archai-assets
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your_public_anon_key
 ```
 
 `SUPABASE_SERVICE_ROLE_KEY` is backend-only. Do not expose it in frontend code or client-visible config.
 
+## Auth
+
+Use Supabase Auth when `AUTH_MODE=supabase`. The frontend uses only `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` to sign in and attach Bearer tokens. The backend validates tokens with the service role key.
+
+For local mock development, keep `AUTH_MODE=dev`; no Supabase project is required.
+
 ## Tables
 
 Run this SQL in the Supabase SQL editor.
 
 ```sql
+create extension if not exists pgcrypto;
+
 create table if not exists public.projects (
   id text primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -76,6 +88,7 @@ create table if not exists public.generation_jobs (
   progress integer not null default 0,
   provider text not null,
   output_asset_id text references public.image_assets(id) on delete set null,
+  output_asset_ids text[] not null default '{}'::text[],
   error_message text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -87,6 +100,7 @@ create table if not exists public.generation_records (
   id text primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   project_id text not null references public.projects(id) on delete cascade,
+  job_id text references public.generation_jobs(id) on delete set null,
   mode text not null check (mode in ('floorplan', 'style-render', 'inpaint')),
   prompt text not null,
   input_image_url text,
@@ -95,6 +109,19 @@ create table if not exists public.generation_records (
   output_image_data_preview text,
   provider text not null,
   status text not null default 'succeeded' check (status in ('succeeded', 'failed')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.generation_results (
+  id text primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  project_id text not null references public.projects(id) on delete cascade,
+  job_id text not null references public.generation_jobs(id) on delete cascade,
+  asset_id text not null references public.image_assets(id) on delete cascade,
+  image_url text not null,
+  is_selected boolean not null default false,
+  is_favorite boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -128,6 +155,8 @@ create table if not exists public.credit_transactions (
 );
 ```
 
+If you are updating an older database, verify the code-to-SQL checklist at the end of this document. In particular, newer code requires `generation_results`, `generation_records.job_id`, and `generation_jobs.output_asset_ids`.
+
 ## Indexes
 
 ```sql
@@ -148,8 +177,23 @@ create index if not exists generation_jobs_status_created_at_idx
 create index if not exists generation_jobs_user_id_created_at_idx
   on public.generation_jobs (user_id, created_at desc);
 
+create index if not exists generation_jobs_project_user_created_at_idx
+  on public.generation_jobs (project_id, user_id, created_at desc);
+
 create index if not exists generation_records_project_user_created_at_idx
   on public.generation_records (project_id, user_id, created_at desc);
+
+create index if not exists generation_records_job_id_idx
+  on public.generation_records (job_id);
+
+create index if not exists generation_results_job_user_created_at_idx
+  on public.generation_results (job_id, user_id, created_at asc);
+
+create index if not exists generation_results_project_user_created_at_idx
+  on public.generation_results (project_id, user_id, created_at desc);
+
+create index if not exists generation_results_asset_id_idx
+  on public.generation_results (asset_id);
 
 create index if not exists share_links_token_idx
   on public.share_links (token);
@@ -162,10 +206,350 @@ create index if not exists credit_transactions_user_id_created_at_idx
 
 create index if not exists credit_transactions_user_ref_idx
   on public.credit_transactions (user_id, type, reference_id);
+
+create unique index if not exists credit_transactions_user_type_reference_unique_idx
+  on public.credit_transactions (user_id, type, reference_id)
+  where reference_id is not null;
+```
+
+## Credit RPC
+
+`SupabaseStorageAdapter.adjustCredits` uses this RPC so credit debits, grants, and refunds happen atomically inside the database. The function locks the user's `credit_balances` row, rejects insufficient debits, updates the balance, writes the transaction, and returns both records. Repeated calls with the same `user_id`, `type`, and `reference_id` return the existing transaction without changing the balance again.
+
+```sql
+create or replace function public.adjust_credits_atomic(
+  p_user_id uuid,
+  p_type text,
+  p_amount integer,
+  p_reason text,
+  p_reference_type text default null,
+  p_reference_id text default null
+)
+returns table (
+  balance_user_id uuid,
+  balance integer,
+  balance_updated_at timestamptz,
+  transaction_id text,
+  transaction_user_id uuid,
+  transaction_type text,
+  transaction_amount integer,
+  transaction_balance_after integer,
+  transaction_reason text,
+  transaction_reference_type text,
+  transaction_reference_id text,
+  transaction_created_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_balance public.credit_balances%rowtype;
+  v_transaction public.credit_transactions%rowtype;
+  v_next_balance integer;
+  v_now timestamptz := now();
+begin
+  if p_type not in ('grant', 'debit', 'refund') then
+    raise exception 'Invalid credit transaction type: %', p_type;
+  end if;
+
+  if p_reference_type is not null and p_reference_type not in ('generation_job', 'system') then
+    raise exception 'Invalid credit reference type: %', p_reference_type;
+  end if;
+
+  if p_amount = 0 then
+    raise exception 'Credit adjustment amount cannot be zero.';
+  end if;
+
+  if p_type = 'debit' and p_amount >= 0 then
+    raise exception 'Debit amount must be negative.';
+  end if;
+
+  if p_type in ('grant', 'refund') and p_amount <= 0 then
+    raise exception 'Grant and refund amounts must be positive.';
+  end if;
+
+  insert into public.credit_balances (user_id, balance, updated_at)
+  values (p_user_id, 0, v_now)
+  on conflict (user_id) do nothing;
+
+  select *
+    into v_balance
+    from public.credit_balances
+    where user_id = p_user_id
+    for update;
+
+  if p_reference_id is not null then
+    select *
+      into v_transaction
+      from public.credit_transactions
+      where user_id = p_user_id
+        and type = p_type
+        and reference_id = p_reference_id;
+
+    if found then
+      return query
+      select
+        v_balance.user_id,
+        v_balance.balance,
+        v_balance.updated_at,
+        v_transaction.id,
+        v_transaction.user_id,
+        v_transaction.type,
+        v_transaction.amount,
+        v_transaction.balance_after,
+        v_transaction.reason,
+        v_transaction.reference_type,
+        v_transaction.reference_id,
+        v_transaction.created_at;
+      return;
+    end if;
+  end if;
+
+  v_next_balance := v_balance.balance + p_amount;
+
+  if v_next_balance < 0 then
+    return;
+  end if;
+
+  update public.credit_balances
+    set balance = v_next_balance,
+        updated_at = v_now
+    where user_id = p_user_id
+    returning * into v_balance;
+
+  insert into public.credit_transactions (
+    id,
+    user_id,
+    type,
+    amount,
+    balance_after,
+    reason,
+    reference_type,
+    reference_id,
+    created_at
+  )
+  values (
+    'credit_tx_' || gen_random_uuid()::text,
+    p_user_id,
+    p_type,
+    p_amount,
+    v_next_balance,
+    p_reason,
+    p_reference_type,
+    p_reference_id,
+    v_now
+  )
+  returning * into v_transaction;
+
+  return query
+  select
+    v_balance.user_id,
+    v_balance.balance,
+    v_balance.updated_at,
+    v_transaction.id,
+    v_transaction.user_id,
+    v_transaction.type,
+    v_transaction.amount,
+    v_transaction.balance_after,
+    v_transaction.reason,
+    v_transaction.reference_type,
+    v_transaction.reference_id,
+    v_transaction.created_at;
+end;
+$$;
+
+revoke all on function public.adjust_credits_atomic(uuid, text, integer, text, text, text) from public;
+grant execute on function public.adjust_credits_atomic(uuid, text, integer, text, text, text) to service_role;
 ```
 
 ## Row Level Security
 
-The current backend uses `SUPABASE_SERVICE_ROLE_KEY`, so it bypasses RLS and applies user filtering inside the `StorageAdapter`. You can still enable RLS before exposing direct client access, but direct frontend table access is not used by this app.
+The current backend uses `SUPABASE_SERVICE_ROLE_KEY`, so it bypasses RLS and applies user filtering inside the `StorageAdapter`. Direct frontend table access is not used by this app. The policies below keep the schema safe if a future browser feature reads through the anon key.
 
-If you later add direct Supabase table reads from the browser, add RLS policies that restrict every table by `auth.uid() = user_id`.
+Run this SQL after creating the tables:
+
+```sql
+alter table public.projects enable row level security;
+alter table public.image_assets enable row level security;
+alter table public.model_assets enable row level security;
+alter table public.generation_jobs enable row level security;
+alter table public.generation_records enable row level security;
+alter table public.generation_results enable row level security;
+alter table public.share_links enable row level security;
+alter table public.credit_balances enable row level security;
+alter table public.credit_transactions enable row level security;
+
+create policy "Users can read own projects"
+  on public.projects for select
+  using (auth.uid() = user_id);
+
+create policy "Users can insert own projects"
+  on public.projects for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can update own projects"
+  on public.projects for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create policy "Users can read own image assets"
+  on public.image_assets for select
+  using (auth.uid() = user_id);
+
+create policy "Users can insert own image assets"
+  on public.image_assets for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can read own model assets"
+  on public.model_assets for select
+  using (auth.uid() = user_id);
+
+create policy "Users can insert own model assets"
+  on public.model_assets for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can update own model assets"
+  on public.model_assets for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create policy "Users can read own generation jobs"
+  on public.generation_jobs for select
+  using (auth.uid() = user_id);
+
+create policy "Users can insert own generation jobs"
+  on public.generation_jobs for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can update own generation jobs"
+  on public.generation_jobs for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create policy "Users can read own generation records"
+  on public.generation_records for select
+  using (auth.uid() = user_id);
+
+create policy "Users can insert own generation records"
+  on public.generation_records for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can read own generation results"
+  on public.generation_results for select
+  using (auth.uid() = user_id);
+
+create policy "Users can insert own generation results"
+  on public.generation_results for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can update own generation results"
+  on public.generation_results for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create policy "Users can read own share links"
+  on public.share_links for select
+  using (
+    exists (
+      select 1 from public.projects
+      where projects.id = share_links.project_id
+        and projects.user_id = auth.uid()
+    )
+  );
+
+create policy "Users can insert own share links"
+  on public.share_links for insert
+  with check (
+    exists (
+      select 1 from public.projects
+      where projects.id = share_links.project_id
+        and projects.user_id = auth.uid()
+    )
+  );
+
+create policy "Users can update own share links"
+  on public.share_links for update
+  using (
+    exists (
+      select 1 from public.projects
+      where projects.id = share_links.project_id
+        and projects.user_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.projects
+      where projects.id = share_links.project_id
+        and projects.user_id = auth.uid()
+    )
+  );
+
+create policy "Users can read own credit balance"
+  on public.credit_balances for select
+  using (auth.uid() = user_id);
+
+create policy "Users can read own credit transactions"
+  on public.credit_transactions for select
+  using (auth.uid() = user_id);
+```
+
+The Express backend still performs writes through the service role key. Do not grant direct browser write access to credits; credits are adjusted only by server code.
+
+## Supabase Storage
+
+Supabase file storage is optional and only used when `FILE_STORAGE=supabase`.
+
+1. Create a bucket named by `SUPABASE_STORAGE_BUCKET`, for example `archai-assets`.
+2. The current app stores:
+   - generated and uploaded images under `images/...` when using Supabase Storage,
+   - uploaded model assets under `models/...`,
+   - local storage uses `/uploads/...` paths instead.
+3. The backend uploads and deletes files with `SUPABASE_SERVICE_ROLE_KEY`.
+4. Generated image URLs are currently resolved with `getPublicUrl`, so the simplest MVP setup is a public bucket. If you need private buckets, add signed URL handling in `server/fileStorage.ts` before switching the bucket to private.
+
+Example public bucket policy:
+
+```sql
+-- Run only if the bucket should be public for MVP previews.
+insert into storage.buckets (id, name, public)
+values ('archai-assets', 'archai-assets', true)
+on conflict (id) do update set public = excluded.public;
+
+create policy "Public can read ArchAI assets"
+  on storage.objects for select
+  using (bucket_id = 'archai-assets');
+
+create policy "Service role can manage ArchAI assets"
+  on storage.objects for all
+  to service_role
+  using (bucket_id = 'archai-assets')
+  with check (bucket_id = 'archai-assets');
+```
+
+Supabase's service role bypasses RLS for server-side operations. Do not put the service role key in Vite env vars or browser-visible config.
+
+## Code-to-SQL Checklist
+
+`SupabaseStorageAdapter` expects these table names and fields:
+
+- `projects`: `id`, `user_id`, `name`, `description`, `status`, `cover_image_url`, `created_at`, `updated_at`, `deleted_at`
+- `image_assets`: `id`, `user_id`, `url`, `filename`, `mime_type`, `size`, `created_at`
+- `model_assets`: `id`, `user_id`, `url`, `filename`, `original_filename`, `file_type`, `mime_type`, `size`, `created_at`, `deleted_at`
+- `generation_jobs`: `id`, `user_id`, `project_id`, `mode`, `prompt`, `config`, `input_asset_ids`, `status`, `progress`, `provider`, `output_asset_id`, `output_asset_ids`, `error_message`, `created_at`, `updated_at`, `started_at`, `finished_at`
+- `generation_records`: `id`, `user_id`, `project_id`, `job_id`, `mode`, `prompt`, `input_image_url`, `input_image_data_preview`, `output_image_url`, `output_image_data_preview`, `provider`, `status`, `created_at`, `updated_at`
+- `generation_results`: `id`, `user_id`, `project_id`, `job_id`, `asset_id`, `image_url`, `is_selected`, `is_favorite`, `created_at`, `updated_at`
+- `share_links`: `id`, `project_id`, `token`, `permission`, `expires_at`, `created_at`, `revoked_at`
+- `credit_balances`: `user_id`, `balance`, `updated_at`
+- `credit_transactions`: `id`, `user_id`, `type`, `amount`, `balance_after`, `reason`, `reference_type`, `reference_id`, `created_at`
+
+## Production Hardening Notes
+
+This setup is enough for a developer to initialize Supabase and run the current app, but it is not a complete production operations plan.
+
+- The in-process generation worker should be replaced or backed by a durable queue before serious production traffic.
+- Add database backups, monitoring, alerting, provider health checks, and operational dashboards.
+- Keep `ENABLE_LEGACY_GENERATION_ENDPOINTS=false` in production.
+- Keep `ENABLE_PROVIDER_FALLBACK=false` in production if mock output must never be shown for failed real-provider jobs.
+- Credits are atomic in Supabase through `adjust_credits_atomic`, but billing, payment, chargebacks, and subscription enforcement are not implemented.
+- Consider private Supabase Storage plus signed URLs before storing sensitive client work.

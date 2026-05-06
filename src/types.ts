@@ -21,6 +21,8 @@ export interface GenerationConfig {
   preserveStructure?: boolean;
   feather?: number;
   batchCount?: 1 | 2 | 4;
+  maskMode?: 'asset-mask' | 'full-image';
+  maskAssetId?: string;
 }
 
 export interface GenerationResultOption {
