@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, 
@@ -22,23 +22,100 @@ interface MaterialLibraryProps {
   selectedId?: string;
 }
 
+type MaterialManifestItem = {
+  id: string;
+  name: string;
+  thumbnail: string;
+  category?: string;
+  tags?: string[];
+  source?: string;
+  originalFileName?: string;
+  originalPath?: string;
+  importedAt?: string;
+  hash?: string;
+};
+
+const materialImageFallback =
+  'data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22400%22 viewBox=%220 0 400 400%22%3E%3Crect width=%22400%22 height=%22400%22 fill=%22%23f1f5f9%22/%3E%3Cpath d=%22M90 255h220v55H90zM112 90h176v138H112z%22 fill=%22%23cbd5e1%22/%3E%3Cpath d=%22M134 116h132v18H134zm0 43h132v18H134zm0 43h84v18h-84z%22 fill=%22%2394a3b8%22/%3E%3Ctext x=%22200%22 y=%22345%22 text-anchor=%22middle%22 font-family=%22Arial,sans-serif%22 font-size=%2220%22 font-weight=%22700%22 fill=%22%2364758b%22%3EMaterial%3C/text%3E%3C/svg%3E';
+
+function handleMaterialImageError(event: React.SyntheticEvent<HTMLImageElement>) {
+  event.currentTarget.onerror = null;
+  event.currentTarget.src = materialImageFallback;
+}
+
+function isMaterialManifestItem(value: unknown): value is MaterialManifestItem {
+  if (typeof value !== 'object' || value === null) return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.id === 'string' && typeof item.name === 'string' && typeof item.thumbnail === 'string';
+}
+
+function mapManifestMaterial(item: MaterialManifestItem): MaterialAsset {
+  return {
+    id: item.id,
+    name: item.name,
+    thumbnail: item.thumbnail,
+    category: item.category || '其他',
+    date: item.importedAt ? item.importedAt.slice(0, 10) : '本地导入',
+    description: item.originalFileName ? `本地导入材质：${item.originalFileName}` : '本地导入材质贴图。',
+    tags: item.tags && item.tags.length > 0 ? item.tags : [item.category || '其他', '本地导入'],
+    source: item.source,
+    originalFileName: item.originalFileName,
+    originalPath: item.originalPath,
+    importedAt: item.importedAt,
+    hash: item.hash,
+  };
+}
+
 export function MaterialLibrary({ isOpen, onClose, onSelect, selectedId }: MaterialLibraryProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<string>('全部');
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [manifestMaterials, setManifestMaterials] = useState<MaterialAsset[]>([]);
 
-  const categories = ['全部', ...Array.from(new Set(MOCK_MATERIALS.map(m => m.category)))];
+  useEffect(() => {
+    if (!isOpen) return;
 
-  const filteredMaterials = MOCK_MATERIALS.filter(m => {
+    let isCancelled = false;
+    fetch('/materials/materials-manifest.json', { cache: 'no-cache' })
+      .then(response => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json() as Promise<unknown>;
+      })
+      .then(value => {
+        if (isCancelled || !Array.isArray(value)) return;
+        setManifestMaterials(value.filter(isMaterialManifestItem).map(mapManifestMaterial));
+      })
+      .catch(() => {
+        if (!isCancelled) setManifestMaterials([]);
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isOpen]);
+
+  const materials = useMemo(() => {
+    const seenIds = new Set<string>();
+    return [...manifestMaterials, ...MOCK_MATERIALS].filter(material => {
+      if (seenIds.has(material.id)) return false;
+      seenIds.add(material.id);
+      return true;
+    });
+  }, [manifestMaterials]);
+
+  const categories = ['全部', ...Array.from(new Set(materials.map(m => m.category).filter(Boolean)))];
+
+  const filteredMaterials = materials.filter(m => {
     const matchesSearch = m.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
                          m.tags?.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()));
     const matchesCategory = activeCategory === '全部' || m.category === activeCategory;
     return matchesSearch && matchesCategory;
   });
 
-  const selectedMaterial = MOCK_MATERIALS.find(m => m.id === (hoveredId || selectedId)) || MOCK_MATERIALS[0];
+  const selectedMaterial = materials.find(m => m.id === (hoveredId || selectedId)) || filteredMaterials[0] || materials[0];
 
   if (!isOpen) return null;
+  if (!selectedMaterial) return null;
 
   return (
     <motion.div 
@@ -106,7 +183,7 @@ export function MaterialLibrary({ isOpen, onClose, onSelect, selectedId }: Mater
                 className={`group p-3 rounded-2xl border cursor-pointer transition-all flex items-center gap-4 ${m.id === selectedId ? 'bg-white border-blue-200 shadow-lg shadow-blue-500/5' : 'bg-transparent border-transparent hover:bg-white hover:border-slate-200'}`}
               >
                 <div className="w-16 h-16 rounded-xl overflow-hidden shrink-0 border border-slate-100 shadow-sm transition-transform group-hover:scale-105">
-                  <img src={m.thumbnail} className="w-full h-full object-cover" alt={m.name} referrerPolicy="no-referrer" />
+                  <img src={m.thumbnail} onError={handleMaterialImageError} className="w-full h-full object-cover" alt={m.name} referrerPolicy="no-referrer" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
@@ -144,7 +221,7 @@ export function MaterialLibrary({ isOpen, onClose, onSelect, selectedId }: Mater
                       animate={{ opacity: 1, scale: 1 }}
                       className="aspect-square bg-slate-50 rounded-3xl overflow-hidden border border-slate-100 shadow-inner group relative"
                     >
-                      <img src={selectedMaterial.thumbnail} className="w-full h-full object-cover" alt={selectedMaterial.name} referrerPolicy="no-referrer" />
+                      <img src={selectedMaterial.thumbnail} onError={handleMaterialImageError} className="w-full h-full object-cover" alt={selectedMaterial.name} referrerPolicy="no-referrer" />
                       <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                         <Maximize2 className="w-8 h-8 text-white" />
                       </div>
@@ -152,17 +229,17 @@ export function MaterialLibrary({ isOpen, onClose, onSelect, selectedId }: Mater
 
                     <div className="grid grid-cols-3 gap-3">
                       <div className="aspect-square rounded-xl bg-slate-50 border border-slate-100 overflow-hidden">
-                        <img src={selectedMaterial.thumbnail} className="w-full h-full object-cover opacity-60 grayscale" alt="贴图一" referrerPolicy="no-referrer" />
+                        <img src={selectedMaterial.thumbnail} onError={handleMaterialImageError} className="w-full h-full object-cover opacity-60 grayscale" alt="贴图一" referrerPolicy="no-referrer" />
                         <span className="absolute bottom-1 right-1 text-[8px] font-bold text-slate-400 uppercase">漫反射</span>
                       </div>
                       <div className="aspect-square rounded-xl bg-slate-50 border border-slate-100 overflow-hidden relative">
                          <div className="absolute inset-0 bg-slate-400 mix-blend-multiply opacity-20" />
-                         <img src={selectedMaterial.thumbnail} className="w-full h-full object-cover opacity-60 grayscale brightness-125" alt="贴图二" referrerPolicy="no-referrer" />
+                         <img src={selectedMaterial.thumbnail} onError={handleMaterialImageError} className="w-full h-full object-cover opacity-60 grayscale brightness-125" alt="贴图二" referrerPolicy="no-referrer" />
                          <span className="absolute bottom-1 right-1 text-[8px] font-bold text-slate-400 uppercase">法线</span>
                       </div>
                       <div className="aspect-square rounded-xl bg-slate-50 border border-slate-100 overflow-hidden relative">
                          <div className="absolute inset-0 bg-blue-400 mix-blend-color opacity-20" />
-                         <img src={selectedMaterial.thumbnail} className="w-full h-full object-cover opacity-40 brightness-50" alt="贴图三" referrerPolicy="no-referrer" />
+                         <img src={selectedMaterial.thumbnail} onError={handleMaterialImageError} className="w-full h-full object-cover opacity-40 brightness-50" alt="贴图三" referrerPolicy="no-referrer" />
                          <span className="absolute bottom-1 right-1 text-[8px] font-bold text-slate-400 uppercase">粗糙度</span>
                       </div>
                     </div>

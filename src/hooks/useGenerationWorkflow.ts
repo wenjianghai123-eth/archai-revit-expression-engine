@@ -1,12 +1,13 @@
 import { useCallback, useState } from 'react';
 import { DEFAULT_CONFIGS } from '../constants';
-import { GenerationConfig, GenerationStep, PromptTemplate, StepState, UploadedImage } from '../types';
+import { GenerationConfig, GenerationStep, MaterialTexture, PromptTemplate, StepState, UploadedImage } from '../types';
 
 function createInitialStepState(step: GenerationStep): StepState {
   return {
     config: DEFAULT_CONFIGS[step],
     inputImage: null,
     materialImage: null,
+    materialTextures: [],
     maskImage: null,
     useFullImageMask: false,
     outputImage: null,
@@ -85,6 +86,27 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
     }));
   }, [currentStep]);
 
+  const handleUpdateMaterialTextures = useCallback((textures: MaterialTexture[]) => {
+    setStepStates(prev => ({
+      ...prev,
+      [currentStep]: {
+        ...prev[currentStep],
+        materialTextures: textures,
+        materialImage: textures[0]
+          ? {
+              id: textures[0].id,
+              name: textures[0].name || '材质贴图',
+              type: 'image/*',
+              size: 0,
+              dataUrl: textures[0].dataUrl || textures[0].url,
+              url: textures[0].url,
+              assetId: textures[0].assetId,
+            }
+          : null,
+      },
+    }));
+  }, [currentStep]);
+
   const handleUpdateMaskImage = useCallback((maskDataUrl: string | null, useFullImage: boolean, feather = 0) => {
     setStepStates(prev => ({
       ...prev,
@@ -152,6 +174,7 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
     handleUpdateConfig,
     handleUpdateInputImage,
     handleUpdateMaterialImage,
+    handleUpdateMaterialTextures,
     handleUpdateMaskImage,
     handleResetConfig,
     handleApplyTemplate,

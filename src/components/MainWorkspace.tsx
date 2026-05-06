@@ -1,21 +1,24 @@
 import React, { useRef, useState } from 'react';
 import {
   AlertCircle,
+  BookOpen,
   Download,
   FileJson,
   Heart,
   Image as ImageIcon,
   RefreshCw,
   Settings2,
+  Trash2,
   Upload,
   X,
   Zap,
 } from 'lucide-react';
-import { GenerationConfig, GenerationProvider, GenerationStep, StepState, UploadedImage } from '../types';
+import { GenerationConfig, GenerationProvider, GenerationStep, MaterialAsset, MaterialTexture, StepState, UploadedImage } from '../types';
 import { createUploadedImage, validateImageFile } from '../utils/file';
 import { downloadDataUrl, downloadJson } from '../utils/download';
 import { uploadImageAsset } from '../lib/api';
 import { MaskEditor } from './MaskEditor';
+import { MaterialLibrary } from './MaterialLibrary';
 
 interface WorkspaceProps {
   step: GenerationStep;
@@ -23,6 +26,7 @@ interface WorkspaceProps {
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
   onUpdateInputImage: (image: UploadedImage | null) => void;
   onUpdateMaterialImage: (image: UploadedImage | null) => void;
+  onUpdateMaterialTextures: (textures: MaterialTexture[]) => void;
   onUpdateMaskImage: (maskDataUrl: string | null, useFullImage: boolean, feather?: number) => void;
   onGenerate: () => void;
   onCancelGeneration: () => void;
@@ -37,9 +41,10 @@ interface WorkspaceProps {
   isCreditsInsufficient: boolean;
 }
 
-type UploadTarget = 'input' | 'material';
+type UploadTarget = 'input' | 'material' | 'texture';
 
 const acceptedImageTypes = 'image/png,image/jpeg,image/webp';
+const maxMaterialTextures = 3;
 const styleOptions = ['现代主义', '极简风格', '北欧风格', '日式侘寂', '工业风格', '新中式'];
 
 export function MainWorkspace({
@@ -48,6 +53,7 @@ export function MainWorkspace({
   onUpdateConfig,
   onUpdateInputImage,
   onUpdateMaterialImage,
+  onUpdateMaterialTextures,
   onUpdateMaskImage,
   onGenerate,
   onCancelGeneration,
@@ -63,7 +69,9 @@ export function MainWorkspace({
 }: WorkspaceProps) {
   const inputFileRef = useRef<HTMLInputElement>(null);
   const materialFileRef = useRef<HTMLInputElement>(null);
-  const [uploadErrors, setUploadErrors] = useState<Record<UploadTarget, string | null>>({ input: null, material: null });
+  const materialTextureFileRef = useRef<HTMLInputElement>(null);
+  const [uploadErrors, setUploadErrors] = useState<Record<UploadTarget, string | null>>({ input: null, material: null, texture: null });
+  const [isMaterialLibraryOpen, setIsMaterialLibraryOpen] = useState(false);
 
   const hasMask = step !== GenerationStep.LocalInpainting || Boolean(state.maskImage) || state.useFullImageMask;
   const canGenerate = Boolean(state.inputImage) && hasMask && !state.isGenerating && !isCreditsInsufficient;
@@ -81,10 +89,16 @@ export function MainWorkspace({
 
   const handleUploadClick = (target: UploadTarget) => {
     if (target === 'input') inputFileRef.current?.click();
-    else materialFileRef.current?.click();
+    else if (target === 'material') materialFileRef.current?.click();
+    else materialTextureFileRef.current?.click();
   };
 
   const handleFileSelected = async (target: UploadTarget, fileList: FileList | null) => {
+    if (target === 'texture') {
+      await handleTextureFiles(fileList);
+      return;
+    }
+
     const file = fileList?.[0];
     if (!file) return;
 
@@ -114,6 +128,88 @@ export function MainWorkspace({
         [target]: error instanceof Error ? error.message : '图片读取失败，请重试。',
       }));
     }
+  };
+
+  const handleTextureFiles = async (fileList: FileList | null) => {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+
+    const availableSlots = maxMaterialTextures - state.materialTextures.length;
+    if (availableSlots <= 0) {
+      setUploadErrors(prev => ({ ...prev, texture: `最多只能选择 ${maxMaterialTextures} 张材质贴图。` }));
+      return;
+    }
+
+    const acceptedFiles = files.slice(0, availableSlots);
+    if (files.length > availableSlots) {
+      setUploadErrors(prev => ({ ...prev, texture: `已添加前 ${availableSlots} 张，材质贴图最多 ${maxMaterialTextures} 张。` }));
+    } else {
+      setUploadErrors(prev => ({ ...prev, texture: null }));
+    }
+
+    const nextTextures: MaterialTexture[] = [];
+    for (const file of acceptedFiles) {
+      const validationError = validateImageFile(file);
+      if (validationError) {
+        setUploadErrors(prev => ({ ...prev, texture: validationError }));
+        continue;
+      }
+
+      const localImage = await createUploadedImage(file);
+      let assetId: string | undefined;
+      let url = localImage.dataUrl;
+
+      try {
+        const asset = await uploadImageAsset(file, file.name);
+        assetId = asset.id;
+        url = asset.url;
+      } catch {
+        // Keep the local preview when backend upload is unavailable.
+      }
+
+      nextTextures.push({
+        id: `${localImage.id}-texture`,
+        name: localImage.name,
+        url,
+        dataUrl: localImage.dataUrl,
+        assetId,
+        source: 'upload',
+      });
+    }
+
+    if (nextTextures.length > 0) {
+      onUpdateMaterialTextures([...state.materialTextures, ...nextTextures].slice(0, maxMaterialTextures));
+    }
+  };
+
+  const handleSelectLibraryMaterial = (material: MaterialAsset) => {
+    if (state.materialTextures.length >= maxMaterialTextures) {
+      setUploadErrors(prev => ({ ...prev, texture: `最多只能选择 ${maxMaterialTextures} 张材质贴图。` }));
+      return;
+    }
+
+    const alreadySelected = state.materialTextures.some(texture => texture.id === `library-${material.id}`);
+    if (alreadySelected) {
+      setUploadErrors(prev => ({ ...prev, texture: '这张材质已经在参考列表中。' }));
+      return;
+    }
+
+    onUpdateMaterialTextures([
+      ...state.materialTextures,
+      {
+        id: `library-${material.id}`,
+        name: material.name,
+        url: material.thumbnail,
+        source: 'library',
+      },
+    ]);
+    setUploadErrors(prev => ({ ...prev, texture: null }));
+    setIsMaterialLibraryOpen(false);
+  };
+
+  const handleRemoveMaterialTexture = (id: string) => {
+    onUpdateMaterialTextures(state.materialTextures.filter(texture => texture.id !== id));
+    setUploadErrors(prev => ({ ...prev, texture: null }));
   };
 
   const renderUpload = (target: UploadTarget, image: UploadedImage | null, title: string, optional = false) => (
@@ -158,6 +254,84 @@ export function MainWorkspace({
       )}
     </div>
   );
+
+  const renderMaterialTextures = () => {
+    const isFull = state.materialTextures.length >= maxMaterialTextures;
+
+    return (
+      <section className="shrink-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-xs font-bold text-slate-800">材质贴图</h3>
+            <p className="mt-0.5 text-[10px] font-medium text-slate-400">材质参考，最多 {maxMaterialTextures} 张</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => handleUploadClick('texture')}
+              disabled={isFull}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] font-bold text-slate-600 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              上传材质贴图
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (isFull) {
+                  setUploadErrors(prev => ({ ...prev, texture: `最多只能选择 ${maxMaterialTextures} 张材质贴图。` }));
+                  return;
+                }
+                setIsMaterialLibraryOpen(true);
+              }}
+              disabled={isFull}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-[10px] font-bold text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+              打开材质库
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+          {state.materialTextures.map(texture => (
+            <div key={texture.id} className="group relative aspect-square overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+              <img src={texture.url} alt={texture.name || '材质贴图'} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+              <div className="absolute inset-x-0 bottom-0 bg-slate-900/70 px-2 py-1 text-[9px] font-bold text-white">
+                <span className="block truncate">{texture.name || (texture.source === 'upload' ? '本地贴图' : '材质库')}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleRemoveMaterialTexture(texture.id)}
+                className="absolute right-1 top-1 rounded-full bg-white/90 p-1 text-slate-500 opacity-0 shadow transition hover:text-red-600 group-hover:opacity-100"
+                title="删除材质贴图"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+          {Array.from({ length: maxMaterialTextures - state.materialTextures.length }).map((_, index) => (
+            <button
+              key={`empty-texture-${index}`}
+              type="button"
+              onClick={() => handleUploadClick('texture')}
+              className="flex aspect-square items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-slate-300 transition hover:border-blue-200 hover:bg-blue-50/40 hover:text-blue-500"
+              title="上传材质贴图"
+            >
+              <Upload className="h-5 w-5" />
+            </button>
+          ))}
+        </div>
+
+        {uploadErrors.texture ? (
+          <p className="mt-2 flex items-center gap-1 text-[11px] font-medium text-amber-600">
+            <AlertCircle className="h-3.5 w-3.5" />
+            {uploadErrors.texture}
+          </p>
+        ) : null}
+      </section>
+    );
+  };
 
   const renderPreview = () => {
     if (!previewImage && !state.isGenerating) {
@@ -218,6 +392,150 @@ export function MainWorkspace({
           event.currentTarget.value = '';
         }}
       />
+      <input
+        ref={materialTextureFileRef}
+        type="file"
+        accept={acceptedImageTypes}
+        multiple
+        className="hidden"
+        onChange={event => {
+          void handleTextureFiles(event.currentTarget.files);
+          event.currentTarget.value = '';
+        }}
+      />
+
+      {step === GenerationStep.LocalInpainting ? (
+        <>
+          <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-r border-slate-200 bg-white p-4 custom-scrollbar">
+            <div className="mb-4 flex items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">输入配置</span>
+              <span className="rounded bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-600">{modeLabel(step)}</span>
+            </div>
+
+            <div className="space-y-5">
+              {renderUpload('input', state.inputImage, '原始图片')}
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">方案数量</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {([1, 2, 4] as const).map(count => (
+                    <button
+                      key={count}
+                      type="button"
+                      onClick={() => onUpdateConfig({ batchCount: count })}
+                      className={`rounded-lg border px-3 py-2 text-[10px] font-bold ${
+                        (state.config.batchCount || 1) === count
+                          ? 'border-blue-600 bg-blue-50 text-blue-700'
+                          : 'border-slate-200 bg-white text-slate-500'
+                      }`}
+                    >
+                      {count}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">提示词</label>
+                <textarea
+                  value={state.config.prompt}
+                  onChange={event => onUpdateConfig({ prompt: event.target.value })}
+                  className="h-36 w-full resize-none rounded-xl border border-blue-100 bg-blue-50/60 p-3 text-xs leading-5 text-blue-950 outline-none focus:border-blue-300"
+                  placeholder="描述希望生成或局部重绘的效果..."
+                />
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">重绘强度</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['weak', 'medium', 'strong'] as const).map(value => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => onUpdateConfig({ inpaintingStrength: value, strength: value })}
+                        className={`rounded-lg border px-3 py-2 text-[10px] font-bold ${
+                          (state.config.strength || state.config.inpaintingStrength) === value
+                            ? 'border-blue-600 bg-blue-50 text-blue-700'
+                            : 'border-slate-200 bg-white text-slate-500'
+                        }`}
+                      >
+                        {value === 'weak' ? '弱' : value === 'medium' ? '中' : '强'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <label className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(state.config.preserveStructure ?? state.config.keepOriginalMaterial)}
+                    onChange={event => onUpdateConfig({ preserveStructure: event.target.checked, keepOriginalMaterial: event.target.checked })}
+                    className="mt-0.5 h-4 w-4 accent-blue-600"
+                  />
+                  <span>
+                    <span className="block font-bold text-slate-800">保持结构</span>
+                    <span className="mt-1 block leading-5">尽量保持未选区域、透视和空间结构不变。</span>
+                  </span>
+                </label>
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="mb-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                    <span>羽化</span>
+                    <span>{state.config.feather ?? 0}px</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="30"
+                    step="1"
+                    value={state.config.feather ?? 0}
+                    onChange={event => onUpdateConfig({ feather: Number(event.target.value) })}
+                    className="w-full accent-blue-600"
+                  />
+                </div>
+              </div>
+            </div>
+          </aside>
+
+          <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <div className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white/70 px-4">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">局部 mask 编辑</span>
+                <p className="text-xs font-medium text-slate-500">上传参考图后，在大画布上涂抹需要重绘的区域。</p>
+              </div>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{providerForStatus || 'provider 待连接'}</span>
+            </div>
+
+            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5 custom-scrollbar">
+              <div className="flex min-h-[360px] flex-1 lg:min-h-[560px] lg:h-[60vh]">
+                {state.inputImage ? (
+                  <MaskEditor
+                    imageDataUrl={state.inputImage.dataUrl}
+                    imageName={state.inputImage.name}
+                    maskImageDataUrl={state.maskImage?.dataUrl || null}
+                    useFullImage={state.useFullImageMask}
+                    onMaskChange={onUpdateMaskImage}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleUploadClick('input')}
+                    className="flex min-h-[360px] w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 bg-white text-slate-400 transition hover:border-blue-200 hover:bg-blue-50/40"
+                  >
+                    <Upload className="mb-3 h-9 w-9" />
+                    <span className="text-sm font-bold text-slate-700">上传参考图开始局部修饰</span>
+                    <span className="mt-1 text-xs font-medium">PNG / JPG / WEBP</span>
+                  </button>
+                )}
+              </div>
+
+              {renderMaterialTextures()}
+            </div>
+          </main>
+        </>
+      ) : (
+        <>
 
       <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-r border-slate-200 bg-white p-4 custom-scrollbar">
         <div className="mb-4 flex items-center justify-between">
@@ -226,10 +544,10 @@ export function MainWorkspace({
         </div>
 
         <div className="space-y-5">
-          {renderUpload('input', state.inputImage, step === GenerationStep.LocalInpainting ? '原始图片' : '输入图片')}
-          {step !== GenerationStep.LocalInpainting && renderUpload('material', state.materialImage, '参考图 / 材质图', true)}
+          {renderUpload('input', state.inputImage, isLocalInpaintingStep(step) ? '原始图片' : '输入图片')}
+          {!isLocalInpaintingStep(step) && renderUpload('material', state.materialImage, '参考图 / 材质图', true)}
 
-          {step === GenerationStep.LocalInpainting && state.inputImage && (
+          {isLocalInpaintingStep(step) && state.inputImage && (
             <MaskEditor
               imageDataUrl={state.inputImage.dataUrl}
               imageName={state.inputImage.name}
@@ -269,7 +587,7 @@ export function MainWorkspace({
             />
           </div>
 
-          {step !== GenerationStep.LocalInpainting && (
+          {!isLocalInpaintingStep(step) && (
             <div className="space-y-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">风格</label>
               <div className="grid grid-cols-2 gap-2">
@@ -289,7 +607,7 @@ export function MainWorkspace({
             </div>
           )}
 
-          {step === GenerationStep.LocalInpainting && (
+          {isLocalInpaintingStep(step) && (
             <div className="space-y-4">
               <div className="space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">重绘强度</label>
@@ -370,6 +688,8 @@ export function MainWorkspace({
           </div>
         </div>
       </main>
+        </>
+      )}
 
       <aside className="flex w-96 shrink-0 flex-col overflow-y-auto border-l border-slate-200 bg-white p-4 custom-scrollbar">
         <div className="mb-4 flex items-center justify-between">
@@ -524,6 +844,12 @@ export function MainWorkspace({
           </button>
         </div>
       </aside>
+      <MaterialLibrary
+        isOpen={isMaterialLibraryOpen}
+        onClose={() => setIsMaterialLibraryOpen(false)}
+        onSelect={handleSelectLibraryMaterial}
+        selectedId={state.materialTextures.find(texture => texture.source === 'library')?.id.replace(/^library-/u, '')}
+      />
     </div>
   );
 }
@@ -532,6 +858,10 @@ function modeLabel(step: GenerationStep): string {
   if (step === GenerationStep.FloorplanTo3D) return '平面生成';
   if (step === GenerationStep.StyleRender) return '风格渲染';
   return '局部重绘';
+}
+
+function isLocalInpaintingStep(step: GenerationStep): boolean {
+  return step === GenerationStep.LocalInpainting;
 }
 
 function getUploadedImageSrc(image: UploadedImage): string {

@@ -1,13 +1,11 @@
-import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import {
-  Backdrop,
   Float,
   MeshDistortMaterial,
   OrbitControls,
   PerspectiveCamera,
   RoundedBox,
-  Stage,
   useGLTF,
 } from '@react-three/drei';
 import { motion } from 'motion/react';
@@ -28,8 +26,9 @@ import {
   Upload,
   X,
 } from 'lucide-react';
+import { Box3, Vector3 } from 'three';
 import { AssetModel } from '../types';
-import { downloadDataUrl } from '../utils/download';
+import { downloadUrl } from '../utils/download';
 import { deleteModelAsset, listModelAssets, ModelAssetRecord, uploadModelAsset } from '../lib/api';
 
 type ModelCategory = NonNullable<AssetModel['category']>;
@@ -212,9 +211,59 @@ function toPersistableAsset(asset: AssetModel): AssetModel {
   };
 }
 
+function useElementSize<T extends HTMLElement>() {
+  const ref = useRef<T | null>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+
+    const update = () => {
+      const rect = element.getBoundingClientRect();
+      const nextSize = {
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
+      setSize(current => current.width === nextSize.width && current.height === nextSize.height ? current : nextSize);
+    };
+
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  return { ref, size };
+}
+
 function LocalModelPreview({ url }: { url: string }) {
   const gltf = useGLTF(url);
-  return <primitive object={gltf.scene} />;
+  const model = useMemo(() => {
+    const scene = gltf.scene.clone(true);
+    scene.updateMatrixWorld(true);
+    scene.traverse(object => {
+      object.frustumCulled = false;
+    });
+
+    const box = new Box3().setFromObject(scene);
+    const center = new Vector3();
+    const size = new Vector3();
+    box.getCenter(center);
+    box.getSize(size);
+
+    const maxDimension = Math.max(size.x, size.y, size.z);
+    const scale = Number.isFinite(maxDimension) && maxDimension > 0 ? 2.8 / maxDimension : 1;
+    const position: [number, number, number] = [
+      -center.x * scale,
+      -center.y * scale,
+      -center.z * scale,
+    ];
+
+    return { scene, position, scale };
+  }, [gltf.scene]);
+
+  return <primitive object={model.scene} position={model.position} scale={model.scale} dispose={null} />;
 }
 
 function DemoModelPreview() {
@@ -232,16 +281,14 @@ function Scene({ asset }: { asset: AssetModel }) {
 
   return (
     <>
-      <PerspectiveCamera makeDefault position={[5, 5, 5]} fov={50} />
-      <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 1.75} />
-      <Stage intensity={0.5} environment="city" shadows={{ type: 'contact', opacity: 0.2 }} adjustCamera={canPreviewModel}>
-        {canPreviewModel && asset.modelUrl ? <LocalModelPreview key={asset.modelUrl} url={asset.modelUrl} /> : <DemoModelPreview />}
-      </Stage>
-      <Backdrop receiveShadow floor={20} segments={20} scale={[50, 30, 10]} position={[0, -2, -10]}>
-        <meshStandardMaterial color="#f8fafc" />
-      </Backdrop>
-      <ambientLight intensity={0.5} />
-      <spotLight position={[10, 10, 10]} angle={0.15} penumbra={1} castShadow />
+      <color attach="background" args={['#f8fafc']} />
+      <PerspectiveCamera makeDefault position={[3.8, 2.6, 4.8]} fov={42} near={0.01} far={1000} />
+      <OrbitControls makeDefault target={[0, 0, 0]} minDistance={0.4} maxDistance={20} minPolarAngle={0} maxPolarAngle={Math.PI / 1.75} enableDamping />
+      {canPreviewModel && asset.modelUrl ? <LocalModelPreview url={asset.modelUrl} /> : <DemoModelPreview />}
+      <ambientLight intensity={0.85} />
+      <hemisphereLight args={['#ffffff', '#cbd5e1', 1.1]} />
+      <directionalLight position={[5, 8, 6]} intensity={1.6} castShadow />
+      <directionalLight position={[-5, 3, -4]} intensity={0.45} />
     </>
   );
 }
@@ -285,26 +332,43 @@ function UnsupportedPreview({ asset }: { asset: AssetModel }) {
 
 function ModelPreview({ asset }: { asset: AssetModel }) {
   const canPreview = Boolean(asset.previewable && asset.modelUrl && PREVIEWABLE_TYPES.has(asset.fileType));
+  const { ref, size } = useElementSize<HTMLDivElement>();
+  const hasUsableSize = size.width > 100 && size.height > 100;
 
   if (!canPreview) {
     return <UnsupportedPreview asset={asset} />;
   }
 
   return (
-    <PreviewErrorBoundary resetKey={asset.id} fallback={<UnsupportedPreview asset={asset} />}>
-      <Suspense
-        fallback={
-          <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-slate-50">
-            <div className="h-12 w-12 animate-spin rounded-full border-4 border-blue-100 border-t-blue-500" />
-            <span className="text-xs font-bold uppercase tracking-widest text-slate-400">正在加载三维预览...</span>
-          </div>
-        }
-      >
-        <Canvas shadows dpr={[1, 2]}>
-          <Scene asset={asset} />
-        </Canvas>
-      </Suspense>
-    </PreviewErrorBoundary>
+    <div ref={ref} className="relative h-full min-h-[480px] w-full bg-slate-100">
+      {!hasUsableSize ? (
+        <ModelPreviewLoading label="正在准备三维预览容器..." />
+      ) : (
+        <PreviewErrorBoundary resetKey={asset.id} fallback={<UnsupportedPreview asset={asset} />}>
+          <Suspense fallback={<ModelPreviewLoading label="正在加载三维预览..." />}>
+            <Canvas
+              className="h-full w-full"
+              style={{ width: '100%', height: '100%' }}
+              frameloop="always"
+              shadows
+              dpr={[1, 2]}
+              gl={{ alpha: false, antialias: true }}
+            >
+              <Scene asset={asset} />
+            </Canvas>
+          </Suspense>
+        </PreviewErrorBoundary>
+      )}
+    </div>
+  );
+}
+
+function ModelPreviewLoading({ label }: { label: string }) {
+  return (
+    <div className="flex h-full min-h-[480px] w-full flex-col items-center justify-center gap-4 bg-slate-50">
+      <div className="h-12 w-12 animate-spin rounded-full border-4 border-blue-100 border-t-blue-500" />
+      <span className="text-xs font-bold uppercase tracking-widest text-slate-400">{label}</span>
+    </div>
   );
 }
 
@@ -574,7 +638,9 @@ export function AssetBank() {
       setUploadError('模型文件无法从 localStorage 恢复。请重新上传文件后再预览或下载。');
       return;
     }
-    downloadDataUrl(asset.modelUrl, asset.fileName);
+    void downloadUrl(asset.modelUrl, asset.fileName).catch((error) => {
+      setUploadError(error instanceof Error ? error.message : '模型文件下载失败。');
+    });
   };
 
   const filteredAssets = useMemo(() => {
@@ -803,7 +869,7 @@ export function AssetBank() {
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
-                <div className="h-52 overflow-hidden rounded-xl border border-slate-100 bg-slate-50">
+                <div className="h-[560px] min-h-[480px] w-full overflow-hidden rounded-xl border border-slate-100 bg-slate-100">
                   <ModelPreview asset={detailAsset} />
                 </div>
 

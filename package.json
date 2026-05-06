@@ -10,6 +10,7 @@
     "build": "vite build",
     "start": "tsx server/index.ts",
     "preview": "vite preview",
+    "import:materials": "node scripts/import-materials.mjs",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",

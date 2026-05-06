@@ -63,6 +63,7 @@ export async function readMultipartFile(
     try {
       busboy = Busboy({
         headers: req.headers,
+        defParamCharset: 'utf8',
         limits: {
           fileSize: maxBytes,
           files: 1,
@@ -112,7 +113,7 @@ export async function readMultipartFile(
       }
 
       fileSeen = true;
-      originalFilename = path.basename(info.filename || '');
+      originalFilename = sanitizeUploadFilename(info.filename || '');
       mimeType = normalizeUploadMimeType(info.mimeType || 'application/octet-stream');
 
       if (!originalFilename) {
@@ -261,6 +262,24 @@ function normalizeUploadMimeType(mimeType: string): string {
   const normalized = mimeType.trim().toLowerCase();
   if (normalized === 'image/jpg') return 'image/jpeg';
   return normalized;
+}
+
+function sanitizeUploadFilename(filename: string): string {
+  const basename = path.basename(filename.replace(/\\/g, '/')).trim();
+  if (!basename) return '';
+  return repairLatin1DecodedUtf8(basename);
+}
+
+function repairLatin1DecodedUtf8(value: string): string {
+  if (!/[ÃÂÐÑ][\u0080-\u00ff]|[\u00c2-\u00f4][\u0080-\u00bf]/u.test(value)) {
+    return value;
+  }
+
+  try {
+    return Buffer.from(value, 'latin1').toString('utf8');
+  } catch {
+    return value;
+  }
 }
 
 function sniffImageMimeType(content: Buffer): string | null {

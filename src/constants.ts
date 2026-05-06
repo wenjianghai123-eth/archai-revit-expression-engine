@@ -1,59 +1,245 @@
 import { GenerationStep, GenerationConfig, MaterialAsset, FurnitureStyle, PromptTemplate } from './types';
 
 export const MOCK_MATERIALS: MaterialAsset[] = [
-  { 
-    id: 'm1', 
-    name: '原木地板 - 橡木', 
-    thumbnail: 'https://images.unsplash.com/photo-1581456424029-37330752538b?auto=format&fit=crop&q=80&w=800', 
-    category: '木材', 
-    date: '2024-04-25', 
-    description: '具有天然纹理效果的橡木地板，适合现代简约及北欧风格室内设计。高精纹理，100%反光率映射。', 
-    tags: ['地板', '温暖', '天然', '物理材质'] 
+  {
+    id: "material-001",
+    name: "ST-03",
+    thumbnail: "/materials/material-001.png",
+    category: "未分类",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "未分类"
+    ]
   },
-  { 
-    id: 'm2', 
-    name: '清水混凝土 - 灰色', 
-    thumbnail: 'https://images.unsplash.com/photo-1517581177682-a085bb7ffb15?auto=format&fit=crop&q=80&w=800', 
-    category: '混凝土', 
-    date: '2024-04-24', 
-    description: '现代粗犷主义风格，工业纹理。表面细腻有气孔分布，适合大面积立面使用。', 
-    tags: ['工业', '墙面', '现代', '冷调'] 
+  {
+    id: "material-002",
+    name: "玻璃幕墙构件铝合金",
+    thumbnail: "/materials/material-002.png",
+    category: "金属",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "金属"
+    ]
   },
-  { 
-    id: 'm3', 
-    name: '拉丝不锈钢', 
-    thumbnail: 'https://images.unsplash.com/photo-1533038590840-1cde6b66b7c6?auto=format&fit=crop&q=80&w=800', 
-    category: '金属', 
-    date: '2024-04-23', 
-    description: '精细拉丝颗粒，具有明显的各向异性反射特征，适合室内装饰立面及构件。', 
-    tags: ['反射', '现代', '细节'] 
+  {
+    id: "material-003",
+    name: "镀锌钢",
+    thumbnail: "/materials/material-003.png",
+    category: "金属",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "金属"
+    ]
   },
-  { 
-    id: 'm4', 
-    name: '大理石 - 爵士白', 
-    thumbnail: 'https://images.unsplash.com/photo-1532453288454-ba56e40d76d2?auto=format&fit=crop&q=80&w=800', 
-    category: '石材', 
-    date: '2024-04-22', 
-    description: '豪华装饰大理石，自带淡灰色纹路。镜面反射效果极佳，多用于高档商业及住宅。', 
-    tags: ['奢华', '天然', '抛光'] 
+  {
+    id: "material-004",
+    name: "仿清水混凝土",
+    thumbnail: "/materials/material-004.png",
+    category: "混凝土",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "混凝土"
+    ]
   },
-  { 
-    id: 'm5', 
-    name: '深色耐候钢', 
-    thumbnail: 'https://images.unsplash.com/photo-1516216628859-9bccecad13ee?auto=format&fit=crop&q=80&w=800', 
-    category: '金属', 
-    date: '2024-04-21', 
-    description: '复古锈蚀效果，色泽浑厚。具有极强的质感表达力，常用于建筑外观。', 
-    tags: ['复古', '外立面', '强质感'] 
+  {
+    id: "material-005",
+    name: "仿清水混凝土2",
+    thumbnail: "/materials/material-005.png",
+    category: "混凝土",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "混凝土"
+    ]
   },
-  { 
-    id: 'm6', 
-    name: '釉面砖 - 翠绿', 
-    thumbnail: 'https://images.unsplash.com/photo-1615529328331-f8917597711f?auto=format&fit=crop&q=80&w=800', 
-    category: '瓷砖', 
-    date: '2024-04-20', 
-    description: '高饱和度釉面效果，具有独特的肌理与反光感，适合特色空间装饰。', 
-    tags: ['高光', '彩色', '鲜明'] 
+  {
+    id: "material-006",
+    name: "扶手栏杆_不锈钢",
+    thumbnail: "/materials/material-006.png",
+    category: "金属",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "金属"
+    ]
+  },
+  {
+    id: "material-007",
+    name: "扶手栏杆_木质",
+    thumbnail: "/materials/material-007.png",
+    category: "木材",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "木材"
+    ]
+  },
+  {
+    id: "material-008",
+    name: "钢管",
+    thumbnail: "/materials/material-008.png",
+    category: "金属",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "金属"
+    ]
+  },
+  {
+    id: "material-009",
+    name: "花岗岩",
+    thumbnail: "/materials/material-009.png",
+    category: "石材",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "石材"
+    ]
+  },
+  {
+    id: "material-010",
+    name: "花岗岩2",
+    thumbnail: "/materials/material-010.png",
+    category: "石材",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "石材"
+    ]
+  },
+  {
+    id: "material-011",
+    name: "金属铝拉网",
+    thumbnail: "/materials/material-011.png",
+    category: "金属",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "金属"
+    ]
+  },
+  {
+    id: "material-012",
+    name: "铝金属本色",
+    thumbnail: "/materials/material-012.png",
+    category: "金属",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "金属"
+    ]
+  },
+  {
+    id: "material-013",
+    name: "铝金属本色2",
+    thumbnail: "/materials/material-013.png",
+    category: "金属",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "金属"
+    ]
+  },
+  {
+    id: "material-014",
+    name: "铝拉网",
+    thumbnail: "/materials/material-014.png",
+    category: "金属",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "金属"
+    ]
+  },
+  {
+    id: "material-015",
+    name: "木质扶手栏杆",
+    thumbnail: "/materials/material-015.png",
+    category: "木材",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "木材"
+    ]
+  },
+  {
+    id: "material-016",
+    name: "泡沫",
+    thumbnail: "/materials/material-016.jpg",
+    category: "未分类",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "未分类"
+    ]
+  },
+  {
+    id: "material-017",
+    name: "浅灰色水泥涂料",
+    thumbnail: "/materials/material-017.jpg",
+    category: "涂料",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "涂料"
+    ]
+  },
+  {
+    id: "material-018",
+    name: "清水混凝土",
+    thumbnail: "/materials/material-018.png",
+    category: "混凝土",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "混凝土"
+    ]
+  },
+  {
+    id: "material-019",
+    name: "室外地面-砖",
+    thumbnail: "/materials/material-019.png",
+    category: "地面",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "地面"
+    ]
+  },
+  {
+    id: "material-020",
+    name: "室外阳台地面水细沙",
+    thumbnail: "/materials/material-020.jpg",
+    category: "地面",
+    date: "2026-05-06",
+    description: "来自本地材质贴图库的静态贴图资源。",
+    tags: [
+      "本地材质",
+      "地面"
+    ]
   }
 ];
 

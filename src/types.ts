@@ -38,6 +38,7 @@ export interface StepState {
   config: GenerationConfig;
   inputImage: UploadedImage | null;
   materialImage: UploadedImage | null;
+  materialTextures: MaterialTexture[];
   maskImage: UploadedImage | null;
   useFullImageMask: boolean;
   outputImage: string | null;
@@ -67,6 +68,15 @@ export interface UploadedImage {
   assetId?: string;
   width?: number;
   height?: number;
+}
+
+export interface MaterialTexture {
+  id: string;
+  name?: string;
+  url: string;
+  dataUrl?: string;
+  assetId?: string;
+  source: 'upload' | 'library';
 }
 
 export interface PromptTemplate {
@@ -137,6 +147,11 @@ export interface MaterialAsset {
   date: string;
   description?: string;
   tags?: string[];
+  source?: 'local-import' | string;
+  originalFileName?: string;
+  originalPath?: string;
+  importedAt?: string;
+  hash?: string;
 }
 
 export interface FurnitureStyle {

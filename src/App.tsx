@@ -63,6 +63,7 @@ export default function App() {
     handleUpdateConfig,
     handleUpdateInputImage,
     handleUpdateMaterialImage,
+    handleUpdateMaterialTextures,
     handleUpdateMaskImage,
     handleResetConfig,
     handleApplyTemplate,
@@ -195,10 +196,13 @@ export default function App() {
 
     if (canUseAsyncJob && selectedProjectId && stateAtStart.inputImage.assetId) {
       try {
-        const inputAssetIds = [
+        const inputAssetIds = Array.from(new Set([
           stateAtStart.inputImage.assetId,
           ...(stateAtStart.materialImage?.assetId ? [stateAtStart.materialImage.assetId] : []),
-        ];
+          ...stateAtStart.materialTextures
+            .map(texture => texture.assetId)
+            .filter((assetId): assetId is string => Boolean(assetId)),
+        ]));
         let maskAssetId: string | undefined;
         const maskMode = currentStep === GenerationStep.LocalInpainting
           ? stateAtStart.useFullImageMask ? 'full-image' : 'asset-mask'
@@ -220,6 +224,14 @@ export default function App() {
             feather: stateAtStart.config.feather ?? 0,
             maskMode,
             maskAssetId,
+            materialTextureAssetIds: stateAtStart.materialTextures
+              .map(texture => texture.assetId)
+              .filter((assetId): assetId is string => Boolean(assetId)),
+            materialTextureSources: stateAtStart.materialTextures.map(texture => ({
+              id: texture.id,
+              name: texture.name,
+              source: texture.source,
+            })),
           },
           inputAssetIds,
         });
@@ -745,6 +757,7 @@ export default function App() {
                       onUpdateConfig={handleUpdateConfig}
                       onUpdateInputImage={handleUpdateInputImage}
                       onUpdateMaterialImage={handleUpdateMaterialImage}
+                      onUpdateMaterialTextures={handleUpdateMaterialTextures}
                       onUpdateMaskImage={handleUpdateMaskImage}
                       onGenerate={handleGenerate}
                       onCancelGeneration={handleCancelGeneration}
