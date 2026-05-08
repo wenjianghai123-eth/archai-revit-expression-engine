@@ -26,6 +26,7 @@ beforeAll(async () => {
   process.env.AUTH_MODE = 'dev';
   process.env.DATA_BACKEND = 'json';
   process.env.FILE_STORAGE = 'local';
+  process.env.GENERATION_PROVIDER = 'mock';
   process.env.AI_PROVIDER = 'mock';
   process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'true';
   process.env.MAX_IMAGE_MB = '0.0001';
@@ -306,6 +307,7 @@ describe('legacy generation endpoints', () => {
       expect(response.body).toMatchObject({
         provider: 'mock',
       });
+      expect(response.body.imageDataUrl).toMatch(/^data:image\/svg\+xml;base64,/u);
     } finally {
       if (originalLegacyFlag === undefined) {
         delete process.env.ENABLE_LEGACY_GENERATION_ENDPOINTS;

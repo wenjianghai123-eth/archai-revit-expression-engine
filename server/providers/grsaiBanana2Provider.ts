@@ -325,7 +325,7 @@ function formatResponseSummary(value: unknown): string {
 
 function readApiKey(value: string | undefined): string {
   if (isNonEmptyString(value)) return value;
-  throw new Error('GRSAI_API_KEY is required when AI_PROVIDER=grsai-banana2 or AI_PROVIDER=grsai-nano-banana.');
+  throw new Error('GRSAI_API_KEY is required when GENERATION_PROVIDER=grsai, AI_PROVIDER=grsai-banana2, or AI_PROVIDER=grsai-nano-banana.');
 }
 
 function readImageContentType(headerValue: string | null, url: string): string {

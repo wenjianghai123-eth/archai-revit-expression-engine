@@ -69,7 +69,7 @@ function createMockImageDataUrl(mode: 'floorplan' | 'style-render' | 'inpaint', 
     </svg>
   `;
 
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
 }
 
 function escapeSvg(value: string): string {

@@ -11,7 +11,7 @@ Use this checklist before handing off an MVP build.
 ## Env Setup
 
 - [ ] Copy `.env.example` to `.env` for local backend runs.
-- [ ] Keep `AI_PROVIDER=mock` for default MVP verification.
+- [ ] Keep `GENERATION_PROVIDER=mock` for default MVP verification.
 - [ ] For real provider testing only, set `AI_PROVIDER=gemini` and `GEMINI_API_KEY` in backend `.env`.
 - [ ] Confirm no model API key is referenced from `src/` frontend code.
 

@@ -59,7 +59,7 @@ After `npm run build`, Express serves the generated `dist` frontend and continue
 
 Create a local `.env` or `.env.local` file for development secrets. These files are ignored by git.
 
-- `AI_PROVIDER`: `mock` by default. Set to `gemini`, `grsai-banana2`, or the legacy alias `grsai-nano-banana` to attempt real image generation through the backend.
+- `GENERATION_PROVIDER`: `mock` by default. Set to `grsai` to use the GRS AI Banana2 provider through the backend. Legacy `AI_PROVIDER` values (`mock`, `gemini`, `grsai-banana2`, `grsai-nano-banana`) are still accepted when `GENERATION_PROVIDER` is unset.
 - `GEMINI_API_KEY`: backend-only Gemini API key. Required only when `AI_PROVIDER=gemini`.
 - `GEMINI_IMAGE_MODEL`: optional Gemini image model. Defaults in code to `gemini-2.5-flash-image-preview`.
 - `AUTH_MODE`: `dev` by default. Use `supabase` in production to require Supabase Auth JWTs for project, asset, and generation job APIs.
@@ -73,7 +73,7 @@ Create a local `.env` or `.env.local` file for development secrets. These files 
 - `VITE_SUPABASE_URL`: Supabase project URL for the browser client. Required when using Supabase Auth.
 - `VITE_SUPABASE_ANON_KEY`: Supabase anon key for the browser client. Required when using Supabase Auth.
 - `SUPABASE_SERVICE_ROLE_KEY`: backend-only Supabase service role key used to validate JWTs. Never expose this in frontend code.
-- `GRSAI_API_KEY`: backend-only model API key. Required only when `AI_PROVIDER=grsai-banana2` or `AI_PROVIDER=grsai-nano-banana`. Do not expose this in frontend code.
+- `GRSAI_API_KEY`: backend-only model API key. Required only when `GENERATION_PROVIDER=grsai`, `AI_PROVIDER=grsai-banana2`, or `AI_PROVIDER=grsai-nano-banana`. Do not expose this in frontend code.
 - `GRSAI_BASE_URL`: optional Grsai API base URL. Defaults to `https://grsai.dakka.com.cn` for China direct access. Overseas deployments can use `https://grsaiapi.com`.
 - `GRSAI_MODEL`: optional Grsai model name. Defaults to `nano-banana-2`.
 - `GRSAI_IMAGE_SIZE`: optional Grsai output size. Defaults to `1K`.
@@ -97,7 +97,7 @@ All AI/model calls must go through the Express backend. The frontend should only
 Example `.env` for local mock development:
 
 ```bash
-AI_PROVIDER=mock
+GENERATION_PROVIDER=mock
 AUTH_MODE=dev
 DATA_BACKEND=json
 FILE_STORAGE=local
@@ -112,7 +112,7 @@ MAX_IMAGE_MB=10
 Example `.env` for Supabase Auth:
 
 ```bash
-AI_PROVIDER=mock
+GENERATION_PROVIDER=mock
 AUTH_MODE=supabase
 DATA_BACKEND=supabase
 FILE_STORAGE=supabase
@@ -133,7 +133,7 @@ Before using `DATA_BACKEND=supabase`, run the SQL in `docs/SUPABASE_SETUP.md`. B
 Example `.env` for Grsai Banana2 / Nano Banana:
 
 ```bash
-AI_PROVIDER=grsai-banana2
+GENERATION_PROVIDER=grsai
 AUTH_MODE=dev
 DATA_BACKEND=json
 FILE_STORAGE=local

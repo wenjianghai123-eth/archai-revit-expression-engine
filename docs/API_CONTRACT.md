@@ -417,7 +417,7 @@ Backend provider adapters normalize output before the server saves a generated a
 For Grsai Banana2 / Nano Banana, configure the backend with:
 
 ```bash
-AI_PROVIDER=grsai-banana2
+GENERATION_PROVIDER=grsai
 GRSAI_API_KEY=your_backend_only_key
 GRSAI_BASE_URL=https://grsai.dakka.com.cn
 GRSAI_MODEL=nano-banana-2
@@ -425,7 +425,7 @@ GRSAI_IMAGE_SIZE=1K
 GRSAI_ASPECT_RATIO=auto
 ```
 
-The legacy `AI_PROVIDER=grsai-nano-banana` alias is still accepted. Grsai keys must stay backend-only. The frontend continues to use `/api/generation-jobs`; it must not call Grsai directly. Grsai result URLs are temporary, so the backend downloads them and saves generated assets through the configured storage adapter.
+The legacy `AI_PROVIDER=grsai-banana2` and `AI_PROVIDER=grsai-nano-banana` aliases are still accepted when `GENERATION_PROVIDER` is unset. Grsai keys must stay backend-only. The frontend continues to use `/api/generation-jobs`; it must not call Grsai directly. Grsai result URLs are temporary, so the backend downloads them and saves generated assets through the configured storage adapter.
 
 ## Not Implemented
 

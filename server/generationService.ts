@@ -99,7 +99,7 @@ export function isLegacyGenerationEndpointEnabled(): boolean {
 
   if (configured === 'true') return true;
 
-  return (process.env.AI_PROVIDER || 'mock') === 'mock' && (process.env.AUTH_MODE || 'dev') === 'dev';
+  return readRequestedProviderName() === 'mock' && (process.env.AUTH_MODE || 'dev') === 'dev';
 }
 
 export function removeQueuedGenerationJob(jobId: string): void {
@@ -420,13 +420,13 @@ function isValidImageDataUrl(value: unknown): value is string {
 }
 
 function selectProvider(): ImageGenerationProvider {
-  const requestedProvider = process.env.AI_PROVIDER || 'mock';
+  const requestedProvider = readRequestedProviderName();
   const geminiApiKey = process.env.GEMINI_API_KEY;
   const grsaiApiKey = process.env.GRSAI_API_KEY;
 
-  if (requestedProvider === 'grsai-banana2') {
+  if (requestedProvider === 'grsai-banana2' || requestedProvider === 'grsai') {
     if (!grsaiApiKey) {
-      console.warn('AI_PROVIDER=grsai-banana2 but GRSAI_API_KEY is missing; generation calls will fail clearly.');
+      console.warn(`${readRequestedProviderVariableName()}=${requestedProvider} but GRSAI_API_KEY is missing; generation calls will fail clearly.`);
     }
     return createGrsaiBanana2Provider({ apiKey: grsaiApiKey });
   }
@@ -447,6 +447,14 @@ function selectProvider(): ImageGenerationProvider {
   }
 
   return mockProvider;
+}
+
+function readRequestedProviderName(): string {
+  return process.env.GENERATION_PROVIDER || process.env.AI_PROVIDER || 'mock';
+}
+
+function readRequestedProviderVariableName(): string {
+  return process.env.GENERATION_PROVIDER ? 'GENERATION_PROVIDER' : 'AI_PROVIDER';
 }
 
 function isMaskMode(value: unknown): value is MaskMode {
