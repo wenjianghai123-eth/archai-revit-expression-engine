@@ -73,10 +73,9 @@ export function MainWorkspace({
   const [uploadErrors, setUploadErrors] = useState<Record<UploadTarget, string | null>>({ input: null, material: null, texture: null });
   const [isMaterialLibraryOpen, setIsMaterialLibraryOpen] = useState(false);
 
-  const hasMask = step !== GenerationStep.LocalInpainting || Boolean(state.maskImage) || state.useFullImageMask;
   const isFloorplanStep = step === GenerationStep.FloorplanTo3D;
   const isStyleRenderStep = step === GenerationStep.StyleRender;
-  const canGenerate = Boolean(state.inputImage) && hasMask && !state.isGenerating && !isCreditsInsufficient;
+  const canGenerate = Boolean(state.inputImage) && !state.isGenerating && !isCreditsInsufficient;
   const providerForStatus = backendProvider || state.generationProvider;
   const resultOptions = state.generationResults.length > 0
     ? state.generationResults
@@ -438,13 +437,14 @@ export function MainWorkspace({
               </div>
 
               <div className="space-y-2">
-                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">提示词</label>
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">修改说明</label>
                 <textarea
                   value={state.config.prompt}
                   onChange={event => onUpdateConfig({ prompt: event.target.value })}
                   className="h-36 w-full resize-none rounded-xl border border-blue-100 bg-blue-50/60 p-3 text-xs leading-5 text-blue-950 outline-none focus:border-blue-300"
-                  placeholder="描述希望生成或局部重绘的效果..."
+                  placeholder="描述希望修改的内容，例如：将地板替换为上传的材质贴图、优化灯光、替换墙面材质……"
                 />
+                <p className="text-[11px] leading-5 text-slate-400">不涂抹也可以直接根据提示词进行全局或智能局部修改；涂抹后可更精确地限制修改区域。</p>
               </div>
 
               <div className="space-y-4">
@@ -504,7 +504,7 @@ export function MainWorkspace({
             <div className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white/70 px-4">
               <div>
                 <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">局部 mask 编辑</span>
-                <p className="text-xs font-medium text-slate-500">上传参考图后，在大画布上涂抹需要重绘的区域。</p>
+                <p className="text-xs font-medium text-slate-500">不涂抹也可以直接根据提示词进行全局或智能局部修改；涂抹后可更精确地限制修改区域。</p>
               </div>
               <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{providerForStatus || 'provider 待连接'}</span>
             </div>
@@ -582,7 +582,7 @@ export function MainWorkspace({
 
           <div className="space-y-2">
             <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-              {isFloorplanStep ? '额外补充说明' : '提示词'}
+              {isFloorplanStep ? '额外补充说明' : isLocalInpaintingStep(step) ? '修改说明' : '提示词'}
             </label>
             {isFloorplanStep ? (
               <p className="text-[11px] leading-5 text-slate-400">系统已内置专业彩平生成提示词，你只需要补充特殊要求。</p>
@@ -593,8 +593,13 @@ export function MainWorkspace({
               className="h-28 w-full resize-none rounded-xl border border-blue-100 bg-blue-50/60 p-3 text-xs leading-5 text-blue-950 outline-none focus:border-blue-300"
               placeholder={isFloorplanStep
                 ? '可选：补充色彩、材质、表达风格、重点区域等要求。例如：强化景观铺装层次，住宅区域使用暖色系。'
-                : '描述希望生成或局部重绘的效果...'}
+                : isLocalInpaintingStep(step)
+                  ? '描述希望修改的内容，例如：将地板替换为上传的材质贴图、优化灯光、替换墙面材质……'
+                  : '描述希望生成或局部重绘的效果...'}
             />
+            {isLocalInpaintingStep(step) ? (
+              <p className="text-[11px] leading-5 text-slate-400">不涂抹也可以直接根据提示词进行全局或智能局部修改；涂抹后可更精确地限制修改区域。</p>
+            ) : null}
           </div>
 
           {isStyleRenderStep && (

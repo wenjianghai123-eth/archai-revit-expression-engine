@@ -30,6 +30,7 @@ interface ProjectDetailProps {
   projectId: string;
   onBack: () => void;
   onOpenGenerate: () => void;
+  onDeleteProject: (projectId: string) => Promise<void>;
 }
 
 interface CreatedShareState {
@@ -44,7 +45,7 @@ interface ReportOption {
   label: string;
 }
 
-export function ProjectDetail({ projectId, onBack, onOpenGenerate }: ProjectDetailProps) {
+export function ProjectDetail({ projectId, onBack, onOpenGenerate, onDeleteProject }: ProjectDetailProps) {
   const [project, setProject] = useState<Project | null>(null);
   const [generations, setGenerations] = useState<GenerationRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -54,6 +55,7 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate }: ProjectDeta
   const [shareMessage, setShareMessage] = useState<string | null>(null);
   const [isCreatingShare, setIsCreatingShare] = useState(false);
   const [isRevokingShare, setIsRevokingShare] = useState(false);
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
   const [compareGenerationId, setCompareGenerationId] = useState<string | null>(null);
   const [selectedReportKeys, setSelectedReportKeys] = useState<Record<string, boolean>>({});
 
@@ -156,6 +158,21 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate }: ProjectDeta
     window.setTimeout(() => window.print(), 50);
   };
 
+  const handleDeleteProject = async () => {
+    const confirmed = window.confirm('确定删除该项目吗？删除后项目将从列表中移除，历史生成记录不会在项目列表中显示。');
+    if (!confirmed) return;
+
+    setIsDeletingProject(true);
+    setError(null);
+
+    try {
+      await onDeleteProject(projectId);
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : '项目删除失败。');
+      setIsDeletingProject(false);
+    }
+  };
+
   return (
     <div className="arch-page">
       <div className="arch-page-inner print-hidden">
@@ -192,10 +209,16 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate }: ProjectDeta
                   <span className="arch-pill">更新：{formatDate(project.updatedAt)}</span>
                 </div>
               </div>
-              <button onClick={onOpenGenerate} className="arch-button-primary w-fit">
-                <Sparkles className="h-4 w-4" />
-                进入 AI 生成工作台
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button onClick={onOpenGenerate} className="arch-button-primary w-fit" disabled={isDeletingProject}>
+                  <Sparkles className="h-4 w-4" />
+                  进入 AI 生成工作台
+                </button>
+                <button onClick={() => void handleDeleteProject()} className="arch-button-secondary w-fit text-red-600" disabled={isDeletingProject}>
+                  {isDeletingProject ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                  删除项目
+                </button>
+              </div>
             </div>
           ) : null}
         </header>

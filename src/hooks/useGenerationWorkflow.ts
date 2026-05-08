@@ -147,6 +147,11 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
     }));
   }, [currentStep]);
 
+  const resetWorkflow = useCallback(() => {
+    setCurrentStep(GenerationStep.FloorplanTo3D);
+    setStepStates(createInitialStepStates());
+  }, []);
+
   const handleApplyTemplate = useCallback((template: PromptTemplate) => {
     const targetStep =
       template.feature === 'floorplan'
@@ -182,6 +187,7 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
     handleUpdateMaskImage,
     handleResetConfig,
     handleApplyTemplate,
+    resetWorkflow,
   };
 }
 

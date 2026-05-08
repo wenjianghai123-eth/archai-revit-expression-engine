@@ -98,6 +98,7 @@ export interface PromptTemplate {
 
 export interface GenerationHistoryItem {
   id: string;
+  projectId?: string | null;
   step: GenerationStep;
   prompt: string;
   style: string;

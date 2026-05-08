@@ -243,7 +243,7 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     const now = new Date().toISOString();
     const { data, error } = await this.client
       .from('projects')
-      .update({ deleted_at: now, updated_at: now })
+      .update({ deleted_at: now, status: 'archived', updated_at: now })
       .eq('id', id)
       .eq('user_id', userId)
       .is('deleted_at', null)

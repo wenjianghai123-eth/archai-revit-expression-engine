@@ -118,6 +118,44 @@ describe('Grsai Banana2 provider', () => {
     expect(vi.mocked(fetch).mock.calls.filter(call => String(call[0]).endsWith('/v1/draw/result'))).toHaveLength(2);
   });
 
+  it('does not add mask-only constraints for prompt-only inpaint requests', async () => {
+    mockFetchSequence([
+      jsonResponse({ code: 0, data: { id: 'inpaint_prompt_only' } }),
+      jsonResponse({ code: 0, data: { id: 'inpaint_prompt_only', status: 'succeeded', results: [{ url: 'data:image/png;base64,cmVzdWx0' }] } }),
+    ]);
+
+    await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage({
+      ...input,
+      mode: 'inpaint',
+      maskImageDataUrl: undefined,
+      maskMode: undefined,
+      prompt: '用户未提供 mask / 涂抹区域\n用户具体修改需求：将地板替换为所上传的材质贴图',
+    });
+
+    const createRequest = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
+    expect(createRequest.prompt).toContain('未提供 mask');
+    expect(createRequest.prompt).not.toContain('仅修改用户涂抹或遮罩区域');
+    expect(createRequest.prompt).not.toContain('严格优先修改 mask 白色区域');
+  });
+
+  it('adds mask guidance for masked inpaint requests', async () => {
+    mockFetchSequence([
+      jsonResponse({ code: 0, data: { id: 'inpaint_masked' } }),
+      jsonResponse({ code: 0, data: { id: 'inpaint_masked', status: 'succeeded', results: [{ url: 'data:image/png;base64,cmVzdWx0' }] } }),
+    ]);
+
+    await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage({
+      ...input,
+      mode: 'inpaint',
+      maskMode: 'asset-mask',
+      maskImageDataUrl: 'data:image/png;base64,bWFzaw==',
+      prompt: '用户具体修改需求：把墙面改成浅米色微水泥质感',
+    });
+
+    const createRequest = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
+    expect(createRequest.prompt).toContain('仅修改用户涂抹或遮罩区域');
+  });
+
   it('throws when Grsai reports failed status', async () => {
     mockFetchSequence([
       jsonResponse({ code: 0, data: { id: 'task_failed' } }),

@@ -271,16 +271,11 @@ function buildReferenceUrls(input: GenerateImageInput): string[] {
 }
 
 function buildPrompt(input: GenerateImageInput): string {
-  const pieces: string[] = [];
-
   if (input.mode === 'inpaint') {
-    pieces.push(
-      '请基于输入参考图进行局部修饰，仅修改用户标注或遮罩区域，其他区域保持不变。若提供了 mask 图，请将 mask 图中的白色区域作为需要修改的区域，黑色区域保持不变。',
-    );
-    if (input.materialImageDataUrl || (input.referenceImageDataUrls?.length || 0) > 0) {
-      pieces.push('材质贴图作为材质风格参考，请将其纹理、颜色、质感应用到需要修饰的区域。');
-    }
+    return buildInpaintPrompt(input);
   }
+
+  const pieces: string[] = [];
 
   if (input.mode === 'floorplan') {
     pieces.push('请保留原始平面图的空间关系、墙体、门窗和动线，生成清晰、专业的建筑表达图。');
@@ -288,6 +283,31 @@ function buildPrompt(input: GenerateImageInput): string {
 
   if (input.mode === 'style-render') {
     pieces.push('请以第一张输入图为空间结构基准，保持构图、透视、比例和主要空间关系，主要改变风格、材质、光影和表达方式。');
+  }
+
+  pieces.push(input.prompt);
+  pieces.push(`Generation config JSON: ${JSON.stringify(input.config)}`);
+  pieces.push('不要添加文字、水印、标签、边框或界面元素。');
+
+  return pieces.filter(Boolean).join('\n');
+}
+
+function buildInpaintPrompt(input: GenerateImageInput): string {
+  const pieces: string[] = [];
+  const hasMask = input.maskMode === 'asset-mask' && isNonEmptyString(input.maskImageDataUrl);
+
+  if (hasMask) {
+    pieces.push(
+      '请基于输入参考图进行局部修饰，仅修改用户涂抹或遮罩区域，其他区域保持不变。请将 mask 图中的白色区域作为需要修改的区域，黑色区域保持不变。',
+    );
+  } else {
+    pieces.push(
+      '请基于输入原图和用户提示词进行图像编辑。未提供遮罩时，请根据用户提示词判断需要修改的区域，并尽量保持原图的空间结构、构图、透视、比例和未涉及区域稳定。',
+    );
+  }
+
+  if (input.materialImageDataUrl || (input.referenceImageDataUrls?.length || 0) > 0) {
+    pieces.push('材质贴图和参考图作为材质、色彩、纹理与表达氛围参考，请只将相关特征应用到需要修饰的区域。');
   }
 
   pieces.push(input.prompt);

@@ -185,7 +185,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
       projectId: job.projectId,
       jobId: job.id,
       mode: job.mode,
-      prompt: job.prompt,
+      prompt: typeof job.config.userPrompt === 'string' ? job.config.userPrompt : job.prompt,
       inputImageUrl: await getInputAssetUrl(job.inputAssetIds[0], job.userId),
       outputImageUrl: firstOutputAsset.url,
       provider: firstOutput.provider,

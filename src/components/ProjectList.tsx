@@ -1,17 +1,19 @@
 import React, { FormEvent, useEffect, useState } from 'react';
-import { AlertCircle, ArrowRight, FolderKanban, Loader2, Plus, RefreshCw } from 'lucide-react';
+import { AlertCircle, ArrowRight, FolderKanban, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { createProject, listProjects, Project } from '../lib/api';
 
 interface ProjectListProps {
   onOpenProject: (projectId: string) => void;
+  onDeleteProject: (projectId: string) => Promise<void>;
 }
 
-export function ProjectList({ onOpenProject }: ProjectListProps) {
+export function ProjectList({ onOpenProject, onDeleteProject }: ProjectListProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadProjects = async () => {
@@ -56,6 +58,23 @@ export function ProjectList({ onOpenProject }: ProjectListProps) {
       setError(createError instanceof Error ? createError.message : '项目创建失败。');
     } finally {
       setIsCreating(false);
+    }
+  };
+
+  const handleDelete = async (project: Project) => {
+    const confirmed = window.confirm('确定删除该项目吗？删除后项目将从列表中移除，历史生成记录不会在项目列表中显示。');
+    if (!confirmed) return;
+
+    setDeletingProjectId(project.id);
+    setError(null);
+
+    try {
+      await onDeleteProject(project.id);
+      setProjects(prev => prev.filter(item => item.id !== project.id));
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : '项目删除失败。');
+    } finally {
+      setDeletingProjectId(null);
     }
   };
 
@@ -143,9 +162,17 @@ export function ProjectList({ onOpenProject }: ProjectListProps) {
             ) : (
               <div className="grid gap-3 xl:grid-cols-2">
                 {projects.map(project => (
-                  <button
+                  <div
                     key={project.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => onOpenProject(project.id)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onOpenProject(project.id);
+                      }
+                    }}
                     className="arch-card group p-4 text-left"
                   >
                     <div className="flex items-start justify-between gap-4">
@@ -156,15 +183,30 @@ export function ProjectList({ onOpenProject }: ProjectListProps) {
                           {project.description || '暂无项目描述。'}
                         </p>
                       </div>
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-50 text-slate-400 transition-colors group-hover:bg-blue-50 group-hover:text-blue-600">
-                        <ArrowRight className="h-5 w-5" />
+                      <div className="flex shrink-0 items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={event => {
+                            event.stopPropagation();
+                            void handleDelete(project);
+                          }}
+                          onKeyDown={event => event.stopPropagation()}
+                          disabled={deletingProjectId === project.id}
+                          className="flex h-10 w-10 items-center justify-center rounded-2xl bg-red-50 text-red-500 transition hover:bg-red-100 disabled:cursor-wait disabled:opacity-60"
+                          title="删除项目"
+                        >
+                          {deletingProjectId === project.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                        </button>
+                        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-50 text-slate-400 transition-colors group-hover:bg-blue-50 group-hover:text-blue-600">
+                          <ArrowRight className="h-5 w-5" />
+                        </div>
                       </div>
                     </div>
                     <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-400">
                       <span>创建：{formatDate(project.createdAt)}</span>
                       <span>更新：{formatDate(project.updatedAt)}</span>
                     </div>
-                  </button>
+                  </div>
                 ))}
               </div>
             )}

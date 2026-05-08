@@ -23,6 +23,7 @@ import {
   cancelGenerationJob,
   createGenerationJob,
   createProjectGeneration,
+  deleteProject,
   getGenerationJob,
   getImageAsset,
   updateGenerationResult,
@@ -34,6 +35,7 @@ import { useCreditBalance } from './hooks/useCreditBalance';
 import { useGenerationWorkflow } from './hooks/useGenerationWorkflow';
 import { useProjectSelection } from './hooks/useProjectSelection';
 import { buildFloorplanColorPrompt } from './prompts/floorplanPrompts';
+import { buildInpaintPrompt } from './prompts/inpaintPrompts';
 import { clearGenerationHistory, deleteGenerationRecord, listGenerationRecords, saveGenerationRecord } from './storage/history';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -54,6 +56,7 @@ export default function App() {
     selectedProjectId,
     openProject: handleOpenProject,
     backToProjects: handleBackToProjects,
+    setSelectedProjectId,
     startCreate,
   } = useProjectSelection();
   const {
@@ -68,6 +71,7 @@ export default function App() {
     handleUpdateMaskImage,
     handleResetConfig,
     handleApplyTemplate,
+    resetWorkflow,
   } = useGenerationWorkflow(() => setActiveTab('generate'));
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<GenerationHistoryItem[]>(() => listGenerationRecords());
@@ -118,6 +122,26 @@ export default function App() {
     setHistoryItems([]);
   }, []);
 
+  const handleOpenProjectWithReset = useCallback((projectId: string) => {
+    resetWorkflow();
+    handleOpenProject(projectId);
+  }, [handleOpenProject, resetWorkflow]);
+
+  const handleBackToProjectsWithReset = useCallback(() => {
+    resetWorkflow();
+    handleBackToProjects();
+  }, [handleBackToProjects, resetWorkflow]);
+
+  const handleDeleteProject = useCallback(async (projectId: string) => {
+    await deleteProject(projectId);
+    if (selectedProjectId === projectId) {
+      setSelectedProjectId(null);
+      setActiveTab('projects');
+    }
+    resetWorkflow();
+    setHistoryItems(listGenerationRecords());
+  }, [resetWorkflow, selectedProjectId, setActiveTab, setSelectedProjectId]);
+
   const estimatedCreditCost = calculateGenerationCreditsCost(currentStep, stepStates[currentStep].config);
   const isCreditsInsufficient = Boolean(creditBalance && creditBalance.balance < estimatedCreditCost);
 
@@ -143,18 +167,6 @@ export default function App() {
           ...prev[currentStep],
           generationStatus: 'error',
           generationError: '请先上传图片后再生成预览。',
-        }
-      }));
-      return;
-    }
-
-    if (currentStep === GenerationStep.LocalInpainting && !stateAtStart.maskImage && !stateAtStart.useFullImageMask) {
-      setStepStates(prev => ({
-        ...prev,
-        [currentStep]: {
-          ...prev[currentStep],
-          generationStatus: 'error',
-          generationError: '请先绘制局部 mask，或选择整图后再生成。',
         }
       }));
       return;
@@ -191,14 +203,13 @@ export default function App() {
 
     const canUseAsyncJob = Boolean(
       selectedProjectId &&
-      stateAtStart.inputImage.assetId &&
-      (currentStep !== GenerationStep.LocalInpainting || stateAtStart.maskImage || stateAtStart.useFullImageMask),
+      stateAtStart.inputImage.assetId,
     );
 
     if (canUseAsyncJob && selectedProjectId && stateAtStart.inputImage.assetId) {
       try {
         const generationMode = getGenerationRecordMode(currentStep);
-        const promptForRequest = buildPromptForGeneration(currentStep, stateAtStart.config.prompt);
+        const promptForRequest = buildPromptForGeneration(currentStep, stateAtStart.config.prompt, stateAtStart);
         const configForRequest = buildConfigForGeneration(currentStep, stateAtStart.config);
         const inputAssetIds = Array.from(new Set([
           stateAtStart.inputImage.assetId,
@@ -208,8 +219,13 @@ export default function App() {
             .filter((assetId): assetId is string => Boolean(assetId)),
         ]));
         let maskAssetId: string | undefined;
+        const hasPaintedMask = Boolean(stateAtStart.maskImage?.dataUrl);
         const maskMode = currentStep === GenerationStep.LocalInpainting
-          ? stateAtStart.useFullImageMask ? 'full-image' : 'asset-mask'
+          ? stateAtStart.useFullImageMask
+            ? 'full-image'
+            : hasPaintedMask
+              ? 'asset-mask'
+              : undefined
           : undefined;
         if (currentStep === GenerationStep.LocalInpainting && maskMode === 'asset-mask' && stateAtStart.maskImage?.dataUrl) {
           const maskFile = dataUrlToFile(stateAtStart.maskImage.dataUrl, `archai-mask-${Date.now()}`);
@@ -223,6 +239,7 @@ export default function App() {
           config: {
             ...configForRequest,
             mode: generationMode,
+            userPrompt: stateAtStart.config.prompt,
             strength: stateAtStart.config.strength || stateAtStart.config.inpaintingStrength || 'medium',
             preserveStructure: Boolean(stateAtStart.config.preserveStructure ?? stateAtStart.config.keepOriginalMaterial),
             feather: stateAtStart.config.feather ?? 0,
@@ -299,6 +316,7 @@ export default function App() {
           const providerWarnings: string[] = [];
           const record = saveGenerationRecord({
             id: latestJob.id,
+            projectId: selectedProjectId,
             step: currentStep,
             prompt: stateAtStart.config.prompt,
             style: readHistoryStyle(currentStep, stateAtStart.config),
@@ -417,7 +435,7 @@ export default function App() {
           response = await generateFloorplanTo3D({
             inputImageDataUrl: stateAtStart.inputImage.dataUrl,
             materialImageDataUrl: stateAtStart.materialImage?.dataUrl,
-            prompt: buildPromptForGeneration(currentStep, stateAtStart.config.prompt),
+            prompt: buildPromptForGeneration(currentStep, stateAtStart.config.prompt, stateAtStart),
             config: buildConfigForGeneration(currentStep, stateAtStart.config),
           });
           break;
@@ -434,7 +452,7 @@ export default function App() {
           response = await generateInpainting({
             inputImageDataUrl: stateAtStart.inputImage.dataUrl,
             maskImageDataUrl: stateAtStart.maskImage?.dataUrl,
-            prompt: stateAtStart.config.prompt,
+            prompt: buildPromptForGeneration(currentStep, stateAtStart.config.prompt, stateAtStart),
             config: stateAtStart.config,
           });
           break;
@@ -456,7 +474,7 @@ export default function App() {
         try {
           await createProjectGeneration(selectedProjectId, {
             mode: getGenerationRecordMode(currentStep),
-            prompt: buildPromptForGeneration(currentStep, stateAtStart.config.prompt),
+            prompt: stateAtStart.config.prompt,
             inputImageUrl: stateAtStart.inputImage.url,
             inputImageDataPreview: stateAtStart.inputImage.url ? null : stateAtStart.inputImage.dataUrl,
             outputImageUrl,
@@ -476,6 +494,7 @@ export default function App() {
       const currentState = prev[currentStep];
       const record = saveGenerationRecord({
           id: response.id,
+          projectId: selectedProjectId,
           step: currentStep,
           prompt: currentState.config.prompt,
           style: readHistoryStyle(currentStep, currentState.config),
@@ -718,7 +737,7 @@ export default function App() {
               exit={{ opacity: 0 }}
               className="min-h-0 flex-1 overflow-hidden"
             >
-              <ProjectList onOpenProject={handleOpenProject} />
+              <ProjectList onOpenProject={handleOpenProjectWithReset} onDeleteProject={handleDeleteProject} />
             </motion.div>
           ) : activeTab === 'project-detail' && selectedProjectId ? (
             <motion.div
@@ -730,8 +749,9 @@ export default function App() {
             >
               <ProjectDetail
                 projectId={selectedProjectId}
-                onBack={handleBackToProjects}
+                onBack={handleBackToProjectsWithReset}
                 onOpenGenerate={() => handleStartCreate(GenerationStep.FloorplanTo3D)}
+                onDeleteProject={handleDeleteProject}
               />
             </motion.div>
           ) : activeTab === 'generate' ? (
@@ -851,8 +871,21 @@ function calculateGenerationCreditsCost(step: GenerationStep, config: Generation
   return baseCost * batchCount;
 }
 
-function buildPromptForGeneration(step: GenerationStep, prompt: string): string {
-  return step === GenerationStep.FloorplanTo3D ? buildFloorplanColorPrompt(prompt) : prompt;
+function buildPromptForGeneration(step: GenerationStep, prompt: string, state?: StepState): string {
+  if (step === GenerationStep.FloorplanTo3D) {
+    return buildFloorplanColorPrompt(prompt);
+  }
+
+  if (step === GenerationStep.LocalInpainting && state) {
+    return buildInpaintPrompt({
+      userPrompt: prompt,
+      hasMask: Boolean(state.maskImage?.dataUrl),
+      useFullImageMask: Boolean(state.useFullImageMask),
+      hasMaterialReference: Boolean(state.materialImage?.dataUrl || state.materialTextures.length > 0),
+    });
+  }
+
+  return prompt;
 }
 
 function buildConfigForGeneration(step: GenerationStep, config: GenerationConfig): GenerationConfig {

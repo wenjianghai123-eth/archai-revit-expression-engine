@@ -933,17 +933,35 @@ function validateGenerationJobCreateBody(
 
   const config: Record<string, unknown> = { ...body.config };
   if (body.mode === 'inpaint') {
-    if (!isMaskMode(config.maskMode)) {
-      return { ok: false, error: { message: 'maskMode must be asset-mask or full-image for inpaint jobs.', code: 'GENERATION_JOB_MASK_MODE_REQUIRED' } };
-    }
-
-    if (config.maskMode === 'asset-mask') {
-      if (!isNonEmptyString(config.maskAssetId)) {
-        return { ok: false, error: { message: 'maskAssetId is required when maskMode is asset-mask.', code: 'GENERATION_JOB_MASK_ASSET_REQUIRED' } };
-      }
-      config.maskAssetId = config.maskAssetId.trim();
-    } else {
+    if (config.maskMode === undefined || config.maskMode === null || config.maskMode === '') {
+      delete config.maskMode;
       delete config.maskAssetId;
+    } else {
+      if (!isMaskMode(config.maskMode)) {
+        return {
+          ok: false,
+          error: {
+            message: 'maskMode must be asset-mask or full-image when provided for inpaint jobs.',
+            code: 'GENERATION_JOB_MASK_MODE_INVALID',
+          },
+        };
+      }
+
+      if (config.maskMode === 'asset-mask') {
+        if (!isNonEmptyString(config.maskAssetId)) {
+          return {
+            ok: false,
+            error: {
+              message: 'maskAssetId is required when maskMode is asset-mask.',
+              code: 'GENERATION_JOB_MASK_ASSET_REQUIRED',
+            },
+          };
+        }
+
+        config.maskAssetId = config.maskAssetId.trim();
+      } else {
+        delete config.maskAssetId;
+      }
     }
   } else {
     delete config.maskMode;

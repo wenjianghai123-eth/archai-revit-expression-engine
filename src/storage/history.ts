@@ -15,7 +15,7 @@ export function saveGenerationRecord(record: GenerationHistoryItem): StoredGener
   return storedRecord;
 }
 
-export function listGenerationRecords(): StoredGenerationRecord[] {
+export function listGenerationRecords(projectId?: string | null): StoredGenerationRecord[] {
   if (typeof window === 'undefined') return [];
 
   try {
@@ -23,7 +23,9 @@ export function listGenerationRecords(): StoredGenerationRecord[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isStoredGenerationRecord);
+    const records = parsed.filter(isStoredGenerationRecord);
+    if (projectId === undefined) return records;
+    return records.filter(record => record.projectId === projectId);
   } catch {
     return [];
   }
@@ -80,6 +82,7 @@ function isStoredGenerationRecord(value: unknown): value is StoredGenerationReco
 
   return (
     typeof value.id === 'string' &&
+    (value.projectId === undefined || typeof value.projectId === 'string' || value.projectId === null) &&
     typeof value.step === 'number' &&
     typeof value.prompt === 'string' &&
     typeof value.style === 'string' &&

@@ -249,6 +249,7 @@ async function softDeleteProject(id: string, userId: string): Promise<Project | 
 
   const now = new Date().toISOString();
   project.deletedAt = now;
+  project.status = 'archived';
   project.updatedAt = now;
 
   await writeDatabase(db);

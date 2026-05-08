@@ -29,6 +29,7 @@ beforeAll(async () => {
   process.env.GENERATION_PROVIDER = 'mock';
   process.env.AI_PROVIDER = 'mock';
   process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'true';
+  process.env.GENERATION_JOB_RATE_LIMIT_PER_MINUTE = '1000';
   process.env.MAX_IMAGE_MB = '0.0001';
   process.env.DATA_DIR = path.join(tempRoot, 'data');
   process.env.UPLOADS_DIR = path.join(tempRoot, 'uploads');
@@ -157,6 +158,25 @@ describe('POST /api/generation-jobs asset ownership', () => {
     expect(response.body.data.job.config).not.toHaveProperty('maskAssetId');
   });
 
+  it('creates a prompt-only inpaint generation job without mask fields', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Prompt only inpaint' });
+    const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'inpaint',
+        prompt: 'make the sofa warmer and improve lighting',
+        config: {},
+        inputAssetIds: [ownAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).not.toHaveProperty('maskMode');
+    expect(response.body.data.job.config).not.toHaveProperty('maskAssetId');
+  });
+
   it('rejects an inpaint asset-mask job without maskAssetId', async () => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Missing mask' });
     const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
@@ -178,6 +198,46 @@ describe('POST /api/generation-jobs asset ownership', () => {
     });
   });
 
+  it('rejects an inpaint generation job with invalid mask mode', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Invalid mask mode' });
+    const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'inpaint',
+        prompt: 'replace selected area',
+        config: { maskMode: 'invalid' },
+        inputAssetIds: [ownAsset.id],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: { code: 'GENERATION_JOB_MASK_MODE_INVALID' },
+    });
+  });
+
+  it('normalizes empty inpaint mask fields as prompt-only editing', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Empty mask fields' });
+    const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'inpaint',
+        prompt: 'improve the lighting without a drawn mask',
+        config: { maskMode: '', maskAssetId: 'image_unused' },
+        inputAssetIds: [ownAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).not.toHaveProperty('maskMode');
+    expect(response.body.data.job.config).not.toHaveProperty('maskAssetId');
+  });
+
   it('ignores mask fields on non-inpaint generation jobs', async () => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Style render' });
     const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
@@ -195,6 +255,67 @@ describe('POST /api/generation-jobs asset ownership', () => {
     expect(response.status).toBe(201);
     expect(response.body.data.job.config).not.toHaveProperty('maskMode');
     expect(response.body.data.job.config).not.toHaveProperty('maskAssetId');
+  });
+});
+
+describe('project soft deletion', () => {
+  it('soft deletes the current user project and hides it from reads', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Delete me' });
+
+    const deleteResponse = await request(app).delete(`/api/projects/${encodeURIComponent(project.id)}`);
+    const listResponse = await request(app).get('/api/projects');
+    const getResponse = await request(app).get(`/api/projects/${encodeURIComponent(project.id)}`);
+
+    expect(deleteResponse.status).toBe(200);
+    expect(deleteResponse.body.data.project).toMatchObject({
+      id: project.id,
+      status: 'archived',
+    });
+    expect(deleteResponse.body.data.project.deletedAt).toEqual(expect.any(String));
+    expect(listResponse.status).toBe(200);
+    expect(listResponse.body.data.projects.map((item: { id: string }) => item.id)).not.toContain(project.id);
+    expect(getResponse.status).toBe(404);
+  });
+
+  it('rejects generation jobs for a deleted project', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Deleted generation target' });
+    const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    await request(app).delete(`/api/projects/${encodeURIComponent(project.id)}`);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'style-render',
+        prompt: 'render this',
+        config: {},
+        inputAssetIds: [ownAsset.id],
+      });
+
+    expect(response.status).toBe(404);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: { code: 'PROJECT_NOT_FOUND' },
+    });
+  });
+
+  it('does not allow deleting another user project', async () => {
+    const otherProject = await storage.createProject({ userId: 'other-user', name: 'Other delete target' });
+
+    const response = await request(app).delete(`/api/projects/${encodeURIComponent(otherProject.id)}`);
+
+    expect(response.status).toBe(404);
+    expect(await storage.getProject(otherProject.id, 'other-user')).not.toBeNull();
+  });
+
+  it('returns 404 when deleting an already deleted project again', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Double delete target' });
+
+    const firstDelete = await request(app).delete(`/api/projects/${encodeURIComponent(project.id)}`);
+    const secondDelete = await request(app).delete(`/api/projects/${encodeURIComponent(project.id)}`);
+
+    expect(firstDelete.status).toBe(200);
+    expect(secondDelete.status).toBe(404);
   });
 });
 
