@@ -84,7 +84,7 @@ function isStoredGenerationRecord(value: unknown): value is StoredGenerationReco
     typeof value.prompt === 'string' &&
     typeof value.style === 'string' &&
     typeof value.createdAt === 'string' &&
-    (value.provider === 'mock' || value.provider === 'gemini' || value.provider === 'grsai-nano-banana') &&
+    (value.provider === 'mock' || value.provider === 'gemini' || value.provider === 'grsai-banana2' || value.provider === 'grsai-nano-banana') &&
     typeof value.outputImage === 'string'
   );
 }

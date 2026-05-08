@@ -155,11 +155,15 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
           ? GenerationStep.StyleRender
           : GenerationStep.LocalInpainting;
 
+    const nextConfig = targetStep === GenerationStep.FloorplanTo3D
+      ? omitFloorplanStyle(template.config)
+      : template.config;
+
     setStepStates(prev => ({
       ...prev,
       [targetStep]: {
         ...prev[targetStep],
-        config: { ...prev[targetStep].config, ...template.config },
+        config: { ...prev[targetStep].config, ...nextConfig },
       },
     }));
     setCurrentStep(targetStep);
@@ -179,4 +183,9 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
     handleResetConfig,
     handleApplyTemplate,
   };
+}
+
+function omitFloorplanStyle(config: Partial<GenerationConfig>): Partial<GenerationConfig> {
+  const { style: _style, ...restConfig } = config;
+  return restConfig;
 }

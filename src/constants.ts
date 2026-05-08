@@ -285,7 +285,6 @@ export const MOCK_FURNITURE_STYLES: FurnitureStyle[] = [
 export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   [GenerationStep.FloorplanTo3D]: {
     prompt: "",
-    style: "现代主义",
     lighting: "黄金时刻 (室外)",
     materialStrength: 0.8,
     batchCount: 1,

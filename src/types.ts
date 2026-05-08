@@ -4,12 +4,12 @@ export enum GenerationStep {
   LocalInpainting = 3, // 局部重绘
 }
 
-export type GenerationProvider = 'mock' | 'gemini' | 'grsai-nano-banana';
+export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface GenerationConfig {
   prompt: string;
-  style: string;
+  style?: string;
   lighting: string;
   materialStrength: number;
   showStructureLines?: boolean;

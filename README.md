@@ -9,7 +9,7 @@ Current backend capabilities include:
 - Local file storage and optional Supabase Storage for image, mask, model, and generated-result files.
 - Authenticated project, asset, generation job, credit, share-link, and admin APIs.
 - Async generation jobs with project/asset ownership checks, credit debit/refund, persisted output assets, generation results, and project generation records.
-- Provider adapters for `mock`, Gemini, and Grsai Nano Banana, with runtime output validation before generated assets are saved.
+- Provider adapters for `mock`, Gemini, and Grsai Banana2 / Nano Banana, with runtime output validation before generated assets are saved.
 - Legacy direct `/api/generate/*` endpoints for explicit local dev/mock debugging only.
 
 This is still an MVP. Supabase modes are usable as optional deployment building blocks, but production hardening still needs external job workers/queues, monitoring, operational rate limits, database backups, provider observability, and a real billing/payment system.
@@ -59,7 +59,7 @@ After `npm run build`, Express serves the generated `dist` frontend and continue
 
 Create a local `.env` or `.env.local` file for development secrets. These files are ignored by git.
 
-- `AI_PROVIDER`: `mock` by default. Set to `gemini` or `grsai-nano-banana` to attempt real image generation through the backend.
+- `AI_PROVIDER`: `mock` by default. Set to `gemini`, `grsai-banana2`, or the legacy alias `grsai-nano-banana` to attempt real image generation through the backend.
 - `GEMINI_API_KEY`: backend-only Gemini API key. Required only when `AI_PROVIDER=gemini`.
 - `GEMINI_IMAGE_MODEL`: optional Gemini image model. Defaults in code to `gemini-2.5-flash-image-preview`.
 - `AUTH_MODE`: `dev` by default. Use `supabase` in production to require Supabase Auth JWTs for project, asset, and generation job APIs.
@@ -73,9 +73,14 @@ Create a local `.env` or `.env.local` file for development secrets. These files 
 - `VITE_SUPABASE_URL`: Supabase project URL for the browser client. Required when using Supabase Auth.
 - `VITE_SUPABASE_ANON_KEY`: Supabase anon key for the browser client. Required when using Supabase Auth.
 - `SUPABASE_SERVICE_ROLE_KEY`: backend-only Supabase service role key used to validate JWTs. Never expose this in frontend code.
-- `GRSAI_API_KEY`: backend-only model API key. Required only when `AI_PROVIDER=grsai-nano-banana`. Do not expose this in frontend code.
-- `GRSAI_BASE_URL`: optional Grsai API base URL. Defaults to `https://grsai.dakka.com.cn`.
-- `GRSAI_MODEL`: optional Grsai model name. Defaults to `nano-banana-fast`.
+- `GRSAI_API_KEY`: backend-only model API key. Required only when `AI_PROVIDER=grsai-banana2` or `AI_PROVIDER=grsai-nano-banana`. Do not expose this in frontend code.
+- `GRSAI_BASE_URL`: optional Grsai API base URL. Defaults to `https://grsai.dakka.com.cn` for China direct access. Overseas deployments can use `https://grsaiapi.com`.
+- `GRSAI_MODEL`: optional Grsai model name. Defaults to `nano-banana-2`.
+- `GRSAI_IMAGE_SIZE`: optional Grsai output size. Defaults to `1K`.
+- `GRSAI_ASPECT_RATIO`: optional Grsai aspect ratio. Defaults to `auto`.
+- `GRSAI_POLL_INTERVAL_MS`: optional Grsai result polling interval. Defaults to `2500`.
+- `GRSAI_POLL_TIMEOUT_MS`: optional Grsai result polling timeout. Defaults to `180000`.
+- `GRSAI_DOWNLOAD_TIMEOUT_MS`: optional timeout for downloading Grsai temporary result URLs. Defaults to `30000`.
 - `PORT`: Express backend port. Defaults to `8787`.
 - `HOST`: Express bind host. Defaults to `0.0.0.0`.
 - `DATA_DIR`: JSON backend directory. Defaults to `data`.
@@ -125,10 +130,10 @@ MAX_IMAGE_MB=10
 
 Before using `DATA_BACKEND=supabase`, run the SQL in `docs/SUPABASE_SETUP.md`. Before using `FILE_STORAGE=supabase`, create the configured bucket and apply the storage policy guidance in that document.
 
-Example `.env` for Grsai Nano Banana:
+Example `.env` for Grsai Banana2 / Nano Banana:
 
 ```bash
-AI_PROVIDER=grsai-nano-banana
+AI_PROVIDER=grsai-banana2
 AUTH_MODE=dev
 DATA_BACKEND=json
 FILE_STORAGE=local
@@ -136,10 +141,14 @@ ENABLE_LEGACY_GENERATION_ENDPOINTS=false
 ENABLE_PROVIDER_FALLBACK=false
 GRSAI_API_KEY=your_backend_only_key
 GRSAI_BASE_URL=https://grsai.dakka.com.cn
-GRSAI_MODEL=nano-banana-fast
+GRSAI_MODEL=nano-banana-2
+GRSAI_IMAGE_SIZE=1K
+GRSAI_ASPECT_RATIO=auto
 PORT=8787
 MAX_IMAGE_MB=10
 ```
+
+Keep the Grsai API key only in the backend environment. The frontend should never configure or send a Grsai key; it continues to create and poll `/api/generation-jobs`. Grsai result URLs are temporary, so the backend immediately downloads the image and stores it through this project's configured asset storage before exposing the final result to history or projects.
 
 When a real provider is selected but unavailable, unsupported, or unable to return an image, the backend falls back to the mock provider only when `ENABLE_PROVIDER_FALLBACK=true` or when running outside production without an explicit fallback setting. In production, provider fallback defaults to disabled so failed real-provider jobs fail clearly and refund through the generation job flow.
 

@@ -81,7 +81,7 @@ Current server user shape:
 | `inputAssetIds` | string[] | Owned image assets. |
 | `status` | `queued` \| `running` \| `succeeded` \| `failed` \| `cancelled` | Job lifecycle. |
 | `progress` | number | 0-100. |
-| `provider` | string | `mock`, `gemini`, or `grsai-nano-banana`. |
+| `provider` | string | `mock`, `gemini`, `grsai-banana2`, or `grsai-nano-banana`. |
 | `outputAssetId` | string \| null | First selected/generated output. |
 | `outputAssetIds` | string[] | All output assets for batched jobs. |
 | `errorMessage` | string \| null | Failure reason. |

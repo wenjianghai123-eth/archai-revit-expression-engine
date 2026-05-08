@@ -33,6 +33,7 @@ import { useBackendHealth } from './hooks/useBackendHealth';
 import { useCreditBalance } from './hooks/useCreditBalance';
 import { useGenerationWorkflow } from './hooks/useGenerationWorkflow';
 import { useProjectSelection } from './hooks/useProjectSelection';
+import { buildFloorplanColorPrompt } from './prompts/floorplanPrompts';
 import { clearGenerationHistory, deleteGenerationRecord, listGenerationRecords, saveGenerationRecord } from './storage/history';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -196,6 +197,9 @@ export default function App() {
 
     if (canUseAsyncJob && selectedProjectId && stateAtStart.inputImage.assetId) {
       try {
+        const generationMode = getGenerationRecordMode(currentStep);
+        const promptForRequest = buildPromptForGeneration(currentStep, stateAtStart.config.prompt);
+        const configForRequest = buildConfigForGeneration(currentStep, stateAtStart.config);
         const inputAssetIds = Array.from(new Set([
           stateAtStart.inputImage.assetId,
           ...(stateAtStart.materialImage?.assetId ? [stateAtStart.materialImage.assetId] : []),
@@ -214,11 +218,11 @@ export default function App() {
         }
         const job = await createGenerationJob({
           projectId: selectedProjectId,
-          mode: getGenerationRecordMode(currentStep),
-          prompt: stateAtStart.config.prompt,
+          mode: generationMode,
+          prompt: promptForRequest,
           config: {
-            ...stateAtStart.config,
-            mode: getGenerationRecordMode(currentStep),
+            ...configForRequest,
+            mode: generationMode,
             strength: stateAtStart.config.strength || stateAtStart.config.inpaintingStrength || 'medium',
             preserveStructure: Boolean(stateAtStart.config.preserveStructure ?? stateAtStart.config.keepOriginalMaterial),
             feather: stateAtStart.config.feather ?? 0,
@@ -230,6 +234,7 @@ export default function App() {
             materialTextureSources: stateAtStart.materialTextures.map(texture => ({
               id: texture.id,
               name: texture.name,
+              url: texture.url,
               source: texture.source,
             })),
           },
@@ -291,14 +296,12 @@ export default function App() {
                 createdAt: latestJob.finishedAt || latestJob.updatedAt,
               }];
           const selectedResult = generationResults.find(result => result.isSelected) || generationResults[0];
-          const providerWarnings = currentStep === GenerationStep.LocalInpainting && latestJob.provider === 'grsai-nano-banana'
-            ? ['当前 provider 暂未支持真实局部重绘，已使用 mock 结果。']
-            : [];
+          const providerWarnings: string[] = [];
           const record = saveGenerationRecord({
             id: latestJob.id,
             step: currentStep,
             prompt: stateAtStart.config.prompt,
-            style: stateAtStart.config.style,
+            style: readHistoryStyle(currentStep, stateAtStart.config),
             createdAt: new Date(latestJob.finishedAt || latestJob.updatedAt).toLocaleString('zh-CN', { hour12: false }),
             provider: providerName || 'mock',
             outputImage: selectedResult.imageUrl,
@@ -414,8 +417,8 @@ export default function App() {
           response = await generateFloorplanTo3D({
             inputImageDataUrl: stateAtStart.inputImage.dataUrl,
             materialImageDataUrl: stateAtStart.materialImage?.dataUrl,
-            prompt: stateAtStart.config.prompt,
-            config: stateAtStart.config,
+            prompt: buildPromptForGeneration(currentStep, stateAtStart.config.prompt),
+            config: buildConfigForGeneration(currentStep, stateAtStart.config),
           });
           break;
 
@@ -453,7 +456,7 @@ export default function App() {
         try {
           await createProjectGeneration(selectedProjectId, {
             mode: getGenerationRecordMode(currentStep),
-            prompt: stateAtStart.config.prompt,
+            prompt: buildPromptForGeneration(currentStep, stateAtStart.config.prompt),
             inputImageUrl: stateAtStart.inputImage.url,
             inputImageDataPreview: stateAtStart.inputImage.url ? null : stateAtStart.inputImage.dataUrl,
             outputImageUrl,
@@ -475,7 +478,7 @@ export default function App() {
           id: response.id,
           step: currentStep,
           prompt: currentState.config.prompt,
-          style: currentState.config.style,
+          style: readHistoryStyle(currentStep, currentState.config),
           createdAt: new Date(response.createdAt).toLocaleString('zh-CN', { hour12: false }),
           provider: response.provider,
           outputImage: response.imageDataUrl,
@@ -824,7 +827,7 @@ export default function App() {
         isOpen={isSettingsOpen}
         providerMode={backendHealth.data?.provider || '未知'}
         backendHealth={backendHealth.message}
-        providerSource={backendHealth.data?.provider === 'gemini' || backendHealth.data?.provider === 'grsai-nano-banana' ? 'Real provider' : backendHealth.data?.provider === 'mock' ? 'Mock provider' : '未知（后端未连接）'}
+        providerSource={backendHealth.data?.provider === 'gemini' || backendHealth.data?.provider === 'grsai-banana2' || backendHealth.data?.provider === 'grsai-nano-banana' ? 'Real provider' : backendHealth.data?.provider === 'mock' ? 'Mock provider' : '未知（后端未连接）'}
         currentUser={currentUser}
         currentUserStatus={isUserLoading ? '正在读取当前用户' : currentUserError || creditError || `剩余额度：${creditBalance?.balance ?? '读取中'} credits`}
         onSignOut={signOut}
@@ -848,12 +851,30 @@ function calculateGenerationCreditsCost(step: GenerationStep, config: Generation
   return baseCost * batchCount;
 }
 
+function buildPromptForGeneration(step: GenerationStep, prompt: string): string {
+  return step === GenerationStep.FloorplanTo3D ? buildFloorplanColorPrompt(prompt) : prompt;
+}
+
+function buildConfigForGeneration(step: GenerationStep, config: GenerationConfig): GenerationConfig {
+  if (step !== GenerationStep.FloorplanTo3D) {
+    return config;
+  }
+
+  const { style: _style, ...floorplanConfig } = config;
+  return floorplanConfig;
+}
+
+function readHistoryStyle(step: GenerationStep, config: GenerationConfig): string {
+  if (step === GenerationStep.FloorplanTo3D) return '彩平表达';
+  return config.style || '未设置风格';
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function parseGenerationProvider(value: string): GenerationProvider | null {
-  if (value === 'mock' || value === 'gemini' || value === 'grsai-nano-banana') {
+  if (value === 'mock' || value === 'gemini' || value === 'grsai-banana2' || value === 'grsai-nano-banana') {
     return value;
   }
 

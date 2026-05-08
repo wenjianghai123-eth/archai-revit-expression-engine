@@ -180,6 +180,7 @@ Rules:
 
 - `projectId` must belong to the current user.
 - Every `inputAssetIds` item must be an existing image asset owned by the current user.
+- `inputAssetIds[0]` is the primary input image. Additional image assets are passed to providers as reference images, including style references and material texture references.
 - `mode` is one of `floorplan`, `style-render`, or `inpaint`.
 - `config.batchCount` can be `1`, `2`, or `4`; omitted means `1`.
 - For `inpaint`, `config.maskMode` is required:
@@ -401,7 +402,7 @@ Backend provider adapters normalize output before the server saves a generated a
 ```ts
 {
   id: string;
-  provider: 'mock' | 'gemini' | 'grsai-nano-banana';
+  provider: 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
   dataUrl: string;
   createdAt: string;
   warnings: string[];
@@ -412,6 +413,19 @@ Backend provider adapters normalize output before the server saves a generated a
 ```
 
 `dataUrl` must be a valid image data URL. If a provider returns a remote image URL, the backend must download it and convert it first. A remote URL is never saved as if it were a data URL.
+
+For Grsai Banana2 / Nano Banana, configure the backend with:
+
+```bash
+AI_PROVIDER=grsai-banana2
+GRSAI_API_KEY=your_backend_only_key
+GRSAI_BASE_URL=https://grsai.dakka.com.cn
+GRSAI_MODEL=nano-banana-2
+GRSAI_IMAGE_SIZE=1K
+GRSAI_ASPECT_RATIO=auto
+```
+
+The legacy `AI_PROVIDER=grsai-nano-banana` alias is still accepted. Grsai keys must stay backend-only. The frontend continues to use `/api/generation-jobs`; it must not call Grsai directly. Grsai result URLs are temporary, so the backend downloads them and saves generated assets through the configured storage adapter.
 
 ## Not Implemented
 

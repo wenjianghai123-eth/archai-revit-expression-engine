@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createStoredFilename, fileStorageProvider, uploadsDir } from './fileStorage';
 import { isProviderFallbackEnabled } from './providers/fallback';
 import { createGeminiProvider } from './providers/geminiProvider';
+import { createGrsaiBanana2Provider } from './providers/grsaiBanana2Provider';
 import { createGrsaiNanoBananaProvider } from './providers/grsaiNanoBananaProvider';
 import { createMockGeneration, mockProvider } from './providers/mockProvider';
 import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider, MaskMode, ProviderName } from './providers/types';
@@ -204,12 +205,23 @@ async function processGenerationJob(jobId: string): Promise<void> {
 }
 
 async function buildGenerateInputFromJob(job: GenerationJob): Promise<GenerateImageInput> {
-  const inputImageDataUrl = await getImageAssetDataUrl(job.inputAssetIds[0], job.userId);
+  const assetIds = Array.from(new Set([
+    ...job.inputAssetIds,
+    ...readStringArray(job.config.materialTextureAssetIds),
+  ]));
+  const imageDataUrls = await Promise.all(assetIds.map(assetId => getImageAssetDataUrl(assetId, job.userId)));
+  const inputImageDataUrl = imageDataUrls[0];
   if (!inputImageDataUrl) {
     throw new Error('Input image asset was not found.');
   }
 
-  const materialImageDataUrl = job.inputAssetIds[1] ? await getImageAssetDataUrl(job.inputAssetIds[1], job.userId) : undefined;
+  const additionalImageDataUrls = imageDataUrls.slice(1).filter(isNonEmptyString);
+  const materialImageDataUrl = additionalImageDataUrls[0];
+  const floorplanTextureUrls = job.mode === 'floorplan' ? await getFloorplanTextureDataUrls(job.config) : [];
+  const referenceImageDataUrls = [
+    ...additionalImageDataUrls.slice(1),
+    ...floorplanTextureUrls,
+  ];
   const maskMode = job.mode === 'inpaint' && isMaskMode(job.config.maskMode) ? job.config.maskMode : undefined;
   const maskAssetId = maskMode === 'asset-mask' && typeof job.config.maskAssetId === 'string' ? job.config.maskAssetId : null;
   const maskImageDataUrl = maskMode === 'full-image'
@@ -220,6 +232,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<GenerateIm
     mode: job.mode,
     inputImageDataUrl,
     materialImageDataUrl,
+    referenceImageDataUrls,
     maskImageDataUrl,
     maskMode,
     prompt: job.prompt,
@@ -300,6 +313,44 @@ function resolveUploadUrlToPath(url: string): string {
   return resolvedPath;
 }
 
+async function getFloorplanTextureDataUrls(config: Record<string, unknown>): Promise<string[]> {
+  const sources = Array.isArray(config.materialTextureSources) ? config.materialTextureSources : [];
+  const urls = sources
+    .map(source => isRecord(source) && typeof source.url === 'string' ? source.url : undefined)
+    .filter(isNonEmptyString);
+  const dataUrls = await Promise.all(urls.map(url => readReferenceUrlAsProviderInput(url)));
+  return dataUrls.filter(isNonEmptyString);
+}
+
+async function readReferenceUrlAsProviderInput(url: string): Promise<string | undefined> {
+  if (url.startsWith('data:image/')) return url;
+  if (/^https:\/\//iu.test(url)) return url;
+  if (!url.startsWith('/materials/')) return undefined;
+
+  const filePath = resolvePublicUrlToPath(url);
+  const content = await readFile(filePath);
+  const mimeType = getMimeTypeForImagePath(filePath);
+  return `data:${mimeType};base64,${content.toString('base64')}`;
+}
+
+function resolvePublicUrlToPath(url: string): string {
+  const relativePath = decodeURIComponent(url.replace(/^\/+/u, ''));
+  const publicRoot = path.resolve('public');
+  const resolvedPath = path.resolve(publicRoot, relativePath);
+  if (!resolvedPath.startsWith(publicRoot)) {
+    throw new Error('Reference image path is outside the public directory.');
+  }
+  return resolvedPath;
+}
+
+function getMimeTypeForImagePath(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
+  if (extension === '.webp') return 'image/webp';
+  if (extension === '.png') return 'image/png';
+  return 'image/png';
+}
+
 async function generateWithFallback(input: GenerateImageInput): Promise<GenerateImageOutput> {
   if (provider.name === 'mock') {
     return normalizeProviderOutput(await provider.generateImage(input));
@@ -308,6 +359,10 @@ async function generateWithFallback(input: GenerateImageInput): Promise<Generate
   try {
     return normalizeProviderOutput(await provider.generateImage(input));
   } catch (error) {
+    if (isMissingProviderSecretError(error) || isGrsaiProvider(provider.name)) {
+      throw error;
+    }
+
     if (!isProviderFallbackEnabled()) {
       throw error;
     }
@@ -355,7 +410,7 @@ function normalizeProviderOutput(output: GenerateImageOutput): GenerateImageOutp
 }
 
 function isProviderName(value: unknown): value is ProviderName {
-  return value === 'mock' || value === 'gemini' || value === 'grsai-nano-banana';
+  return value === 'mock' || value === 'gemini' || value === 'grsai-banana2' || value === 'grsai-nano-banana';
 }
 
 function isValidImageDataUrl(value: unknown): value is string {
@@ -369,12 +424,18 @@ function selectProvider(): ImageGenerationProvider {
   const geminiApiKey = process.env.GEMINI_API_KEY;
   const grsaiApiKey = process.env.GRSAI_API_KEY;
 
-  if (requestedProvider === 'grsai-nano-banana' && grsaiApiKey) {
-    return createGrsaiNanoBananaProvider({ apiKey: grsaiApiKey });
+  if (requestedProvider === 'grsai-banana2') {
+    if (!grsaiApiKey) {
+      console.warn('AI_PROVIDER=grsai-banana2 but GRSAI_API_KEY is missing; generation calls will fail clearly.');
+    }
+    return createGrsaiBanana2Provider({ apiKey: grsaiApiKey });
   }
 
-  if (requestedProvider === 'grsai-nano-banana' && !grsaiApiKey) {
-    console.warn('AI_PROVIDER=grsai-nano-banana but GRSAI_API_KEY is missing; falling back to mock provider.');
+  if (requestedProvider === 'grsai-nano-banana') {
+    if (!grsaiApiKey) {
+      console.warn('AI_PROVIDER=grsai-nano-banana but GRSAI_API_KEY is missing; generation calls will fail clearly.');
+    }
+    return createGrsaiNanoBananaProvider({ apiKey: grsaiApiKey });
   }
 
   if (requestedProvider === 'gemini' && geminiApiKey) {
@@ -390,4 +451,20 @@ function selectProvider(): ImageGenerationProvider {
 
 function isMaskMode(value: unknown): value is MaskMode {
   return value === 'asset-mask' || value === 'full-image';
+}
+
+function isMissingProviderSecretError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('GRSAI_API_KEY is required');
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter(isNonEmptyString) : [];
+}
+
+function isGrsaiProvider(name: ProviderName): boolean {
+  return name === 'grsai-banana2' || name === 'grsai-nano-banana';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

@@ -74,6 +74,8 @@ export function MainWorkspace({
   const [isMaterialLibraryOpen, setIsMaterialLibraryOpen] = useState(false);
 
   const hasMask = step !== GenerationStep.LocalInpainting || Boolean(state.maskImage) || state.useFullImageMask;
+  const isFloorplanStep = step === GenerationStep.FloorplanTo3D;
+  const isStyleRenderStep = step === GenerationStep.StyleRender;
   const canGenerate = Boolean(state.inputImage) && hasMask && !state.isGenerating && !isCreditsInsufficient;
   const providerForStatus = backendProvider || state.generationProvider;
   const resultOptions = state.generationResults.length > 0
@@ -546,6 +548,7 @@ export function MainWorkspace({
         <div className="space-y-5">
           {renderUpload('input', state.inputImage, isLocalInpaintingStep(step) ? '原始图片' : '输入图片')}
           {!isLocalInpaintingStep(step) && renderUpload('material', state.materialImage, '参考图 / 材质图', true)}
+          {isFloorplanStep && renderMaterialTextures()}
 
           {isLocalInpaintingStep(step) && state.inputImage && (
             <MaskEditor
@@ -578,16 +581,23 @@ export function MainWorkspace({
           </div>
 
           <div className="space-y-2">
-            <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">提示词</label>
+            <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+              {isFloorplanStep ? '额外补充说明' : '提示词'}
+            </label>
+            {isFloorplanStep ? (
+              <p className="text-[11px] leading-5 text-slate-400">系统已内置专业彩平生成提示词，你只需要补充特殊要求。</p>
+            ) : null}
             <textarea
               value={state.config.prompt}
               onChange={event => onUpdateConfig({ prompt: event.target.value })}
               className="h-28 w-full resize-none rounded-xl border border-blue-100 bg-blue-50/60 p-3 text-xs leading-5 text-blue-950 outline-none focus:border-blue-300"
-              placeholder="描述希望生成或局部重绘的效果..."
+              placeholder={isFloorplanStep
+                ? '可选：补充色彩、材质、表达风格、重点区域等要求。例如：强化景观铺装层次，住宅区域使用暖色系。'
+                : '描述希望生成或局部重绘的效果...'}
             />
           </div>
 
-          {!isLocalInpaintingStep(step) && (
+          {isStyleRenderStep && (
             <div className="space-y-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">风格</label>
               <div className="grid grid-cols-2 gap-2">
