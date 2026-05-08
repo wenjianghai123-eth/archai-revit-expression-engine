@@ -23,10 +23,10 @@ export function useCurrentUser() {
     }
   }, []);
 
-  const signInWithEmail = useCallback(async (email: string) => {
+  const signInWithEmail = useCallback(async (email: string, password: string) => {
     const supabase = getSupabaseClient();
     if (!supabase) {
-      setError('Supabase 尚未配置，无法使用邮箱登录。');
+      setError('Supabase 尚未配置，无法使用邮箱密码登录。');
       return;
     }
 
@@ -35,24 +35,22 @@ export function useCurrentUser() {
     setAuthMessage(null);
 
     try {
-      const { error: signInError } = await supabase.auth.signInWithOtp({
+      const { error: signInError } = await supabase.auth.signInWithPassword({
         email,
-        options: {
-          emailRedirectTo: window.location.origin,
-        },
+        password,
       });
 
       if (signInError) {
         throw signInError;
       }
 
-      setAuthMessage('登录链接已发送，请检查邮箱。');
+      await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '邮箱登录失败。');
+      setError(err instanceof Error ? err.message : '登录失败，请检查邮箱和密码。');
     } finally {
       setIsSigningIn(false);
     }
-  }, []);
+  }, [refresh]);
 
   const signOut = useCallback(async () => {
     const supabase = getSupabaseClient();

@@ -15,6 +15,7 @@ import {
   createImageAsset,
   createModelAsset,
   createProject,
+  createUserProfile,
   createGenerationResult,
   createShareLink,
   deleteModelAsset,
@@ -29,6 +30,7 @@ import {
   getShareLinkByToken,
   getCreditBalance,
   getCreditTransactionByReference,
+  getUserProfileByEmail,
   ImageAsset,
   listGenerationResults,
   getModelAsset,
@@ -39,6 +41,7 @@ import {
   ModelAsset,
   listProjects,
   listCreditTransactions,
+  listUserProfiles,
   Project,
   revokeShareLink,
   ShareLink,
@@ -46,6 +49,8 @@ import {
   updateGenerationJob,
   updateGenerationResult,
   updateProject,
+  updateUserProfile,
+  UserProfile,
 } from './storage';
 import {
   ApiError,
@@ -79,6 +84,7 @@ import {
   restorePendingGenerationJobs,
 } from './generationService';
 import { createAssetsRouter } from './routes/assets';
+import { createSupabaseAuthUser, resetSupabaseAuthUserPassword, updateSupabaseAuthUserMetadata } from './supabaseAdmin';
 
 export const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -191,6 +197,153 @@ app.get('/api/admin/dashboard', requireAuth, requireAdmin, async (
 ) => {
   try {
     res.json(apiOk({ dashboard: await getAdminDashboard() }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/admin/users', requireAuth, requireAdmin, async (
+  _req: Request,
+  res: Response<ApiResponse<{ users: UserProfile[] }>>,
+  next: NextFunction,
+) => {
+  try {
+    res.json(apiOk({ users: await listUserProfiles() }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/admin/users', requireAuth, requireAdmin, async (
+  req: Request,
+  res: Response<ApiResponse<{ user: UserProfile; balance: CreditBalance }>>,
+  next: NextFunction,
+) => {
+  const body = validateAdminUserCreateBody(req.body);
+  if (body.ok === false) {
+    res.status(400).json(apiError(body.error.message, body.error.code));
+    return;
+  }
+
+  try {
+    const existing = await getUserProfileByEmail(body.value.email);
+    if (existing) {
+      res.status(409).json(apiError('Email already exists.', 'ADMIN_USER_EMAIL_EXISTS'));
+      return;
+    }
+
+    const authUser = await createSupabaseAuthUser({
+      email: body.value.email,
+      password: body.value.password,
+      name: body.value.name,
+    });
+    const user = await createUserProfile({
+      id: authUser.id,
+      email: authUser.email || body.value.email,
+      name: body.value.name,
+      role: body.value.role,
+      status: 'active',
+    });
+    const creditResult = await adjustCredits({
+      userId: user.id,
+      type: 'grant',
+      amount: body.value.initialCredits,
+      reason: 'admin_user_create',
+      referenceType: 'system',
+      referenceId: `admin_user_create_${user.id}`,
+    });
+
+    if (!creditResult) {
+      res.status(400).json(apiError('Unable to initialize user credits.', 'ADMIN_USER_CREDITS_FAILED'));
+      return;
+    }
+
+    res.status(201).json(apiOk({ user, balance: creditResult.balance }));
+  } catch (error) {
+    if (error instanceof Error && /Email already exists/i.test(error.message)) {
+      res.status(409).json(apiError('Email already exists.', 'ADMIN_USER_EMAIL_EXISTS'));
+      return;
+    }
+    next(error);
+  }
+});
+
+app.patch('/api/admin/users/:userId', requireAuth, requireAdmin, async (
+  req: Request,
+  res: Response<ApiResponse<{ user: UserProfile }>>,
+  next: NextFunction,
+) => {
+  const body = validateAdminUserUpdateBody(req.body);
+  if (body.ok === false) {
+    res.status(400).json(apiError(body.error.message, body.error.code));
+    return;
+  }
+
+  try {
+    const user = await updateUserProfile(req.params.userId, body.value);
+    if (!user) {
+      res.status(404).json(apiError('User not found.', 'ADMIN_USER_NOT_FOUND'));
+      return;
+    }
+
+    await updateSupabaseAuthUserMetadata({
+      userId: user.id,
+      email: body.value.email,
+      name: body.value.name,
+    });
+
+    res.json(apiOk({ user }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/admin/users/:userId/reset-password', requireAuth, requireAdmin, async (
+  req: Request,
+  res: Response<ApiResponse<{ ok: true }>>,
+  next: NextFunction,
+) => {
+  const body = validateAdminPasswordResetBody(req.body);
+  if (body.ok === false) {
+    res.status(400).json(apiError(body.error.message, body.error.code));
+    return;
+  }
+
+  try {
+    await resetSupabaseAuthUserPassword({ userId: req.params.userId, password: body.value.password });
+    res.json(apiOk({ ok: true }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/admin/users/:userId/credits', requireAuth, requireAdmin, async (
+  req: Request,
+  res: Response<ApiResponse<{ balance: CreditBalance; transaction: CreditTransaction }>>,
+  next: NextFunction,
+) => {
+  const body = validateAdminUserCreditBody(req.body);
+  if (body.ok === false) {
+    res.status(400).json(apiError(body.error.message, body.error.code));
+    return;
+  }
+
+  try {
+    const result = await adjustCredits({
+      userId: req.params.userId,
+      type: 'grant',
+      amount: body.value.amount,
+      reason: body.value.reason,
+      referenceType: 'system',
+      referenceId: `admin_user_credit_${req.params.userId}_${Date.now()}`,
+    });
+
+    if (!result) {
+      res.status(400).json(apiError('Unable to grant credits.', 'ADMIN_CREDIT_GRANT_FAILED'));
+      return;
+    }
+
+    res.json(apiOk(result));
   } catch (error) {
     next(error);
   }
@@ -621,6 +774,7 @@ if (existsSync(distIndexPath)) {
 app.use(createErrorHandler(jsonLimit));
 
 export async function startServer(): Promise<void> {
+  validateAuthEnvironment();
   await ensureAppDatabase();
   await fileStorageProvider.ensureReady();
   await restorePendingGenerationJobs();
@@ -632,6 +786,21 @@ export async function startServer(): Promise<void> {
 
 if (process.env.NODE_ENV !== 'test') {
   await startServer();
+}
+
+export function validateAuthEnvironment(): void {
+  const authMode = process.env.AUTH_MODE || 'dev';
+  if (process.env.NODE_ENV === 'production' && authMode === 'dev') {
+    throw new Error('AUTH_MODE=dev is not allowed when NODE_ENV=production.');
+  }
+
+  if (authMode === 'supabase') {
+    const missing = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY']
+      .filter(name => !process.env[name]);
+    if (missing.length > 0) {
+      throw new Error(`AUTH_MODE=supabase requires ${missing.join(', ')}.`);
+    }
+  }
 }
 
 function validateGenerateBody(
@@ -840,6 +1009,110 @@ function validateAdminCreditGrantBody(
       userId: body.userId.trim(),
       amount: body.amount,
       reason,
+    },
+  };
+}
+
+function validateAdminUserCreateBody(
+  body: unknown,
+): { ok: true; value: { name: string; email: string; password: string; role: UserProfile['role']; initialCredits: number } } | { ok: false; error: ApiError } {
+  if (!isRecord(body)) {
+    return { ok: false, error: { message: 'Request body must be a JSON object.', code: 'INVALID_REQUEST_BODY' } };
+  }
+
+  if (!isNonEmptyString(body.name)) {
+    return { ok: false, error: { message: 'name is required.', code: 'ADMIN_USER_NAME_REQUIRED' } };
+  }
+
+  if (!isEmailString(body.email)) {
+    return { ok: false, error: { message: 'email is invalid.', code: 'ADMIN_USER_EMAIL_INVALID' } };
+  }
+
+  if (!isNonEmptyString(body.password) || body.password.trim().length < 8) {
+    return { ok: false, error: { message: 'password must be at least 8 characters.', code: 'ADMIN_USER_PASSWORD_INVALID' } };
+  }
+
+  const role = body.role === 'admin' ? 'admin' : 'member';
+  const initialCredits = readNonNegativeInteger(body.initialCredits, Number(process.env.DEFAULT_INITIAL_CREDITS || 100));
+
+  return {
+    ok: true,
+    value: {
+      name: body.name.trim(),
+      email: body.email.trim().toLowerCase(),
+      password: body.password,
+      role,
+      initialCredits,
+    },
+  };
+}
+
+function validateAdminUserUpdateBody(
+  body: unknown,
+): { ok: true; value: Parameters<typeof updateUserProfile>[1] } | { ok: false; error: ApiError } {
+  if (!isRecord(body)) {
+    return { ok: false, error: { message: 'Request body must be a JSON object.', code: 'INVALID_REQUEST_BODY' } };
+  }
+
+  const value: Parameters<typeof updateUserProfile>[1] = {};
+  if (body.name !== undefined) {
+    if (!isNonEmptyString(body.name)) {
+      return { ok: false, error: { message: 'name must be a non-empty string.', code: 'ADMIN_USER_NAME_INVALID' } };
+    }
+    value.name = body.name.trim();
+  }
+  if (body.email !== undefined) {
+    if (!isEmailString(body.email)) {
+      return { ok: false, error: { message: 'email is invalid.', code: 'ADMIN_USER_EMAIL_INVALID' } };
+    }
+    value.email = body.email.trim().toLowerCase();
+  }
+  if (body.role !== undefined) {
+    if (body.role !== 'admin' && body.role !== 'member') {
+      return { ok: false, error: { message: 'role must be admin or member.', code: 'ADMIN_USER_ROLE_INVALID' } };
+    }
+    value.role = body.role;
+  }
+  if (body.status !== undefined) {
+    if (body.status !== 'active' && body.status !== 'disabled') {
+      return { ok: false, error: { message: 'status must be active or disabled.', code: 'ADMIN_USER_STATUS_INVALID' } };
+    }
+    value.status = body.status;
+  }
+
+  if (Object.keys(value).length === 0) {
+    return { ok: false, error: { message: 'At least one user field is required.', code: 'ADMIN_USER_UPDATE_EMPTY' } };
+  }
+
+  return { ok: true, value };
+}
+
+function validateAdminPasswordResetBody(
+  body: unknown,
+): { ok: true; value: { password: string } } | { ok: false; error: ApiError } {
+  if (!isRecord(body)) {
+    return { ok: false, error: { message: 'Request body must be a JSON object.', code: 'INVALID_REQUEST_BODY' } };
+  }
+  if (!isNonEmptyString(body.password) || body.password.trim().length < 8) {
+    return { ok: false, error: { message: 'password must be at least 8 characters.', code: 'ADMIN_USER_PASSWORD_INVALID' } };
+  }
+  return { ok: true, value: { password: body.password } };
+}
+
+function validateAdminUserCreditBody(
+  body: unknown,
+): { ok: true; value: { amount: number; reason: string } } | { ok: false; error: ApiError } {
+  if (!isRecord(body)) {
+    return { ok: false, error: { message: 'Request body must be a JSON object.', code: 'INVALID_REQUEST_BODY' } };
+  }
+  if (typeof body.amount !== 'number' || !Number.isInteger(body.amount) || body.amount <= 0) {
+    return { ok: false, error: { message: 'amount must be a positive integer.', code: 'ADMIN_CREDIT_AMOUNT_INVALID' } };
+  }
+  return {
+    ok: true,
+    value: {
+      amount: body.amount,
+      reason: typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim() : 'Admin user credit grant',
     },
   };
 }
@@ -1160,5 +1433,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isEmailString(value: unknown): value is string {
+  return typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value.trim());
+}
+
+function readNonNegativeInteger(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : fallback;
 }
 

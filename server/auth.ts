@@ -6,6 +6,7 @@ export interface AuthUser {
   email: string;
   name: string;
   role: 'admin' | 'member';
+  status: 'active' | 'disabled';
   createdAt: string;
 }
 
@@ -16,10 +17,12 @@ export const devAuthUser: AuthUser = {
   email: 'dev@archai.local',
   name: 'ArchAI Dev User',
   role: 'admin',
+  status: 'active',
   createdAt: '2026-01-01T00:00:00.000Z',
 };
 
-type RequestWithUser = Request & { authUser?: AuthUser };
+type AuthFailure = { status: 403; message: string; code: string };
+type RequestWithUser = Request & { authUser?: AuthUser; authFailure?: AuthFailure };
 
 let supabaseAdminClient: SupabaseClient | null = null;
 
@@ -27,7 +30,23 @@ export async function attachAuthUser(req: Request, _res: Response, next: NextFun
   const authMode = process.env.AUTH_MODE || 'dev';
 
   if (authMode === 'dev') {
-    (req as RequestWithUser).authUser = devAuthUser;
+    const role = req.headers['x-dev-user-role'] === 'member' ? 'member' : 'admin';
+    const status = req.headers['x-dev-user-status'] === 'disabled' ? 'disabled' : 'active';
+    if (status === 'disabled') {
+      (req as RequestWithUser).authFailure = {
+        status: 403,
+        message: 'Account is disabled. Please contact an administrator.',
+        code: 'AUTH_USER_DISABLED',
+      };
+    } else {
+      (req as RequestWithUser).authUser = {
+        ...devAuthUser,
+        id: typeof req.headers['x-dev-user-id'] === 'string' ? req.headers['x-dev-user-id'] : devAuthUser.id,
+        email: typeof req.headers['x-dev-user-email'] === 'string' ? req.headers['x-dev-user-email'] : devAuthUser.email,
+        role,
+        status,
+      };
+    }
     next();
     return;
   }
@@ -58,12 +77,35 @@ export async function attachAuthUser(req: Request, _res: Response, next: NextFun
       return;
     }
 
+    const { getUserProfile } = await import('./storage');
+    const profile = await getUserProfile(data.user.id);
+    if (!profile) {
+      (req as RequestWithUser).authFailure = {
+        status: 403,
+        message: 'Account is not activated by an administrator.',
+        code: 'AUTH_PROFILE_REQUIRED',
+      };
+      next();
+      return;
+    }
+
+    if (profile.status === 'disabled') {
+      (req as RequestWithUser).authFailure = {
+        status: 403,
+        message: 'Account is disabled. Please contact an administrator.',
+        code: 'AUTH_USER_DISABLED',
+      };
+      next();
+      return;
+    }
+
     (req as RequestWithUser).authUser = {
       id: data.user.id,
-      email: data.user.email || '',
-      name: readUserName(data.user.user_metadata) || data.user.email || 'Supabase User',
-      role: readUserRole(data.user.app_metadata) || readUserRole(data.user.user_metadata) || 'member',
-      createdAt: data.user.created_at,
+      email: profile.email || data.user.email || '',
+      name: profile.name || readUserName(data.user.user_metadata) || data.user.email || 'Supabase User',
+      role: profile.role,
+      status: profile.status,
+      createdAt: profile.createdAt,
     };
     next();
   } catch (error) {
@@ -74,6 +116,18 @@ export async function attachAuthUser(req: Request, _res: Response, next: NextFun
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   if ((req as RequestWithUser).authUser) {
     next();
+    return;
+  }
+
+  const authFailure = (req as RequestWithUser).authFailure;
+  if (authFailure) {
+    res.status(authFailure.status).json({
+      ok: false,
+      error: {
+        message: authFailure.message,
+        code: authFailure.code,
+      },
+    });
     return;
   }
 
@@ -106,11 +160,11 @@ function readBearerToken(req: Request): string | null {
 function getSupabaseAdminClient(): SupabaseClient | null {
   if (supabaseAdminClient) return supabaseAdminClient;
 
-  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const supabaseUrl = process.env.SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!supabaseUrl || !serviceRoleKey) {
-    console.warn('AUTH_MODE=supabase requires VITE_SUPABASE_URL or SUPABASE_URL plus SUPABASE_SERVICE_ROLE_KEY.');
+    console.warn('AUTH_MODE=supabase requires SUPABASE_URL plus SUPABASE_SERVICE_ROLE_KEY.');
     return null;
   }
 
@@ -133,11 +187,3 @@ function readUserName(metadata: unknown): string | null {
   return typeof name === 'string' && name.trim().length > 0 ? name.trim() : null;
 }
 
-function readUserRole(metadata: unknown): AuthUser['role'] | null {
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
-    return null;
-  }
-
-  const role = (metadata as Record<string, unknown>).role;
-  return role === 'admin' || role === 'member' ? role : null;
-}

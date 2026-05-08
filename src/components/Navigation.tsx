@@ -11,7 +11,8 @@ import {
   Wand2,
   Paintbrush,
   ScanLine,
-  Sparkles
+  Sparkles,
+  ShieldCheck
 } from 'lucide-react';
 import { GenerationStep } from '../types';
 
@@ -19,9 +20,10 @@ interface SidebarProps {
   activeTab: string;
   onTabChange: (id: string) => void;
   onSettingsOpen: () => void;
+  isAdmin?: boolean;
 }
 
-export function Sidebar({ activeTab, onTabChange, onSettingsOpen }: SidebarProps) {
+export function Sidebar({ activeTab, onTabChange, onSettingsOpen, isAdmin = false }: SidebarProps) {
   const groups = [
     {
       title: '创作',
@@ -88,6 +90,17 @@ export function Sidebar({ activeTab, onTabChange, onSettingsOpen }: SidebarProps
             <span className="block text-xs text-slate-500">后端与模型状态</span>
           </span>
         </button>
+        {isAdmin ? (
+          <button onClick={() => { window.location.href = '/admin'; }} className="group mt-2 flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-slate-400 transition-colors hover:bg-white/5 hover:text-white" title="后台管理">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/5 group-hover:bg-white/10">
+              <ShieldCheck className="h-5 w-5" />
+            </div>
+            <span className="min-w-0">
+              <span className="block text-sm font-bold">后台管理</span>
+              <span className="block text-xs text-slate-500">用户与额度管理</span>
+            </span>
+          </button>
+        ) : null}
       </div>
     </div>
     <div className="fixed bottom-0 left-0 right-0 z-40 flex border-t border-white/10 bg-slate-950/95 px-2 py-2 text-white backdrop-blur lg:hidden">

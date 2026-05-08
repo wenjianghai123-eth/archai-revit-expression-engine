@@ -113,6 +113,16 @@ export interface CreditTransaction {
   createdAt: string;
 }
 
+export interface UserProfile {
+  id: string;
+  email: string;
+  name: string;
+  role: 'admin' | 'member';
+  status: 'active' | 'disabled';
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AdminDashboard {
   stats: {
     userCount: number;
@@ -127,6 +137,7 @@ export interface AdminDashboard {
 }
 
 export interface AppDatabase {
+  profiles: UserProfile[];
   projects: Project[];
   generationRecords: GenerationRecord[];
   generationResults: GenerationResult[];
@@ -137,6 +148,16 @@ export interface AppDatabase {
   creditBalances: CreditBalance[];
   creditTransactions: CreditTransaction[];
 }
+
+export type CreateUserProfileInput = {
+  id: string;
+  email: string;
+  name: string;
+  role?: UserProfile['role'];
+  status?: UserProfile['status'];
+};
+
+export type UpdateUserProfileInput = Partial<Pick<UserProfile, 'email' | 'name' | 'role' | 'status'>>;
 
 export type CreateProjectInput = {
   userId: string;
@@ -224,6 +245,12 @@ export type CreditTransactionInput = {
 
 export interface StorageAdapter {
   ensureReady(): Promise<void>;
+
+  listUserProfiles(): Promise<UserProfile[]>;
+  getUserProfile(id: string): Promise<UserProfile | null>;
+  getUserProfileByEmail(email: string): Promise<UserProfile | null>;
+  createUserProfile(input: CreateUserProfileInput): Promise<UserProfile>;
+  updateUserProfile(id: string, input: UpdateUserProfileInput): Promise<UserProfile | null>;
 
   listProjects(userId: string): Promise<Project[]>;
   createProject(input: CreateProjectInput): Promise<Project>;

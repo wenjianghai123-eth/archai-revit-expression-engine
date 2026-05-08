@@ -272,6 +272,7 @@ async function saveGeneratedDataUrl(userId: string, dataUrl: string, basename: s
     content: parsed.content,
     filename: createStoredFilename(extension, basename),
     mimeType: parsed.mimeType,
+    userId,
   });
 
   return createImageAsset({

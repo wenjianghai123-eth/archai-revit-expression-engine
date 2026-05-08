@@ -24,13 +24,31 @@ SUPABASE_SERVICE_ROLE_KEY=your_backend_only_service_role_key
 SUPABASE_STORAGE_BUCKET=archai-assets
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your_public_anon_key
+VITE_API_BASE_URL=https://your-api-domain.com
 ```
 
 `SUPABASE_SERVICE_ROLE_KEY` is backend-only. Do not expose it in frontend code or client-visible config.
 
+`VITE_*` variables are Vite build-time variables. After changing `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, or `VITE_API_BASE_URL`, rebuild and redeploy the frontend; changing only the server environment will not update already-built browser bundles.
+
+If frontend and backend are deployed separately, set `VITE_API_BASE_URL` to the backend origin only, for example `https://api.example.com`. The frontend will call `${VITE_API_BASE_URL}/api/...`. If it is empty, the app calls same-origin `/api/...`.
+
+Production login uses an administrator-created account model. Do not expose a public sign-up UI, and disable or restrict public sign-ups in Supabase Authentication settings. The backend authorizes users through the `profiles` table, so a Supabase Auth user without an active profile cannot access business APIs.
+
+Create the first admin with:
+
+```bash
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=replace-with-a-strong-password
+ADMIN_NAME="ArchAI Admin"
+npm run seed:admin
+```
+
+The script does not print the password. After seeding, log in at `/admin` and create member accounts from the user management page.
+
 ## Auth
 
-Use Supabase Auth when `AUTH_MODE=supabase`. The frontend uses only `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` to sign in and attach Bearer tokens. The backend validates tokens with the service role key.
+Use Supabase Auth when `AUTH_MODE=supabase`. The frontend uses only `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` to sign in with email and password, then attach Bearer tokens. Magic link login and public sign-up are intentionally not used. The backend validates tokens with the service role key.
 
 For local mock development, keep `AUTH_MODE=dev`; no Supabase project is required.
 
@@ -40,6 +58,16 @@ Run this SQL in the Supabase SQL editor.
 
 ```sql
 create extension if not exists pgcrypto;
+
+create table if not exists public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  email text not null unique,
+  name text not null,
+  role text not null default 'member' check (role in ('admin', 'member')),
+  status text not null default 'active' check (status in ('active', 'disabled')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 
 create table if not exists public.projects (
   id text primary key,
@@ -163,6 +191,9 @@ If you are updating an older database, verify the code-to-SQL checklist at the e
 create index if not exists projects_user_id_created_at_idx
   on public.projects (user_id, created_at desc)
   where deleted_at is null;
+
+create index if not exists profiles_role_status_idx
+  on public.profiles (role, status);
 
 create index if not exists image_assets_user_id_created_at_idx
   on public.image_assets (user_id, created_at desc);
@@ -371,6 +402,7 @@ Run this SQL after creating the tables:
 
 ```sql
 alter table public.projects enable row level security;
+alter table public.profiles enable row level security;
 alter table public.image_assets enable row level security;
 alter table public.model_assets enable row level security;
 alter table public.generation_jobs enable row level security;
@@ -379,6 +411,10 @@ alter table public.generation_results enable row level security;
 alter table public.share_links enable row level security;
 alter table public.credit_balances enable row level security;
 alter table public.credit_transactions enable row level security;
+
+create policy "Users can read own profile"
+  on public.profiles for select
+  using (auth.uid() = id);
 
 create policy "Users can read own projects"
   on public.projects for select
@@ -502,8 +538,8 @@ Supabase file storage is optional and only used when `FILE_STORAGE=supabase`.
 
 1. Create a bucket named by `SUPABASE_STORAGE_BUCKET`, for example `archai-assets`.
 2. The current app stores:
-   - generated and uploaded images under `images/...` when using Supabase Storage,
-   - uploaded model assets under `models/...`,
+   - generated and uploaded images under `users/{userId}/images/...` when using Supabase Storage,
+   - uploaded model assets under `users/{userId}/models/...`,
    - local storage uses `/uploads/...` paths instead.
 3. The backend uploads and deletes files with `SUPABASE_SERVICE_ROLE_KEY`.
 4. Generated image URLs are currently resolved with `getPublicUrl`, so the simplest MVP setup is a public bucket. If you need private buckets, add signed URL handling in `server/fileStorage.ts` before switching the bucket to private.
@@ -534,6 +570,7 @@ Supabase's service role bypasses RLS for server-side operations. Do not put the 
 `SupabaseStorageAdapter` expects these table names and fields:
 
 - `projects`: `id`, `user_id`, `name`, `description`, `status`, `cover_image_url`, `created_at`, `updated_at`, `deleted_at`
+- `profiles`: `id`, `email`, `name`, `role`, `status`, `created_at`, `updated_at`
 - `image_assets`: `id`, `user_id`, `url`, `filename`, `mime_type`, `size`, `created_at`
 - `model_assets`: `id`, `user_id`, `url`, `filename`, `original_filename`, `file_type`, `mime_type`, `size`, `created_at`, `deleted_at`
 - `generation_jobs`: `id`, `user_id`, `project_id`, `mode`, `prompt`, `config`, `input_asset_ids`, `status`, `progress`, `provider`, `output_asset_id`, `output_asset_ids`, `error_message`, `created_at`, `updated_at`, `started_at`, `finished_at`

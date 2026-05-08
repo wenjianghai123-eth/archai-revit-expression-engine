@@ -38,14 +38,16 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
       }
 
       const extension = getImageExtension(uploadedFile.value.mimeType);
+      const user = getRequiredCurrentUser(req);
       const storedFile = await fileStorageProvider.uploadImage({
         content: uploadedFile.value.content,
         filename: createStoredFilename(extension),
         mimeType: uploadedFile.value.mimeType,
+        userId: user.id,
       });
 
       const asset = await createImageAsset({
-        userId: getRequiredCurrentUser(req).id,
+        userId: user.id,
         url: storedFile.url,
         filename: storedFile.filename,
         mimeType: storedFile.mimeType,
@@ -121,14 +123,16 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
         return;
       }
 
+      const user = getRequiredCurrentUser(req);
       const storedFile = await fileStorageProvider.uploadModel({
         content: uploadedFile.value.content,
         filename: createStoredFilename(fileType),
         mimeType: uploadedFile.value.mimeType || getDefaultModelMimeType(fileType),
+        userId: user.id,
       });
 
       const asset = await createModelAsset({
-        userId: getRequiredCurrentUser(req).id,
+        userId: user.id,
         url: storedFile.url,
         filename: storedFile.filename,
         originalFilename: uploadedFile.value.originalFilename,

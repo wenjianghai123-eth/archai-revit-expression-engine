@@ -15,6 +15,7 @@ import {
   CreditBalance,
   CreditTransaction,
   CreditTransactionInput,
+  CreateUserProfileInput,
   GenerationJob,
   GenerationRecord,
   GenerationResult,
@@ -26,11 +27,14 @@ import {
   UpdateGenerationJobInput,
   UpdateGenerationResultInput,
   UpdateProjectInput,
+  UpdateUserProfileInput,
+  UserProfile,
 } from './types';
 
 const dataDir = path.resolve(process.cwd(), process.env.DATA_DIR || 'data');
 const dbPath = path.join(dataDir, 'app-db.json');
 const emptyDatabase: AppDatabase = {
+  profiles: [],
   projects: [],
   generationRecords: [],
   generationResults: [],
@@ -47,6 +51,26 @@ let writeQueue: Promise<void> = Promise.resolve();
 export class JsonStorageAdapter implements StorageAdapter {
   ensureReady(): Promise<void> {
     return ensureAppDatabase();
+  }
+
+  listUserProfiles(): Promise<UserProfile[]> {
+    return listUserProfiles();
+  }
+
+  getUserProfile(id: string): Promise<UserProfile | null> {
+    return getUserProfile(id);
+  }
+
+  getUserProfileByEmail(email: string): Promise<UserProfile | null> {
+    return getUserProfileByEmail(email);
+  }
+
+  createUserProfile(input: CreateUserProfileInput): Promise<UserProfile> {
+    return createUserProfile(input);
+  }
+
+  updateUserProfile(id: string, input: UpdateUserProfileInput): Promise<UserProfile | null> {
+    return updateUserProfile(id, input);
   }
 
   listProjects(userId: string): Promise<Project[]> {
@@ -184,6 +208,67 @@ async function ensureAppDatabase(): Promise<void> {
 async function listProjects(userId: string): Promise<Project[]> {
   const db = await readDatabase();
   return db.projects.filter(project => project.userId === userId && !project.deletedAt);
+}
+
+async function listUserProfiles(): Promise<UserProfile[]> {
+  const db = await readDatabase();
+  return [...db.profiles].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+async function getUserProfile(id: string): Promise<UserProfile | null> {
+  const db = await readDatabase();
+  return db.profiles.find(profile => profile.id === id) ?? null;
+}
+
+async function getUserProfileByEmail(email: string): Promise<UserProfile | null> {
+  const db = await readDatabase();
+  const normalizedEmail = email.trim().toLowerCase();
+  return db.profiles.find(profile => profile.email.toLowerCase() === normalizedEmail) ?? null;
+}
+
+async function createUserProfile(input: CreateUserProfileInput): Promise<UserProfile> {
+  const db = await readDatabase();
+  const now = new Date().toISOString();
+  const existing = db.profiles.find(profile => profile.id === input.id);
+
+  if (existing) {
+    existing.email = input.email.trim().toLowerCase();
+    existing.name = input.name.trim();
+    existing.role = input.role ?? existing.role;
+    existing.status = input.status ?? existing.status;
+    existing.updatedAt = now;
+    await writeDatabase(db);
+    return existing;
+  }
+
+  const profile: UserProfile = {
+    id: input.id,
+    email: input.email.trim().toLowerCase(),
+    name: input.name.trim(),
+    role: input.role ?? 'member',
+    status: input.status ?? 'active',
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  db.profiles.unshift(profile);
+  await writeDatabase(db);
+  return profile;
+}
+
+async function updateUserProfile(id: string, input: UpdateUserProfileInput): Promise<UserProfile | null> {
+  const db = await readDatabase();
+  const profile = db.profiles.find(item => item.id === id);
+  if (!profile) return null;
+
+  if (input.email !== undefined) profile.email = input.email.trim().toLowerCase();
+  if (input.name !== undefined) profile.name = input.name.trim();
+  if (input.role !== undefined) profile.role = input.role;
+  if (input.status !== undefined) profile.status = input.status;
+  profile.updatedAt = new Date().toISOString();
+
+  await writeDatabase(db);
+  return profile;
 }
 
 async function createProject(input: {
@@ -720,6 +805,7 @@ async function getAdminDashboard(): Promise<AdminDashboard> {
   const db = await readDatabase();
   const userIds = new Set<string>();
 
+  for (const profile of db.profiles) userIds.add(profile.id);
   for (const project of db.projects) userIds.add(project.userId);
   for (const job of db.generationJobs) userIds.add(job.userId);
   for (const asset of db.imageAssets) userIds.add(asset.userId);
@@ -755,6 +841,7 @@ async function readDatabase(): Promise<AppDatabase> {
   const parsed = JSON.parse(content) as Partial<AppDatabase>;
 
   return {
+    profiles: Array.isArray(parsed.profiles) ? parsed.profiles : [],
     projects: normalizeUserScopedItems(Array.isArray(parsed.projects) ? parsed.projects : []),
     generationRecords: normalizeUserScopedItems(Array.isArray(parsed.generationRecords) ? parsed.generationRecords : []),
     generationResults: normalizeUserScopedItems(Array.isArray(parsed.generationResults) ? parsed.generationResults : []),

@@ -26,6 +26,7 @@ export interface FileUploadInput {
   content: Buffer;
   filename: string;
   mimeType: string;
+  userId?: string;
 }
 
 export class LocalFileStorageProvider implements FileStorageProvider {
@@ -112,11 +113,11 @@ export class SupabaseFileStorageProvider implements FileStorageProvider {
   }
 
   uploadImage(input: FileUploadInput): Promise<StoredFile> {
-    return this.uploadFile(`images/${input.filename}`, input);
+    return this.uploadFile(`users/${input.userId || 'unknown'}/images/${input.filename}`, input);
   }
 
   uploadModel(input: FileUploadInput): Promise<StoredFile> {
-    return this.uploadFile(`models/${input.filename}`, input);
+    return this.uploadFile(`users/${input.userId || 'unknown'}/models/${input.filename}`, input);
   }
 
   getPublicUrl(filename: string): string {

@@ -1,60 +1,113 @@
 import React, { useEffect, useState } from 'react';
-import { AlertCircle, Coins, Loader2, ShieldCheck, UserPlus } from 'lucide-react';
-import { AdminDashboard, AuthUser, GenerationJob, getAdminDashboard, grantUserCredits } from '../lib/api';
+import { AlertCircle, ArrowLeft, Coins, KeyRound, Loader2, LogOut, ShieldCheck, UserPlus } from 'lucide-react';
+import {
+  AdminDashboard,
+  AuthUser,
+  createAdminUser,
+  getAdminDashboard,
+  grantAdminUserCredits,
+  listAdminUsers,
+  resetAdminUserPassword,
+  updateAdminUser,
+  UserProfile,
+} from '../lib/api';
 
 interface AdminPageProps {
   currentUser: AuthUser;
+  onBackToApp: () => void;
+  onSignOut: () => void;
 }
 
-export function AdminPage({ currentUser }: AdminPageProps) {
+export function AdminPage({ currentUser, onBackToApp, onSignOut }: AdminPageProps) {
   const [dashboard, setDashboard] = useState<AdminDashboard | null>(null);
+  const [users, setUsers] = useState<UserProfile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [grantUserId, setGrantUserId] = useState('');
-  const [grantAmount, setGrantAmount] = useState(100);
-  const [grantReason, setGrantReason] = useState('Admin manual credit grant');
-  const [grantMessage, setGrantMessage] = useState<string | null>(null);
-  const [isGranting, setIsGranting] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'member' as UserProfile['role'], initialCredits: 100 });
+  const [resetPasswords, setResetPasswords] = useState<Record<string, string>>({});
+  const [creditAmounts, setCreditAmounts] = useState<Record<string, number>>({});
 
-  const loadDashboard = async () => {
+  const load = async () => {
     setIsLoading(true);
     setError(null);
-
     try {
-      setDashboard(await getAdminDashboard());
+      const [nextDashboard, nextUsers] = await Promise.all([getAdminDashboard(), listAdminUsers()]);
+      setDashboard(nextDashboard);
+      setUsers(nextUsers);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Admin 数据加载失败。');
+      setError(loadError instanceof Error ? loadError.message : '后台数据加载失败。');
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    if (currentUser.role === 'admin') {
-      void loadDashboard();
-    } else {
-      setIsLoading(false);
-    }
+    if (currentUser.role === 'admin') void load();
+    else setIsLoading(false);
   }, [currentUser.role]);
 
-  const handleGrantCredits = async (event: React.FormEvent) => {
+  const handleCreateUser = async (event: React.FormEvent) => {
     event.preventDefault();
-    setIsGranting(true);
-    setGrantMessage(null);
+    setIsCreating(true);
     setError(null);
-
+    setMessage(null);
     try {
-      const result = await grantUserCredits({
-        userId: grantUserId.trim(),
-        amount: grantAmount,
-        reason: grantReason,
-      });
-      setGrantMessage(`已为 ${result.balance.userId} 增加 ${grantAmount} credits，当前余额 ${result.balance.balance}。`);
-      await loadDashboard();
+      await createAdminUser(form);
+      setForm({ name: '', email: '', password: '', role: 'member', initialCredits: 100 });
+      setMessage('用户已创建。请通过安全渠道把邮箱和初始密码发送给用户。');
+      await load();
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : '创建用户失败。');
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const handlePatchUser = async (user: UserProfile, patch: Partial<Pick<UserProfile, 'role' | 'status'>>) => {
+    setError(null);
+    setMessage(null);
+    try {
+      await updateAdminUser(user.id, patch);
+      setMessage('用户已更新。');
+      await load();
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : '更新用户失败。');
+    }
+  };
+
+  const handleResetPassword = async (user: UserProfile) => {
+    const password = resetPasswords[user.id] || '';
+    if (password.length < 8) {
+      setError('新密码至少需要 8 个字符。');
+      return;
+    }
+    setError(null);
+    setMessage(null);
+    try {
+      await resetAdminUserPassword(user.id, password);
+      setResetPasswords(prev => ({ ...prev, [user.id]: '' }));
+      setMessage('密码已重置。请通过安全渠道通知用户。');
+    } catch (resetError) {
+      setError(resetError instanceof Error ? resetError.message : '重置密码失败。');
+    }
+  };
+
+  const handleGrantCredits = async (user: UserProfile) => {
+    const amount = creditAmounts[user.id] || 0;
+    if (!Number.isInteger(amount) || amount <= 0) {
+      setError('请输入正整数 credits。');
+      return;
+    }
+    setError(null);
+    setMessage(null);
+    try {
+      await grantAdminUserCredits(user.id, { amount, reason: 'Admin manual credit grant' });
+      setMessage(`已为 ${user.email} 增加 ${amount} credits。`);
+      await load();
     } catch (grantError) {
       setError(grantError instanceof Error ? grantError.message : '增加 credits 失败。');
-    } finally {
-      setIsGranting(false);
     }
   };
 
@@ -62,11 +115,10 @@ export function AdminPage({ currentUser }: AdminPageProps) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-100 p-6">
         <div className="max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-red-600">
-            <AlertCircle className="h-5 w-5" />
-          </div>
+          <AlertCircle className="mx-auto h-8 w-8 text-red-600" />
           <h1 className="mt-4 text-xl font-bold text-slate-950">无权限访问</h1>
           <p className="mt-2 text-sm leading-6 text-slate-500">当前账号不是 admin，无法进入后台。</p>
+          <button onClick={onBackToApp} className="mt-4 rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white">返回前台</button>
         </div>
       </div>
     );
@@ -75,7 +127,7 @@ export function AdminPage({ currentUser }: AdminPageProps) {
   return (
     <div className="min-h-screen bg-slate-100 p-4 text-slate-900">
       <div className="mx-auto flex max-w-7xl flex-col gap-4">
-        <header className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <header className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
               <ShieldCheck className="h-5 w-5" />
@@ -85,93 +137,125 @@ export function AdminPage({ currentUser }: AdminPageProps) {
               <h1 className="text-2xl font-bold text-slate-950">ArchAI 后台</h1>
             </div>
           </div>
+          <div className="flex gap-2">
+            <button onClick={onBackToApp} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-600">
+              <ArrowLeft className="h-4 w-4" /> 返回前台
+            </button>
+            <button onClick={onSignOut} className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white">
+              <LogOut className="h-4 w-4" /> 退出登录
+            </button>
+          </div>
         </header>
 
         {isLoading ? (
           <div className="flex items-center gap-3 rounded-2xl bg-white p-5 text-sm font-bold text-slate-500">
-            <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
-            正在加载后台数据...
-          </div>
-        ) : error ? (
-          <div className="flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>{error}</span>
+            <Loader2 className="h-5 w-5 animate-spin text-blue-600" /> 正在加载后台数据...
           </div>
         ) : null}
+        {error ? <div className="rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">{error}</div> : null}
+        {message ? <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm text-emerald-700">{message}</div> : null}
 
         {dashboard ? (
-          <>
-            <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-              <StatCard label="用户数量" value={dashboard.stats.userCount} />
-              <StatCard label="项目数量" value={dashboard.stats.projectCount} />
-              <StatCard label="生成任务" value={dashboard.stats.generationJobCount} />
-              <StatCard label="成功任务" value={dashboard.stats.succeededJobCount} />
-              <StatCard label="失败任务" value={dashboard.stats.failedJobCount} />
-              <StatCard label="总消耗 credits" value={dashboard.stats.totalCreditsConsumed} />
-            </section>
-
-            <section className="grid gap-4 xl:grid-cols-[1fr_360px]">
-              <div className="space-y-4">
-                <JobTable title="最近 20 条 GenerationJob" jobs={dashboard.recentJobs} />
-                <JobTable title="最近 20 条错误任务" jobs={dashboard.recentErrorJobs} emptyText="暂无失败任务。" />
-              </div>
-
-              <form onSubmit={handleGrantCredits} className="h-fit rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="mb-4 flex items-center gap-2">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
-                    <Coins className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <h2 className="text-base font-bold text-slate-950">手动增加 Credits</h2>
-                    <p className="text-xs text-slate-500">用于内部补额度和运营处理。</p>
-                  </div>
-                </div>
-
-                <label className="block text-xs font-bold text-slate-500">
-                  用户 ID
-                  <input
-                    value={grantUserId}
-                    onChange={event => setGrantUserId(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-300"
-                    placeholder="dev-user 或 Supabase user id"
-                    required
-                  />
-                </label>
-
-                <label className="mt-3 block text-xs font-bold text-slate-500">
-                  增加数量
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={grantAmount}
-                    onChange={event => setGrantAmount(Number(event.target.value))}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-300"
-                    required
-                  />
-                </label>
-
-                <label className="mt-3 block text-xs font-bold text-slate-500">
-                  备注
-                  <input
-                    value={grantReason}
-                    onChange={event => setGrantReason(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-300"
-                  />
-                </label>
-
-                <button disabled={isGranting} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">
-                  {isGranting ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
-                  增加 Credits
-                </button>
-
-                {grantMessage ? <p className="mt-3 text-xs font-semibold text-emerald-600">{grantMessage}</p> : null}
-              </form>
-            </section>
-          </>
+          <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+            <StatCard label="用户数量" value={dashboard.stats.userCount} />
+            <StatCard label="项目数量" value={dashboard.stats.projectCount} />
+            <StatCard label="生成任务" value={dashboard.stats.generationJobCount} />
+            <StatCard label="成功任务" value={dashboard.stats.succeededJobCount} />
+            <StatCard label="失败任务" value={dashboard.stats.failedJobCount} />
+            <StatCard label="消耗 credits" value={dashboard.stats.totalCreditsConsumed} />
+          </section>
         ) : null}
+
+        <section className="grid gap-4 xl:grid-cols-[380px_1fr]">
+          <form onSubmit={handleCreateUser} className="h-fit rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-4 flex items-center gap-2">
+              <UserPlus className="h-5 w-5 text-blue-600" />
+              <h2 className="text-base font-bold text-slate-950">创建用户</h2>
+            </div>
+            <TextInput label="姓名" value={form.name} onChange={value => setForm(prev => ({ ...prev, name: value }))} required />
+            <TextInput label="邮箱" type="email" value={form.email} onChange={value => setForm(prev => ({ ...prev, email: value }))} required />
+            <TextInput label="初始密码" type="password" value={form.password} onChange={value => setForm(prev => ({ ...prev, password: value }))} required />
+            <label className="mt-3 block text-xs font-bold text-slate-500">
+              角色
+              <select value={form.role} onChange={event => setForm(prev => ({ ...prev, role: event.target.value as UserProfile['role'] }))} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                <option value="member">member</option>
+                <option value="admin">admin</option>
+              </select>
+            </label>
+            <label className="mt-3 block text-xs font-bold text-slate-500">
+              初始积分
+              <input type="number" min="0" step="1" value={form.initialCredits} onChange={event => setForm(prev => ({ ...prev, initialCredits: Number(event.target.value) }))} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+            <button disabled={isCreating} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">
+              {isCreating ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
+              创建账号
+            </button>
+          </form>
+
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-100 px-4 py-3">
+              <h2 className="text-base font-bold text-slate-950">用户管理</h2>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2">用户</th>
+                    <th className="px-3 py-2">角色</th>
+                    <th className="px-3 py-2">状态</th>
+                    <th className="px-3 py-2">重置密码</th>
+                    <th className="px-3 py-2">Credits</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {users.map(user => (
+                    <tr key={user.id}>
+                      <td className="px-3 py-3">
+                        <div className="font-bold text-slate-900">{user.name}</div>
+                        <div className="text-slate-500">{user.email}</div>
+                        <div className="font-mono text-[10px] text-slate-400">{user.id}</div>
+                      </td>
+                      <td className="px-3 py-3">
+                        <select value={user.role} onChange={event => void handlePatchUser(user, { role: event.target.value as UserProfile['role'] })} className="rounded-lg border border-slate-200 bg-white px-2 py-1">
+                          <option value="member">member</option>
+                          <option value="admin">admin</option>
+                        </select>
+                      </td>
+                      <td className="px-3 py-3">
+                        <button onClick={() => void handlePatchUser(user, { status: user.status === 'active' ? 'disabled' : 'active' })} className={`rounded-lg px-3 py-1 font-bold ${user.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                          {user.status === 'active' ? 'active' : 'disabled'}
+                        </button>
+                      </td>
+                      <td className="px-3 py-3">
+                        <div className="flex gap-2">
+                          <input type="password" value={resetPasswords[user.id] || ''} onChange={event => setResetPasswords(prev => ({ ...prev, [user.id]: event.target.value }))} placeholder="新密码" className="w-32 rounded-lg border border-slate-200 px-2 py-1" />
+                          <button onClick={() => void handleResetPassword(user)} className="rounded-lg bg-slate-900 px-2 py-1 font-bold text-white"><KeyRound className="h-3.5 w-3.5" /></button>
+                        </div>
+                      </td>
+                      <td className="px-3 py-3">
+                        <div className="flex gap-2">
+                          <input type="number" min="1" value={creditAmounts[user.id] || ''} onChange={event => setCreditAmounts(prev => ({ ...prev, [user.id]: Number(event.target.value) }))} className="w-24 rounded-lg border border-slate-200 px-2 py-1" />
+                          <button onClick={() => void handleGrantCredits(user)} className="rounded-lg bg-emerald-600 px-2 py-1 font-bold text-white"><Coins className="h-3.5 w-3.5" /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
       </div>
     </div>
+  );
+}
+
+function TextInput({ label, value, onChange, type = 'text', required = false }: { label: string; value: string; onChange: (value: string) => void; type?: string; required?: boolean }) {
+  return (
+    <label className="mt-3 block text-xs font-bold text-slate-500">
+      {label}
+      <input type={type} value={value} onChange={event => onChange(event.target.value)} required={required} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-300" />
+    </label>
   );
 }
 
@@ -182,58 +266,4 @@ function StatCard({ label, value }: { label: string; value: number }) {
       <p className="mt-2 text-2xl font-black text-slate-950">{value.toLocaleString('zh-CN')}</p>
     </div>
   );
-}
-
-function JobTable({ title, jobs, emptyText = '暂无任务。' }: { title: string; jobs: GenerationJob[]; emptyText?: string }) {
-  return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-100 px-4 py-3">
-        <h2 className="text-base font-bold text-slate-950">{title}</h2>
-      </div>
-      {jobs.length === 0 ? (
-        <div className="p-5 text-sm text-slate-500">{emptyText}</div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-left text-xs">
-            <thead className="bg-slate-50 text-slate-500">
-              <tr>
-                <th className="px-3 py-2 font-bold">Job</th>
-                <th className="px-3 py-2 font-bold">User</th>
-                <th className="px-3 py-2 font-bold">Mode</th>
-                <th className="px-3 py-2 font-bold">Status</th>
-                <th className="px-3 py-2 font-bold">Provider</th>
-                <th className="px-3 py-2 font-bold">Created</th>
-                <th className="px-3 py-2 font-bold">Error</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {jobs.map(job => (
-                <tr key={job.id}>
-                  <td className="max-w-[180px] truncate px-3 py-2 font-mono text-slate-700">{job.id}</td>
-                  <td className="max-w-[160px] truncate px-3 py-2 font-mono text-slate-500">{job.userId}</td>
-                  <td className="px-3 py-2 text-slate-700">{job.mode}</td>
-                  <td className="px-3 py-2">
-                    <span className="rounded-full bg-slate-100 px-2 py-1 font-bold text-slate-600">{job.status}</span>
-                  </td>
-                  <td className="px-3 py-2 text-slate-500">{job.provider}</td>
-                  <td className="px-3 py-2 text-slate-500">{formatDate(job.createdAt)}</td>
-                  <td className="max-w-[260px] truncate px-3 py-2 text-red-600">{job.errorMessage || '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function formatDate(value: string): string {
-  return new Date(value).toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
 }

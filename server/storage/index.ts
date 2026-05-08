@@ -12,6 +12,7 @@ import {
   CreditBalance,
   CreditTransaction,
   CreditTransactionInput,
+  CreateUserProfileInput,
   GenerationJob,
   GenerationRecord,
   GenerationResult,
@@ -23,6 +24,8 @@ import {
   UpdateGenerationJobInput,
   UpdateGenerationResultInput,
   UpdateProjectInput,
+  UpdateUserProfileInput,
+  UserProfile,
 } from './types';
 
 export type {
@@ -37,6 +40,7 @@ export type {
   CreditBalance,
   CreditTransaction,
   CreditTransactionInput,
+  CreateUserProfileInput,
   GenerationJob,
   GenerationRecord,
   GenerationResult,
@@ -48,6 +52,8 @@ export type {
   UpdateGenerationJobInput,
   UpdateGenerationResultInput,
   UpdateProjectInput,
+  UpdateUserProfileInput,
+  UserProfile,
 } from './types';
 
 export const storageAdapter: StorageAdapter = createStorageAdapter();
@@ -68,6 +74,26 @@ function createStorageAdapter(): StorageAdapter {
 
 export function ensureAppDatabase(): Promise<void> {
   return storageAdapter.ensureReady();
+}
+
+export function listUserProfiles(): Promise<UserProfile[]> {
+  return storageAdapter.listUserProfiles();
+}
+
+export function getUserProfile(id: string): Promise<UserProfile | null> {
+  return storageAdapter.getUserProfile(id);
+}
+
+export function getUserProfileByEmail(email: string): Promise<UserProfile | null> {
+  return storageAdapter.getUserProfileByEmail(email);
+}
+
+export function createUserProfile(input: CreateUserProfileInput): Promise<UserProfile> {
+  return storageAdapter.createUserProfile(input);
+}
+
+export function updateUserProfile(id: string, input: UpdateUserProfileInput): Promise<UserProfile | null> {
+  return storageAdapter.updateUserProfile(id, input);
 }
 
 export function listProjects(userId: string): Promise<Project[]> {

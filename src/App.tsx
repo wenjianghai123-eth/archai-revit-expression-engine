@@ -142,6 +142,17 @@ export default function App() {
     setHistoryItems(listGenerationRecords());
   }, [resetWorkflow, selectedProjectId, setActiveTab, setSelectedProjectId]);
 
+  const handleSignOut = useCallback(async () => {
+    await signOut();
+    setSelectedProjectId(null);
+    setActiveTab('home');
+    resetWorkflow();
+    setHistoryItems(listGenerationRecords());
+    if (window.location.pathname === '/admin') {
+      window.history.pushState({}, '', '/');
+    }
+  }, [resetWorkflow, setActiveTab, setSelectedProjectId, signOut]);
+
   const estimatedCreditCost = calculateGenerationCreditsCost(currentStep, stepStates[currentStep].config);
   const isCreditsInsufficient = Boolean(creditBalance && creditBalance.balance < estimatedCreditCost);
 
@@ -701,13 +712,13 @@ export default function App() {
   }
 
   if (isAdminPath) {
-    return <AdminPage currentUser={currentUser} />;
+    return <AdminPage currentUser={currentUser} onBackToApp={() => { window.location.href = '/'; }} onSignOut={() => { void handleSignOut(); }} />;
   }
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-slate-100 text-slate-900 selection:bg-arch-accent selection:text-arch-bg">
       {/* Sidebar */}
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onSettingsOpen={() => setIsSettingsOpen(true)} />
+      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onSettingsOpen={() => setIsSettingsOpen(true)} isAdmin={currentUser.role === 'admin'} />
 
       {/* Main Content Area */}
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden min-w-0 pb-20 lg:pb-0">
@@ -850,7 +861,7 @@ export default function App() {
         providerSource={backendHealth.data?.provider === 'gemini' || backendHealth.data?.provider === 'grsai-banana2' || backendHealth.data?.provider === 'grsai-nano-banana' ? 'Real provider' : backendHealth.data?.provider === 'mock' ? 'Mock provider' : '未知（后端未连接）'}
         currentUser={currentUser}
         currentUserStatus={isUserLoading ? '正在读取当前用户' : currentUserError || creditError || `剩余额度：${creditBalance?.balance ?? '读取中'} credits`}
-        onSignOut={signOut}
+        onSignOut={handleSignOut}
         isChecking={backendHealth.status === 'checking'}
         onRefresh={refreshBackendHealth}
         onClose={() => setIsSettingsOpen(false)}

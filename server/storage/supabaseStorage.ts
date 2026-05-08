@@ -12,6 +12,7 @@ import {
   CreditBalance,
   CreditTransaction,
   CreditTransactionInput,
+  CreateUserProfileInput,
   GenerationJob,
   GenerationRecord,
   GenerationResult,
@@ -23,6 +24,8 @@ import {
   UpdateGenerationJobInput,
   UpdateGenerationResultInput,
   UpdateProjectInput,
+  UpdateUserProfileInput,
+  UserProfile,
 } from './types';
 
 type ProjectRow = {
@@ -138,6 +141,16 @@ type CreditTransactionRow = {
   created_at: string;
 };
 
+type UserProfileRow = {
+  id: string;
+  email: string;
+  name: string;
+  role: UserProfile['role'];
+  status: UserProfile['status'];
+  created_at: string;
+  updated_at: string;
+};
+
 type CreditAdjustmentRpcRow = {
   balance_user_id: string;
   balance: number;
@@ -177,6 +190,72 @@ export class SupabaseStorageAdapter implements StorageAdapter {
   async ensureReady(): Promise<void> {
     const { error } = await this.client.from('projects').select('id').limit(1);
     assertNoSupabaseError(error, 'checking Supabase storage tables');
+  }
+
+  async listUserProfiles(): Promise<UserProfile[]> {
+    const { data, error } = await this.client
+      .from('profiles')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    assertNoSupabaseError(error, 'listing user profiles');
+    return ((data ?? []) as UserProfileRow[]).map(mapUserProfileRow);
+  }
+
+  async getUserProfile(id: string): Promise<UserProfile | null> {
+    const { data, error } = await this.client.from('profiles').select('*').eq('id', id).maybeSingle();
+    assertNoSupabaseError(error, 'reading user profile');
+    return data ? mapUserProfileRow(data as UserProfileRow) : null;
+  }
+
+  async getUserProfileByEmail(email: string): Promise<UserProfile | null> {
+    const { data, error } = await this.client
+      .from('profiles')
+      .select('*')
+      .eq('email', email.trim().toLowerCase())
+      .maybeSingle();
+    assertNoSupabaseError(error, 'reading user profile by email');
+    return data ? mapUserProfileRow(data as UserProfileRow) : null;
+  }
+
+  async createUserProfile(input: CreateUserProfileInput): Promise<UserProfile> {
+    const now = new Date().toISOString();
+    const row: UserProfileRow = {
+      id: input.id,
+      email: input.email.trim().toLowerCase(),
+      name: input.name.trim(),
+      role: input.role ?? 'member',
+      status: input.status ?? 'active',
+      created_at: now,
+      updated_at: now,
+    };
+
+    const { data, error } = await this.client
+      .from('profiles')
+      .upsert(row, { onConflict: 'id' })
+      .select('*')
+      .single();
+
+    assertNoSupabaseError(error, 'creating user profile');
+    return mapUserProfileRow(data as UserProfileRow);
+  }
+
+  async updateUserProfile(id: string, input: UpdateUserProfileInput): Promise<UserProfile | null> {
+    const patch: Partial<UserProfileRow> = { updated_at: new Date().toISOString() };
+    if (input.email !== undefined) patch.email = input.email.trim().toLowerCase();
+    if (input.name !== undefined) patch.name = input.name.trim();
+    if (input.role !== undefined) patch.role = input.role;
+    if (input.status !== undefined) patch.status = input.status;
+
+    const { data, error } = await this.client
+      .from('profiles')
+      .update(patch)
+      .eq('id', id)
+      .select('*')
+      .maybeSingle();
+
+    assertNoSupabaseError(error, 'updating user profile');
+    return data ? mapUserProfileRow(data as UserProfileRow) : null;
   }
 
   async listProjects(userId: string): Promise<Project[]> {
@@ -642,18 +721,21 @@ export class SupabaseStorageAdapter implements StorageAdapter {
   }
 
   async getAdminDashboard(): Promise<AdminDashboard> {
-    const [projects, jobs, balances, transactions] = await Promise.all([
+    const [profiles, projects, jobs, balances, transactions] = await Promise.all([
+      this.client.from('profiles').select('*'),
       this.client.from('projects').select('*').is('deleted_at', null),
       this.client.from('generation_jobs').select('*'),
       this.client.from('credit_balances').select('*'),
       this.client.from('credit_transactions').select('*'),
     ]);
 
+    assertNoSupabaseError(profiles.error, 'admin listing profiles');
     assertNoSupabaseError(projects.error, 'admin listing projects');
     assertNoSupabaseError(jobs.error, 'admin listing generation jobs');
     assertNoSupabaseError(balances.error, 'admin listing credit balances');
     assertNoSupabaseError(transactions.error, 'admin listing credit transactions');
 
+    const profileRows = (profiles.data ?? []) as UserProfileRow[];
     const projectRows = (projects.data ?? []) as ProjectRow[];
     const jobRows = (jobs.data ?? []) as GenerationJobRow[];
     const balanceRows = (balances.data ?? []) as CreditBalanceRow[];
@@ -661,6 +743,7 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     const mappedJobs = jobRows.map(mapGenerationJobRow);
     const userIds = new Set<string>();
 
+    for (const profile of profileRows) userIds.add(profile.id);
     for (const project of projectRows) userIds.add(project.user_id);
     for (const job of jobRows) userIds.add(job.user_id);
     for (const balance of balanceRows) userIds.add(balance.user_id);
@@ -697,6 +780,18 @@ function mapProjectRow(row: ProjectRow): Project {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
+  };
+}
+
+function mapUserProfileRow(row: UserProfileRow): UserProfile {
+  return {
+    id: row.id,
+    email: row.email,
+    name: row.name,
+    role: row.role,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 

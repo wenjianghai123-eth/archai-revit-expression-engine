@@ -5,7 +5,18 @@ export interface AuthUser {
   email: string;
   name: string;
   role: 'admin' | 'member';
+  status: 'active' | 'disabled';
   createdAt: string;
+}
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  name: string;
+  role: 'admin' | 'member';
+  status: 'active' | 'disabled';
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Project {
@@ -235,6 +246,46 @@ export async function grantUserCredits(input: { userId: string; amount: number; 
   });
 }
 
+export async function listAdminUsers(): Promise<UserProfile[]> {
+  const response = await request<{ users: UserProfile[] }>('/api/admin/users');
+  return response.users;
+}
+
+export async function createAdminUser(input: {
+  name: string;
+  email: string;
+  password: string;
+  role: UserProfile['role'];
+  initialCredits: number;
+}): Promise<{ user: UserProfile; balance: CreditBalance }> {
+  return request<{ user: UserProfile; balance: CreditBalance }>('/api/admin/users', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateAdminUser(id: string, input: Partial<Pick<UserProfile, 'name' | 'email' | 'role' | 'status'>>): Promise<UserProfile> {
+  const response = await request<{ user: UserProfile }>(`/api/admin/users/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+  return response.user;
+}
+
+export async function resetAdminUserPassword(id: string, password: string): Promise<void> {
+  await request<{ ok: true }>(`/api/admin/users/${encodeURIComponent(id)}/reset-password`, {
+    method: 'POST',
+    body: JSON.stringify({ password }),
+  });
+}
+
+export async function grantAdminUserCredits(id: string, input: { amount: number; reason?: string }): Promise<{ balance: CreditBalance; transaction: CreditTransaction }> {
+  return request<{ balance: CreditBalance; transaction: CreditTransaction }>(`/api/admin/users/${encodeURIComponent(id)}/credits`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
 export async function listProjects(): Promise<Project[]> {
   const response = await request<{ projects: Project[] }>('/api/projects');
   return response.projects;
@@ -374,6 +425,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
   const accessToken = await getSupabaseAccessToken();
   const headers = new Headers(init.headers);
+  const url = buildApiUrl(path);
 
   if (!(init.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
@@ -384,7 +436,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   try {
-    response = await fetch(path, {
+    response = await fetch(url, {
       ...init,
       headers,
     });
@@ -403,6 +455,19 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   return body.data;
+}
+
+function buildApiUrl(path: string): string {
+  if (/^https?:\/\//iu.test(path)) return path;
+
+  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
+  if (!apiBaseUrl || apiBaseUrl.trim().length === 0) {
+    return path;
+  }
+
+  const normalizedBaseUrl = apiBaseUrl.trim().replace(/\/+$/u, '');
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  return `${normalizedBaseUrl}${normalizedPath}`;
 }
 
 async function readJson(response: Response): Promise<unknown> {
