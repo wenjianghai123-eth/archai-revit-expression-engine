@@ -1,3 +1,4 @@
+import { buildApiUrl } from '../lib/apiBaseUrl';
 import { GenerationProvider } from '../types';
 
 export interface BackendHealth {
@@ -9,9 +10,9 @@ export interface BackendHealth {
 export async function getBackendHealth(): Promise<BackendHealth> {
   let response: Response;
   try {
-    response = await fetch('/api/health');
+    response = await fetch(buildApiUrl('/api/health'));
   } catch {
-    throw new Error('无法连接后端服务，请确认 npm run dev:server 已启动。');
+    throw new Error('无法连接后端服务，请确认后端服务已启动，并检查 VITE_API_BASE_URL 是否指向后端域名。');
   }
 
   if (!response.ok) {

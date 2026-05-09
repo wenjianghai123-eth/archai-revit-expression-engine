@@ -72,6 +72,7 @@ Create a local `.env` or `.env.local` file for development secrets. These files 
 - `SUPABASE_STORAGE_BUCKET`: Supabase Storage bucket name used when `FILE_STORAGE=supabase`.
 - `VITE_SUPABASE_URL`: Supabase project URL for the browser client. Required when using Supabase Auth.
 - `VITE_SUPABASE_ANON_KEY`: Supabase anon key for the browser client. Required when using Supabase Auth.
+- `VITE_API_BASE_URL`: optional backend origin for split frontend/backend deployments. Set it to the backend origin only, for example `https://api.example.com`; the frontend calls `${VITE_API_BASE_URL}/api/...`. Leave it empty for same-origin `/api` deployments.
 - `SUPABASE_SERVICE_ROLE_KEY`: backend-only Supabase service role key used to validate JWTs. Never expose this in frontend code.
 - `GRSAI_API_KEY`: backend-only model API key. Required only when `GENERATION_PROVIDER=grsai`, `AI_PROVIDER=grsai-banana2`, or `AI_PROVIDER=grsai-nano-banana`. Do not expose this in frontend code.
 - `GRSAI_BASE_URL`: optional Grsai API base URL. Defaults to `https://grsai.dakka.com.cn` for China direct access. Overseas deployments can use `https://grsaiapi.com`.
@@ -123,6 +124,7 @@ SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_STORAGE_BUCKET=archai-assets
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your_public_anon_key
+VITE_API_BASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=your_backend_only_service_role_key
 PORT=8787
 MAX_IMAGE_MB=10
@@ -164,7 +166,16 @@ The old `/api/generate/floorplan`, `/api/generate/style-render`, and `/api/gener
 
 Local development defaults to `AUTH_MODE=dev`, which injects a single development user and requires no Supabase configuration. This keeps mock generation and local project workflows available after `npm run dev:client` and `npm run dev:server`.
 
-Production authentication uses Supabase when `AUTH_MODE=supabase` is set. The frontend uses `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for email magic-link login and logout. The Express backend uses `SUPABASE_SERVICE_ROLE_KEY` only on the server to validate incoming Bearer JWTs. Project, asset, and generation job APIs return `401` when a valid Supabase session is not present.
+Production authentication uses Supabase when `AUTH_MODE=supabase` is set. The frontend uses `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for email + password login and logout. Accounts are created by administrators; public registration and magic-link login are intentionally not used. The Express backend uses `SUPABASE_SERVICE_ROLE_KEY` only on the server to validate incoming Bearer JWTs. Project, asset, and generation job APIs return `401` when a valid Supabase session is not present.
+
+`VITE_*` variables are embedded by Vite at build time. After setting or changing `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, or `VITE_API_BASE_URL` on Vercel, Netlify, Render, or another hosting platform, rebuild and redeploy the frontend. Updating only runtime server variables will not change an already-built browser bundle.
+
+Frontend deployment checklist:
+
+- Configure `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the frontend deployment platform's build environment, not only in the backend service.
+- If the frontend and backend are deployed separately, set `VITE_API_BASE_URL` to the backend origin, for example `https://api.example.com`.
+- After changing any `VITE_*` variable, run `npm run build` again and redeploy the frontend. Only restarting the backend will not update the already-built browser bundle.
+- Keep `SUPABASE_SERVICE_ROLE_KEY`, `GRSAI_API_KEY`, and any other model/provider secret only in the backend environment. Do not add them with a `VITE_` prefix.
 
 ## Storage
 

@@ -33,6 +33,8 @@ VITE_API_BASE_URL=https://your-api-domain.com
 
 If frontend and backend are deployed separately, set `VITE_API_BASE_URL` to the backend origin only, for example `https://api.example.com`. The frontend will call `${VITE_API_BASE_URL}/api/...`. If it is empty, the app calls same-origin `/api/...`.
 
+For production deploys, put `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the frontend host's build-time environment settings. Backend-only variables such as `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `GRSAI_API_KEY` are not injected into Vite browser code. After changing frontend env vars, run `npm run build` again and redeploy the frontend; restarting only the Express backend will not make the login page pick up new `VITE_*` values.
+
 Production login uses an administrator-created account model. Do not expose a public sign-up UI, and disable or restrict public sign-ups in Supabase Authentication settings. The backend authorizes users through the `profiles` table, so a Supabase Auth user without an active profile cannot access business APIs.
 
 Create the first admin with:

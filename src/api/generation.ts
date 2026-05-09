@@ -1,3 +1,4 @@
+import { buildApiUrl } from '../lib/apiBaseUrl';
 import { GenerationConfig, GenerationProvider } from '../types';
 
 interface GenerationRequest {
@@ -31,7 +32,7 @@ export function generateInpainting(request: GenerationRequest): Promise<Generati
 async function postGeneration(endpoint: string, request: GenerationRequest): Promise<GenerationResponse> {
   let response: Response;
   try {
-    response = await fetch(endpoint, {
+    response = await fetch(buildApiUrl(endpoint), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -39,7 +40,7 @@ async function postGeneration(endpoint: string, request: GenerationRequest): Pro
       body: JSON.stringify(request),
     });
   } catch {
-    throw new Error('无法连接后端服务，请确认 npm run dev:server 已启动。');
+    throw new Error('无法连接后端服务，请确认后端服务已启动，并检查 VITE_API_BASE_URL 是否指向后端域名。');
   }
 
   if (!response.ok) {

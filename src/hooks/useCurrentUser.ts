@@ -13,6 +13,12 @@ export function useCurrentUser() {
     setIsLoading(true);
     setError(null);
 
+    if (import.meta.env.PROD && !isSupabaseConfigured()) {
+      setUser(null);
+      setIsLoading(false);
+      return;
+    }
+
     try {
       setUser(await getCurrentUser());
     } catch (err) {
