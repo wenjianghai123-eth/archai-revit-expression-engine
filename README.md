@@ -177,6 +177,19 @@ Frontend deployment checklist:
 - After changing any `VITE_*` variable, run `npm run build` again and redeploy the frontend. Only restarting the backend will not update the already-built browser bundle.
 - Keep `SUPABASE_SERVICE_ROLE_KEY`, `GRSAI_API_KEY`, and any other model/provider secret only in the backend environment. Do not add them with a `VITE_` prefix.
 
+### Netlify Frontend Deployment
+
+For a Netlify-hosted Vite frontend, configure the browser-facing variables in Netlify, not only in local `.env` files or the backend service:
+
+- Open Netlify Site configuration -> Environment variables.
+- Add `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and, for split frontend/backend deployments, `VITE_API_BASE_URL`.
+- Make sure each variable's Scope includes Builds.
+- Make sure the Production deploy context has values for these variables; branch deploy or deploy-preview values do not fix a Production deploy unless Production also has values.
+- Set Build command to `npm run build`.
+- Set Publish directory to `dist`.
+- After changing any `VITE_*` value, use Clear cache and deploy site so Netlify rebuilds the browser bundle with the new values.
+- To confirm the Netlify build environment before building, run `npm run check:env` in the build log or temporarily set the build command to `npm run check:env && npm run build`.
+
 ## Storage
 
 Metadata storage is selected with `DATA_BACKEND`. Local development uses `DATA_BACKEND=json`, which writes metadata to `data/app-db.json`. Production can use `DATA_BACKEND=supabase` after creating the tables in `docs/SUPABASE_SETUP.md`.

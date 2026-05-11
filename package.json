@@ -8,6 +8,7 @@
     "dev:client": "vite --port=3000 --host=0.0.0.0",
     "dev:server": "tsx server/index.ts",
     "build": "vite build",
+    "check:env": "node -e \"console.log('VITE_SUPABASE_URL set:', Boolean(process.env.VITE_SUPABASE_URL)); console.log('VITE_SUPABASE_ANON_KEY set:', Boolean(process.env.VITE_SUPABASE_ANON_KEY));\"",
     "start": "tsx server/index.ts",
     "preview": "vite preview",
     "import:materials": "node scripts/import-materials.mjs",
