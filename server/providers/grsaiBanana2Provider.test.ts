@@ -84,6 +84,27 @@ describe('Grsai Banana2 provider', () => {
     expect(output.dataUrl).toBe('data:image/png;base64,cmVzdWx0');
   });
 
+  it('adds interior floorplan preservation constraints to floorplan prompts', async () => {
+    mockFetchSequence([
+      jsonResponse({ code: 0, data: { id: 'floorplan_task' } }),
+      jsonResponse({ code: 0, data: { id: 'floorplan_task', status: 'succeeded', results: [{ url: 'data:image/png;base64,cmVzdWx0' }] } }),
+    ]);
+
+    await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage({
+      ...input,
+      mode: 'floorplan',
+      prompt: '用户补充要求：卧室偏暖色木地板。',
+    });
+
+    const createRequest = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
+    expect(createRequest.prompt).toContain('professional interior colored floor plan');
+    expect(createRequest.prompt).toContain('Strictly preserve the original floor plan layout');
+    expect(createRequest.prompt).toContain('walls, doors, windows');
+    expect(createRequest.prompt).toContain('furniture positions');
+    expect(createRequest.prompt).toContain('top-down plan representation');
+    expect(createRequest.prompt).toContain('用户补充要求：卧室偏暖色木地板。');
+  });
+
   it('normalizes non-base64 Grsai data URLs before returning to storage', async () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     mockFetchSequence([
@@ -154,6 +175,37 @@ describe('Grsai Banana2 provider', () => {
 
     const createRequest = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
     expect(createRequest.prompt).toContain('仅修改用户涂抹或遮罩区域');
+  });
+
+  it('uses target aspect ratio and ordered role-specific references', async () => {
+    mockFetchSequence([
+      jsonResponse({ code: 0, data: { id: 'target_ratio' } }),
+      jsonResponse({ code: 0, data: { id: 'target_ratio', status: 'succeeded', results: [{ url: 'data:image/png;base64,cmVzdWx0' }] } }),
+    ]);
+
+    await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage({
+      ...input,
+      mode: 'inpaint',
+      targetAspectRatio: '16:9',
+      maskMode: 'asset-mask',
+      maskImageDataUrl: 'data:image/png;base64,bWFzaw==',
+      materialReferenceImageDataUrls: ['data:image/png;base64,bWF0MQ=='],
+      furnitureReferenceImageDataUrls: ['data:image/png;base64,ZnVyMQ=='],
+      editTarget: 'furniture',
+    });
+
+    const createRequest = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
+    expect(createRequest.aspectRatio).toBe('16:9');
+    expect(createRequest.urls).toEqual([
+      'data:image/png;base64,aW5wdXQ=',
+      'data:image/png;base64,bWFzaw==',
+      'data:image/png;base64,bWF0ZXJpYWw=',
+      'data:image/png;base64,bWF0MQ==',
+      'data:image/png;base64,ZnVyMQ==',
+      'data:image/png;base64,dGV4dHVyZQ==',
+    ]);
+    expect(createRequest.prompt).toContain('Furniture reference images are only for furniture type');
+    expect(createRequest.prompt).toContain('Edit target is furniture');
   });
 
   it('throws when Grsai reports failed status', async () => {

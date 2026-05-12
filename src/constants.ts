@@ -302,6 +302,7 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
     lighting: "匹配原图",
     materialStrength: 0.8,
     batchCount: 1,
+    editTarget: 'general',
     inpaintingStrength: 'medium',
     strength: 'medium',
     keepOriginalMaterial: true,

@@ -158,6 +158,28 @@ describe('POST /api/generation-jobs asset ownership', () => {
     expect(response.body.data.job.config).not.toHaveProperty('maskAssetId');
   });
 
+  it('rejects another user furniture reference asset id', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Own project furniture' });
+    const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const otherFurnitureAsset = await createImageAssetForUser('other-user');
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'inpaint',
+        prompt: 'replace selected chair',
+        config: { editTarget: 'furniture', furnitureReferenceAssetIds: [otherFurnitureAsset.id] },
+        inputAssetIds: [ownAsset.id],
+      });
+
+    expect(response.status).toBe(404);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: { code: 'GENERATION_JOB_REFERENCE_ASSET_NOT_FOUND' },
+    });
+  });
+
   it('creates a prompt-only inpaint generation job without mask fields', async () => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Prompt only inpaint' });
     const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
@@ -375,6 +397,26 @@ describe('generation job credits', () => {
     expect(secondCancel.status).toBe(200);
     expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance);
     expect(transactions.filter(transaction => transaction.type === 'refund' && transaction.referenceId === jobId)).toHaveLength(1);
+  });
+
+  it('clamps legacy batchCount requests to one result and single-image credit cost', async () => {
+    const originalBalance = await storage.getCreditBalance(DEV_AUTH_USER_ID);
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Single output clamp project' });
+    const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'style-render',
+        prompt: 'render one option',
+        config: { batchCount: 4 },
+        inputAssetIds: [ownAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config.batchCount).toBe(1);
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 10);
   });
 
   it('refunds credits when a job fails and does not double refund', async () => {

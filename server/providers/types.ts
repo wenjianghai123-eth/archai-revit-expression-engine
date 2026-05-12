@@ -7,10 +7,16 @@ export interface GenerateImageInput {
   inputImageDataUrl: string;
   materialImageDataUrl?: string;
   referenceImageDataUrls?: string[];
+  materialReferenceImageDataUrls?: string[];
+  furnitureReferenceImageDataUrls?: string[];
   maskImageDataUrl?: string;
   maskMode?: MaskMode;
   prompt: string;
   config: Record<string, unknown>;
+  targetWidth?: number;
+  targetHeight?: number;
+  targetAspectRatio?: string;
+  editTarget?: 'general' | 'material' | 'furniture';
 }
 
 export interface GenerateImageOutput {

@@ -32,14 +32,19 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
   return {
     id: crypto.randomUUID(),
     provider: 'mock',
-    dataUrl: createMockImageDataUrl(input.mode, input.prompt, createdAt),
+    dataUrl: createMockImageDataUrl(input.mode, input.prompt, createdAt, readMockSize(input)),
     mimeType: 'image/svg+xml',
     createdAt,
     warnings,
   };
 }
 
-function createMockImageDataUrl(mode: 'floorplan' | 'style-render' | 'inpaint', prompt: string, createdAt: string): string {
+function createMockImageDataUrl(
+  mode: 'floorplan' | 'style-render' | 'inpaint',
+  prompt: string,
+  createdAt: string,
+  size: { width: number; height: number },
+): string {
   const title = {
     floorplan: 'Mock Floorplan Generation',
     'style-render': 'Mock Style Render Generation',
@@ -47,15 +52,15 @@ function createMockImageDataUrl(mode: 'floorplan' | 'style-render' | 'inpaint', 
   }[mode];
   const promptPreview = prompt.length > 90 ? `${prompt.slice(0, 90)}...` : prompt;
   const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
+    <svg xmlns="http://www.w3.org/2000/svg" width="${size.width}" height="${size.height}" viewBox="0 0 ${size.width} ${size.height}">
       <defs>
         <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" stop-color="#e2e8f0"/>
           <stop offset="100%" stop-color="#bfdbfe"/>
         </linearGradient>
       </defs>
-      <rect width="1200" height="800" fill="url(#bg)"/>
-      <rect x="96" y="96" width="1008" height="608" rx="18" fill="#ffffff" opacity="0.82"/>
+      <rect width="${size.width}" height="${size.height}" fill="url(#bg)"/>
+      <rect x="${size.width * 0.08}" y="${size.height * 0.12}" width="${size.width * 0.84}" height="${size.height * 0.76}" rx="18" fill="#ffffff" opacity="0.82"/>
       ${mode === 'inpaint' ? '<rect x="360" y="310" width="480" height="230" rx="28" fill="#fb7185" opacity="0.28"/><rect x="380" y="330" width="440" height="190" rx="22" fill="none" stroke="#be123c" stroke-width="8" stroke-dasharray="18 14"/>' : ''}
       <path d="M220 560 L360 360 L520 480 L680 260 L980 560 Z" fill="#2563eb" opacity="0.18"/>
       <path d="M220 560 L360 360 L520 480 L680 260 L980 560" fill="none" stroke="#2563eb" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
@@ -70,6 +75,16 @@ function createMockImageDataUrl(mode: 'floorplan' | 'style-render' | 'inpaint', 
   `;
 
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+}
+
+function readMockSize(input: GenerateImageInput): { width: number; height: number } {
+  const width = typeof input.targetWidth === 'number' && Number.isInteger(input.targetWidth) && input.targetWidth >= 64
+    ? input.targetWidth
+    : 1200;
+  const height = typeof input.targetHeight === 'number' && Number.isInteger(input.targetHeight) && input.targetHeight >= 64
+    ? input.targetHeight
+    : 800;
+  return { width, height };
 }
 
 function escapeSvg(value: string): string {

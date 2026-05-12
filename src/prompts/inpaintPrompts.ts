@@ -1,44 +1,78 @@
+export type InpaintEditTarget = 'general' | 'material' | 'furniture';
+
 export interface BuildInpaintPromptInput {
   userPrompt: string;
   hasMask: boolean;
   useFullImageMask: boolean;
   hasMaterialReference: boolean;
+  hasFurnitureReference?: boolean;
+  editTarget?: InpaintEditTarget;
 }
 
 export function buildInpaintPrompt(input: BuildInpaintPromptInput): string {
-  const pieces: string[] = [];
+  const editTarget = input.editTarget || 'general';
+  const pieces: string[] = [
+    'You are a professional architectural and interior image editing assistant.',
+    'Preserve the original camera angle, perspective, spatial structure, lighting direction, composition, visual boundary, and canvas ratio.',
+    'Do not crop, extend, pad, add borders, add text, add watermarks, or change the image proportions.',
+  ];
 
   if (input.hasMask) {
     pieces.push(
-      '你是一名专业建筑表现与室内设计图像编辑助手。请基于输入图进行局部重绘。用户已提供 mask / 涂抹区域，请严格优先修改 mask 白色区域或用户标注区域，未选区域应尽量保持不变，包括构图、透视、空间结构、主体比例、门窗位置、家具布局和整体风格。',
+      'The white area of the mask is the editable region. Keep the black area and all unmasked areas as unchanged as possible.',
+      'Do not repaint the whole image. Only edit the masked or clearly selected target region.',
     );
   } else if (input.useFullImageMask) {
     pieces.push(
-      '你是一名专业建筑表现与室内设计图像编辑助手。用户选择整图修改，请基于用户提示词对整张图进行整体优化或重绘，但仍需保持原图的主体空间结构、构图、透视关系和主要设计逻辑稳定，避免无关的大幅变形。',
+      'The user allows full-image editing, but the original composition, spatial structure, camera view, canvas ratio, and main object relationships must remain stable.',
     );
   } else {
     pieces.push(
-      '你是一名专业建筑表现与室内设计图像编辑助手。用户未提供 mask / 涂抹区域，请根据用户提示词自动判断需要修改的对象、材质或区域。可以进行局部或全局智能编辑，但应尽量保持原图主体结构、空间关系、构图、透视、门窗位置、家具布局和未相关区域稳定。',
+      'No mask was provided. Identify the target object or region from the user request, and keep unrelated areas as stable as possible.',
     );
   }
 
-  if (input.hasMaterialReference) {
+  if (editTarget === 'material') {
     pieces.push(
-      '用户上传了材质贴图或参考图。请将材质贴图作为材质、纹理、颜色、质感和细节表现参考，应用到用户提示词指定的对象或区域；如果用户没有明确对象，请根据上下文判断最合理的应用区域。',
+      'Edit target: material replacement or material refinement.',
+      'Only replace or improve material, color, texture, tactile quality, reflection, roughness, and surface detail in the target area.',
+      'Do not change furniture shape, spatial structure, doors, windows, floors, ceilings, walls, fixed architecture, or the overall composition.',
+    );
+    if (input.hasMaterialReference) {
+      pieces.push(
+        'Material reference images are for material texture, color, pattern, and surface quality only. Do not copy objects, layout, or background from the reference images.',
+      );
+    }
+  } else if (editTarget === 'furniture') {
+    pieces.push(
+      'Edit target: furniture modification.',
+      'Replace, add, remove, or refine furniture according to the mask and user request.',
+      'Keep the room perspective, scale, proportions, light direction, camera view, and overall style consistent with the original image.',
+      'Do not change walls, floors, doors, windows, ceilings, fixed structures, unrelated furniture, or unmasked areas.',
+    );
+    if (input.hasFurnitureReference) {
+      pieces.push(
+        'Furniture reference images are for furniture type, form, proportion, material, color, and style only. Do not copy the reference image background.',
+      );
+    }
+  } else {
+    pieces.push(
+      'Edit target: general local improvement.',
+      'Modify the requested target area while keeping unrelated regions, structure, perspective, lighting, and composition stable.',
     );
   }
 
   const trimmedUserPrompt = input.userPrompt.trim();
   if (trimmedUserPrompt) {
-    pieces.push(`用户具体修改需求：${trimmedUserPrompt}`);
+    pieces.push(`User edit request: ${trimmedUserPrompt}`);
   } else {
     pieces.push(
-      '用户未填写具体修改需求时，请进行克制的建筑表现优化，例如提升材质真实感、光影层次、细节清晰度和整体画面质感，但不要改变原图设计方案。',
+      'User edit request is empty. Apply a restrained architectural visual refinement only where appropriate, without changing the design scheme.',
     );
   }
 
   pieces.push(
-    '输出要求：结果应自然真实，与原图风格协调；避免文字、水印、标签、边框、明显拼接痕迹、错误透视、扭曲结构或不合理新增物体。',
+    'Final result must look natural and integrated with the original scene, with plausible contact shadows, perspective, scale, and material behavior.',
   );
 
   return pieces.join('\n');

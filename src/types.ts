@@ -12,6 +12,16 @@ export interface GenerationConfig {
   style?: string;
   lighting: string;
   materialStrength: number;
+  editTarget?: 'general' | 'material' | 'furniture';
+  sourceImageWidth?: number;
+  sourceImageHeight?: number;
+  targetWidth?: number;
+  targetHeight?: number;
+  targetAspectRatio?: string;
+  materialTextureAssetIds?: string[];
+  materialTextureSources?: unknown[];
+  furnitureReferenceAssetIds?: string[];
+  furnitureReferenceSources?: unknown[];
   showStructureLines?: boolean;
   enhanceInterior?: boolean;
   addCharacters?: boolean;
@@ -39,6 +49,7 @@ export interface StepState {
   inputImage: UploadedImage | null;
   materialImage: UploadedImage | null;
   materialTextures: MaterialTexture[];
+  furnitureReferences: ReferenceImage[];
   maskImage: UploadedImage | null;
   useFullImageMask: boolean;
   outputImage: string | null;
@@ -55,7 +66,7 @@ export interface StepState {
   generationJobStatus: AsyncGenerationStatus | null;
   generationProgress: number;
   generationLogs: string[];
-  viewMode: 'original' | 'after' | 'compare';
+  viewMode: 'original' | 'after' | 'compare' | 'overlay';
 }
 
 export interface UploadedImage {
@@ -71,6 +82,15 @@ export interface UploadedImage {
 }
 
 export interface MaterialTexture {
+  id: string;
+  name?: string;
+  url: string;
+  dataUrl?: string;
+  assetId?: string;
+  source: 'upload' | 'library';
+}
+
+export interface ReferenceImage {
   id: string;
   name?: string;
   url: string;
@@ -109,6 +129,8 @@ export interface GenerationHistoryItem {
   inputImageName?: string;
   materialImageName?: string;
   maskImageName?: string;
+  editTarget?: GenerationConfig['editTarget'];
+  furnitureReferences?: ReferenceImage[];
   resultStored?: boolean;
   storageWarning?: string;
 }

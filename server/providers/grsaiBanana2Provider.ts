@@ -52,7 +52,7 @@ export function createGrsaiBanana2Provider(options: GrsaiBanana2ProviderOptions 
   const providerName = options.name || 'grsai-banana2';
   const baseUrl = normalizeBaseUrl(process.env.GRSAI_BASE_URL || defaultBaseUrl);
   const model = process.env.GRSAI_MODEL || defaultModel;
-  const aspectRatio = process.env.GRSAI_ASPECT_RATIO || defaultAspectRatio;
+  const configuredAspectRatio = process.env.GRSAI_ASPECT_RATIO || defaultAspectRatio;
   const imageSize = process.env.GRSAI_IMAGE_SIZE || defaultImageSize;
   const pollIntervalMs = readPositiveInteger(process.env.GRSAI_POLL_INTERVAL_MS, defaultPollIntervalMs);
   const pollTimeoutMs = readPositiveInteger(process.env.GRSAI_POLL_TIMEOUT_MS, defaultPollTimeoutMs);
@@ -63,6 +63,7 @@ export function createGrsaiBanana2Provider(options: GrsaiBanana2ProviderOptions 
       const apiKey = readApiKey(options.apiKey);
       const prompt = buildPrompt(input);
       const urls = buildReferenceUrls(input);
+      const aspectRatio = input.targetAspectRatio || configuredAspectRatio || defaultAspectRatio;
       const taskId = await createGeneration({
         apiKey,
         baseUrl,
@@ -264,8 +265,10 @@ function normalizeImageDataUrl(dataUrl: string): NormalizedDataUrl {
 function buildReferenceUrls(input: GenerateImageInput): string[] {
   return [
     input.inputImageDataUrl,
-    input.materialImageDataUrl,
     input.maskImageDataUrl,
+    input.materialImageDataUrl,
+    ...(input.materialReferenceImageDataUrls || []),
+    ...(input.furnitureReferenceImageDataUrls || []),
     ...(input.referenceImageDataUrls || []),
   ].filter(isNonEmptyString);
 }
@@ -276,13 +279,43 @@ function buildPrompt(input: GenerateImageInput): string {
   }
 
   const pieces: string[] = [];
+  pieces.push(
+    'The first image is the original scene to edit or render.',
+    'Keep the exact same canvas aspect ratio, framing, composition boundary, and image proportions as the first input image. Do not crop, extend, pad, add borders, or change the canvas ratio.',
+  );
+  if (input.maskImageDataUrl) {
+    pieces.push('The mask image limits the editable region. White is editable; black and unmasked areas should remain unchanged.');
+  }
+  if (input.materialImageDataUrl || (input.materialReferenceImageDataUrls?.length || 0) > 0) {
+    pieces.push('Material reference images are only for material texture, color, pattern, reflection, roughness, and surface quality. Do not copy objects or backgrounds from them.');
+  }
+  if ((input.furnitureReferenceImageDataUrls?.length || 0) > 0) {
+    pieces.push('Furniture reference images are only for furniture type, shape, proportion, material, color, and style. Do not copy their backgrounds.');
+  }
 
   if (input.mode === 'floorplan') {
-    pieces.push('请保留原始平面图的空间关系、墙体、门窗和动线，生成清晰、专业的建筑表达图。');
+    pieces.push(
+      'Convert the input image into a professional interior colored floor plan with clear, realistic, and clean material rendering.',
+      'Strictly preserve the original floor plan layout, room boundaries, walls, doors, windows, openings, columns, furniture positions, furniture outlines, and proportions.',
+      'Use light marble, white marble, light stone, or light tile for living rooms, dining rooms, corridors, and public areas; dark tiles, anti-slip tiles, or durable stain-resistant materials for kitchens, bathrooms, balconies, and wet areas; white oak flooring, light wood flooring, or warm wood materials for bedrooms and studies.',
+      'Keep walls, windows, and door openings in their original style and outline. Preserve the top-down plan representation. Do not generate a perspective rendering, elevation, 3D bird-eye view, or change the architectural layout.',
+    );
   }
 
   if (input.mode === 'style-render') {
     pieces.push('请以第一张输入图为空间结构基准，保持构图、透视、比例和主要空间关系，主要改变风格、材质、光影和表达方式。');
+  }
+
+  if (input.editTarget === 'material') {
+    pieces.push('Edit target is material: only change material, color, texture, reflection, roughness, and surface quality. Do not change furniture shape or fixed architecture.');
+  } else if (input.editTarget === 'furniture') {
+    pieces.push('Edit target is furniture: replace, add, remove, or refine furniture while preserving perspective, scale, lighting, walls, floor, ceiling, doors, windows, and fixed structures.');
+  }
+
+  if (input.editTarget === 'material') {
+    pieces.push('Edit target is material: only change material, color, texture, reflection, roughness, and surface quality. Do not change furniture shape or fixed architecture.');
+  } else if (input.editTarget === 'furniture') {
+    pieces.push('Edit target is furniture: replace, add, remove, or refine furniture while preserving perspective, scale, lighting, walls, floor, ceiling, doors, windows, and fixed structures.');
   }
 
   pieces.push(input.prompt);
@@ -295,6 +328,18 @@ function buildPrompt(input: GenerateImageInput): string {
 function buildInpaintPrompt(input: GenerateImageInput): string {
   const pieces: string[] = [];
   const hasMask = input.maskMode === 'asset-mask' && isNonEmptyString(input.maskImageDataUrl);
+  pieces.push(
+    'The first image is the original scene image.',
+    'Keep the exact same canvas aspect ratio, framing, composition boundary, and image proportions as the first input image.',
+  );
+  if (input.editTarget === 'material') {
+    pieces.push('Edit target is material: only change material, color, texture, reflection, roughness, and surface quality. Do not change furniture shape or fixed architecture.');
+  } else if (input.editTarget === 'furniture') {
+    pieces.push('Edit target is furniture: replace, add, remove, or refine furniture while preserving perspective, scale, lighting, walls, floor, ceiling, doors, windows, and fixed structures.');
+  }
+  if ((input.furnitureReferenceImageDataUrls?.length || 0) > 0) {
+    pieces.push('Furniture reference images are only for furniture type, shape, proportion, material, color, and style. Do not copy their backgrounds.');
+  }
 
   if (hasMask) {
     pieces.push(

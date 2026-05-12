@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
@@ -420,7 +420,6 @@ function ReportExportPanel({
         </div>
       </div>
       <div className="mt-4 flex items-center justify-between rounded-2xl bg-slate-50 p-3 text-xs font-bold text-slate-600">
-        <span>已选择 {selectedCount} / {reportOptions.length} 个方案</span>
         <div className="flex gap-2">
           <button onClick={onSelectAll} className="text-blue-600 hover:text-blue-700">全选</button>
           <button onClick={onSelectNone} className="text-slate-500 hover:text-slate-700">清空</button>
@@ -514,7 +513,6 @@ function ProjectReportPrintView({ project, reportOptions }: { project: Project; 
         <p>{project.description || '暂无项目描述。'}</p>
         <div className="pdf-report-meta">
           <span>导出时间：{formatDate(new Date().toISOString())}</span>
-          <span>方案数量：{reportOptions.length}</span>
         </div>
       </header>
 
@@ -638,3 +636,4 @@ function formatDate(value: string): string {
     hour12: false,
   });
 }
+

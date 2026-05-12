@@ -24,4 +24,17 @@ describe('mock provider', () => {
       delete process.env.GENERATION_PROVIDER;
     }
   });
+
+  it('uses targetWidth and targetHeight for the mock SVG canvas', async () => {
+    const output = await mockProvider.generateImage({
+      ...input,
+      targetWidth: 800,
+      targetHeight: 600,
+    });
+    const svg = Buffer.from(output.dataUrl.split(',')[1] || '', 'base64').toString('utf8');
+
+    expect(svg).toContain('width="800"');
+    expect(svg).toContain('height="600"');
+    expect(svg).toContain('viewBox="0 0 800 600"');
+  });
 });

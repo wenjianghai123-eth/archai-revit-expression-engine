@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { DEFAULT_CONFIGS } from '../constants';
-import { GenerationConfig, GenerationStep, MaterialTexture, PromptTemplate, StepState, UploadedImage } from '../types';
+import { GenerationConfig, GenerationStep, MaterialTexture, PromptTemplate, ReferenceImage, StepState, UploadedImage } from '../types';
 
 function createInitialStepState(step: GenerationStep): StepState {
   return {
@@ -8,6 +8,7 @@ function createInitialStepState(step: GenerationStep): StepState {
     inputImage: null,
     materialImage: null,
     materialTextures: [],
+    furnitureReferences: [],
     maskImage: null,
     useFullImageMask: false,
     outputImage: null,
@@ -107,6 +108,16 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
     }));
   }, [currentStep]);
 
+  const handleUpdateFurnitureReferences = useCallback((references: ReferenceImage[]) => {
+    setStepStates(prev => ({
+      ...prev,
+      [currentStep]: {
+        ...prev[currentStep],
+        furnitureReferences: references,
+      },
+    }));
+  }, [currentStep]);
+
   const handleUpdateMaskImage = useCallback((maskDataUrl: string | null, useFullImage: boolean, feather = 0) => {
     setStepStates(prev => ({
       ...prev,
@@ -184,6 +195,7 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
     handleUpdateInputImage,
     handleUpdateMaterialImage,
     handleUpdateMaterialTextures,
+    handleUpdateFurnitureReferences,
     handleUpdateMaskImage,
     handleResetConfig,
     handleApplyTemplate,

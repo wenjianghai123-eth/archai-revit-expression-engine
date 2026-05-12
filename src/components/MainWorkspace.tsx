@@ -13,12 +13,13 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { GenerationConfig, GenerationProvider, GenerationStep, MaterialAsset, MaterialTexture, StepState, UploadedImage } from '../types';
+import { GenerationConfig, GenerationProvider, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, StepState, UploadedImage } from '../types';
 import { createUploadedImage, validateImageFile } from '../utils/file';
 import { downloadDataUrl, downloadJson } from '../utils/download';
 import { uploadImageAsset } from '../lib/api';
 import { MaskEditor } from './MaskEditor';
 import { MaterialLibrary } from './MaterialLibrary';
+import { OverlayCompareViewer } from './OverlayCompareViewer';
 
 interface WorkspaceProps {
   step: GenerationStep;
@@ -27,8 +28,10 @@ interface WorkspaceProps {
   onUpdateInputImage: (image: UploadedImage | null) => void;
   onUpdateMaterialImage: (image: UploadedImage | null) => void;
   onUpdateMaterialTextures: (textures: MaterialTexture[]) => void;
+  onUpdateFurnitureReferences: (references: ReferenceImage[]) => void;
   onUpdateMaskImage: (maskDataUrl: string | null, useFullImage: boolean, feather?: number) => void;
   onGenerate: () => void;
+  onRegenerate: () => void;
   onCancelGeneration: () => void;
   onSelectGenerationResult: (resultId: string) => void;
   onToggleGenerationFavorite: (resultId: string) => void;
@@ -36,15 +39,14 @@ interface WorkspaceProps {
   onNextStep: () => void;
   onReset: () => void;
   backendProvider: GenerationProvider | null;
-  creditBalance: number | null;
-  estimatedCreditCost: number;
   isCreditsInsufficient: boolean;
 }
 
-type UploadTarget = 'input' | 'material' | 'texture';
+type UploadTarget = 'input' | 'material' | 'texture' | 'furniture';
 
 const acceptedImageTypes = 'image/png,image/jpeg,image/webp';
 const maxMaterialTextures = 3;
+const maxFurnitureReferences = 3;
 const styleOptions = ['现代主义', '极简风格', '北欧风格', '日式侘寂', '工业风格', '新中式'];
 
 export function MainWorkspace({
@@ -54,8 +56,10 @@ export function MainWorkspace({
   onUpdateInputImage,
   onUpdateMaterialImage,
   onUpdateMaterialTextures,
+  onUpdateFurnitureReferences,
   onUpdateMaskImage,
   onGenerate,
+  onRegenerate,
   onCancelGeneration,
   onSelectGenerationResult,
   onToggleGenerationFavorite,
@@ -63,20 +67,20 @@ export function MainWorkspace({
   onNextStep,
   onReset,
   backendProvider,
-  creditBalance,
-  estimatedCreditCost,
   isCreditsInsufficient,
 }: WorkspaceProps) {
   const inputFileRef = useRef<HTMLInputElement>(null);
   const materialFileRef = useRef<HTMLInputElement>(null);
   const materialTextureFileRef = useRef<HTMLInputElement>(null);
-  const [uploadErrors, setUploadErrors] = useState<Record<UploadTarget, string | null>>({ input: null, material: null, texture: null });
+  const furnitureReferenceFileRef = useRef<HTMLInputElement>(null);
+  const [uploadErrors, setUploadErrors] = useState<Record<UploadTarget, string | null>>({ input: null, material: null, texture: null, furniture: null });
   const [isMaterialLibraryOpen, setIsMaterialLibraryOpen] = useState(false);
 
   const isFloorplanStep = step === GenerationStep.FloorplanTo3D;
   const isStyleRenderStep = step === GenerationStep.StyleRender;
   const canGenerate = Boolean(state.inputImage) && !state.isGenerating && !isCreditsInsufficient;
   const providerForStatus = backendProvider || state.generationProvider;
+  const originalImageUrl = state.inputImage ? getUploadedImageSrc(state.inputImage) : null;
   const resultOptions = state.generationResults.length > 0
     ? state.generationResults
     : state.outputImage
@@ -87,16 +91,28 @@ export function MainWorkspace({
     || resultOptions[0]
     || null;
   const previewImage = selectedResult?.imageUrl || state.outputImage;
+  const resultPanelTitle = isFloorplanStep ? '材质设置与结果' : isStyleRenderStep ? '渲染设置与结果' : '输出 / 状态';
+  const viewModeOptions: Array<{ value: StepState['viewMode']; label: string; disabled: boolean }> = [
+    { value: 'after', label: '结果图', disabled: !previewImage },
+    { value: 'original', label: '原图', disabled: !originalImageUrl },
+    { value: 'compare', label: '对比', disabled: !previewImage || !originalImageUrl },
+    { value: 'overlay', label: '叠加对比', disabled: !previewImage || !originalImageUrl },
+  ];
 
   const handleUploadClick = (target: UploadTarget) => {
     if (target === 'input') inputFileRef.current?.click();
     else if (target === 'material') materialFileRef.current?.click();
-    else materialTextureFileRef.current?.click();
+    else if (target === 'texture') materialTextureFileRef.current?.click();
+    else furnitureReferenceFileRef.current?.click();
   };
 
   const handleFileSelected = async (target: UploadTarget, fileList: FileList | null) => {
     if (target === 'texture') {
       await handleTextureFiles(fileList);
+      return;
+    }
+    if (target === 'furniture') {
+      await handleFurnitureReferenceFiles(fileList);
       return;
     }
 
@@ -129,6 +145,135 @@ export function MainWorkspace({
         [target]: error instanceof Error ? error.message : '图片读取失败，请重试。',
       }));
     }
+  };
+
+  const handleFurnitureReferenceFiles = async (fileList: FileList | null) => {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+
+    const availableSlots = maxFurnitureReferences - state.furnitureReferences.length;
+    if (availableSlots <= 0) {
+      setUploadErrors(prev => ({ ...prev, furniture: `最多只能选择 ${maxFurnitureReferences} 张家具参考图。` }));
+      return;
+    }
+
+    const nextReferences: ReferenceImage[] = [];
+    for (const file of files.slice(0, availableSlots)) {
+      const validationError = validateImageFile(file);
+      if (validationError) {
+        setUploadErrors(prev => ({ ...prev, furniture: validationError }));
+        continue;
+      }
+
+      const localImage = await createUploadedImage(file);
+      let assetId: string | undefined;
+      let url = localImage.dataUrl;
+
+      try {
+        const asset = await uploadImageAsset(file, file.name);
+        assetId = asset.id;
+        url = asset.url;
+      } catch {
+        // Keep the local preview when backend upload is unavailable.
+      }
+
+      nextReferences.push({
+        id: `${localImage.id}-furniture`,
+        name: localImage.name,
+        url,
+        dataUrl: localImage.dataUrl,
+        assetId,
+        source: 'upload',
+      });
+    }
+
+    if (nextReferences.length > 0) {
+      onUpdateFurnitureReferences([...state.furnitureReferences, ...nextReferences].slice(0, maxFurnitureReferences));
+      setUploadErrors(prev => ({ ...prev, furniture: null }));
+    }
+  };
+
+  const handleRemoveFurnitureReference = (id: string) => {
+    onUpdateFurnitureReferences(state.furnitureReferences.filter(reference => reference.id !== id));
+    setUploadErrors(prev => ({ ...prev, furniture: null }));
+  };
+
+  const renderEditTargetControls = () => {
+    if (!isLocalInpaintingStep(step)) return null;
+    const options: Array<{ value: NonNullable<GenerationConfig['editTarget']>; label: string }> = [
+      { value: 'general', label: '综合优化' },
+      { value: 'material', label: '材质修改' },
+      { value: 'furniture', label: '家具修改' },
+    ];
+
+    return (
+      <div className="space-y-2">
+        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">修改类型</label>
+        <div className="grid grid-cols-3 gap-2">
+          {options.map(option => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => onUpdateConfig({ editTarget: option.value })}
+              className={`rounded-lg border px-2 py-2 text-[10px] font-bold ${
+                (state.config.editTarget || 'general') === option.value
+                  ? 'border-blue-600 bg-blue-50 text-blue-700'
+                  : 'border-slate-200 bg-white text-slate-500'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const renderFurnitureReferences = () => {
+    const isFull = state.furnitureReferences.length >= maxFurnitureReferences;
+
+    return (
+      <section className="shrink-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-xs font-bold text-slate-800">家具参考图</h3>
+            <p className="mt-0.5 text-[10px] font-medium text-slate-400">参考家具类型、造型、比例与风格，最多 {maxFurnitureReferences} 张</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleUploadClick('furniture')}
+            disabled={isFull}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] font-bold text-slate-600 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Upload className="h-3.5 w-3.5" />
+            上传家具参考图
+          </button>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          {state.furnitureReferences.map(reference => (
+            <div key={reference.id} className="group relative aspect-square overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+              <img src={reference.url} alt={reference.name || '家具参考图'} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+              <button
+                type="button"
+                onClick={() => handleRemoveFurnitureReference(reference.id)}
+                className="absolute right-1 top-1 rounded-full bg-white/90 p-1 text-slate-500 opacity-0 shadow transition hover:text-red-600 group-hover:opacity-100"
+                title="删除家具参考图"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {uploadErrors.furniture ? (
+          <p className="mt-2 flex items-center gap-1 text-[11px] font-medium text-amber-600">
+            <AlertCircle className="h-3.5 w-3.5" />
+            {uploadErrors.furniture}
+          </p>
+        ) : null}
+      </section>
+    );
   };
 
   const handleTextureFiles = async (fileList: FileList | null) => {
@@ -256,6 +401,29 @@ export function MainWorkspace({
     </div>
   );
 
+  const renderStyleSelector = () => (
+    <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="mb-3">
+        <h3 className="text-xs font-bold text-slate-800">风格选择</h3>
+        <p className="mt-0.5 text-[10px] font-medium text-slate-400">选择当前渲染任务的空间表达方向。</p>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {styleOptions.map(style => (
+          <button
+            key={style}
+            type="button"
+            onClick={() => onUpdateConfig({ style })}
+            className={`min-h-11 rounded-lg border px-2 text-left text-[10px] font-bold ${
+              state.config.style === style ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-500'
+            }`}
+          >
+            {style}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+
   const renderMaterialTextures = () => {
     const isFull = state.materialTextures.length >= maxMaterialTextures;
 
@@ -335,16 +503,6 @@ export function MainWorkspace({
   };
 
   const renderPreview = () => {
-    if (!previewImage && !state.isGenerating) {
-      return (
-        <div className="flex h-full flex-col items-center justify-center bg-slate-50 text-center text-slate-400">
-          <ImageIcon className="mb-4 h-10 w-10 opacity-40" />
-          <h3 className="text-base font-bold text-slate-800">暂无生成结果</h3>
-          <p className="mt-2 max-w-sm text-sm">上传图片并点击生成后，结果会显示在这里。</p>
-        </div>
-      );
-    }
-
     if (state.isGenerating) {
       return (
         <div className="flex h-full flex-col items-center justify-center bg-white/80 text-blue-600">
@@ -355,17 +513,31 @@ export function MainWorkspace({
       );
     }
 
-    if (state.viewMode === 'original' && state.inputImage) {
-      return <img src={getUploadedImageSrc(state.inputImage)} alt="原图" className="h-full w-full object-contain bg-white" referrerPolicy="no-referrer" />;
+    if (state.viewMode === 'original' && originalImageUrl) {
+      return <img src={originalImageUrl} alt="原图" className="h-full w-full object-contain bg-white" referrerPolicy="no-referrer" />;
     }
 
-    if (state.viewMode === 'compare' && state.inputImage && previewImage) {
+    if (!previewImage) {
+      return (
+        <div className="flex h-full flex-col items-center justify-center bg-slate-50 text-center text-slate-400">
+          <ImageIcon className="mb-4 h-10 w-10 opacity-40" />
+          <h3 className="text-base font-bold text-slate-800">暂无生成结果</h3>
+          <p className="mt-2 max-w-sm text-sm">上传图片并点击生成后，结果会显示在这里。</p>
+        </div>
+      );
+    }
+
+    if (state.viewMode === 'compare' && originalImageUrl && previewImage) {
       return (
         <div className="grid h-full w-full grid-cols-2 bg-white">
-          <img src={getUploadedImageSrc(state.inputImage)} alt="原图" className="h-full w-full border-r border-slate-200 object-contain" referrerPolicy="no-referrer" />
+          <img src={originalImageUrl} alt="原图" className="h-full w-full border-r border-slate-200 object-contain" referrerPolicy="no-referrer" />
           <img src={previewImage} alt="结果图" className="h-full w-full object-contain" referrerPolicy="no-referrer" />
         </div>
       );
+    }
+
+    if (state.viewMode === 'overlay') {
+      return <OverlayCompareViewer originalImageUrl={originalImageUrl} generatedImageUrl={previewImage} className="h-full" />;
     }
 
     return <img src={previewImage || ''} alt="生成结果" className="h-full w-full object-contain bg-white" referrerPolicy="no-referrer" />;
@@ -404,6 +576,17 @@ export function MainWorkspace({
           event.currentTarget.value = '';
         }}
       />
+      <input
+        ref={furnitureReferenceFileRef}
+        type="file"
+        accept={acceptedImageTypes}
+        multiple
+        className="hidden"
+        onChange={event => {
+          void handleFurnitureReferenceFiles(event.currentTarget.files);
+          event.currentTarget.value = '';
+        }}
+      />
 
       {step === GenerationStep.LocalInpainting ? (
         <>
@@ -415,26 +598,8 @@ export function MainWorkspace({
 
             <div className="space-y-5">
               {renderUpload('input', state.inputImage, '原始图片')}
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">方案数量</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {([1, 2, 4] as const).map(count => (
-                    <button
-                      key={count}
-                      type="button"
-                      onClick={() => onUpdateConfig({ batchCount: count })}
-                      className={`rounded-lg border px-3 py-2 text-[10px] font-bold ${
-                        (state.config.batchCount || 1) === count
-                          ? 'border-blue-600 bg-blue-50 text-blue-700'
-                          : 'border-slate-200 bg-white text-slate-500'
-                      }`}
-                    >
-                      {count}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              {renderEditTargetControls()}
+              {(state.config.editTarget || 'general') === 'furniture' ? renderFurnitureReferences() : null}
 
               <div className="space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">修改说明</label>
@@ -547,8 +712,9 @@ export function MainWorkspace({
 
         <div className="space-y-5">
           {renderUpload('input', state.inputImage, isLocalInpaintingStep(step) ? '原始图片' : '输入图片')}
+          {renderEditTargetControls()}
+          {isLocalInpaintingStep(step) && (state.config.editTarget || 'general') === 'furniture' ? renderFurnitureReferences() : null}
           {!isLocalInpaintingStep(step) && renderUpload('material', state.materialImage, '参考图 / 材质图', true)}
-          {isFloorplanStep && renderMaterialTextures()}
 
           {isLocalInpaintingStep(step) && state.inputImage && (
             <MaskEditor
@@ -559,26 +725,6 @@ export function MainWorkspace({
               onMaskChange={onUpdateMaskImage}
             />
           )}
-
-          <div className="space-y-2">
-            <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">方案数量</label>
-            <div className="grid grid-cols-3 gap-2">
-              {([1, 2, 4] as const).map(count => (
-                <button
-                  key={count}
-                  type="button"
-                  onClick={() => onUpdateConfig({ batchCount: count })}
-                  className={`rounded-lg border px-3 py-2 text-[10px] font-bold ${
-                    (state.config.batchCount || 1) === count
-                      ? 'border-blue-600 bg-blue-50 text-blue-700'
-                      : 'border-slate-200 bg-white text-slate-500'
-                  }`}
-                >
-                  {count}
-                </button>
-              ))}
-            </div>
-          </div>
 
           <div className="space-y-2">
             <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
@@ -601,26 +747,6 @@ export function MainWorkspace({
               <p className="text-[11px] leading-5 text-slate-400">不涂抹也可以直接根据提示词进行全局或智能局部修改；涂抹后可更精确地限制修改区域。</p>
             ) : null}
           </div>
-
-          {isStyleRenderStep && (
-            <div className="space-y-2">
-              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">风格</label>
-              <div className="grid grid-cols-2 gap-2">
-                {styleOptions.map(style => (
-                  <button
-                    key={style}
-                    type="button"
-                    onClick={() => onUpdateConfig({ style })}
-                    className={`min-h-11 rounded-lg border px-2 text-left text-[10px] font-bold ${
-                      state.config.style === style ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-500'
-                    }`}
-                  >
-                    {style}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
 
           {isLocalInpaintingStep(step) && (
             <div className="space-y-4">
@@ -680,17 +806,17 @@ export function MainWorkspace({
       <main className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-12 items-center justify-between border-b border-slate-200 bg-white/70 px-4">
           <div className="flex overflow-hidden rounded-lg bg-slate-200 p-0.5">
-            {(['after', 'original', 'compare'] as const).map(viewMode => (
+            {viewModeOptions.map(({ value, label, disabled }) => (
               <button
-                key={viewMode}
+                key={value}
                 type="button"
-                onClick={() => onSetViewMode(viewMode)}
-                disabled={viewMode === 'compare' && (!state.outputImage || !state.inputImage)}
+                onClick={() => onSetViewMode(value)}
+                disabled={disabled}
                 className={`rounded-md px-4 py-1.5 text-[10px] font-bold uppercase disabled:opacity-40 ${
-                  state.viewMode === viewMode ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'
+                  state.viewMode === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'
                 }`}
               >
-                {viewMode === 'after' ? '结果图' : viewMode === 'original' ? '原图' : '对比'}
+                {label}
               </button>
             ))}
           </div>
@@ -709,25 +835,15 @@ export function MainWorkspace({
       <aside className="flex w-96 shrink-0 flex-col overflow-y-auto border-l border-slate-200 bg-white p-4 custom-scrollbar">
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">输出 / 状态</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{resultPanelTitle}</span>
             <p className="mt-1 text-xs text-slate-500">{state.generationJobStatus || state.generationStatus}</p>
           </div>
           <Settings2 className="h-4 w-4 text-slate-300" />
         </div>
 
         <div className="space-y-4">
-          <div className={`rounded-xl border p-3 ${isCreditsInsufficient ? 'border-amber-200 bg-amber-50' : 'border-slate-100 bg-slate-50'}`}>
-            <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-slate-400">
-              <span>Credits</span>
-              <span>{creditBalance === null ? '读取中' : `${creditBalance} credits`}</span>
-            </div>
-            <p className="mt-2 text-xs font-semibold text-slate-700">本次预计消耗 {estimatedCreditCost} credits</p>
-            {isCreditsInsufficient ? (
-              <div className="mt-3 rounded-lg bg-white/80 p-3 text-xs leading-5 text-amber-800">
-                剩余额度不足，暂不能创建生成任务。商业化版本会在这里接入升级套餐和充值入口。
-              </div>
-            ) : null}
-          </div>
+          {isStyleRenderStep ? renderStyleSelector() : null}
+          {isFloorplanStep ? renderMaterialTextures() : null}
 
           <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
             <div className="mb-2 flex items-center justify-between text-[10px] font-bold text-slate-500">
@@ -744,11 +860,28 @@ export function MainWorkspace({
             )}
           </div>
 
-          {previewImage ? (
-            <div className="space-y-3">
-              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                <img src={previewImage} alt="当前结果" className="h-32 w-full object-contain" referrerPolicy="no-referrer" />
-              </div>
+          <div className="space-y-3">
+            <div className="flex overflow-hidden rounded-lg bg-slate-200 p-0.5">
+              {viewModeOptions.map(({ value, label, disabled }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => onSetViewMode(value)}
+                  disabled={disabled}
+                  className={`flex-1 rounded-md px-2 py-1.5 text-[10px] font-bold disabled:opacity-40 ${
+                    state.viewMode === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="h-48 overflow-hidden rounded-xl border border-slate-200 bg-white">
+              {renderPreview()}
+            </div>
+
+            {previewImage ? (
+              <>
               {resultOptions.length > 1 && (
                 <div className="grid grid-cols-2 gap-2">
                   {resultOptions.map((result, index) => (
@@ -812,13 +945,9 @@ export function MainWorkspace({
                   导出 JSON
                 </button>
               </div>
-            </div>
-          ) : (
-            <div className="flex h-32 flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-center text-slate-400">
-              <ImageIcon className="mb-2 h-7 w-7 opacity-40" />
-              <p className="text-xs font-medium">生成结果会显示在这里</p>
-            </div>
-          )}
+              </>
+            ) : null}
+          </div>
 
           {state.generationWarnings.length > 0 && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
@@ -845,9 +974,17 @@ export function MainWorkspace({
           )}
         </div>
 
-        <div className="mt-auto grid grid-cols-2 gap-2 border-t border-slate-100 pt-4">
+        <div className="mt-auto grid grid-cols-3 gap-2 border-t border-slate-100 pt-4">
           <button type="button" onClick={onReset} disabled={state.isGenerating} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-500 disabled:opacity-40">
             重置
+          </button>
+          <button
+            type="button"
+            onClick={onRegenerate}
+            disabled={!canGenerate}
+            className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 disabled:opacity-50"
+          >
+            重新生成
           </button>
           <button
             type="button"

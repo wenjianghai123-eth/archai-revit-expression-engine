@@ -68,6 +68,7 @@ export default function App() {
     handleUpdateInputImage,
     handleUpdateMaterialImage,
     handleUpdateMaterialTextures,
+    handleUpdateFurnitureReferences,
     handleUpdateMaskImage,
     handleResetConfig,
     handleApplyTemplate,
@@ -222,12 +223,17 @@ export default function App() {
         const generationMode = getGenerationRecordMode(currentStep);
         const promptForRequest = buildPromptForGeneration(currentStep, stateAtStart.config.prompt, stateAtStart);
         const configForRequest = buildConfigForGeneration(currentStep, stateAtStart.config);
-        const inputAssetIds = Array.from(new Set([
+        const targetSizeConfig = buildTargetSizeConfig(stateAtStart.inputImage);
+        const furnitureReferenceAssetIds = stateAtStart.furnitureReferences
+          .map(reference => reference.assetId)
+          .filter((assetId): assetId is string => Boolean(assetId));
+        let inputAssetIds = Array.from(new Set([
           stateAtStart.inputImage.assetId,
           ...(stateAtStart.materialImage?.assetId ? [stateAtStart.materialImage.assetId] : []),
           ...stateAtStart.materialTextures
             .map(texture => texture.assetId)
             .filter((assetId): assetId is string => Boolean(assetId)),
+          ...furnitureReferenceAssetIds,
         ]));
         let maskAssetId: string | undefined;
         const hasPaintedMask = Boolean(stateAtStart.maskImage?.dataUrl);
@@ -242,6 +248,7 @@ export default function App() {
           const maskFile = dataUrlToFile(stateAtStart.maskImage.dataUrl, `archai-mask-${Date.now()}`);
           const maskAsset = await uploadImageAsset(maskFile, maskFile.name);
           maskAssetId = maskAsset.id;
+          inputAssetIds = Array.from(new Set([...inputAssetIds, maskAsset.id]));
         }
         const job = await createGenerationJob({
           projectId: selectedProjectId,
@@ -249,8 +256,11 @@ export default function App() {
           prompt: promptForRequest,
           config: {
             ...configForRequest,
+            ...targetSizeConfig,
             mode: generationMode,
+            batchCount: 1,
             userPrompt: stateAtStart.config.prompt,
+            editTarget: currentStep === GenerationStep.LocalInpainting ? stateAtStart.config.editTarget || 'general' : stateAtStart.config.editTarget,
             strength: stateAtStart.config.strength || stateAtStart.config.inpaintingStrength || 'medium',
             preserveStructure: Boolean(stateAtStart.config.preserveStructure ?? stateAtStart.config.keepOriginalMaterial),
             feather: stateAtStart.config.feather ?? 0,
@@ -264,6 +274,13 @@ export default function App() {
               name: texture.name,
               url: texture.url,
               source: texture.source,
+            })),
+            furnitureReferenceAssetIds,
+            furnitureReferenceSources: stateAtStart.furnitureReferences.map(reference => ({
+              id: reference.id,
+              name: reference.name,
+              url: reference.url,
+              source: reference.source,
             })),
           },
           inputAssetIds,
@@ -335,6 +352,8 @@ export default function App() {
             provider: providerName || 'mock',
             outputImage: selectedResult.imageUrl,
             config: stateAtStart.config,
+            editTarget: stateAtStart.config.editTarget,
+            furnitureReferences: stateAtStart.furnitureReferences,
             inputImageName: stateAtStart.inputImage.name,
             materialImageName: stateAtStart.materialImage?.name,
             maskImageName: stateAtStart.maskImage?.name,
@@ -447,7 +466,7 @@ export default function App() {
             inputImageDataUrl: stateAtStart.inputImage.dataUrl,
             materialImageDataUrl: stateAtStart.materialImage?.dataUrl,
             prompt: buildPromptForGeneration(currentStep, stateAtStart.config.prompt, stateAtStart),
-            config: buildConfigForGeneration(currentStep, stateAtStart.config),
+            config: forceSingleOutputConfig(buildConfigForGeneration(currentStep, stateAtStart.config)),
           });
           break;
 
@@ -455,7 +474,7 @@ export default function App() {
           response = await generateStyleRender({
             inputImageDataUrl: stateAtStart.inputImage.dataUrl,
             prompt: stateAtStart.config.prompt,
-            config: stateAtStart.config,
+            config: forceSingleOutputConfig(stateAtStart.config),
           });
           break;
 
@@ -464,7 +483,7 @@ export default function App() {
             inputImageDataUrl: stateAtStart.inputImage.dataUrl,
             maskImageDataUrl: stateAtStart.maskImage?.dataUrl,
             prompt: buildPromptForGeneration(currentStep, stateAtStart.config.prompt, stateAtStart),
-            config: stateAtStart.config,
+            config: forceSingleOutputConfig(stateAtStart.config),
           });
           break;
       }
@@ -513,6 +532,8 @@ export default function App() {
           provider: response.provider,
           outputImage: response.imageDataUrl,
           config: currentState.config,
+          editTarget: currentState.config.editTarget,
+          furnitureReferences: currentState.furnitureReferences,
           inputImageName: currentState.inputImage?.name,
           materialImageName: currentState.materialImage?.name,
           maskImageName: currentState.maskImage?.name,
@@ -773,7 +794,12 @@ export default function App() {
               exit={{ opacity: 0 }}
               className="flex min-h-0 flex-1 flex-col overflow-hidden min-w-0"
             >
-              <Stepper currentStep={currentStep} onStepChange={setCurrentStep} />
+              <Stepper
+                currentStep={currentStep}
+                onStepChange={setCurrentStep}
+                estimatedCreditCost={estimatedCreditCost}
+                creditBalance={creditBalance?.balance ?? null}
+              />
               
               <div className="relative min-h-0 flex-1 overflow-hidden">
                 <AnimatePresence mode="wait">
@@ -792,8 +818,10 @@ export default function App() {
                       onUpdateInputImage={handleUpdateInputImage}
                       onUpdateMaterialImage={handleUpdateMaterialImage}
                       onUpdateMaterialTextures={handleUpdateMaterialTextures}
+                      onUpdateFurnitureReferences={handleUpdateFurnitureReferences}
                       onUpdateMaskImage={handleUpdateMaskImage}
                       onGenerate={handleGenerate}
+                      onRegenerate={handleGenerate}
                       onCancelGeneration={handleCancelGeneration}
                       onSelectGenerationResult={handleSelectGenerationResult}
                       onToggleGenerationFavorite={handleToggleGenerationFavorite}
@@ -801,8 +829,6 @@ export default function App() {
                       onNextStep={handleNextStep}
                       onReset={handleResetConfig}
                       backendProvider={backendHealth.data?.provider || null}
-                      creditBalance={creditBalance?.balance ?? null}
-                      estimatedCreditCost={estimatedCreditCost}
                       isCreditsInsufficient={isCreditsInsufficient}
                     />
                   </motion.div>
@@ -878,13 +904,16 @@ function getGenerationRecordMode(step: GenerationStep): 'floorplan' | 'style-ren
 
 function calculateGenerationCreditsCost(step: GenerationStep, config: GenerationConfig): number {
   const baseCost = step === GenerationStep.LocalInpainting ? 8 : 10;
-  const batchCount = config.batchCount === 2 || config.batchCount === 4 ? config.batchCount : 1;
-  return baseCost * batchCount;
+  return baseCost;
 }
 
 function buildPromptForGeneration(step: GenerationStep, prompt: string, state?: StepState): string {
   if (step === GenerationStep.FloorplanTo3D) {
-    return buildFloorplanColorPrompt(prompt);
+    return buildFloorplanColorPrompt({
+      userPrompt: prompt,
+      hasMaterialReferences: Boolean(state?.materialImage?.dataUrl || (state?.materialTextures.length || 0) > 0),
+      materialNames: state?.materialTextures.map(texture => texture.name || '').filter(Boolean),
+    });
   }
 
   if (step === GenerationStep.LocalInpainting && state) {
@@ -893,10 +922,40 @@ function buildPromptForGeneration(step: GenerationStep, prompt: string, state?: 
       hasMask: Boolean(state.maskImage?.dataUrl),
       useFullImageMask: Boolean(state.useFullImageMask),
       hasMaterialReference: Boolean(state.materialImage?.dataUrl || state.materialTextures.length > 0),
+      hasFurnitureReference: state.furnitureReferences.length > 0,
+      editTarget: state.config.editTarget || 'general',
     });
   }
 
   return prompt;
+}
+
+function buildTargetSizeConfig(image: UploadedImage): Pick<GenerationConfig, 'sourceImageWidth' | 'sourceImageHeight' | 'targetWidth' | 'targetHeight' | 'targetAspectRatio'> {
+  if (!image.width || !image.height) {
+    return {};
+  }
+
+  return {
+    sourceImageWidth: image.width,
+    sourceImageHeight: image.height,
+    targetWidth: image.width,
+    targetHeight: image.height,
+    targetAspectRatio: getAspectRatioString(image.width, image.height),
+  };
+}
+
+function getAspectRatioString(width: number, height: number): string {
+  const ratio = width / height;
+  const candidates = [
+    { value: '1:1', ratio: 1 },
+    { value: '4:3', ratio: 4 / 3 },
+    { value: '3:4', ratio: 3 / 4 },
+    { value: '16:9', ratio: 16 / 9 },
+    { value: '9:16', ratio: 9 / 16 },
+  ];
+  return candidates.reduce((best, candidate) => (
+    Math.abs(candidate.ratio - ratio) < Math.abs(best.ratio - ratio) ? candidate : best
+  )).value;
 }
 
 function buildConfigForGeneration(step: GenerationStep, config: GenerationConfig): GenerationConfig {
@@ -906,6 +965,10 @@ function buildConfigForGeneration(step: GenerationStep, config: GenerationConfig
 
   const { style: _style, ...floorplanConfig } = config;
   return floorplanConfig;
+}
+
+function forceSingleOutputConfig(config: GenerationConfig): GenerationConfig {
+  return { ...config, batchCount: 1 };
 }
 
 function readHistoryStyle(step: GenerationStep, config: GenerationConfig): string {

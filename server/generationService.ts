@@ -7,6 +7,8 @@ import { createGrsaiBanana2Provider } from './providers/grsaiBanana2Provider';
 import { createGrsaiNanoBananaProvider } from './providers/grsaiNanoBananaProvider';
 import { createMockGeneration, mockProvider } from './providers/mockProvider';
 import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider, MaskMode, ProviderName } from './providers/types';
+import { getImageSizeFromDataUrl, isValidTargetDimension } from './image/imageMetadata';
+import { normalizeGeneratedImageDataUrl } from './image/normalizeImage';
 import {
   adjustCredits,
   createGenerationRecord,
@@ -21,7 +23,7 @@ import {
   listRunnableGenerationJobs,
   updateGenerationJob,
 } from './storage';
-import { readBatchCount, isNonEmptyString } from './validation';
+import { isNonEmptyString } from './validation';
 
 export interface GenerateResponseBody {
   id: string;
@@ -42,7 +44,7 @@ export function getGenerationProviderName(): ProviderName {
 
 export function calculateGenerationCreditsCost(mode: GenerationRecord['mode'], config: Record<string, unknown>): number {
   const baseCost = mode === 'inpaint' ? 8 : 10;
-  return baseCost * readBatchCount(config.batchCount);
+  return baseCost;
 }
 
 export async function refundGenerationJobCredits(jobId: string): Promise<void> {
@@ -141,13 +143,22 @@ async function processGenerationJob(jobId: string): Promise<void> {
     });
 
     const input = await buildGenerateInputFromJob(job);
-    const batchCount = readBatchCount(job.config.batchCount);
+    const batchCount = 1;
     const outputAssetIds: string[] = [];
     let firstOutput: GenerateImageOutput | null = null;
     let firstOutputAsset: ImageAsset | null = null;
 
     for (let index = 0; index < batchCount; index += 1) {
-      const output = await generateWithFallback(input);
+      const providerOutput = await generateWithFallback(input);
+      const output = {
+        ...providerOutput,
+        dataUrl: await normalizeGeneratedImageDataUrl({
+          dataUrl: providerOutput.dataUrl,
+          targetWidth: input.targetWidth,
+          targetHeight: input.targetHeight,
+          mode: job.mode,
+        }),
+      };
       const progress = 25 + Math.round(((index + 1) / batchCount) * 55);
       await updateGenerationJob(job.id, { progress });
 
@@ -215,11 +226,13 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<GenerateIm
     throw new Error('Input image asset was not found.');
   }
 
+  const materialReferenceImageDataUrls = await getOwnedAssetDataUrls(readStringArray(job.config.materialTextureAssetIds), job.userId, 3, 'material reference');
+  const furnitureReferenceImageDataUrls = await getOwnedAssetDataUrls(readStringArray(job.config.furnitureReferenceAssetIds), job.userId, 3, 'furniture reference');
   const additionalImageDataUrls = imageDataUrls.slice(1).filter(isNonEmptyString);
-  const materialImageDataUrl = additionalImageDataUrls[0];
+  const materialImageDataUrl = materialReferenceImageDataUrls[0] || additionalImageDataUrls[0];
   const floorplanTextureUrls = job.mode === 'floorplan' ? await getFloorplanTextureDataUrls(job.config) : [];
   const referenceImageDataUrls = [
-    ...additionalImageDataUrls.slice(1),
+    ...additionalImageDataUrls.slice(1).filter(url => !materialReferenceImageDataUrls.includes(url) && !furnitureReferenceImageDataUrls.includes(url)),
     ...floorplanTextureUrls,
   ];
   const maskMode = job.mode === 'inpaint' && isMaskMode(job.config.maskMode) ? job.config.maskMode : undefined;
@@ -228,16 +241,80 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<GenerateIm
     ? createFullImageMaskDataUrl()
     : maskAssetId ? await getImageAssetDataUrl(maskAssetId, job.userId) : undefined;
 
+  const targetDimensions = await resolveTargetDimensions(job.config, inputImageDataUrl);
+
   return {
     mode: job.mode,
     inputImageDataUrl,
     materialImageDataUrl,
     referenceImageDataUrls,
+    materialReferenceImageDataUrls,
+    furnitureReferenceImageDataUrls,
     maskImageDataUrl,
     maskMode,
     prompt: job.prompt,
     config: job.config,
+    targetWidth: targetDimensions.targetWidth,
+    targetHeight: targetDimensions.targetHeight,
+    targetAspectRatio: targetDimensions.targetAspectRatio,
+    editTarget: readEditTarget(job.config.editTarget),
   };
+}
+
+async function resolveTargetDimensions(
+  config: Record<string, unknown>,
+  inputImageDataUrl: string,
+): Promise<{ targetWidth?: number; targetHeight?: number; targetAspectRatio?: string }> {
+  const configWidth = isValidTargetDimension(config.targetWidth) ? config.targetWidth : undefined;
+  const configHeight = isValidTargetDimension(config.targetHeight) ? config.targetHeight : undefined;
+  if (configWidth && configHeight) {
+    return {
+      targetWidth: configWidth,
+      targetHeight: configHeight,
+      targetAspectRatio: typeof config.targetAspectRatio === 'string' ? config.targetAspectRatio : getAspectRatioString(configWidth, configHeight),
+    };
+  }
+
+  try {
+    const size = await getImageSizeFromDataUrl(inputImageDataUrl);
+    return {
+      targetWidth: size.width,
+      targetHeight: size.height,
+      targetAspectRatio: getAspectRatioString(size.width, size.height),
+    };
+  } catch (error) {
+    console.warn('Unable to infer target image size; generated output will not be resized.', {
+      error: error instanceof Error ? error.message : 'unknown error',
+    });
+    return {};
+  }
+}
+
+function getAspectRatioString(width: number, height: number): string {
+  const ratio = width / height;
+  const candidates = [
+    { value: '1:1', ratio: 1 },
+    { value: '4:3', ratio: 4 / 3 },
+    { value: '3:4', ratio: 3 / 4 },
+    { value: '16:9', ratio: 16 / 9 },
+    { value: '9:16', ratio: 9 / 16 },
+  ];
+  return candidates.reduce((best, candidate) => (
+    Math.abs(candidate.ratio - ratio) < Math.abs(best.ratio - ratio) ? candidate : best
+  )).value;
+}
+
+async function getOwnedAssetDataUrls(assetIds: string[], userId: string, maxCount: number, label: string): Promise<string[]> {
+  const uniqueAssetIds = Array.from(new Set(assetIds)).slice(0, maxCount);
+  const dataUrls: string[] = [];
+  for (const assetId of uniqueAssetIds) {
+    const dataUrl = await getImageAssetDataUrl(assetId, userId);
+    if (!dataUrl) {
+      throw new Error(`${label} image asset was not found.`);
+    }
+    dataUrls.push(dataUrl);
+  }
+  return dataUrls;
 }
 
 function createFullImageMaskDataUrl(): string {
@@ -319,8 +396,19 @@ async function getFloorplanTextureDataUrls(config: Record<string, unknown>): Pro
   const urls = sources
     .map(source => isRecord(source) && typeof source.url === 'string' ? source.url : undefined)
     .filter(isNonEmptyString);
-  const dataUrls = await Promise.all(urls.map(url => readReferenceUrlAsProviderInput(url)));
-  return dataUrls.filter(isNonEmptyString);
+  const dataUrls: string[] = [];
+  for (const url of urls) {
+    try {
+      const dataUrl = await readReferenceUrlAsProviderInput(url);
+      if (dataUrl) dataUrls.push(dataUrl);
+    } catch (error) {
+      console.warn('Unable to read floorplan texture reference; skipping it.', {
+        url,
+        error: error instanceof Error ? error.message : 'unknown error',
+      });
+    }
+  }
+  return dataUrls;
 }
 
 async function readReferenceUrlAsProviderInput(url: string): Promise<string | undefined> {
@@ -472,6 +560,11 @@ function readStringArray(value: unknown): string[] {
 
 function isGrsaiProvider(name: ProviderName): boolean {
   return name === 'grsai-banana2' || name === 'grsai-nano-banana';
+}
+
+function readEditTarget(value: unknown): GenerateImageInput['editTarget'] {
+  if (value === 'material' || value === 'furniture' || value === 'general') return value;
+  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

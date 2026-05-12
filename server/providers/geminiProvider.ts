@@ -61,6 +61,10 @@ function buildRequestParts(input: GenerateImageInput, warnings: string[]): Part[
     });
   }
 
+  appendReferenceImages(parts, 'Additional reference image:', input.referenceImageDataUrls);
+  appendReferenceImages(parts, 'Material reference image. Use only for material, color, texture, and surface quality:', input.materialReferenceImageDataUrls);
+  appendReferenceImages(parts, 'Furniture reference image. Use only for furniture type, form, proportion, material, color, and style:', input.furnitureReferenceImageDataUrls);
+
   if (input.maskImageDataUrl) {
     parts.push({
       text: input.maskMode === 'full-image'
@@ -82,6 +86,7 @@ function buildPrompt(input: GenerateImageInput): string {
     return [
       'Generate a high-quality architectural, interior, or spatial rendering from the uploaded reference image.',
       'Preserve the subject, composition, spatial relationships, perspective, proportions, and main outlines from the reference image.',
+      'Keep the exact same canvas aspect ratio, framing, composition boundary, and image proportions as the first input image. Do not crop, extend, pad, add borders, or change the canvas ratio.',
       'Transform materials, lighting, color palette, furniture, details, and atmosphere according to the selected style and user prompt.',
       'Return an image as the primary output. Do not add text, watermarks, labels, borders, or UI elements.',
       `User prompt: ${input.prompt}`,
@@ -91,12 +96,20 @@ function buildPrompt(input: GenerateImageInput): string {
 
   return [
     input.mode === 'floorplan'
-      ? 'Generate an architectural visual expression from the uploaded floorplan image.'
+      ? 'Convert the input image into a professional interior colored floor plan with clear, realistic, and clean material rendering. Strictly preserve the original layout, room boundaries, walls, doors, windows, openings, columns, furniture positions, furniture outlines, proportions, canvas ratio, and top-down plan representation. Do not generate a perspective rendering, elevation, 3D bird-eye view, or change the architectural layout.'
       : 'Edit or improve the uploaded architectural image according to the prompt.',
+    'Keep the exact same canvas aspect ratio, framing, composition boundary, and image proportions as the first input image.',
     'Return an image as the primary output.',
     `User prompt: ${input.prompt}`,
     `Generation config JSON: ${JSON.stringify(input.config)}`,
   ].join('\n');
+}
+
+function appendReferenceImages(parts: Part[], label: string, dataUrls: string[] | undefined): void {
+  for (const dataUrl of dataUrls || []) {
+    parts.push({ text: label });
+    parts.push({ inlineData: toInlineData(dataUrl) });
+  }
 }
 
 function toInlineData(dataUrl: string): { mimeType: string; data: string } {

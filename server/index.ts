@@ -417,7 +417,7 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
       userId: user.id,
       type: 'debit',
       amount: -creditsCost,
-      reason: `Generation job ${job.mode} x${readBatchCount(job.config.batchCount)}`,
+      reason: `Generation job ${job.mode} x1`,
       referenceType: 'generation_job',
       referenceId: job.id,
     });
@@ -1200,11 +1200,25 @@ function validateGenerationJobCreateBody(
     return { ok: false, error: { message: 'inputAssetIds must contain at least one asset id.', code: 'GENERATION_JOB_INPUTS_INVALID' } };
   }
 
-  if (body.config.batchCount !== undefined && !isBatchCount(body.config.batchCount)) {
-    return { ok: false, error: { message: 'batchCount must be 1, 2, or 4.', code: 'GENERATION_JOB_BATCH_COUNT_INVALID' } };
-  }
-
   const config: Record<string, unknown> = { ...body.config };
+  config.batchCount = 1;
+  if (config.editTarget !== undefined && config.editTarget !== 'general' && config.editTarget !== 'material' && config.editTarget !== 'furniture') {
+    return { ok: false, error: { message: 'editTarget must be general, material, or furniture.', code: 'GENERATION_JOB_EDIT_TARGET_INVALID' } };
+  }
+  for (const key of ['sourceImageWidth', 'sourceImageHeight', 'targetWidth', 'targetHeight']) {
+    if (config[key] !== undefined && !isReasonableImageDimension(config[key])) {
+      return { ok: false, error: { message: `${key} must be an integer between 64 and 8192.`, code: 'GENERATION_JOB_TARGET_SIZE_INVALID' } };
+    }
+  }
+  if (config.targetAspectRatio !== undefined && typeof config.targetAspectRatio !== 'string') {
+    return { ok: false, error: { message: 'targetAspectRatio must be a string.', code: 'GENERATION_JOB_ASPECT_RATIO_INVALID' } };
+  }
+  if (config.furnitureReferenceAssetIds !== undefined && !isStringArrayWithLimit(config.furnitureReferenceAssetIds, 3)) {
+    return { ok: false, error: { message: 'furnitureReferenceAssetIds must contain at most 3 asset ids.', code: 'GENERATION_JOB_FURNITURE_REFERENCES_INVALID' } };
+  }
+  if (config.materialTextureAssetIds !== undefined && !isStringArrayWithLimit(config.materialTextureAssetIds, 3)) {
+    return { ok: false, error: { message: 'materialTextureAssetIds must contain at most 3 asset ids.', code: 'GENERATION_JOB_MATERIAL_REFERENCES_INVALID' } };
+  }
   if (body.mode === 'inpaint') {
     if (config.maskMode === undefined || config.maskMode === null || config.maskMode === '') {
       delete config.maskMode;
@@ -1349,12 +1363,12 @@ function isMaskMode(value: unknown): value is MaskMode {
   return value === 'asset-mask' || value === 'full-image';
 }
 
-function isBatchCount(value: unknown): value is 1 | 2 | 4 {
-  return value === 1 || value === 2 || value === 4;
+function isReasonableImageDimension(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 64 && value <= 8192;
 }
 
-function readBatchCount(value: unknown): 1 | 2 | 4 {
-  return isBatchCount(value) ? value : 1;
+function isStringArrayWithLimit(value: unknown, limit: number): value is string[] {
+  return Array.isArray(value) && value.length <= limit && value.every(item => typeof item === 'string' && item.trim().length > 0);
 }
 
 async function validateGenerationJobAssets(
@@ -1371,6 +1385,22 @@ async function validateGenerationJobAssets(
         error: {
           message: 'Input image asset not found.',
           code: 'GENERATION_JOB_INPUT_ASSET_NOT_FOUND',
+        },
+      };
+    }
+  }
+
+  for (const assetId of [
+    ...readStringArray(config.materialTextureAssetIds),
+    ...readStringArray(config.furnitureReferenceAssetIds),
+  ]) {
+    const asset = await getImageAsset(assetId, userId);
+    if (!asset) {
+      return {
+        ok: false,
+        error: {
+          message: 'Reference image asset not found.',
+          code: 'GENERATION_JOB_REFERENCE_ASSET_NOT_FOUND',
         },
       };
     }
@@ -1433,6 +1463,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
 }
 
 function isEmailString(value: unknown): value is string {

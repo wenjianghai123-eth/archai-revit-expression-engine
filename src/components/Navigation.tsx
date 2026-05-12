@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { motion } from 'motion/react';
 import { 
   History, 
@@ -159,9 +159,12 @@ function NavItem({
 
 interface StepperProps {
   currentStep: GenerationStep;
+  onStepChange: (step: GenerationStep) => void;
+  estimatedCreditCost?: number | null;
+  creditBalance?: number | null;
 }
 
-export function Stepper({ currentStep, onStepChange }: { currentStep: GenerationStep, onStepChange: (step: GenerationStep) => void }) {
+export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null, creditBalance = null }: StepperProps) {
   const steps = [
     {
       id: GenerationStep.FloorplanTo3D,
@@ -197,7 +200,15 @@ export function Stepper({ currentStep, onStepChange }: { currentStep: Generation
           <h1 className="mt-1 text-lg font-bold tracking-tight text-slate-950 md:text-xl">建筑设计 AI 生成工作台</h1>
         </div>
         <div className="hidden rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-bold text-slate-500 md:block">
-          MVP 0.1 / Express Backend
+          <span>MVP 0.1 / Express Backend</span>
+          <span className="mx-2 text-slate-300">/</span>
+          <span>本次消耗：{estimatedCreditCost === null ? '-' : estimatedCreditCost} Credits</span>
+          {creditBalance !== null ? (
+            <>
+              <span className="mx-2 text-slate-300">/</span>
+              <span>余额：{creditBalance} Credits</span>
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -249,13 +260,12 @@ export function Stepper({ currentStep, onStepChange }: { currentStep: Generation
         })}
       </div>
 
-      <div className="hidden items-center justify-between border-t border-slate-100 px-5 py-2 text-xs text-slate-500 md:flex">
-        <span>选择任务后，在下方工作区上传图片、配置提示词并生成结果。</span>
+      <div className="hidden items-center justify-end border-t border-slate-100 px-5 py-2 text-xs text-slate-500 md:flex">
         <button
           className="rounded-full bg-slate-100 px-3 py-1.5 font-bold text-slate-700 hover:bg-slate-200"
           type="button"
         >
-          项目一号
+          当前项目
         </button>
       </div>
 
@@ -276,3 +286,4 @@ export function Stepper({ currentStep, onStepChange }: { currentStep: Generation
     </div>
   );
 }
+
