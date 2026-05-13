@@ -327,11 +327,11 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                   return (
                     <article
                       key={template.id}
-                      className={`arch-card p-2 ${
+                      className={`arch-card flex min-h-[460px] flex-col p-2 ${
                         isActive ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200'
                       }`}
                     >
-                      <div className="relative h-36 overflow-hidden rounded-2xl bg-slate-100">
+                      <div className="relative h-36 shrink-0 overflow-hidden rounded-2xl bg-slate-100">
                         <img src={template.previewImage} alt={template.title} className="h-full w-full object-cover transition-transform duration-500 hover:scale-105" referrerPolicy="no-referrer" />
                         <div className="absolute left-3 top-3 flex gap-2">
                           <span className="rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-bold text-slate-700 backdrop-blur">
@@ -360,7 +360,7 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                         </button>
                       </div>
 
-                      <div className="flex h-44 flex-col p-3">
+                      <div className="flex min-h-0 flex-1 flex-col p-3">
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{template.category}</p>
@@ -368,19 +368,20 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                           </div>
                         </div>
 
-                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{template.description}</p>
+                        <p className="mt-1 line-clamp-3 text-xs leading-5 text-slate-500">{template.description}</p>
 
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {(template.tags || []).slice(0, 4).map((tagValue) => (
+                        <div className="mt-2 flex min-h-7 flex-wrap gap-1.5 overflow-hidden">
+                          {(template.tags || []).slice(0, 3).map((tagValue) => (
                             <TemplateTag key={tagValue}>#{tagValue}</TemplateTag>
                           ))}
+                          {(template.tags || []).length > 3 ? <TemplateTag>+{(template.tags || []).length - 3}</TemplateTag> : null}
                         </div>
 
                         <div className="mt-2 rounded-xl bg-slate-50 p-2">
                           <p className="line-clamp-2 text-[11px] leading-4 text-slate-600">{promptSummary(template.promptText)}</p>
                         </div>
 
-                        <div className="mt-auto grid grid-cols-3 gap-1.5 border-t border-slate-100 pt-2">
+                        <div className="mt-auto grid shrink-0 grid-cols-3 gap-1.5 border-t border-slate-100 pt-2">
                           <button
                             onClick={() => handleApply(template)}
                             className="arch-button-primary rounded-xl py-2 text-xs"

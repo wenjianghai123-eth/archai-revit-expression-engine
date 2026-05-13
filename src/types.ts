@@ -126,10 +126,18 @@ export interface PromptTemplate {
   title: string;
   category: string;
   feature: 'floorplan' | 'style-render' | 'inpaint';
+  supportedModes?: GenerationStep[] | string[];
   description: string;
   previewImage: string;
+  prompt?: string;
   promptText: string;
   tags?: string[];
+  variables?: {
+    key: string;
+    label: string;
+    defaultValue?: string;
+    placeholder?: string;
+  }[];
   recommendedStyle?: string;
   recommendedLighting?: string;
   recommendedMaterialStrength?: number;

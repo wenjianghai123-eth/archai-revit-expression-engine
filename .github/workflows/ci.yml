@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       AI_PROVIDER: mock
+      GENERATION_PROVIDER: mock
       AUTH_MODE: dev
       DATA_BACKEND: json
       FILE_STORAGE: local
@@ -47,6 +48,7 @@ jobs:
     continue-on-error: true
     env:
       AI_PROVIDER: mock
+      GENERATION_PROVIDER: mock
       AUTH_MODE: dev
       DATA_BACKEND: json
       FILE_STORAGE: local

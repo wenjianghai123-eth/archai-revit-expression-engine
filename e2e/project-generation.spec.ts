@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
-const onePixelPng = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+const minSizePng = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAeElEQVR4nOXOMQEAAACDIPuXdjF2SAIwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwDuMwjnfgbUbQw7Iy86vBAAAAAElFTkSuQmCC',
   'base64',
 );
 
@@ -42,7 +42,7 @@ test('project generation happy path with mock provider', async ({ page }) => {
     await page.locator('input[type="file"]').first().setInputFiles({
       name: 'floorplan.png',
       mimeType: 'image/png',
-      buffer: onePixelPng,
+      buffer: minSizePng,
     });
     await uploadResponse;
 
@@ -53,7 +53,7 @@ test('project generation happy path with mock provider', async ({ page }) => {
       response.request().method() === 'POST' &&
       response.status() === 201
     ));
-    await page.locator('button.bg-slate-900').click();
+    await page.getByRole('button', { name: '生成预览' }).click();
     await jobResponse;
 
     await expect(page.locator('body')).toContainText('succeeded', { timeout: 60_000 });

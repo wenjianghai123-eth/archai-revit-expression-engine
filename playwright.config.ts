@@ -27,6 +27,7 @@ export default defineConfig({
       reuseExistingServer: !process.env.CI,
       env: {
         ...process.env,
+        GENERATION_PROVIDER: 'mock',
         AI_PROVIDER: 'mock',
         AUTH_MODE: 'dev',
         DATA_BACKEND: 'json',

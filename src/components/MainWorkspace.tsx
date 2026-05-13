@@ -20,6 +20,7 @@ import { uploadImageAsset } from '../lib/api';
 import { MaskEditor } from './MaskEditor';
 import { MaterialLibrary } from './MaterialLibrary';
 import { OverlayCompareViewer } from './OverlayCompareViewer';
+import { PromptTemplatePanel } from './PromptTemplatePanel';
 
 interface WorkspaceProps {
   step: GenerationStep;
@@ -75,6 +76,7 @@ export function MainWorkspace({
   const furnitureReferenceFileRef = useRef<HTMLInputElement>(null);
   const [uploadErrors, setUploadErrors] = useState<Record<UploadTarget, string | null>>({ input: null, material: null, texture: null, furniture: null });
   const [isMaterialLibraryOpen, setIsMaterialLibraryOpen] = useState(false);
+  const [isPromptTemplatePanelOpen, setIsPromptTemplatePanelOpen] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const isFloorplanStep = step === GenerationStep.FloorplanTo3D;
@@ -620,6 +622,10 @@ export function MainWorkspace({
 
               <div className="space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">修改说明</label>
+                <button type="button" onClick={() => setIsPromptTemplatePanelOpen(true)} className="inline-flex w-fit items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-600 hover:border-blue-200 hover:text-blue-700">
+                  <BookOpen className="h-3.5 w-3.5" />
+                  提示词模板
+                </button>
                 <textarea
                   value={state.config.prompt}
                   onChange={event => onUpdateConfig({ prompt: event.target.value })}
@@ -750,6 +756,10 @@ export function MainWorkspace({
             {isFloorplanStep ? (
               <p className="text-[11px] leading-5 text-slate-400">系统已内置专业彩平生成提示词，你只需要补充特殊要求。</p>
             ) : null}
+            <button type="button" onClick={() => setIsPromptTemplatePanelOpen(true)} className="inline-flex w-fit items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-600 hover:border-blue-200 hover:text-blue-700">
+              <BookOpen className="h-3.5 w-3.5" />
+              提示词模板
+            </button>
             <textarea
               value={state.config.prompt}
               onChange={event => onUpdateConfig({ prompt: event.target.value })}
@@ -1027,6 +1037,14 @@ export function MainWorkspace({
         onClose={() => setIsMaterialLibraryOpen(false)}
         onSelect={handleSelectLibraryMaterial}
         selectedId={state.materialTextures.find(texture => texture.source === 'library')?.id.replace(/^library-/u, '')}
+      />
+      <PromptTemplatePanel
+        isOpen={isPromptTemplatePanelOpen}
+        step={step}
+        editTarget={state.config.editTarget}
+        currentPrompt={state.config.prompt}
+        onApplyPrompt={prompt => onUpdateConfig({ prompt })}
+        onClose={() => setIsPromptTemplatePanelOpen(false)}
       />
     </div>
   );
