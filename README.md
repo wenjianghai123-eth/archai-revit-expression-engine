@@ -179,16 +179,21 @@ Frontend deployment checklist:
 
 ### Netlify Frontend Deployment
 
-For a Netlify-hosted Vite frontend, configure the browser-facing variables in Netlify, not only in local `.env` files or the backend service:
+Netlify deploys this Vite app as static frontend files only. It does not run the Express backend from `server/index.ts`, so `/api/...` on the Netlify domain will return 404 unless you deploy the backend separately and point the frontend at it.
+
+Deploy the Express backend to a server platform such as Render or Railway, then configure the browser-facing variables in Netlify, not only in local `.env` files or the backend service:
 
 - Open Netlify Site configuration -> Environment variables.
 - Add `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and, for split frontend/backend deployments, `VITE_API_BASE_URL`.
+- Set `VITE_API_BASE_URL` to the backend origin only, for example `https://your-archai-api.onrender.com`, not to the Supabase URL and not with a trailing `/api`.
 - Make sure each variable's Scope includes Builds.
 - Make sure the Production deploy context has values for these variables; branch deploy or deploy-preview values do not fix a Production deploy unless Production also has values.
 - Set Build command to `npm run build`.
 - Set Publish directory to `dist`.
 - After changing any `VITE_*` value, use Clear cache and deploy site so Netlify rebuilds the browser bundle with the new values.
 - To confirm the Netlify build environment before building, run `npm run check:env` in the build log or temporarily set the build command to `npm run check:env && npm run build`.
+
+Keep backend-only secrets such as `SUPABASE_SERVICE_ROLE_KEY` and `GRSAI_API_KEY` on the Render/Railway backend service. Do not add them to Netlify with a `VITE_` prefix.
 
 ## Storage
 

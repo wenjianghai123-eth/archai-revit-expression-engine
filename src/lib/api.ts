@@ -1,5 +1,7 @@
-import { buildApiUrl } from './apiBaseUrl';
+import { buildApiUrl, isApiBaseUrlMissingInProduction, isRelativeApiPath } from './apiBaseUrl';
 import { getSupabaseAccessToken } from './supabase';
+
+const MISSING_API_BASE_URL_MESSAGE = '后端 API 未配置或不可访问，请配置 VITE_API_BASE_URL。';
 
 export interface AuthUser {
   id: string;
@@ -482,10 +484,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       headers,
     });
   } catch {
+    if (isMissingProductionApi(path)) {
+      throw new Error(MISSING_API_BASE_URL_MESSAGE);
+    }
     throw new Error('无法连接后端服务，请确认 npm run dev:server 已启动。');
   }
 
   const body = await readJson(response);
+
+  if (response.status === 404 && isMissingProductionApi(path)) {
+    throw new Error(MISSING_API_BASE_URL_MESSAGE);
+  }
 
   if (!response.ok || !isApiResponse<T>(body)) {
     throw new Error(readApiError(body) || `请求失败（HTTP ${response.status}）。`);
@@ -523,6 +532,10 @@ function readApiError(value: unknown): string | null {
   if (typeof value.error === 'string') return value.error;
   if (isRecord(value.error) && typeof value.error.message === 'string') return value.error.message;
   return null;
+}
+
+function isMissingProductionApi(path: string): boolean {
+  return isApiBaseUrlMissingInProduction() && isRelativeApiPath(path);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
