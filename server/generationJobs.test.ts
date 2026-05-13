@@ -134,6 +134,10 @@ describe('POST /api/generation-jobs asset ownership', () => {
           projectId: project.id,
           inputAssetIds: [ownAsset.id],
           status: 'queued',
+          diagnostics: {
+            phase: 'queued',
+            timing: { jobCreatedAt: expect.any(String) },
+          },
         },
       },
     });

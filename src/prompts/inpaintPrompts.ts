@@ -46,9 +46,14 @@ export function buildInpaintPrompt(input: BuildInpaintPromptInput): string {
   } else if (editTarget === 'furniture') {
     pieces.push(
       'Edit target: furniture modification.',
-      'Replace, add, remove, or refine furniture according to the mask and user request.',
+      input.hasMask
+        ? 'Only modify the furniture inside the white area of the mask.'
+        : 'Only modify the furniture target described by the user.',
+      'Replace only the furniture type, form, material, color, and style corresponding to the painted masked object.',
+      'Do not modify unmasked areas. Do not replace any other furniture outside the mask.',
+      'If the masked region covers only one furniture item, treat that item as the only editable target.',
       'Keep the room perspective, scale, proportions, light direction, camera view, and overall style consistent with the original image.',
-      'Do not change walls, floors, doors, windows, ceilings, fixed structures, unrelated furniture, or unmasked areas.',
+      'Keep walls, doors, windows, floors, ceilings, fixed structures, spatial structure, camera angle, perspective, and lighting unchanged.',
     );
     if (input.hasFurnitureReference) {
       pieces.push(

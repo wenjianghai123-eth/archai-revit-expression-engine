@@ -46,7 +46,74 @@ export interface GenerationJob {
   updatedAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  diagnostics?: GenerationJobDiagnostics;
   results?: GenerationResult[];
+}
+
+export type GenerationJobPhase =
+  | 'queued'
+  | 'prepare-input'
+  | 'provider-request'
+  | 'postprocess'
+  | 'save-result'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled';
+
+export interface GenerationJobDiagnostics {
+  phase?: GenerationJobPhase;
+  timing?: {
+    jobCreatedAt?: string;
+    jobStartedAt?: string;
+    prepareInputStartedAt?: string;
+    prepareInputFinishedAt?: string;
+    providerRequestStartedAt?: string;
+    providerRequestFinishedAt?: string;
+    postprocessStartedAt?: string;
+    postprocessFinishedAt?: string;
+    saveResultStartedAt?: string;
+    saveResultFinishedAt?: string;
+    jobFinishedAt?: string;
+    prepareInputDurationMs?: number;
+    providerDurationMs?: number;
+    postprocessDurationMs?: number;
+    saveResultDurationMs?: number;
+    totalDurationMs?: number;
+  };
+  provider?: {
+    name?: string;
+    model?: string;
+    httpStatus?: number;
+    retryCount?: number;
+    fallbackProvider?: string;
+    fallbackReason?: string;
+  };
+  images?: {
+    inputImages?: number;
+    referenceImages?: number;
+    inputBytesBefore?: number;
+    inputBytesAfter?: number;
+    referenceBytesBefore?: number;
+    referenceBytesAfter?: number;
+    payloadBytesApprox?: number;
+    localInpaintEnabled?: boolean;
+    originalWidth?: number;
+    originalHeight?: number;
+    maskWidth?: number;
+    maskHeight?: number;
+    furnitureReferenceCount?: number;
+    maskBbox?: { x: number; y: number; width: number; height: number };
+    prepared?: Array<{
+      role: string;
+      width: number;
+      height: number;
+      originalWidth: number;
+      originalHeight: number;
+      originalBytes: number;
+      outputBytes: number;
+      mime: string;
+    }>;
+  };
 }
 
 export interface GenerationResult {
@@ -195,7 +262,9 @@ export type CreateGenerationJobInput = {
 
 export type UpdateGenerationJobInput = Partial<
   Pick<GenerationJob, 'status' | 'progress' | 'outputAssetId' | 'outputAssetIds' | 'errorMessage' | 'startedAt' | 'finishedAt'>
->;
+> & {
+  diagnostics?: GenerationJobDiagnostics;
+};
 
 export type CreateGenerationResultInput = {
   userId: string;

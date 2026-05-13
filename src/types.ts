@@ -6,6 +6,27 @@ export enum GenerationStep {
 
 export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled';
+
+export interface GenerationJobDiagnostics {
+  phase?: GenerationJobPhase;
+  timing?: {
+    jobCreatedAt?: string;
+    jobStartedAt?: string;
+    jobFinishedAt?: string;
+    providerDurationMs?: number;
+    totalDurationMs?: number;
+  };
+  provider?: {
+    name?: string;
+    model?: string;
+    retryCount?: number;
+    fallbackProvider?: string;
+  };
+  images?: {
+    payloadBytesApprox?: number;
+  };
+}
 
 export interface GenerationConfig {
   prompt: string;
@@ -64,6 +85,7 @@ export interface StepState {
   generationCreatedAt: string | null;
   generationJobId: string | null;
   generationJobStatus: AsyncGenerationStatus | null;
+  generationJobDiagnostics: GenerationJobDiagnostics | null;
   generationProgress: number;
   generationLogs: string[];
   viewMode: 'original' | 'after' | 'compare' | 'overlay';
@@ -125,6 +147,9 @@ export interface GenerationHistoryItem {
   createdAt: string;
   provider: GenerationProvider;
   outputImage: string;
+  inputImageUrl?: string;
+  inputImageDataPreview?: string;
+  inputImageAssetId?: string;
   config?: GenerationConfig;
   inputImageName?: string;
   materialImageName?: string;

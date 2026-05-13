@@ -41,19 +41,30 @@ export function clearGenerationHistory(): void {
 }
 
 function trimRecordForStorage(record: GenerationHistoryItem): StoredGenerationRecord {
+  const inputImageDataPreview = record.inputImageDataPreview && record.inputImageDataPreview.length <= maxStoredDataUrlLength
+    ? record.inputImageDataPreview
+    : undefined;
+  const inputStorageWarning = record.inputImageDataPreview && !inputImageDataPreview
+    ? '原图预览较大，localStorage 仅保存原图文件链接或元数据。'
+    : undefined;
+
   if (record.outputImage.length <= maxStoredDataUrlLength) {
     return {
       ...record,
+      inputImageDataPreview,
       resultStored: true,
-      storageWarning: record.storageWarning,
+      storageWarning: record.storageWarning || inputStorageWarning,
     };
   }
 
   return {
     ...record,
+    inputImageDataPreview,
     outputImage: '',
     resultStored: false,
-    storageWarning: '结果图片较大，localStorage 仅保存元数据。',
+    storageWarning: inputStorageWarning
+      ? '结果图和原图预览较大，localStorage 仅保存元数据。'
+      : '结果图片较大，localStorage 仅保存元数据。',
   };
 }
 
@@ -66,6 +77,7 @@ function writeRecords(records: StoredGenerationRecord[]): void {
     const metadataOnly = records.map(record => ({
       ...record,
       outputImage: '',
+      inputImageDataPreview: undefined,
       resultStored: false,
       storageWarning: record.storageWarning || 'localStorage 空间不足，已仅保存元数据。',
     }));
@@ -88,7 +100,10 @@ function isStoredGenerationRecord(value: unknown): value is StoredGenerationReco
     typeof value.style === 'string' &&
     typeof value.createdAt === 'string' &&
     (value.provider === 'mock' || value.provider === 'gemini' || value.provider === 'grsai-banana2' || value.provider === 'grsai-nano-banana') &&
-    typeof value.outputImage === 'string'
+    typeof value.outputImage === 'string' &&
+    (value.inputImageUrl === undefined || typeof value.inputImageUrl === 'string') &&
+    (value.inputImageDataPreview === undefined || typeof value.inputImageDataPreview === 'string') &&
+    (value.inputImageAssetId === undefined || typeof value.inputImageAssetId === 'string')
   );
 }
 

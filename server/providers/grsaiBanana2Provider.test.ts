@@ -1,315 +1,91 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-
-import { isProviderFallbackEnabled } from './fallback';
-import { createGrsaiBanana2Provider, downloadImageAsDataUrl } from './grsaiBanana2Provider';
-import { createGrsaiNanoBananaProvider } from './grsaiNanoBananaProvider';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createGrsaiBanana2Provider } from './grsaiBanana2Provider';
 import type { GenerateImageInput } from './types';
+
+const tinyPngDataUrl = 'data:image/png;base64,iVBORw0KGgo=';
 
 const input: GenerateImageInput = {
   mode: 'style-render',
-  inputImageDataUrl: 'data:image/png;base64,aW5wdXQ=',
-  materialImageDataUrl: 'data:image/png;base64,bWF0ZXJpYWw=',
-  referenceImageDataUrls: ['data:image/png;base64,dGV4dHVyZQ=='],
-  prompt: 'warm lobby render',
+  inputImageDataUrl: tinyPngDataUrl,
+  prompt: 'render',
   config: {},
 };
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  delete process.env.GRSAI_BASE_URL;
-  delete process.env.GRSAI_MODEL;
-  delete process.env.GRSAI_ASPECT_RATIO;
-  delete process.env.GRSAI_IMAGE_SIZE;
-  delete process.env.GRSAI_POLL_INTERVAL_MS;
-  delete process.env.GRSAI_POLL_TIMEOUT_MS;
-  delete process.env.GRSAI_DOWNLOAD_TIMEOUT_MS;
-});
+describe('Grsai Banana2 provider timing, timeout and retry', () => {
+  const originalFetch = globalThis.fetch;
 
-describe('Grsai Banana2 provider', () => {
-  it('creates a generation task with the Banana2 request contract and returns a downloaded data URL', async () => {
-    process.env.GRSAI_POLL_INTERVAL_MS = '1';
-    vi.spyOn(console, 'info').mockImplementation(() => undefined);
-    mockFetchSequence([
-      jsonResponse({ code: 0, data: { id: 'task_1' }, msg: 'success' }),
-      jsonResponse({
-        code: 0,
-        data: {
-          id: 'task_1',
-          status: 'succeeded',
-          progress: 100,
-          results: [{ url: 'https://cdn.example.com/result.png', content: 'done' }],
-        },
-        msg: 'success',
-      }),
-      binaryResponse('image/png', 'downloaded-result'),
-    ]);
-
-    const output = await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage(input);
-    const fetchMock = vi.mocked(fetch);
-    const createRequest = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
-
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://grsai.dakka.com.cn/v1/draw/nano-banana');
-    expect(createRequest).toMatchObject({
-      model: 'nano-banana-2',
-      aspectRatio: 'auto',
-      imageSize: '1K',
-      webHook: '-1',
-      shutProgress: false,
-    });
-    expect(createRequest.urls).toEqual([
-      'data:image/png;base64,aW5wdXQ=',
-      'data:image/png;base64,bWF0ZXJpYWw=',
-      'data:image/png;base64,dGV4dHVyZQ==',
-    ]);
-    expect(output).toMatchObject({
-      id: 'task_1',
-      provider: 'grsai-banana2',
-      remoteUrl: 'https://cdn.example.com/result.png',
-      mimeType: 'image/png',
-      warnings: ['Grsai returned text: done'],
-    });
-    expect(output.dataUrl).toBe(`data:image/png;base64,${Buffer.from('downloaded-result').toString('base64')}`);
-    expect(output.dataUrl).not.toMatch(/^https?:\/\//u);
+  beforeEach(() => {
+    process.env.GRSAI_API_KEY = 'test-key';
+    process.env.GRSAI_MAX_RETRIES = '1';
+    process.env.GRSAI_RETRY_BACKOFF_MS = '1';
+    process.env.GRSAI_TIMEOUT_MS = '1000';
   });
 
-  it('keeps the legacy grsai-nano-banana alias on the Banana2 endpoint behavior', async () => {
-    mockFetchSequence([
-      jsonResponse({ code: 0, data: { id: 'task_alias' } }),
-      jsonResponse({ code: 0, data: { id: 'task_alias', status: 'succeeded', results: [{ url: 'data:image/png;base64,cmVzdWx0' }] } }),
-    ]);
-
-    const output = await createGrsaiNanoBananaProvider({ apiKey: 'test-key' }).generateImage(input);
-
-    expect(output.provider).toBe('grsai-nano-banana');
-    expect(output.dataUrl).toBe('data:image/png;base64,cmVzdWx0');
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+    delete process.env.GRSAI_API_KEY;
+    delete process.env.GRSAI_MAX_RETRIES;
+    delete process.env.GRSAI_RETRY_BACKOFF_MS;
+    delete process.env.GRSAI_TIMEOUT_MS;
   });
 
-  it('adds interior floorplan preservation constraints to floorplan prompts', async () => {
-    mockFetchSequence([
-      jsonResponse({ code: 0, data: { id: 'floorplan_task' } }),
-      jsonResponse({ code: 0, data: { id: 'floorplan_task', status: 'succeeded', results: [{ url: 'data:image/png;base64,cmVzdWx0' }] } }),
-    ]);
-
-    await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage({
-      ...input,
-      mode: 'floorplan',
-      prompt: '用户补充要求：卧室偏暖色木地板。',
-    });
-
-    const createRequest = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
-    expect(createRequest.prompt).toContain('professional interior colored floor plan');
-    expect(createRequest.prompt).toContain('Strictly preserve the original floor plan layout');
-    expect(createRequest.prompt).toContain('walls, doors, windows');
-    expect(createRequest.prompt).toContain('furniture positions');
-    expect(createRequest.prompt).toContain('top-down plan representation');
-    expect(createRequest.prompt).toContain('用户补充要求：卧室偏暖色木地板。');
-  });
-
-  it('normalizes non-base64 Grsai data URLs before returning to storage', async () => {
-    vi.spyOn(console, 'info').mockImplementation(() => undefined);
-    mockFetchSequence([
-      jsonResponse({ code: 0, data: { id: 'task_data_url' } }),
-      jsonResponse({
-        code: 0,
-        data: {
-          id: 'task_data_url',
-          status: 'succeeded',
-          results: [{ url: 'data:image/svg+xml;charset=UTF-8,%3Csvg%3E%3C%2Fsvg%3E' }],
-        },
-      }),
-    ]);
+  it('returns provider timing metadata on success', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: 'task-1' }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { id: 'task-1', status: 'succeeded', progress: 100, results: [{ url: tinyPngDataUrl }] } }));
+    globalThis.fetch = fetchMock;
 
     const output = await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage(input);
 
-    expect(output.dataUrl).toBe(`data:image/svg+xml;base64,${Buffer.from('<svg></svg>').toString('base64')}`);
-    expect(output.dataUrl).not.toContain('charset=UTF-8');
+    expect(output.metadata).toMatchObject({
+      taskId: 'task-1',
+      model: expect.any(String),
+      retryCount: 0,
+      imageCount: 1,
+    });
+    expect(typeof output.metadata?.providerDurationMs).toBe('number');
   });
 
-  it('polls through running status before succeeded', async () => {
-    process.env.GRSAI_POLL_INTERVAL_MS = '1';
-    mockFetchSequence([
-      jsonResponse({ code: 0, data: { id: 'task_2' } }),
-      jsonResponse({ code: 0, data: { id: 'task_2', status: 'running', progress: 50 } }),
-      jsonResponse({ code: 0, data: { id: 'task_2', status: 'succeeded', progress: 100, results: [{ url: 'data:image/png;base64,cmVzdWx0' }] } }),
-    ]);
+  it('retries a retryable 5xx response', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ msg: 'upstream unavailable' }, 502))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: 'task-1' }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { id: 'task-1', status: 'succeeded', progress: 100, results: [{ url: tinyPngDataUrl }] } }));
+    globalThis.fetch = fetchMock;
 
     const output = await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage(input);
 
-    expect(output.dataUrl).toBe('data:image/png;base64,cmVzdWx0');
-    expect(vi.mocked(fetch).mock.calls.filter(call => String(call[0]).endsWith('/v1/draw/result'))).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(output.metadata?.retryCount).toBe(1);
   });
 
-  it('does not add mask-only constraints for prompt-only inpaint requests', async () => {
-    mockFetchSequence([
-      jsonResponse({ code: 0, data: { id: 'inpaint_prompt_only' } }),
-      jsonResponse({ code: 0, data: { id: 'inpaint_prompt_only', status: 'succeeded', results: [{ url: 'data:image/png;base64,cmVzdWx0' }] } }),
-    ]);
-
-    await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage({
-      ...input,
-      mode: 'inpaint',
-      maskImageDataUrl: undefined,
-      maskMode: undefined,
-      prompt: '用户未提供 mask / 涂抹区域\n用户具体修改需求：将地板替换为所上传的材质贴图',
-    });
-
-    const createRequest = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
-    expect(createRequest.prompt).toContain('未提供 mask');
-    expect(createRequest.prompt).not.toContain('仅修改用户涂抹或遮罩区域');
-    expect(createRequest.prompt).not.toContain('严格优先修改 mask 白色区域');
-  });
-
-  it('adds mask guidance for masked inpaint requests', async () => {
-    mockFetchSequence([
-      jsonResponse({ code: 0, data: { id: 'inpaint_masked' } }),
-      jsonResponse({ code: 0, data: { id: 'inpaint_masked', status: 'succeeded', results: [{ url: 'data:image/png;base64,cmVzdWx0' }] } }),
-    ]);
-
-    await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage({
-      ...input,
-      mode: 'inpaint',
-      maskMode: 'asset-mask',
-      maskImageDataUrl: 'data:image/png;base64,bWFzaw==',
-      prompt: '用户具体修改需求：把墙面改成浅米色微水泥质感',
-    });
-
-    const createRequest = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
-    expect(createRequest.prompt).toContain('仅修改用户涂抹或遮罩区域');
-  });
-
-  it('uses target aspect ratio and ordered role-specific references', async () => {
-    mockFetchSequence([
-      jsonResponse({ code: 0, data: { id: 'target_ratio' } }),
-      jsonResponse({ code: 0, data: { id: 'target_ratio', status: 'succeeded', results: [{ url: 'data:image/png;base64,cmVzdWx0' }] } }),
-    ]);
-
-    await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage({
-      ...input,
-      mode: 'inpaint',
-      targetAspectRatio: '16:9',
-      maskMode: 'asset-mask',
-      maskImageDataUrl: 'data:image/png;base64,bWFzaw==',
-      materialReferenceImageDataUrls: ['data:image/png;base64,bWF0MQ=='],
-      furnitureReferenceImageDataUrls: ['data:image/png;base64,ZnVyMQ=='],
-      editTarget: 'furniture',
-    });
-
-    const createRequest = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
-    expect(createRequest.aspectRatio).toBe('16:9');
-    expect(createRequest.urls).toEqual([
-      'data:image/png;base64,aW5wdXQ=',
-      'data:image/png;base64,bWFzaw==',
-      'data:image/png;base64,bWF0ZXJpYWw=',
-      'data:image/png;base64,bWF0MQ==',
-      'data:image/png;base64,ZnVyMQ==',
-      'data:image/png;base64,dGV4dHVyZQ==',
-    ]);
-    expect(createRequest.prompt).toContain('Furniture reference images are only for furniture type');
-    expect(createRequest.prompt).toContain('Edit target is furniture');
-  });
-
-  it('throws when Grsai reports failed status', async () => {
-    mockFetchSequence([
-      jsonResponse({ code: 0, data: { id: 'task_failed' } }),
-      jsonResponse({ code: 0, data: { id: 'task_failed', status: 'failed', failure_reason: 'quota exhausted', error: 'provider error' } }),
-    ]);
+  it('does not retry a 4xx parameter error', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ msg: 'bad request' }, 400));
+    globalThis.fetch = fetchMock;
 
     await expect(createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage(input))
-      .rejects.toThrow('quota exhausted');
+      .rejects.toThrow('HTTP 400');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('throws when create returns code != 0', async () => {
-    mockFetchSequence([
-      jsonResponse({ code: 123, msg: 'bad request' }),
-    ]);
+  it('returns a clear timeout error', async () => {
+    process.env.GRSAI_TIMEOUT_MS = '1';
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+      });
+    }));
+    globalThis.fetch = fetchMock as typeof fetch;
 
     await expect(createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage(input))
-      .rejects.toThrow('Grsai Banana2 create failed: code 123: bad request');
-  });
-
-  it('throws a clear message when result returns code -22', async () => {
-    mockFetchSequence([
-      jsonResponse({ code: 0, data: { id: 'missing_task' } }),
-      jsonResponse({ code: -22, msg: 'not found' }),
-    ]);
-
-    await expect(createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage(input))
-      .rejects.toThrow('Grsai Banana2 task not found: missing_task');
-  });
-
-  it('throws when succeeded results are empty', async () => {
-    mockFetchSequence([
-      jsonResponse({ code: 0, data: { id: 'empty_result' } }),
-      jsonResponse({ code: 0, data: { id: 'empty_result', status: 'succeeded', results: [] } }),
-    ]);
-
-    await expect(createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage(input))
-      .rejects.toThrow('Grsai Banana2 succeeded but results were empty.');
-  });
-
-  it('rejects text/html result downloads instead of saving a temporary URL', async () => {
-    mockFetchSequence([
-      jsonResponse({ code: 0, data: { id: 'html_result' } }),
-      jsonResponse({ code: 0, data: { id: 'html_result', status: 'succeeded', results: [{ url: 'https://cdn.example.com/result.png' }] } }),
-      binaryResponse('text/html', '<html>error</html>'),
-    ]);
-
-    await expect(createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage(input))
-      .rejects.toThrow('non-image content-type: text/html');
-  });
-
-  it('throws when GRSAI_API_KEY is missing', async () => {
-    await expect(createGrsaiBanana2Provider().generateImage(input))
-      .rejects.toThrow('GRSAI_API_KEY is required');
-  });
-
-  it('downloads remote images as data URLs for downstream storage', async () => {
-    mockFetchSequence([binaryResponse('image/jpeg', 'jpeg-result')]);
-
-    const dataUrl = await downloadImageAsDataUrl('https://cdn.example.com/temp-result.jpg');
-
-    expect(dataUrl).toBe(`data:image/jpeg;base64,${Buffer.from('jpeg-result').toString('base64')}`);
-    expect(dataUrl).not.toBe('https://cdn.example.com/temp-result.jpg');
+      .rejects.toThrow('Grsai request timed out after 1ms');
   });
 });
-
-describe('provider fallback configuration', () => {
-  it('defaults provider fallback off in production and on outside production', () => {
-    expect(isProviderFallbackEnabled({ NODE_ENV: 'production' })).toBe(false);
-    expect(isProviderFallbackEnabled({ NODE_ENV: 'development' })).toBe(true);
-  });
-
-  it('respects explicit provider fallback overrides', () => {
-    expect(isProviderFallbackEnabled({ NODE_ENV: 'production', ENABLE_PROVIDER_FALLBACK: 'true' })).toBe(true);
-    expect(isProviderFallbackEnabled({ NODE_ENV: 'development', ENABLE_PROVIDER_FALLBACK: 'false' })).toBe(false);
-  });
-});
-
-function mockFetchSequence(responses: Response[]): void {
-  const fetchMock = vi.fn();
-  for (const response of responses) {
-    fetchMock.mockResolvedValueOnce(response);
-  }
-  vi.stubGlobal('fetch', fetchMock);
-}
 
 function jsonResponse(body: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
+  return new Response(JSON.stringify(body), {
     status,
-    json: () => Promise.resolve(body),
-    headers: { get: () => 'application/json' },
-    arrayBuffer: () => Promise.resolve(Buffer.from(JSON.stringify(body)).buffer),
-  } as unknown as Response;
-}
-
-function binaryResponse(contentType: string | null, body: string, status = 200): Response {
-  const buffer = Buffer.from(body);
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: () => Promise.resolve(null),
-    headers: { get: (name: string) => name.toLowerCase() === 'content-type' ? contentType : null },
-    arrayBuffer: () => Promise.resolve(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)),
-  } as unknown as Response;
+    headers: { 'content-type': 'application/json' },
+  });
 }

@@ -25,6 +25,7 @@ import {
   revokeShareLink,
   ShareLink,
 } from '../lib/api';
+import { ResultImageTabs } from './ResultImageTabs';
 
 interface ProjectDetailProps {
   projectId: string;
@@ -56,7 +57,6 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate, onDeleteProje
   const [isCreatingShare, setIsCreatingShare] = useState(false);
   const [isRevokingShare, setIsRevokingShare] = useState(false);
   const [isDeletingProject, setIsDeletingProject] = useState(false);
-  const [compareGenerationId, setCompareGenerationId] = useState<string | null>(null);
   const [selectedReportKeys, setSelectedReportKeys] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -254,8 +254,6 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate, onDeleteProje
                     key={generation.id}
                     generation={generation}
                     selectedReportKeys={selectedReportKeys}
-                    isComparing={compareGenerationId === generation.id}
-                    onToggleCompare={() => setCompareGenerationId(current => current === generation.id ? null : generation.id)}
                     onToggleReportOption={handleToggleReportOption}
                   />
                 ))}
@@ -320,14 +318,10 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate, onDeleteProje
 function GenerationCard({
   generation,
   selectedReportKeys,
-  isComparing,
-  onToggleCompare,
   onToggleReportOption,
 }: {
   generation: GenerationRecord;
   selectedReportKeys: Record<string, boolean>;
-  isComparing: boolean;
-  onToggleCompare: () => void;
   onToggleReportOption: (key: string) => void;
 }) {
   const resultImages = useMemo(() => getResultImages(generation), [generation]);
@@ -343,21 +337,19 @@ function GenerationCard({
             <span className="arch-pill">{generation.provider}</span>
             <span className="arch-pill">{generation.status === 'succeeded' ? '成功' : '失败'}</span>
           </div>
-          <button
-            onClick={onToggleCompare}
-            disabled={!inputImage || !primaryResult}
-            className="arch-button-secondary px-3 py-2 text-xs disabled:opacity-50"
-          >
-            原图 / 结果
-          </button>
+          <span className="text-xs font-semibold text-slate-400">{formatDate(generation.createdAt)}</span>
         </div>
 
-        {isComparing && inputImage && primaryResult ? (
-          <div className="grid gap-3 sm:grid-cols-2">
-            <PreviewImage src={inputImage} label="原图" />
-            <PreviewImage src={primaryResult.imageUrl} label="结果图" />
-          </div>
-        ) : resultImages.length > 0 ? (
+        <ResultImageTabs
+          resultImageUrl={primaryResult?.imageUrl || generation.outputImageDataPreview || generation.outputImageUrl}
+          originalImageUrl={inputImage}
+          className="h-[360px]"
+          tabListClassName="mb-3 w-fit"
+          tabButtonClassName="px-3"
+          frameClassName="rounded-xl shadow-none"
+        />
+
+        {resultImages.length > 0 ? (
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {resultImages.map(result => {
               const reportKey = buildReportKey(generation.id, result.id);
@@ -378,17 +370,12 @@ function GenerationCard({
               );
             })}
           </div>
-        ) : (
-          <div className="flex aspect-[4/3] items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-300">
-            <ImageIcon className="h-8 w-8" />
-          </div>
-        )}
+        ) : null}
 
         <div>
           <p className="line-clamp-2 text-sm font-semibold leading-6 text-slate-800">
             {generation.prompt || '未填写提示词'}
           </p>
-          <p className="mt-2 text-xs text-slate-400">生成时间：{formatDate(generation.createdAt)}</p>
         </div>
       </div>
     </article>

@@ -45,7 +45,9 @@ describe('buildInpaintPrompt', () => {
     });
 
     expect(prompt).toContain('Edit target: furniture');
-    expect(prompt).toContain('Replace, add, remove, or refine furniture');
+    expect(prompt).toContain('Only modify the furniture inside the white area of the mask');
+    expect(prompt).toContain('Do not modify unmasked areas');
+    expect(prompt).toContain('Do not replace any other furniture outside the mask');
     expect(prompt).toContain('perspective, scale, proportions');
     expect(prompt).toContain('Furniture reference images are for furniture type');
   });

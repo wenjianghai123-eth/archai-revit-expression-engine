@@ -9,6 +9,9 @@ const defaultImageSize = '1K';
 const defaultPollIntervalMs = 2500;
 const defaultPollTimeoutMs = 180000;
 const defaultDownloadTimeoutMs = 30000;
+const defaultRequestTimeoutMs = 120000;
+const defaultMaxRetries = 1;
+const defaultRetryBackoffMs = 1500;
 
 interface GrsaiBanana2ProviderOptions {
   apiKey?: string;
@@ -55,7 +58,10 @@ export function createGrsaiBanana2Provider(options: GrsaiBanana2ProviderOptions 
   const configuredAspectRatio = process.env.GRSAI_ASPECT_RATIO || defaultAspectRatio;
   const imageSize = process.env.GRSAI_IMAGE_SIZE || defaultImageSize;
   const pollIntervalMs = readPositiveInteger(process.env.GRSAI_POLL_INTERVAL_MS, defaultPollIntervalMs);
-  const pollTimeoutMs = readPositiveInteger(process.env.GRSAI_POLL_TIMEOUT_MS, defaultPollTimeoutMs);
+  const requestTimeoutMs = readPositiveInteger(process.env.GRSAI_TIMEOUT_MS, defaultRequestTimeoutMs);
+  const pollTimeoutMs = readPositiveInteger(process.env.GRSAI_POLL_TIMEOUT_MS, readPositiveInteger(process.env.GRSAI_TIMEOUT_MS, defaultPollTimeoutMs));
+  const maxRetries = readNonNegativeInteger(process.env.GRSAI_MAX_RETRIES, defaultMaxRetries);
+  const retryBackoffMs = readPositiveInteger(process.env.GRSAI_RETRY_BACKOFF_MS, defaultRetryBackoffMs);
 
   return {
     name: providerName,
@@ -63,10 +69,20 @@ export function createGrsaiBanana2Provider(options: GrsaiBanana2ProviderOptions 
       const apiKey = readApiKey(options.apiKey);
       const prompt = buildPrompt(input);
       const urls = buildReferenceUrls(input);
+      const payloadBytesApprox = urls.reduce((sum, url) => sum + estimateDataUrlBytes(url), 0);
       const aspectRatio = input.targetAspectRatio || configuredAspectRatio || defaultAspectRatio;
+      const requestStartedAt = Date.now();
+      const diagnostics = {
+        retryCount: 0,
+        httpStatus: undefined as number | undefined,
+      };
       const taskId = await createGeneration({
         apiKey,
         baseUrl,
+        requestTimeoutMs,
+        maxRetries,
+        retryBackoffMs,
+        diagnostics,
         body: {
           model,
           prompt,
@@ -77,7 +93,18 @@ export function createGrsaiBanana2Provider(options: GrsaiBanana2ProviderOptions 
           shutProgress: false,
         },
       });
-      const result = await pollGeneration({ apiKey, baseUrl, taskId, pollIntervalMs, pollTimeoutMs });
+      const result = await pollGeneration({ apiKey, baseUrl, taskId, pollIntervalMs, pollTimeoutMs, requestTimeoutMs, maxRetries, retryBackoffMs, diagnostics });
+      console.info('Grsai Banana2 provider timing', {
+        provider: providerName,
+        model,
+        durationMs: Date.now() - requestStartedAt,
+        httpStatus: diagnostics.httpStatus,
+        retryCount: diagnostics.retryCount,
+        imageCount: urls.length,
+        inputImageBytes: estimateDataUrlBytes(input.inputImageDataUrl),
+        referenceImageCount: Math.max(0, urls.length - 1),
+        payloadBytesApprox,
+      });
       const firstResult = result.results?.[0];
 
       if (!firstResult?.url) {
@@ -102,6 +129,13 @@ export function createGrsaiBanana2Provider(options: GrsaiBanana2ProviderOptions 
           taskId,
           model,
           progress: result.progress,
+          providerDurationMs: Date.now() - requestStartedAt,
+          httpStatus: diagnostics.httpStatus,
+          retryCount: diagnostics.retryCount,
+          inputImages: 1,
+          imageCount: urls.length,
+          referenceImageCount: Math.max(0, urls.length - 1),
+          payloadBytesApprox,
         },
         createdAt: new Date().toISOString(),
         warnings,
@@ -110,19 +144,28 @@ export function createGrsaiBanana2Provider(options: GrsaiBanana2ProviderOptions 
   };
 }
 
-async function createGeneration(input: { apiKey: string; baseUrl: string; body: Record<string, unknown> }): Promise<string> {
-  const response = await fetch(`${input.baseUrl}/v1/draw/nano-banana`, {
+async function createGeneration(input: {
+  apiKey: string;
+  baseUrl: string;
+  body: Record<string, unknown>;
+  requestTimeoutMs: number;
+  maxRetries: number;
+  retryBackoffMs: number;
+  diagnostics: { retryCount: number; httpStatus?: number };
+}): Promise<string> {
+  const response = await fetchWithRetry(`${input.baseUrl}/v1/draw/nano-banana`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${input.apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(input.body),
-  });
+  }, input);
+  input.diagnostics.httpStatus = response.status;
   const body = await readJson(response) as GrsaiCreateResponse;
 
   if (!response.ok) {
-    throw new Error(`Grsai Banana2 create failed: HTTP ${response.status}${formatResponseSummary(body)}`);
+    throw createHttpError(`Grsai Banana2 create failed: HTTP ${response.status}${formatResponseSummary(body)}`, response.status);
   }
 
   if (typeof body.code === 'number' && body.code !== 0) {
@@ -143,22 +186,27 @@ async function pollGeneration(input: {
   taskId: string;
   pollIntervalMs: number;
   pollTimeoutMs: number;
+  requestTimeoutMs: number;
+  maxRetries: number;
+  retryBackoffMs: number;
+  diagnostics: { retryCount: number; httpStatus?: number };
 }): Promise<GrsaiTaskResult> {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < input.pollTimeoutMs) {
-    const response = await fetch(`${input.baseUrl}/v1/draw/result`, {
+    const response = await fetchWithRetry(`${input.baseUrl}/v1/draw/result`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${input.apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ id: input.taskId }),
-    });
+    }, input);
+    input.diagnostics.httpStatus = response.status;
     const body = await readJson(response) as GrsaiResultResponse;
 
     if (!response.ok) {
-      throw new Error(`Grsai Banana2 result failed: HTTP ${response.status}${formatResponseSummary(body)}`);
+      throw createHttpError(`Grsai Banana2 result failed: HTTP ${response.status}${formatResponseSummary(body)}`, response.status);
     }
 
     if (body.code === -22) {
@@ -186,7 +234,7 @@ async function pollGeneration(input: {
     await delay(input.pollIntervalMs);
   }
 
-  throw new Error(`Grsai Banana2 task timed out after ${input.pollTimeoutMs}ms.`);
+  throw createHttpError(`Grsai request timed out after ${input.pollTimeoutMs}ms`, 408);
 }
 
 export async function downloadImageAsDataUrl(url: string): Promise<string> {
@@ -239,6 +287,91 @@ async function downloadImage(url: string): Promise<DownloadedImage> {
   }
 }
 
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  options: {
+    requestTimeoutMs: number;
+    maxRetries: number;
+    retryBackoffMs: number;
+    diagnostics: { retryCount: number; httpStatus?: number };
+  },
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= options.maxRetries; attempt += 1) {
+    try {
+      const response = await fetchWithTimeout(url, init, options.requestTimeoutMs);
+      options.diagnostics.httpStatus = response.status;
+      if (!isRetryableStatus(response.status) || attempt >= options.maxRetries) {
+        return response;
+      }
+
+      options.diagnostics.retryCount += 1;
+      console.warn('Grsai request returned retryable status; retrying.', {
+        status: response.status,
+        attempt: attempt + 1,
+        maxRetries: options.maxRetries,
+      });
+      await delay(options.retryBackoffMs * (attempt + 1));
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableError(error) || attempt >= options.maxRetries) {
+        throw error;
+      }
+
+      options.diagnostics.retryCount += 1;
+      console.warn('Grsai request failed; retrying.', {
+        error: error instanceof Error ? error.message : 'unknown error',
+        attempt: attempt + 1,
+        maxRetries: options.maxRetries,
+      });
+      await delay(options.retryBackoffMs * (attempt + 1));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Grsai request failed.');
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw createHttpError(`Grsai request timed out after ${timeoutMs}ms`, 408);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+function isRetryableError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const status = (error as Error & { status?: unknown }).status;
+  return error.message.includes('timed out')
+    || status === 429
+    || (typeof status === 'number' && status >= 500);
+}
+
+function createHttpError(message: string, status: number): Error {
+  const error = new Error(formatHttpErrorMessage(message, status)) as Error & { status?: number };
+  error.status = status;
+  return error;
+}
+
+function formatHttpErrorMessage(message: string, status: number): string {
+  if (status === 429) return 'Grsai returned 429 rate limit';
+  if (status >= 500) return 'Grsai returned 5xx upstream error';
+  return message;
+}
+
 function normalizeImageDataUrl(dataUrl: string): NormalizedDataUrl {
   const match = /^data:([^;,]+)((?:;[^,]*)?),(.*)$/su.exec(dataUrl);
   if (!match || !match[1].startsWith('image/')) {
@@ -263,13 +396,16 @@ function normalizeImageDataUrl(dataUrl: string): NormalizedDataUrl {
 }
 
 function buildReferenceUrls(input: GenerateImageInput): string[] {
+  const materialReferences = (input.materialReferenceImageDataUrls || []).slice(0, 3);
+  const furnitureReferences = (input.furnitureReferenceImageDataUrls || []).slice(0, 3);
+  const maxAdditionalReferences = Math.max(0, readPositiveInteger(process.env.MAX_PROVIDER_REFERENCE_IMAGES, 6) - materialReferences.length - furnitureReferences.length - (input.materialImageDataUrl ? 1 : 0));
   return [
     input.inputImageDataUrl,
     input.maskImageDataUrl,
     input.materialImageDataUrl,
-    ...(input.materialReferenceImageDataUrls || []),
-    ...(input.furnitureReferenceImageDataUrls || []),
-    ...(input.referenceImageDataUrls || []),
+    ...materialReferences,
+    ...furnitureReferences,
+    ...(input.referenceImageDataUrls || []).slice(0, maxAdditionalReferences),
   ].filter(isNonEmptyString);
 }
 
@@ -284,7 +420,7 @@ function buildPrompt(input: GenerateImageInput): string {
     'Keep the exact same canvas aspect ratio, framing, composition boundary, and image proportions as the first input image. Do not crop, extend, pad, add borders, or change the canvas ratio.',
   );
   if (input.maskImageDataUrl) {
-    pieces.push('The mask image limits the editable region. White is editable; black and unmasked areas should remain unchanged.');
+    pieces.push('The mask image limits the editable region. White is editable; black and unmasked areas must remain unchanged. Do not modify outside the white mask.');
   }
   if (input.materialImageDataUrl || (input.materialReferenceImageDataUrls?.length || 0) > 0) {
     pieces.push('Material reference images are only for material texture, color, pattern, reflection, roughness, and surface quality. Do not copy objects or backgrounds from them.');
@@ -309,13 +445,13 @@ function buildPrompt(input: GenerateImageInput): string {
   if (input.editTarget === 'material') {
     pieces.push('Edit target is material: only change material, color, texture, reflection, roughness, and surface quality. Do not change furniture shape or fixed architecture.');
   } else if (input.editTarget === 'furniture') {
-    pieces.push('Edit target is furniture: replace, add, remove, or refine furniture while preserving perspective, scale, lighting, walls, floor, ceiling, doors, windows, and fixed structures.');
+    pieces.push('Edit target is furniture: only modify the furniture inside the white mask. Do not replace other furniture. Preserve perspective, scale, lighting, walls, floor, ceiling, doors, windows, fixed structures, and all unmasked areas.');
   }
 
   if (input.editTarget === 'material') {
     pieces.push('Edit target is material: only change material, color, texture, reflection, roughness, and surface quality. Do not change furniture shape or fixed architecture.');
   } else if (input.editTarget === 'furniture') {
-    pieces.push('Edit target is furniture: replace, add, remove, or refine furniture while preserving perspective, scale, lighting, walls, floor, ceiling, doors, windows, and fixed structures.');
+    pieces.push('Edit target is furniture: only modify the furniture inside the white mask. Do not replace other furniture. Preserve perspective, scale, lighting, walls, floor, ceiling, doors, windows, fixed structures, and all unmasked areas.');
   }
 
   pieces.push(input.prompt);
@@ -335,7 +471,7 @@ function buildInpaintPrompt(input: GenerateImageInput): string {
   if (input.editTarget === 'material') {
     pieces.push('Edit target is material: only change material, color, texture, reflection, roughness, and surface quality. Do not change furniture shape or fixed architecture.');
   } else if (input.editTarget === 'furniture') {
-    pieces.push('Edit target is furniture: replace, add, remove, or refine furniture while preserving perspective, scale, lighting, walls, floor, ceiling, doors, windows, and fixed structures.');
+    pieces.push('Edit target is furniture: only modify the furniture inside the white mask. Do not replace other furniture. Preserve perspective, scale, lighting, walls, floor, ceiling, doors, windows, fixed structures, and all unmasked areas.');
   }
   if ((input.furnitureReferenceImageDataUrls?.length || 0) > 0) {
     pieces.push('Furniture reference images are only for furniture type, shape, proportion, material, color, and style. Do not copy their backgrounds.');
@@ -426,6 +562,13 @@ function logProviderResult(input: { dataUrl: string; mimeType: string; remoteUrl
   });
 }
 
+function estimateDataUrlBytes(value: string): number {
+  const match = /^data:[^,]+,(.*)$/su.exec(value);
+  if (!match) return Buffer.byteLength(value);
+  const payload = match[1];
+  return Math.ceil(payload.length * 0.75);
+}
+
 function safeReadHost(url: string): string | undefined {
   try {
     return new URL(url).host;
@@ -437,6 +580,11 @@ function safeReadHost(url: string): string | undefined {
 function readPositiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
+}
+
+function readNonNegativeInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : fallback;
 }
 
 function isHttpUrl(value: string): boolean {

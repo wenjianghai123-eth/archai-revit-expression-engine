@@ -75,6 +75,7 @@ type GenerationJobRow = {
   updated_at: string;
   started_at: string | null;
   finished_at: string | null;
+  diagnostics?: unknown;
 };
 
 type GenerationResultRow = {
@@ -462,7 +463,13 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       project_id: input.projectId,
       mode: input.mode,
       prompt: input.prompt,
-      config: input.config,
+      config: {
+        ...input.config,
+        __diagnostics: {
+          phase: 'queued',
+          timing: { jobCreatedAt: now },
+        },
+      },
       input_asset_ids: input.inputAssetIds,
       status: 'queued',
       progress: 0,
@@ -511,6 +518,13 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     if (input.errorMessage !== undefined) patch.error_message = input.errorMessage;
     if (input.startedAt !== undefined) patch.started_at = input.startedAt;
     if (input.finishedAt !== undefined) patch.finished_at = input.finishedAt;
+    if (input.diagnostics !== undefined) {
+      const current = await this.getGenerationJob(id);
+      patch.config = {
+        ...(current?.config || {}),
+        __diagnostics: input.diagnostics,
+      };
+    }
 
     const { data, error } = await this.client
       .from('generation_jobs')
@@ -815,6 +829,7 @@ function mapGenerationRecordRow(row: GenerationRecordRow): GenerationRecord {
 }
 
 function mapGenerationJobRow(row: GenerationJobRow): GenerationJob {
+  const diagnostics = readDiagnostics(row);
   return {
     id: row.id,
     userId: row.user_id,
@@ -833,7 +848,16 @@ function mapGenerationJobRow(row: GenerationJobRow): GenerationJob {
     updatedAt: row.updated_at,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
+    diagnostics,
   };
+}
+
+function readDiagnostics(row: GenerationJobRow): GenerationJob['diagnostics'] {
+  if (isRecord(row.diagnostics)) return row.diagnostics as GenerationJob['diagnostics'];
+  if (isRecord(row.config) && isRecord(row.config.__diagnostics)) {
+    return row.config.__diagnostics as GenerationJob['diagnostics'];
+  }
+  return undefined;
 }
 
 function mapGenerationResultRow(row: GenerationResultRow): GenerationResult {
@@ -937,4 +961,8 @@ function assertNoSupabaseError(error: { message: string } | null, action: string
   if (error) {
     throw new Error(`Supabase storage error while ${action}: ${error.message}`);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

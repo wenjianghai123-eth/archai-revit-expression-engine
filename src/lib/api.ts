@@ -122,7 +122,47 @@ export interface GenerationJob {
   updatedAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  diagnostics?: GenerationJobDiagnostics;
   results?: GenerationResult[];
+}
+
+export interface GenerationJobDiagnostics {
+  phase?: 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled';
+  timing?: {
+    jobCreatedAt?: string;
+    jobStartedAt?: string;
+    prepareInputStartedAt?: string;
+    prepareInputFinishedAt?: string;
+    providerRequestStartedAt?: string;
+    providerRequestFinishedAt?: string;
+    postprocessStartedAt?: string;
+    postprocessFinishedAt?: string;
+    saveResultStartedAt?: string;
+    saveResultFinishedAt?: string;
+    jobFinishedAt?: string;
+    prepareInputDurationMs?: number;
+    providerDurationMs?: number;
+    postprocessDurationMs?: number;
+    saveResultDurationMs?: number;
+    totalDurationMs?: number;
+  };
+  provider?: {
+    name?: string;
+    model?: string;
+    httpStatus?: number;
+    retryCount?: number;
+    fallbackProvider?: string;
+    fallbackReason?: string;
+  };
+  images?: {
+    inputImages?: number;
+    referenceImages?: number;
+    inputBytesBefore?: number;
+    inputBytesAfter?: number;
+    referenceBytesBefore?: number;
+    referenceBytesAfter?: number;
+    payloadBytesApprox?: number;
+  };
 }
 
 export interface GenerationJobInput {

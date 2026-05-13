@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   BookOpen,
@@ -75,6 +75,7 @@ export function MainWorkspace({
   const furnitureReferenceFileRef = useRef<HTMLInputElement>(null);
   const [uploadErrors, setUploadErrors] = useState<Record<UploadTarget, string | null>>({ input: null, material: null, texture: null, furniture: null });
   const [isMaterialLibraryOpen, setIsMaterialLibraryOpen] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const isFloorplanStep = step === GenerationStep.FloorplanTo3D;
   const isStyleRenderStep = step === GenerationStep.StyleRender;
@@ -91,6 +92,8 @@ export function MainWorkspace({
     || resultOptions[0]
     || null;
   const previewImage = selectedResult?.imageUrl || state.outputImage;
+  const generationStartedAt = state.generationJobDiagnostics?.timing?.jobStartedAt || state.generationCreatedAt;
+  const statusLabel = readGenerationStatusLabel(state.generationJobDiagnostics?.phase, state.generationJobStatus, state.generationStatus);
   const resultPanelTitle = isFloorplanStep ? '材质设置与结果' : isStyleRenderStep ? '渲染设置与结果' : '输出 / 状态';
   const viewModeOptions: Array<{ value: StepState['viewMode']; label: string; disabled: boolean }> = [
     { value: 'after', label: '结果图', disabled: !previewImage },
@@ -98,6 +101,20 @@ export function MainWorkspace({
     { value: 'compare', label: '对比', disabled: !previewImage || !originalImageUrl },
     { value: 'overlay', label: '叠加对比', disabled: !previewImage || !originalImageUrl },
   ];
+
+  useEffect(() => {
+    if (!state.isGenerating || !generationStartedAt) {
+      setElapsedSeconds(0);
+      return;
+    }
+
+    const updateElapsed = () => {
+      setElapsedSeconds(Math.max(0, Math.floor((Date.now() - new Date(generationStartedAt).getTime()) / 1000)));
+    };
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(timer);
+  }, [generationStartedAt, state.isGenerating]);
 
   const handleUploadClick = (target: UploadTarget) => {
     if (target === 'input') inputFileRef.current?.click();
@@ -836,7 +853,7 @@ export function MainWorkspace({
         <div className="mb-4 flex items-center justify-between">
           <div>
             <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{resultPanelTitle}</span>
-            <p className="mt-1 text-xs text-slate-500">{state.generationJobStatus || state.generationStatus}</p>
+            <p className="mt-1 text-xs text-slate-500">{statusLabel}</p>
           </div>
           <Settings2 className="h-4 w-4 text-slate-300" />
         </div>
@@ -848,11 +865,20 @@ export function MainWorkspace({
           <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
             <div className="mb-2 flex items-center justify-between text-[10px] font-bold text-slate-500">
               <span>{state.generationJobId || 'legacy fallback'}</span>
-              <span>{state.generationProgress}%</span>
+              <span>{state.isGenerating ? formatElapsed(elapsedSeconds) : `${state.generationProgress}%`}</span>
             </div>
             <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
               <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${Math.min(100, Math.max(0, state.generationProgress))}%` }} />
             </div>
+            {state.isGenerating ? (
+              <div className="mt-3 rounded-lg bg-white px-3 py-2 text-xs leading-5 text-slate-600">
+                <p className="font-bold text-slate-800">{statusLabel}</p>
+                <p>AI 生成中，复杂图片可能需要 1-3 分钟。</p>
+                {elapsedSeconds > 60 ? (
+                  <p className="mt-1 font-semibold text-amber-700">生成时间较长，可能是第三方模型排队或图片较复杂，请不要重复点击。</p>
+                ) : null}
+              </div>
+            ) : null}
             {state.isGenerating && state.generationJobId && (
               <button type="button" onClick={onCancelGeneration} className="mt-3 w-full rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-600">
                 取消任务
@@ -1010,6 +1036,36 @@ function modeLabel(step: GenerationStep): string {
   if (step === GenerationStep.FloorplanTo3D) return '平面生成';
   if (step === GenerationStep.StyleRender) return '风格渲染';
   return '局部重绘';
+}
+
+function readGenerationStatusLabel(
+  phase: StepState['generationJobDiagnostics'] extends infer D ? D extends { phase?: infer P } ? P : never : never,
+  jobStatus: StepState['generationJobStatus'],
+  generationStatus: StepState['generationStatus'],
+): string {
+  if (phase === 'prepare-input') return '准备输入中';
+  if (phase === 'provider-request') return '正在调用 AI 生成';
+  if (phase === 'postprocess') return '正在后处理图片';
+  if (phase === 'save-result') return '正在保存结果';
+  if (phase === 'succeeded') return '已完成';
+  if (phase === 'failed') return '生成失败';
+  if (phase === 'cancelled') return '已取消';
+  if (jobStatus === 'queued') return '准备输入中';
+  if (jobStatus === 'running') return '正在调用 AI 生成';
+  if (jobStatus === 'succeeded') return '已完成';
+  if (jobStatus === 'failed') return '生成失败';
+  if (jobStatus === 'cancelled') return '已取消';
+  if (generationStatus === 'uploading') return '准备输入中';
+  if (generationStatus === 'generating') return '正在调用 AI 生成';
+  if (generationStatus === 'success') return '已完成';
+  if (generationStatus === 'error') return '生成失败';
+  return '待生成';
+}
+
+function formatElapsed(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
 }
 
 function isLocalInpaintingStep(step: GenerationStep): boolean {

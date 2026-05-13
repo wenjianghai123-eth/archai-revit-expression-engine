@@ -503,6 +503,10 @@ async function createGenerationJob(input: {
     updatedAt: now,
     startedAt: null,
     finishedAt: null,
+    diagnostics: {
+      phase: 'queued',
+      timing: { jobCreatedAt: now },
+    },
   };
 
   db.generationJobs.unshift(job);
@@ -541,6 +545,7 @@ async function updateGenerationJob(
   if (input.errorMessage !== undefined) job.errorMessage = input.errorMessage;
   if (input.startedAt !== undefined) job.startedAt = input.startedAt;
   if (input.finishedAt !== undefined) job.finishedAt = input.finishedAt;
+  if (input.diagnostics !== undefined) job.diagnostics = input.diagnostics;
   job.updatedAt = new Date().toISOString();
 
   await writeDatabase(db);

@@ -9,12 +9,15 @@ import { createMockGeneration, mockProvider } from './providers/mockProvider';
 import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider, MaskMode, ProviderName } from './providers/types';
 import { getImageSizeFromDataUrl, isValidTargetDimension } from './image/imageMetadata';
 import { normalizeGeneratedImageDataUrl } from './image/normalizeImage';
+import { prepareImageForProvider, prepareMaskForProvider, PreparedProviderImage } from './image/prepareProviderImage';
+import { composeLocalInpaintResult, createLocalInpaintContext, LocalInpaintContext } from './image/localInpaint';
 import {
   adjustCredits,
   createGenerationRecord,
   createGenerationResult,
   createImageAsset,
   GenerationJob,
+  GenerationJobDiagnostics,
   GenerationRecord,
   getCreditTransactionByReference,
   getGenerationJob,
@@ -133,35 +136,78 @@ async function runGenerationWorker(): Promise<void> {
 async function processGenerationJob(jobId: string): Promise<void> {
   const job = await getGenerationJob(jobId);
   if (!job || job.status === 'cancelled' || job.status === 'succeeded') return;
+  const diagnostics: GenerationJobDiagnostics = {
+    ...job.diagnostics,
+    phase: 'prepare-input',
+    timing: {
+      ...job.diagnostics?.timing,
+      jobCreatedAt: job.createdAt,
+      jobStartedAt: new Date().toISOString(),
+    },
+  };
 
   try {
     await updateGenerationJob(job.id, {
       status: 'running',
       progress: 10,
-      startedAt: new Date().toISOString(),
+      startedAt: diagnostics.timing?.jobStartedAt,
       errorMessage: null,
+      diagnostics,
     });
 
-    const input = await buildGenerateInputFromJob(job);
+    markTiming(diagnostics, 'prepareInputStartedAt', 'prepare-input');
+    await updateGenerationJob(job.id, { progress: 15, diagnostics });
+    const { input, imageDiagnostics, localInpaint } = await buildGenerateInputFromJob(job);
+    diagnostics.images = imageDiagnostics;
+    markTiming(diagnostics, 'prepareInputFinishedAt');
+    await updateGenerationJob(job.id, { progress: 22, diagnostics });
+
     const batchCount = 1;
     const outputAssetIds: string[] = [];
     let firstOutput: GenerateImageOutput | null = null;
     let firstOutputAsset: ImageAsset | null = null;
 
     for (let index = 0; index < batchCount; index += 1) {
+      markTiming(diagnostics, 'providerRequestStartedAt', 'provider-request');
+      await updateGenerationJob(job.id, { progress: 28, diagnostics });
       const providerOutput = await generateWithFallback(input);
+      markTiming(diagnostics, 'providerRequestFinishedAt');
+      diagnostics.provider = {
+        ...diagnostics.provider,
+        name: providerOutput.provider,
+        model: typeof providerOutput.metadata?.model === 'string' ? providerOutput.metadata.model : diagnostics.provider?.model,
+        httpStatus: typeof providerOutput.metadata?.httpStatus === 'number' ? providerOutput.metadata.httpStatus : diagnostics.provider?.httpStatus,
+        retryCount: typeof providerOutput.metadata?.retryCount === 'number' ? providerOutput.metadata.retryCount : diagnostics.provider?.retryCount,
+        fallbackProvider: typeof providerOutput.metadata?.fallbackProvider === 'string' ? providerOutput.metadata.fallbackProvider : diagnostics.provider?.fallbackProvider,
+        fallbackReason: typeof providerOutput.metadata?.fallbackReason === 'string' ? providerOutput.metadata.fallbackReason : diagnostics.provider?.fallbackReason,
+      };
+      await updateGenerationJob(job.id, { progress: 75, diagnostics });
+
+      markTiming(diagnostics, 'postprocessStartedAt', 'postprocess');
+      let outputDataUrl = await normalizeGeneratedImageDataUrl({
+        dataUrl: providerOutput.dataUrl,
+        targetWidth: localInpaint ? localInpaint.bbox.width : input.targetWidth,
+        targetHeight: localInpaint ? localInpaint.bbox.height : input.targetHeight,
+        mode: job.mode,
+      });
+      if (localInpaint) {
+        outputDataUrl = await composeLocalInpaintResult({
+          originalImageDataUrl: localInpaint.originalImageDataUrl,
+          resultCropDataUrl: outputDataUrl,
+          maskCropDataUrl: localInpaint.cropMaskDataUrl,
+          bbox: localInpaint.bbox,
+        });
+      }
       const output = {
         ...providerOutput,
-        dataUrl: await normalizeGeneratedImageDataUrl({
-          dataUrl: providerOutput.dataUrl,
-          targetWidth: input.targetWidth,
-          targetHeight: input.targetHeight,
-          mode: job.mode,
-        }),
+        dataUrl: outputDataUrl,
       };
+      markTiming(diagnostics, 'postprocessFinishedAt');
       const progress = 25 + Math.round(((index + 1) / batchCount) * 55);
       await updateGenerationJob(job.id, { progress });
 
+      markTiming(diagnostics, 'saveResultStartedAt', 'save-result');
+      await updateGenerationJob(job.id, { progress: 88, diagnostics });
       const outputAsset = await saveGeneratedDataUrl(job.userId, output.dataUrl, `generation-${job.id}-${index + 1}`);
       if (!firstOutputAsset) firstOutputAsset = outputAsset;
       outputAssetIds.push(outputAsset.id);
@@ -177,18 +223,24 @@ async function processGenerationJob(jobId: string): Promise<void> {
       });
 
       if (!firstOutput) firstOutput = output;
+      markTiming(diagnostics, 'saveResultFinishedAt');
     }
 
     if (!firstOutput || !firstOutputAsset) {
       throw new Error('Provider did not return a generation result.');
     }
 
+    markTiming(diagnostics, 'jobFinishedAt', 'succeeded');
+    finalizeDurations(diagnostics);
+    logJobTiming(job.id, diagnostics);
+
     await updateGenerationJob(job.id, {
       status: 'succeeded',
       progress: 100,
       outputAssetId: firstOutputAsset.id,
       outputAssetIds,
-      finishedAt: new Date().toISOString(),
+      finishedAt: diagnostics.timing?.jobFinishedAt,
+      diagnostics,
     });
 
     await createGenerationRecord({
@@ -204,18 +256,26 @@ async function processGenerationJob(jobId: string): Promise<void> {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Generation failed.';
+    markTiming(diagnostics, 'jobFinishedAt', 'failed');
+    finalizeDurations(diagnostics);
+    logJobTiming(job.id, diagnostics, message);
     console.error('Generation job failed', { jobId: job.id, error: message });
     await updateGenerationJob(job.id, {
       status: 'failed',
       progress: 100,
       errorMessage: message,
-      finishedAt: new Date().toISOString(),
+      finishedAt: diagnostics.timing?.jobFinishedAt,
+      diagnostics,
     });
     await refundGenerationJobCredits(job.id);
   }
 }
 
-async function buildGenerateInputFromJob(job: GenerationJob): Promise<GenerateImageInput> {
+async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
+  input: GenerateImageInput;
+  imageDiagnostics: NonNullable<GenerationJobDiagnostics['images']>;
+  localInpaint?: LocalInpaintContext;
+}> {
   const assetIds = Array.from(new Set([
     ...job.inputAssetIds,
     ...readStringArray(job.config.materialTextureAssetIds),
@@ -242,8 +302,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<GenerateIm
     : maskAssetId ? await getImageAssetDataUrl(maskAssetId, job.userId) : undefined;
 
   const targetDimensions = await resolveTargetDimensions(job.config, inputImageDataUrl);
-
-  return {
+  const rawInput: GenerateImageInput = {
     mode: job.mode,
     inputImageDataUrl,
     materialImageDataUrl,
@@ -253,12 +312,35 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<GenerateIm
     maskImageDataUrl,
     maskMode,
     prompt: job.prompt,
-    config: job.config,
+    config: removeInternalConfig(job.config),
     targetWidth: targetDimensions.targetWidth,
     targetHeight: targetDimensions.targetHeight,
     targetAspectRatio: targetDimensions.targetAspectRatio,
     editTarget: readEditTarget(job.config.editTarget),
   };
+
+  const localInpaint = await maybeCreateLocalInpaintContext(rawInput);
+  const providerInput = localInpaint
+    ? {
+        ...rawInput,
+        inputImageDataUrl: localInpaint.cropImageDataUrl,
+        maskImageDataUrl: localInpaint.cropMaskDataUrl,
+        targetWidth: localInpaint.bbox.width,
+        targetHeight: localInpaint.bbox.height,
+        targetAspectRatio: getAspectRatioString(localInpaint.bbox.width, localInpaint.bbox.height),
+      }
+    : rawInput;
+  const prepared = await prepareGenerateInputForProvider(providerInput);
+  prepared.imageDiagnostics.localInpaintEnabled = Boolean(localInpaint);
+  if (localInpaint) {
+    prepared.imageDiagnostics.maskBbox = localInpaint.bbox;
+    prepared.imageDiagnostics.originalWidth = localInpaint.originalWidth;
+    prepared.imageDiagnostics.originalHeight = localInpaint.originalHeight;
+    prepared.imageDiagnostics.maskWidth = localInpaint.maskWidth;
+    prepared.imageDiagnostics.maskHeight = localInpaint.maskHeight;
+    prepared.imageDiagnostics.furnitureReferenceCount = rawInput.furnitureReferenceImageDataUrls?.length || 0;
+  }
+  return { ...prepared, localInpaint: localInpaint || undefined };
 }
 
 async function resolveTargetDimensions(
@@ -288,6 +370,117 @@ async function resolveTargetDimensions(
     });
     return {};
   }
+}
+
+async function prepareGenerateInputForProvider(input: GenerateImageInput): Promise<{ input: GenerateImageInput; imageDiagnostics: NonNullable<GenerationJobDiagnostics['images']> }> {
+  const imageMaxLongSide = readPositiveInteger(process.env.PROVIDER_IMAGE_MAX_LONG_SIDE, 1536);
+  const referenceMaxLongSide = readPositiveInteger(process.env.PROVIDER_REFERENCE_MAX_LONG_SIDE, 1024);
+  const quality = readPositiveInteger(process.env.PROVIDER_IMAGE_JPEG_QUALITY, 85);
+  const maxReferenceImages = readPositiveInteger(process.env.MAX_PROVIDER_REFERENCE_IMAGES, 6);
+  const maxPayloadBytes = readPositiveInteger(process.env.MAX_PROVIDER_PAYLOAD_BYTES, 8_000_000);
+  const prepared: Array<{ role: string; image: PreparedProviderImage }> = [];
+
+  const inputImage = await prepareImageForProvider({
+    dataUrl: input.inputImageDataUrl,
+    maxLongSide: imageMaxLongSide,
+    quality,
+    preferMime: 'image/jpeg',
+  });
+  prepared.push({ role: 'input', image: inputImage });
+
+  const materialImage = input.materialImageDataUrl
+    ? await prepareReferenceImage(input.materialImageDataUrl, 'material', referenceMaxLongSide, quality, prepared)
+    : undefined;
+  const materialReferences = await prepareReferenceImages(input.materialReferenceImageDataUrls, 'material-reference', 3, referenceMaxLongSide, quality, prepared);
+  const furnitureReferences = await prepareReferenceImages(input.furnitureReferenceImageDataUrls, 'furniture-reference', 3, referenceMaxLongSide, quality, prepared);
+  const remainingReferenceSlots = Math.max(0, maxReferenceImages - materialReferences.length - furnitureReferences.length - (materialImage ? 1 : 0));
+  const additionalReferences = await prepareReferenceImages(input.referenceImageDataUrls, 'reference', remainingReferenceSlots, referenceMaxLongSide, quality, prepared);
+  let maskImage: PreparedProviderImage | undefined;
+  if (input.maskImageDataUrl) {
+    maskImage = await prepareMaskForProvider({
+      dataUrl: input.maskImageDataUrl,
+      width: inputImage.width,
+      height: inputImage.height,
+    });
+    prepared.push({ role: 'mask', image: maskImage });
+  }
+
+  const images = prepared.map(item => item.image);
+  const payloadBytesApprox = images.reduce((sum, image) => sum + image.outputBytes, 0);
+  if (payloadBytesApprox > maxPayloadBytes) {
+    throw new Error('参考图过多或图片过大，请减少参考图数量或压缩图片后重试。');
+  }
+
+  return {
+    input: {
+      ...input,
+      inputImageDataUrl: inputImage.dataUrl,
+      materialImageDataUrl: materialImage?.dataUrl,
+      materialReferenceImageDataUrls: materialReferences.map(image => image.dataUrl),
+      furnitureReferenceImageDataUrls: furnitureReferences.map(image => image.dataUrl),
+      referenceImageDataUrls: additionalReferences.map(image => image.dataUrl),
+      maskImageDataUrl: maskImage?.dataUrl,
+    },
+    imageDiagnostics: {
+      inputImages: 1,
+      referenceImages: images.length - 1,
+      inputBytesBefore: inputImage.originalBytes,
+      inputBytesAfter: inputImage.outputBytes,
+      referenceBytesBefore: images.slice(1).reduce((sum, image) => sum + image.originalBytes, 0),
+      referenceBytesAfter: images.slice(1).reduce((sum, image) => sum + image.outputBytes, 0),
+      payloadBytesApprox,
+      prepared: prepared.map(item => ({
+        role: item.role,
+        width: item.image.width,
+        height: item.image.height,
+        originalWidth: item.image.originalWidth,
+        originalHeight: item.image.originalHeight,
+        originalBytes: item.image.originalBytes,
+        outputBytes: item.image.outputBytes,
+        mime: item.image.mime,
+      })),
+    },
+  };
+}
+
+async function maybeCreateLocalInpaintContext(input: GenerateImageInput): Promise<LocalInpaintContext | null> {
+  if (input.mode !== 'inpaint') return null;
+  if (input.editTarget !== 'furniture') return null;
+  if (input.maskMode !== 'asset-mask' || !input.maskImageDataUrl) return null;
+
+  return createLocalInpaintContext({
+    inputImageDataUrl: input.inputImageDataUrl,
+    maskImageDataUrl: input.maskImageDataUrl,
+    paddingRatio: Number(process.env.LOCAL_INPAINT_PADDING_RATIO || 0.15),
+  });
+}
+
+async function prepareReferenceImages(
+  dataUrls: string[] | undefined,
+  role: string,
+  maxCount: number,
+  maxLongSide: number,
+  quality: number,
+  prepared: Array<{ role: string; image: PreparedProviderImage }>,
+): Promise<PreparedProviderImage[]> {
+  const results: PreparedProviderImage[] = [];
+  for (const dataUrl of (dataUrls || []).filter(isNonEmptyString).slice(0, maxCount)) {
+    results.push(await prepareReferenceImage(dataUrl, role, maxLongSide, quality, prepared));
+  }
+  return results;
+}
+
+async function prepareReferenceImage(
+  dataUrl: string,
+  role: string,
+  maxLongSide: number,
+  quality: number,
+  prepared: Array<{ role: string; image: PreparedProviderImage }>,
+  preferMime: 'image/jpeg' | 'image/png' | 'image/webp' = 'image/jpeg',
+): Promise<PreparedProviderImage> {
+  const image = await prepareImageForProvider({ dataUrl, maxLongSide, quality, preferMime });
+  prepared.push({ role, image });
+  return image;
 }
 
 function getAspectRatioString(width: number, height: number): string {
@@ -448,6 +641,25 @@ async function generateWithFallback(input: GenerateImageInput): Promise<Generate
   try {
     return normalizeProviderOutput(await provider.generateImage(input));
   } catch (error) {
+    const fallbackProvider = createConfiguredFallbackProvider(error);
+    if (fallbackProvider) {
+      const message = error instanceof Error ? error.message : `${provider.name} provider failed.`;
+      console.warn('Generation provider fallback activated', {
+        from: provider.name,
+        to: fallbackProvider.name,
+        reason: message,
+      });
+      const fallbackOutput = await fallbackProvider.generateImage(input);
+      return normalizeProviderOutput({
+        ...fallbackOutput,
+        metadata: {
+          ...fallbackOutput.metadata,
+          fallbackProvider: fallbackProvider.name,
+          fallbackReason: message,
+        },
+      });
+    }
+
     if (isMissingProviderSecretError(error) || isGrsaiProvider(provider.name)) {
       throw error;
     }
@@ -502,6 +714,30 @@ function isProviderName(value: unknown): value is ProviderName {
   return value === 'mock' || value === 'gemini' || value === 'grsai-banana2' || value === 'grsai-nano-banana';
 }
 
+function createConfiguredFallbackProvider(error: unknown): ImageGenerationProvider | null {
+  const fallbackName = process.env.GENERATION_FALLBACK_PROVIDER;
+  if (!fallbackName || !isRetryableProviderFailure(error)) return null;
+
+  if (fallbackName === 'gemini') {
+    const apiKey = process.env.GEMINI_API_KEY;
+    return apiKey ? createGeminiProvider(apiKey) : null;
+  }
+
+  if (fallbackName === 'mock') {
+    return mockProvider;
+  }
+
+  return null;
+}
+
+function isRetryableProviderFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const status = readErrorStatus(error);
+  return error.message.includes('timed out')
+    || status === 429
+    || (typeof status === 'number' && status >= 500);
+}
+
 function isValidImageDataUrl(value: unknown): value is string {
   if (!isNonEmptyString(value)) return false;
   const match = /^data:([^;,]+)((?:;[^,]*)?),(.*)$/u.exec(value);
@@ -544,6 +780,77 @@ function readRequestedProviderName(): string {
 
 function readRequestedProviderVariableName(): string {
   return process.env.GENERATION_PROVIDER ? 'GENERATION_PROVIDER' : 'AI_PROVIDER';
+}
+
+function removeInternalConfig(config: Record<string, unknown>): Record<string, unknown> {
+  const { __diagnostics: _diagnostics, ...publicConfig } = config;
+  return publicConfig;
+}
+
+function markTiming(
+  diagnostics: GenerationJobDiagnostics,
+  key: keyof NonNullable<GenerationJobDiagnostics['timing']>,
+  phase?: NonNullable<GenerationJobDiagnostics['phase']>,
+): void {
+  diagnostics.timing = {
+    ...diagnostics.timing,
+    [key]: new Date().toISOString(),
+  };
+  if (phase) diagnostics.phase = phase;
+}
+
+function finalizeDurations(diagnostics: GenerationJobDiagnostics): void {
+  const timing = diagnostics.timing || {};
+  diagnostics.timing = {
+    ...timing,
+    prepareInputDurationMs: durationBetween(timing.prepareInputStartedAt, timing.prepareInputFinishedAt),
+    providerDurationMs: durationBetween(timing.providerRequestStartedAt, timing.providerRequestFinishedAt),
+    postprocessDurationMs: durationBetween(timing.postprocessStartedAt, timing.postprocessFinishedAt),
+    saveResultDurationMs: durationBetween(timing.saveResultStartedAt, timing.saveResultFinishedAt),
+    totalDurationMs: durationBetween(timing.jobStartedAt || timing.jobCreatedAt, timing.jobFinishedAt),
+  };
+}
+
+function durationBetween(start: string | undefined, end: string | undefined): number | undefined {
+  if (!start || !end) return undefined;
+  const duration = new Date(end).getTime() - new Date(start).getTime();
+  return Number.isFinite(duration) && duration >= 0 ? duration : undefined;
+}
+
+function logJobTiming(jobId: string, diagnostics: GenerationJobDiagnostics, error?: string): void {
+  console.info(`[GenerationJob ${jobId}] timing`, {
+    prepareInput: diagnostics.timing?.prepareInputDurationMs,
+    provider: diagnostics.timing?.providerDurationMs,
+    postprocess: diagnostics.timing?.postprocessDurationMs,
+    saveResult: diagnostics.timing?.saveResultDurationMs,
+    total: diagnostics.timing?.totalDurationMs,
+    providerName: diagnostics.provider?.name,
+    model: diagnostics.provider?.model,
+    inputImages: diagnostics.images?.inputImages,
+    referenceImages: diagnostics.images?.referenceImages,
+    payloadBytesApprox: diagnostics.images?.payloadBytesApprox,
+    localInpaintEnabled: diagnostics.images?.localInpaintEnabled,
+    maskBbox: diagnostics.images?.maskBbox,
+    originalSize: diagnostics.images?.originalWidth && diagnostics.images?.originalHeight ? `${diagnostics.images.originalWidth}x${diagnostics.images.originalHeight}` : undefined,
+    maskSize: diagnostics.images?.maskWidth && diagnostics.images?.maskHeight ? `${diagnostics.images.maskWidth}x${diagnostics.images.maskHeight}` : undefined,
+    furnitureReferenceCount: diagnostics.images?.furnitureReferenceCount,
+    retryCount: diagnostics.provider?.retryCount,
+    fallbackProvider: diagnostics.provider?.fallbackProvider,
+    error,
+  });
+}
+
+function readPositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
+}
+
+function readErrorStatus(error: Error): number | undefined {
+  const status = (error as Error & { status?: unknown }).status;
+  if (typeof status === 'number') return status;
+  const match = /HTTP\s+(\d{3})|returned\s+(\d{3})/iu.exec(error.message);
+  const parsed = Number(match?.[1] || match?.[2]);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function isMaskMode(value: unknown): value is MaskMode {

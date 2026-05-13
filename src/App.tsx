@@ -82,6 +82,7 @@ export default function App() {
   const isAdminPath = window.location.pathname === '/admin';
 
   const handleReuseHistory = useCallback((item: GenerationHistoryItem) => {
+    const historyInputImage = buildHistoryInputImage(item);
     setCurrentStep(item.step);
     setStepStates(prev => ({
       ...prev,
@@ -93,6 +94,7 @@ export default function App() {
           prompt: item.prompt,
           style: item.style,
         },
+        inputImage: historyInputImage || prev[item.step].inputImage,
         outputImage: item.outputImage,
         generationResults: item.outputImage
           ? [{
@@ -194,9 +196,10 @@ export default function App() {
         generationWarnings: [],
         generationProvider: null,
         generationResultId: null,
-        generationCreatedAt: null,
+        generationCreatedAt: new Date().toISOString(),
         generationJobId: null,
         generationJobStatus: null,
+        generationJobDiagnostics: null,
         generationProgress: 0,
         generationLogs: [],
       }
@@ -294,6 +297,7 @@ export default function App() {
             generationStatus: 'generating',
             generationJobId: job.id,
             generationJobStatus: job.status,
+            generationJobDiagnostics: job.diagnostics || null,
             generationProgress: job.progress,
             generationProvider: parseGenerationProvider(job.provider),
             generationLogs: [...prev[currentStep].generationLogs, `queued: 任务 ${job.id} 已创建。`],
@@ -301,19 +305,25 @@ export default function App() {
         }));
 
         let latestJob = job;
+        const pollStartedAt = Date.now();
         while (latestJob.status === 'queued' || latestJob.status === 'running') {
-          await delay(2000);
+          await delay(getGenerationJobPollDelayMs(Date.now() - pollStartedAt));
           latestJob = await getGenerationJob(job.id);
           setStepStates(prev => ({
             ...prev,
             [currentStep]: {
               ...prev[currentStep],
-              generationStatus: latestJob.status === 'queued' ? 'uploading' : 'generating',
+              generationStatus: latestJob.status === 'queued'
+                ? 'uploading'
+                : latestJob.status === 'running'
+                  ? 'generating'
+                  : prev[currentStep].generationStatus,
               generationJobStatus: latestJob.status,
+              generationJobDiagnostics: latestJob.diagnostics || null,
               generationProgress: latestJob.progress,
               generationLogs: [
                 ...prev[currentStep].generationLogs,
-                `${latestJob.status}: 任务进度 ${latestJob.progress}%`,
+                `${readJobPhaseLabel(latestJob.diagnostics?.phase, latestJob.status)}: 任务进度 ${latestJob.progress}%`,
               ].slice(-8),
             },
           }));
@@ -351,6 +361,9 @@ export default function App() {
             createdAt: new Date(latestJob.finishedAt || latestJob.updatedAt).toLocaleString('zh-CN', { hour12: false }),
             provider: providerName || 'mock',
             outputImage: selectedResult.imageUrl,
+            inputImageUrl: stateAtStart.inputImage.url,
+            inputImageDataPreview: stateAtStart.inputImage.url ? undefined : stateAtStart.inputImage.dataUrl,
+            inputImageAssetId: stateAtStart.inputImage.assetId,
             config: stateAtStart.config,
             editTarget: stateAtStart.config.editTarget,
             furnitureReferences: stateAtStart.furnitureReferences,
@@ -375,6 +388,7 @@ export default function App() {
               generationResultId: latestJob.id,
               generationCreatedAt: latestJob.finishedAt || latestJob.updatedAt,
               generationJobStatus: latestJob.status,
+              generationJobDiagnostics: latestJob.diagnostics || null,
               generationProgress: 100,
               generationLogs: [...prev[currentStep].generationLogs, 'succeeded: 生成结果已保存。'].slice(-8),
               viewMode: 'after',
@@ -391,6 +405,7 @@ export default function App() {
             generationStatus: 'error',
             generationError: latestJob.status === 'cancelled' ? '生成任务已取消。' : latestJob.errorMessage || '生成任务失败。',
             generationJobStatus: latestJob.status,
+            generationJobDiagnostics: latestJob.diagnostics || null,
             generationProgress: latestJob.progress,
             generationLogs: [...prev[currentStep].generationLogs, `${latestJob.status}: ${latestJob.errorMessage || '任务结束。'}`].slice(-8),
           },
@@ -531,6 +546,9 @@ export default function App() {
           createdAt: new Date(response.createdAt).toLocaleString('zh-CN', { hour12: false }),
           provider: response.provider,
           outputImage: response.imageDataUrl,
+          inputImageUrl: currentState.inputImage?.url,
+          inputImageDataPreview: currentState.inputImage?.url ? undefined : currentState.inputImage?.dataUrl,
+          inputImageAssetId: currentState.inputImage?.assetId,
           config: currentState.config,
           editTarget: currentState.config.editTarget,
           furnitureReferences: currentState.furnitureReferences,
@@ -580,6 +598,7 @@ export default function App() {
           generationStatus: 'error',
           generationError: error instanceof Error ? error.message : '生成失败，请稍后重试.',
           generationJobStatus: 'failed',
+          generationJobDiagnostics: null,
           generationProgress: 100,
           generationLogs: [...prev[currentStep].generationLogs, `error: ${error instanceof Error ? error.message : '生成失败。'}`].slice(-8),
         }
@@ -601,6 +620,7 @@ export default function App() {
           generationStatus: 'error',
           generationError: '生成任务已取消。',
           generationJobStatus: job.status,
+          generationJobDiagnostics: job.diagnostics || null,
           generationProgress: job.progress,
           generationLogs: [...prev[currentStep].generationLogs, 'cancelled: 用户取消了任务。'].slice(-8),
         },
@@ -902,6 +922,21 @@ function getGenerationRecordMode(step: GenerationStep): 'floorplan' | 'style-ren
   return 'inpaint';
 }
 
+function buildHistoryInputImage(item: GenerationHistoryItem): UploadedImage | null {
+  const imageUrl = item.inputImageUrl || item.inputImageDataPreview;
+  if (!imageUrl) return null;
+
+  return {
+    id: item.inputImageAssetId || `${item.id}-input`,
+    name: item.inputImageName || '历史原图',
+    type: 'image/*',
+    size: 0,
+    dataUrl: item.inputImageDataPreview || imageUrl,
+    url: item.inputImageUrl,
+    assetId: item.inputImageAssetId,
+  };
+}
+
 function calculateGenerationCreditsCost(step: GenerationStep, config: GenerationConfig): number {
   const baseCost = step === GenerationStep.LocalInpainting ? 8 : 10;
   return baseCost;
@@ -978,6 +1013,23 @@ function readHistoryStyle(step: GenerationStep, config: GenerationConfig): strin
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getGenerationJobPollDelayMs(elapsedMs: number): number {
+  if (elapsedMs < 10_000) return 1_000;
+  if (elapsedMs < 120_000) return 2_500;
+  return 5_000;
+}
+
+function readJobPhaseLabel(phase: string | undefined, status: string): string {
+  if (phase === 'prepare-input') return '准备输入中';
+  if (phase === 'provider-request') return '正在调用 AI 生成';
+  if (phase === 'postprocess') return '正在后处理图片';
+  if (phase === 'save-result') return '正在保存结果';
+  if (phase === 'succeeded') return '已完成';
+  if (phase === 'failed') return '生成失败';
+  if (phase === 'cancelled') return '已取消';
+  return status;
 }
 
 function parseGenerationProvider(value: string): GenerationProvider | null {
