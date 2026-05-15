@@ -16,5 +16,5 @@ Guidance for agents working on ArchAI Expression Engine, a Vite + React + TypeSc
   - `npm run build`
 - If a command fails, explain the failure and fix it before finishing.
 - For MVP, prioritize working upload, generation, mask selection, download, history, and deployability over visual polish.
-- Do not add authentication, payment, or real Revit plugin support in this MVP.
+- Supabase Auth is allowed for this MVP only with administrator-created accounts. Do not add public user registration, self-serve signup, payment, or real Revit plugin support.
 - Keep mock fallback behavior only as a development fallback, clearly labeled as mock.

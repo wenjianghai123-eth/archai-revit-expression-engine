@@ -25,7 +25,7 @@ Current server user shape:
 | `id` | string | Dev user id or Supabase user id. |
 | `email` | string | Used for display/auth context. |
 | `name` | string | Display name. |
-| `role` | `admin` \| `user` | Admin role can access admin APIs. |
+| `role` | `admin` \| `member` | Admin role can access admin APIs. |
 
 ## Project
 

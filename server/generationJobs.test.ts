@@ -1,4 +1,6 @@
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import request from 'supertest';
@@ -14,6 +16,10 @@ type StorageModule = typeof Storage;
 type GenerationServiceModule = typeof GenerationService;
 
 const tinyPngDataUrl = 'data:image/png;base64,iVBORw0KGgo=';
+const validOnePixelPng = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+  'base64',
+);
 
 let app: App;
 let storage: StorageModule;
@@ -456,6 +462,64 @@ describe('generation job credits', () => {
   });
 });
 
+describe('generation worker image inputs', () => {
+  it('downloads a Supabase-style public image URL before sending provider input', async () => {
+    const originalWorkerDisabled = process.env.ARCHAI_DISABLE_GENERATION_WORKER;
+    const imageServer = createServer((req, res) => {
+      if (req.url === '/storage/v1/object/public/archai-assets/users/dev-user/images/input.png') {
+        res.writeHead(200, { 'Content-Type': 'image/png' });
+        res.end(validOnePixelPng);
+        return;
+      }
+
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise<void>(resolve => imageServer.listen(0, '127.0.0.1', resolve));
+
+    try {
+      process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'false';
+      const address = imageServer.address() as AddressInfo;
+      const publicImageUrl = `http://127.0.0.1:${address.port}/storage/v1/object/public/archai-assets/users/dev-user/images/input.png`;
+      const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Remote storage input' });
+      const remoteAsset = await storage.createImageAsset({
+        userId: DEV_AUTH_USER_ID,
+        url: publicImageUrl,
+        filename: 'users/dev-user/images/input.png',
+        mimeType: 'image/png',
+        size: validOnePixelPng.length,
+      });
+
+      const response = await request(app)
+        .post('/api/generation-jobs')
+        .send({
+          projectId: project.id,
+          mode: 'style-render',
+          prompt: 'render remote storage input',
+          config: {},
+          inputAssetIds: [remoteAsset.id],
+        });
+
+      expect(response.status).toBe(201);
+      const job = await waitForGenerationJob(response.body.data.job.id, 'succeeded');
+
+      expect(job.status).toBe('succeeded');
+      expect(job.outputAssetId).toEqual(expect.any(String));
+      expect(job.diagnostics?.images?.inputImages).toBe(1);
+      expect(job.diagnostics?.images?.prepared?.[0]).toMatchObject({
+        role: 'input',
+        mime: expect.stringMatching(/^image\//u),
+      });
+    } finally {
+      process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
+      await new Promise<void>((resolve, reject) => {
+        imageServer.close(error => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+});
+
 describe('legacy generation endpoints', () => {
   it('remain available for explicit dev mock debugging', async () => {
     const originalLegacyFlag = process.env.ENABLE_LEGACY_GENERATION_ENDPOINTS;
@@ -771,4 +835,18 @@ async function restoreDevUserCredits(targetBalance: number, label: string) {
     referenceType: 'system',
     referenceId: `restore_${label}_${Date.now()}`,
   });
+}
+
+async function waitForGenerationJob(jobId: string, status: 'succeeded' | 'failed') {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const job = await storage.getGenerationJob(jobId, DEV_AUTH_USER_ID);
+    if (job?.status === status) return job;
+    if (job?.status === 'failed' && status !== 'failed') {
+      throw new Error(job.errorMessage || 'Generation job failed.');
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+
+  throw new Error(`Timed out waiting for generation job ${jobId} to become ${status}.`);
 }

@@ -520,8 +520,16 @@ async function getImageAssetDataUrl(assetId: string | undefined, userId: string)
   const asset = await getImageAsset(assetId, userId);
   if (!asset) return undefined;
 
+  if (asset.url.startsWith('data:')) {
+    return asset.url;
+  }
+
+  if (isRemoteImageUrl(asset.url)) {
+    return readRemoteImageUrlAsDataUrl(asset.url, asset.mimeType);
+  }
+
   if (!asset.url.startsWith('/uploads/')) {
-    return asset.url.startsWith('data:') ? asset.url : undefined;
+    return undefined;
   }
 
   const filePath = resolveUploadUrlToPath(asset.url);
@@ -606,7 +614,7 @@ async function getFloorplanTextureDataUrls(config: Record<string, unknown>): Pro
 
 async function readReferenceUrlAsProviderInput(url: string): Promise<string | undefined> {
   if (url.startsWith('data:image/')) return url;
-  if (/^https:\/\//iu.test(url)) return url;
+  if (isRemoteImageUrl(url)) return readRemoteImageUrlAsDataUrl(url);
   if (!url.startsWith('/materials/')) return undefined;
 
   const filePath = resolvePublicUrlToPath(url);
@@ -631,6 +639,35 @@ function getMimeTypeForImagePath(filePath: string): string {
   if (extension === '.webp') return 'image/webp';
   if (extension === '.png') return 'image/png';
   return 'image/png';
+}
+
+async function readRemoteImageUrlAsDataUrl(url: string, fallbackMimeType = 'image/png'): Promise<string> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Unable to download image URL: HTTP ${response.status}.`);
+  }
+
+  const contentType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase();
+  const mimeType = contentType?.startsWith('image/') ? contentType : fallbackMimeType;
+  if (!mimeType.startsWith('image/')) {
+    throw new Error('Downloaded URL did not return an image.');
+  }
+
+  const content = Buffer.from(await response.arrayBuffer());
+  if (content.length === 0) {
+    throw new Error('Downloaded image URL was empty.');
+  }
+
+  const maxBytes = maxImageMb * 1024 * 1024;
+  if (Number.isFinite(maxBytes) && maxBytes > 0 && content.length > maxBytes) {
+    throw new Error(`Downloaded image exceeds ${maxImageMb}MB.`);
+  }
+
+  return `data:${mimeType};base64,${content.toString('base64')}`;
+}
+
+function isRemoteImageUrl(url: string): boolean {
+  return /^https?:\/\//iu.test(url);
 }
 
 async function generateWithFallback(input: GenerateImageInput): Promise<GenerateImageOutput> {

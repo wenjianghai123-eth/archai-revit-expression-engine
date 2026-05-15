@@ -13,25 +13,29 @@ DATA_BACKEND=json
 AUTH_MODE=dev
 ```
 
-Production storage can use Supabase:
+Production storage can use Supabase. Keep frontend `VITE_*` variables and backend/runtime variables in the correct hosting service:
 
 ```bash
+# Backend/runtime environment on the Express service:
 DATA_BACKEND=supabase
 AUTH_MODE=supabase
 FILE_STORAGE=supabase
 SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your_public_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_backend_only_service_role_key
 SUPABASE_STORAGE_BUCKET=archai-assets
+
+# Frontend build-time environment on Netlify/Vercel/static hosts:
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your_public_anon_key
 VITE_API_BASE_URL=https://your-api-domain.com
 ```
 
-`SUPABASE_SERVICE_ROLE_KEY` is backend-only. Do not expose it in frontend code or client-visible config.
+`SUPABASE_SERVICE_ROLE_KEY`, provider keys, `DATA_BACKEND`, `FILE_STORAGE`, and `AUTH_MODE` are backend-only. Do not expose them in frontend code or client-visible config. `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `VITE_API_BASE_URL` are frontend build-time values and are expected to be visible in the browser bundle.
 
 `VITE_*` variables are Vite build-time variables. After changing `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, or `VITE_API_BASE_URL`, rebuild and redeploy the frontend; changing only the server environment will not update already-built browser bundles.
 
-If frontend and backend are deployed separately, set `VITE_API_BASE_URL` to the backend origin only, for example `https://api.example.com`. The frontend will call `${VITE_API_BASE_URL}/api/...`. If it is empty, the app calls same-origin `/api/...`.
+If frontend and backend are deployed separately, such as Netlify static frontend plus Render/Railway backend, `VITE_API_BASE_URL` is required and must be set to the backend origin only, for example `https://api.example.com`. The frontend will call `${VITE_API_BASE_URL}/api/...`. If it is empty, the app calls same-origin `/api/...`, which only works for single-service deployments where Express serves both `dist` and `/api`.
 
 For production deploys, put `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the frontend host's build-time environment settings. Backend-only variables such as `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `GRSAI_API_KEY` are not injected into Vite browser code. After changing frontend env vars, run `npm run build` again and redeploy the frontend; restarting only the Express backend will not make the login page pick up new `VITE_*` values.
 

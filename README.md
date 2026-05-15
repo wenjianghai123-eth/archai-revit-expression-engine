@@ -55,9 +55,41 @@ npm run start
 
 After `npm run build`, Express serves the generated `dist` frontend and continues to handle `/api` routes on the same server.
 
+## Deployment Modes
+
+### Single-Service Deployment
+
+Deploy this repository as one Node service when the hosting platform can run the Express backend. Use:
+
+- Build command: `npm ci && npm run build`
+- Start command: `npm run start`
+- Runtime service: `server/index.ts`, which serves both `/api/...` and the built `dist` frontend
+
+In this mode the browser and backend share the same origin, so leave `VITE_API_BASE_URL` empty. Keep backend variables such as `SUPABASE_SERVICE_ROLE_KEY`, `GRSAI_API_KEY`, `DATA_BACKEND`, `FILE_STORAGE`, and `AUTH_MODE` on the Node service.
+
+### Netlify Frontend + Render/Railway Backend
+
+Use this split deployment when Netlify hosts only the static Vite frontend and another platform, such as Render or Railway, runs Express.
+
+- Netlify build command: `npm run build`
+- Netlify publish directory: `dist`
+- Render/Railway build command: `npm ci && npm run build`
+- Render/Railway start command: `npm run start`
+
+In this mode `VITE_API_BASE_URL` is required in the Netlify build environment and must point to the backend origin only, for example `https://your-archai-api.onrender.com`. Netlify does not run `server/index.ts`, so same-origin `/api/...` calls on the Netlify domain will fail without this value.
+
 ## Environment Variables
 
 Create a local `.env` or `.env.local` file for development secrets. These files are ignored by git.
+
+Frontend build-time variables, visible in browser bundles:
+
+- `VITE_SUPABASE_URL`: Supabase project URL for the browser client. Required when using Supabase Auth.
+- `VITE_SUPABASE_ANON_KEY`: Supabase anon key for the browser client. Required when using Supabase Auth.
+- `VITE_API_BASE_URL`: backend origin for split frontend/backend deployments. Required for Netlify static frontend + Render/Railway backend; leave empty only for same-origin single-service deployments.
+- `VITE_ENABLE_LEGACY_GENERATION_FALLBACK`: frontend fallback to old `/api/generate/*` endpoints. Set to `true` only for local dev/mock debugging. Production builds ignore this fallback.
+
+Backend/runtime variables, never expose with a `VITE_` prefix:
 
 - `GENERATION_PROVIDER`: `mock` by default. Set to `grsai` to use the GRS AI Banana2 provider through the backend. Legacy `AI_PROVIDER` values (`mock`, `gemini`, `grsai-banana2`, `grsai-nano-banana`) are still accepted when `GENERATION_PROVIDER` is unset.
 - `GEMINI_API_KEY`: backend-only Gemini API key. Required only when `AI_PROVIDER=gemini`.
@@ -66,13 +98,9 @@ Create a local `.env` or `.env.local` file for development secrets. These files 
 - `DATA_BACKEND`: `json` by default. Set to `supabase` to store metadata in Supabase tables.
 - `FILE_STORAGE`: `local` by default. Set to `supabase` to store uploaded images, models, and generated results in Supabase Storage.
 - `ENABLE_LEGACY_GENERATION_ENDPOINTS`: controls old `/api/generate/*` endpoints. Defaults to enabled outside production and disabled in production. Production keeps these endpoints disabled even if this flag is set.
-- `VITE_ENABLE_LEGACY_GENERATION_FALLBACK`: frontend fallback to old `/api/generate/*` endpoints. Set to `true` only for local dev/mock debugging. Production builds ignore this fallback.
 - `ENABLE_PROVIDER_FALLBACK`: controls backend fallback from a real provider to mock when the provider fails. Defaults to `true` outside production and `false` in production.
 - `SUPABASE_URL`: server-side Supabase project URL for backend adapters. This URL is not a secret, but keep service-role keys backend-only.
 - `SUPABASE_STORAGE_BUCKET`: Supabase Storage bucket name used when `FILE_STORAGE=supabase`.
-- `VITE_SUPABASE_URL`: Supabase project URL for the browser client. Required when using Supabase Auth.
-- `VITE_SUPABASE_ANON_KEY`: Supabase anon key for the browser client. Required when using Supabase Auth.
-- `VITE_API_BASE_URL`: optional backend origin for split frontend/backend deployments. Set it to the backend origin only, for example `https://api.example.com`; the frontend calls `${VITE_API_BASE_URL}/api/...`. Leave it empty for same-origin `/api` deployments.
 - `SUPABASE_SERVICE_ROLE_KEY`: backend-only Supabase service role key used to validate JWTs. Never expose this in frontend code.
 - `GRSAI_API_KEY`: backend-only model API key. Required only when `GENERATION_PROVIDER=grsai`, `AI_PROVIDER=grsai-banana2`, or `AI_PROVIDER=grsai-nano-banana`. Do not expose this in frontend code.
 - `GRSAI_BASE_URL`: optional Grsai API base URL. Defaults to `https://grsai.dakka.com.cn` for China direct access. Overseas deployments can use `https://grsaiapi.com`.
