@@ -3,19 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { Suspense, lazy, useState, useCallback } from 'react';
 import { Sidebar, Stepper } from './components/Navigation';
-import { MainWorkspace } from './components/MainWorkspace';
-import { AssetBank } from './components/AssetBank';
 import { HistoryView } from './components/HistoryView';
 import { SettingsModal } from './components/SettingsModal';
 import { LoginPage } from './components/LoginPage';
-import { TemplatesLibrary } from './components/TemplatesLibrary';
 import { CreativeHome } from './components/CreativeHome';
-import { ProjectDetail } from './components/ProjectDetail';
 import { ProjectList } from './components/ProjectList';
-import { PublicSharePreview } from './components/PublicSharePreview';
-import { AdminPage } from './components/AdminPage';
 import { GenerationConfig, GenerationStep, GenerationHistoryItem, GenerationProvider, StepState, UploadedImage } from './types';
 import { PROMPT_TEMPLATES } from './constants';
 import { generateFloorplanTo3D, generateInpainting, generateStyleRender } from './api/generation';
@@ -38,6 +32,13 @@ import { buildFloorplanColorPrompt } from './prompts/floorplanPrompts';
 import { buildInpaintPrompt } from './prompts/inpaintPrompts';
 import { clearGenerationHistory, deleteGenerationRecord, listGenerationRecords, saveGenerationRecord } from './storage/history';
 import { motion, AnimatePresence } from 'motion/react';
+
+const MainWorkspace = lazy(() => import('./components/MainWorkspace').then(module => ({ default: module.MainWorkspace })));
+const AssetBank = lazy(() => import('./components/AssetBank').then(module => ({ default: module.AssetBank })));
+const TemplatesLibrary = lazy(() => import('./components/TemplatesLibrary').then(module => ({ default: module.TemplatesLibrary })));
+const ProjectDetail = lazy(() => import('./components/ProjectDetail').then(module => ({ default: module.ProjectDetail })));
+const PublicSharePreview = lazy(() => import('./components/PublicSharePreview').then(module => ({ default: module.PublicSharePreview })));
+const AdminPage = lazy(() => import('./components/AdminPage').then(module => ({ default: module.AdminPage })));
 
 export default function App() {
   const {
@@ -729,7 +730,11 @@ export default function App() {
   }, [setCurrentStep, startCreate]);
 
   if (publicShareToken) {
-    return <PublicSharePreview token={publicShareToken} />;
+    return (
+      <Suspense fallback={<PageLoading />}>
+        <PublicSharePreview token={publicShareToken} />
+      </Suspense>
+    );
   }
 
   if (isUserLoading && !currentUser) {
@@ -753,7 +758,11 @@ export default function App() {
   }
 
   if (isAdminPath) {
-    return <AdminPage currentUser={currentUser} onBackToApp={() => { window.location.href = '/'; }} onSignOut={() => { void handleSignOut(); }} />;
+    return (
+      <Suspense fallback={<PageLoading />}>
+        <AdminPage currentUser={currentUser} onBackToApp={() => { window.location.href = '/'; }} onSignOut={() => { void handleSignOut(); }} />
+      </Suspense>
+    );
   }
 
   return (
@@ -799,12 +808,14 @@ export default function App() {
               exit={{ opacity: 0 }}
               className="min-h-0 flex-1 overflow-hidden"
             >
-              <ProjectDetail
-                projectId={selectedProjectId}
-                onBack={handleBackToProjectsWithReset}
-                onOpenGenerate={() => handleStartCreate(GenerationStep.FloorplanTo3D)}
-                onDeleteProject={handleDeleteProject}
-              />
+              <Suspense fallback={<PanelLoading />}>
+                <ProjectDetail
+                  projectId={selectedProjectId}
+                  onBack={handleBackToProjectsWithReset}
+                  onOpenGenerate={() => handleStartCreate(GenerationStep.FloorplanTo3D)}
+                  onDeleteProject={handleDeleteProject}
+                />
+              </Suspense>
             </motion.div>
           ) : activeTab === 'generate' ? (
             <motion.div 
@@ -831,26 +842,28 @@ export default function App() {
                     transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
                     className="absolute inset-0 flex min-h-0 flex-col overflow-hidden"
                   >
-                    <MainWorkspace 
-                      step={currentStep}
-                      state={stepStates[currentStep]}
-                      onUpdateConfig={handleUpdateConfig}
-                      onUpdateInputImage={handleUpdateInputImage}
-                      onUpdateMaterialImage={handleUpdateMaterialImage}
-                      onUpdateMaterialTextures={handleUpdateMaterialTextures}
-                      onUpdateFurnitureReferences={handleUpdateFurnitureReferences}
-                      onUpdateMaskImage={handleUpdateMaskImage}
-                      onGenerate={handleGenerate}
-                      onRegenerate={handleGenerate}
-                      onCancelGeneration={handleCancelGeneration}
-                      onSelectGenerationResult={handleSelectGenerationResult}
-                      onToggleGenerationFavorite={handleToggleGenerationFavorite}
-                      onSetViewMode={handleSetViewMode}
-                      onNextStep={handleNextStep}
-                      onReset={handleResetConfig}
-                      backendProvider={backendHealth.data?.provider || null}
-                      isCreditsInsufficient={isCreditsInsufficient}
-                    />
+                    <Suspense fallback={<PanelLoading />}>
+                      <MainWorkspace
+                        step={currentStep}
+                        state={stepStates[currentStep]}
+                        onUpdateConfig={handleUpdateConfig}
+                        onUpdateInputImage={handleUpdateInputImage}
+                        onUpdateMaterialImage={handleUpdateMaterialImage}
+                        onUpdateMaterialTextures={handleUpdateMaterialTextures}
+                        onUpdateFurnitureReferences={handleUpdateFurnitureReferences}
+                        onUpdateMaskImage={handleUpdateMaskImage}
+                        onGenerate={handleGenerate}
+                        onRegenerate={handleGenerate}
+                        onCancelGeneration={handleCancelGeneration}
+                        onSelectGenerationResult={handleSelectGenerationResult}
+                        onToggleGenerationFavorite={handleToggleGenerationFavorite}
+                        onSetViewMode={handleSetViewMode}
+                        onNextStep={handleNextStep}
+                        onReset={handleResetConfig}
+                        backendProvider={backendHealth.data?.provider || null}
+                        isCreditsInsufficient={isCreditsInsufficient}
+                      />
+                    </Suspense>
                   </motion.div>
                 </AnimatePresence>
               </div>
@@ -863,7 +876,9 @@ export default function App() {
               exit={{ opacity: 0 }}
               className="min-h-0 flex-1 overflow-hidden"
             >
-              <AssetBank />
+              <Suspense fallback={<PanelLoading />}>
+                <AssetBank />
+              </Suspense>
             </motion.div>
           ) : activeTab === 'templates' ? (
             <motion.div
@@ -873,7 +888,9 @@ export default function App() {
               exit={{ opacity: 0 }}
               className="min-h-0 flex-1 overflow-hidden"
             >
-              <TemplatesLibrary templates={PROMPT_TEMPLATES} currentConfig={stepStates[currentStep].config} onApply={handleApplyTemplate} />
+              <Suspense fallback={<PanelLoading />}>
+                <TemplatesLibrary templates={PROMPT_TEMPLATES} currentConfig={stepStates[currentStep].config} onApply={handleApplyTemplate} />
+              </Suspense>
             </motion.div>
           ) : activeTab === 'history' ? (
             <motion.div
@@ -912,6 +929,22 @@ export default function App() {
         onRefresh={refreshBackendHealth}
         onClose={() => setIsSettingsOpen(false)}
       />
+    </div>
+  );
+}
+
+function PageLoading() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-100 text-sm font-bold text-slate-500">
+      正在加载...
+    </div>
+  );
+}
+
+function PanelLoading() {
+  return (
+    <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-slate-50 text-sm font-bold text-slate-400">
+      正在加载...
     </div>
   );
 }

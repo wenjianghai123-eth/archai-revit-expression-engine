@@ -26,5 +26,21 @@ export default defineConfig(() => {
         },
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined;
+            if (id.includes('@react-three/fiber')) return 'vendor-three-fiber';
+            if (id.includes('@react-three/drei') || id.includes('three-stdlib')) return 'vendor-three-drei';
+            if (id.includes('node_modules/three/')) return 'vendor-three';
+            if (id.includes('motion')) return 'vendor-motion';
+            if (id.includes('@supabase')) return 'vendor-supabase';
+            if (id.includes('react') || id.includes('scheduler')) return 'vendor-react';
+            return 'vendor';
+          },
+        },
+      },
+    },
   };
 });

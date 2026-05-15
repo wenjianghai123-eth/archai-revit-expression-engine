@@ -189,7 +189,7 @@ create table if not exists public.credit_transactions (
 );
 ```
 
-If you are updating an older database, verify the code-to-SQL checklist at the end of this document. In particular, newer code requires `generation_results`, `generation_records.job_id`, and `generation_jobs.output_asset_ids`.
+If you are updating an older database, verify the code-to-SQL checklist at the end of this document. In particular, newer code requires `generation_results`, `generation_records.job_id`, and `generation_jobs.output_asset_ids`. `credit_transactions` must contain a single `id text primary key` column; do not duplicate the `id` column when merging older SQL snippets.
 
 ## Indexes
 
@@ -585,6 +585,10 @@ Supabase's service role bypasses RLS for server-side operations. Do not put the 
 - `share_links`: `id`, `project_id`, `token`, `permission`, `expires_at`, `created_at`, `revoked_at`
 - `credit_balances`: `user_id`, `balance`, `updated_at`
 - `credit_transactions`: `id`, `user_id`, `type`, `amount`, `balance_after`, `reason`, `reference_type`, `reference_id`, `created_at`
+
+Generation job diagnostics are persisted inside `generation_jobs.config.__diagnostics` by the current adapter. A separate `diagnostics` column is not required for the SQL in this document.
+
+Current role values are `admin` and `member` only. Do not create or migrate profile rows with a legacy `user` role value.
 
 ## Production Hardening Notes
 
