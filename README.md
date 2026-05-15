@@ -238,16 +238,24 @@ File storage is selected with `FILE_STORAGE`. Local development uses `FILE_STORA
 - `npm run typecheck`: run TypeScript checks with `tsc --noEmit`.
 - `npm run test`: run Vitest tests.
 - `npm run test:watch`: run Vitest in watch mode.
-- `npm run test:e2e`: run Playwright end-to-end tests against local mock/dev/json services.
+- `npm run test:e2e`: run Playwright end-to-end tests against local mock/dev/json services with the Chromium project.
 - `npm run build`: build the frontend for production.
 - `npm run start`: start the Express server and serve `dist` after a production build.
 - `npm run preview`: preview the production build.
 - `npm run clean`: remove build output.
 
-The E2E config uses the local Microsoft Edge channel on Windows. If Edge is not available on a fresh machine, install a Playwright browser binary and adjust `playwright.config.ts` if needed:
+The E2E config includes both `chromium` and `msedge` projects. Ordinary local validation uses Chromium so a missing Edge install does not block `npm run test:e2e`.
 
 ```bash
 npx playwright install chromium
+npm run test:e2e
+```
+
+To explicitly run the Edge project, install Edge support and select that project:
+
+```bash
+npx playwright install msedge
+npx playwright test --project=msedge
 ```
 
 The E2E suite starts its own backend and frontend servers with `AI_PROVIDER=mock`, `AUTH_MODE=dev`, `DATA_BACKEND=json`, and isolated `e2e-data/` plus `e2e-uploads/` directories.
@@ -256,7 +264,7 @@ The E2E suite starts its own backend and frontend servers with `AI_PROVIDER=mock
 
 GitHub Actions runs CI on `push` and `pull_request` with mock/dev configuration only, so no real AI API keys or Supabase secrets are required. The required CI job installs dependencies with `npm ci`, then runs `npm run typecheck`, `npm run build`, and `npm run test`.
 
-An optional Playwright E2E job is also configured. It installs the Playwright Edge browser on Linux and runs `npm run test:e2e`; failures in that job are reported without blocking the required build job.
+An optional Playwright E2E job is also configured. It installs a Playwright browser on Linux and runs `npm run test:e2e`; failures in that job are reported without blocking the required build job.
 
 ## MVP Limitations
 

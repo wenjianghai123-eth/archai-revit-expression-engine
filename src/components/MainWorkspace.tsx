@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   BookOpen,
@@ -17,10 +17,11 @@ import { GenerationConfig, GenerationProvider, GenerationStep, MaterialAsset, Ma
 import { createUploadedImage, validateImageFile } from '../utils/file';
 import { downloadDataUrl, downloadJson } from '../utils/download';
 import { uploadImageAsset } from '../lib/api';
-import { MaskEditor } from './MaskEditor';
-import { MaterialLibrary } from './MaterialLibrary';
-import { OverlayCompareViewer } from './OverlayCompareViewer';
-import { PromptTemplatePanel } from './PromptTemplatePanel';
+
+const MaskEditor = lazy(() => import('./MaskEditor').then(module => ({ default: module.MaskEditor })));
+const MaterialLibrary = lazy(() => import('./MaterialLibrary').then(module => ({ default: module.MaterialLibrary })));
+const OverlayCompareViewer = lazy(() => import('./OverlayCompareViewer').then(module => ({ default: module.OverlayCompareViewer })));
+const PromptTemplatePanel = lazy(() => import('./PromptTemplatePanel').then(module => ({ default: module.PromptTemplatePanel })));
 
 interface WorkspaceProps {
   step: GenerationStep;
