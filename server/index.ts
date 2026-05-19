@@ -1183,10 +1183,13 @@ const variantStyleKeys = new Set([
   'premium-gray',
   'custom',
 ]);
-const defaultVariantStylesByCount: Record<2 | 4, string[]> = {
+const MAX_DESIGN_VARIANT_BATCH = Number(process.env.MAX_DESIGN_VARIANT_BATCH || 8);
+const defaultVariantStylesByCount: Record<2 | 4 | 8, string[]> = {
   2: ['modern-minimal', 'natural-wood'],
   4: ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'],
+  8: ['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby'],
 };
+const designVariantPackIds = new Set(['interior-common', 'commercial', 'office', 'hotel', 'facade']);
 
 const materialReplaceObjectTypes = new Set(['floor', 'wall', 'ceiling', 'cabinet', 'sofa', 'table-chair', 'lighting', 'plant', 'door-window', 'feature-wall', 'other']);
 const materialReplaceMaterials = new Set(['light-wood', 'dark-wood', 'walnut', 'microcement', 'rock-slab', 'marble', 'terrazzo', 'tile', 'leather', 'fabric', 'metal', 'glass', 'art-paint', 'linear-light', 'warm-light-strip', 'plant', 'custom']);
@@ -1199,16 +1202,18 @@ function normalizeDesignVariantConfig(
     config.batchCount = 1;
     delete config.variantStrategy;
     delete config.variantStyles;
+    delete config.variantNames;
+    delete config.stylePackId;
     delete config.customStyleLabel;
     return { ok: true };
   }
 
   const batchCount = config.batchCount === undefined ? 4 : config.batchCount;
-  if (batchCount !== 2 && batchCount !== 4) {
+  if ((batchCount !== 2 && batchCount !== 4 && batchCount !== 8) || batchCount > MAX_DESIGN_VARIANT_BATCH) {
     return {
       ok: false,
       error: {
-        message: '方案数量只能为 2 或 4',
+        message: '方案数量只能为 2、4 或 8',
         code: 'GENERATION_JOB_BATCH_COUNT_INVALID',
       },
     };
@@ -1238,6 +1243,11 @@ function normalizeDesignVariantConfig(
   config.batchCount = batchCount;
   config.variantStrategy = variantStrategy;
   config.variantStyles = styles.slice(0, batchCount);
+  config.stylePackId = typeof config.stylePackId === 'string' && designVariantPackIds.has(config.stylePackId) ? config.stylePackId : 'interior-common';
+  config.variantNames = readStringArray(config.variantNames)
+    .slice(0, batchCount)
+    .map(item => item.trim())
+    .filter(Boolean);
   config.preserveStructure = config.preserveStructure !== false;
   config.preserveCamera = config.preserveCamera !== false;
   config.strength = config.strength === 'subtle' || config.strength === 'strong' ? config.strength : 'balanced';
@@ -1317,8 +1327,45 @@ function normalizeMaterialReplaceConfig(
   return { ok: true };
 }
 
+const planDrawingTypes = new Set(['residential', 'commercial', 'office', 'hotel', 'landscape', 'site-plan', 'custom']);
+const planExpressionTemplates = new Set(['zoning-color', 'colored-plan', 'landscape-plan', 'furniture-enhance', 'annotation-plan', 'circulation-analysis']);
+
+function normalizePlanColorizeConfig(
+  mode: GenerationRecord['mode'],
+  config: Record<string, unknown>,
+): { ok: true } | { ok: false; error: ApiError } {
+  if (mode !== 'plan-colorize') {
+    delete config.drawingType;
+    delete config.template;
+    delete config.enableZoningColor;
+    delete config.enableRoomLabels;
+    delete config.enableFurnitureEnhance;
+    delete config.enableCirculationArrows;
+    delete config.enableScaleEnhance;
+    delete config.enableLandscapeFill;
+    delete config.preserveLinework;
+    delete config.manualRoomLabels;
+    return { ok: true };
+  }
+
+  config.batchCount = 1;
+  config.drawingType = typeof config.drawingType === 'string' && planDrawingTypes.has(config.drawingType) ? config.drawingType : 'residential';
+  config.template = typeof config.template === 'string' && planExpressionTemplates.has(config.template) ? config.template : 'colored-plan';
+  config.enableZoningColor = config.enableZoningColor !== false;
+  config.enableRoomLabels = config.enableRoomLabels === true;
+  config.enableFurnitureEnhance = config.enableFurnitureEnhance !== false;
+  config.enableCirculationArrows = config.enableCirculationArrows === true;
+  config.enableScaleEnhance = config.enableScaleEnhance !== false;
+  config.enableLandscapeFill = config.enableLandscapeFill === true;
+  config.preserveLinework = config.preserveLinework !== false;
+  config.manualRoomLabels = readStringArray(config.manualRoomLabels).slice(0, 24);
+  if (typeof config.customPrompt !== 'string' || config.customPrompt.trim().length === 0) delete config.customPrompt;
+  else config.customPrompt = config.customPrompt.trim();
+  return { ok: true };
+}
+
 function resolveChargedOutputCount(mode: GenerationRecord['mode'], config: Record<string, unknown>): number {
-  return mode === 'design-variants' && (config.batchCount === 2 || config.batchCount === 4) ? config.batchCount : 1;
+  return mode === 'design-variants' && (config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8) ? config.batchCount : 1;
 }
 
 function validateGenerationJobCreateBody(
@@ -1354,6 +1401,8 @@ function validateGenerationJobCreateBody(
       error: {
         message: body.mode === 'design-variants'
           ? '请先上传或选择参考图'
+          : body.mode === 'plan-colorize'
+            ? '请先上传或选择一张平面图'
           : 'inputAssetIds must contain at least one asset id.',
         code: 'GENERATION_JOB_INPUTS_INVALID',
       },
@@ -1390,6 +1439,10 @@ function validateGenerationJobCreateBody(
   const materialReplaceConfig = normalizeMaterialReplaceConfig(body.mode, config);
   if (materialReplaceConfig.ok === false) {
     return { ok: false, error: materialReplaceConfig.error };
+  }
+  const planColorizeConfig = normalizePlanColorizeConfig(body.mode, config);
+  if (planColorizeConfig.ok === false) {
+    return { ok: false, error: planColorizeConfig.error };
   }
   if (body.mode === 'model-render') {
     if (!isNonEmptyString(config.sourceImageAssetId) && !isNonEmptyString(config.snapshotAssetId)) {
@@ -1499,6 +1552,16 @@ function validateGenerationResultUpdateBody(
     value.isFavorite = body.isFavorite;
   }
 
+  if (body.metadata !== undefined) {
+    if (!isRecord(body.metadata)) {
+      return { ok: false, error: { message: 'metadata must be an object.', code: 'GENERATION_RESULT_METADATA_INVALID' } };
+    }
+    const metadata: Record<string, unknown> = {};
+    if (typeof body.metadata.variantName === 'string') metadata.variantName = body.metadata.variantName.trim().slice(0, 80);
+    if (typeof body.metadata.variantCode === 'string') metadata.variantCode = body.metadata.variantCode.trim().slice(0, 8);
+    value.metadata = metadata;
+  }
+
   if (Object.keys(value).length === 0) {
     return { ok: false, error: { message: 'At least one result field is required.', code: 'GENERATION_RESULT_UPDATE_EMPTY' } };
   }
@@ -1562,7 +1625,7 @@ function isNullableString(value: unknown): value is string | null {
 }
 
 function isGenerationMode(value: unknown): value is GenerationRecord['mode'] {
-  return value === 'floorplan' || value === 'style-render' || value === 'inpaint' || value === 'model-render' || value === 'design-variants' || value === 'material-replace';
+  return value === 'floorplan' || value === 'style-render' || value === 'inpaint' || value === 'model-render' || value === 'design-variants' || value === 'material-replace' || value === 'plan-colorize';
 }
 
 function isGenerationStatus(value: unknown): value is GenerationRecord['status'] {

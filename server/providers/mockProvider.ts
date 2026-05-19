@@ -32,6 +32,9 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
   if (input.mode === 'model-render') {
     warnings.push('Mock model-render 已接收模型视角截图，结果仅用于开发占位。');
   }
+  if (input.mode === 'plan-colorize') {
+    warnings.push('Mock plan-colorize 已接收图纸智能表达配置，结果仅用于开发占位。');
+  }
 
   return {
     id: crypto.randomUUID(),
@@ -44,6 +47,15 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
       variantLabel: typeof input.config.variantLabel === 'string' ? input.config.variantLabel : undefined,
       variantStyle: typeof input.config.variantStyle === 'string' ? input.config.variantStyle : undefined,
       batchCount: typeof input.config.batchCount === 'number' ? input.config.batchCount : undefined,
+      drawingType: typeof input.config.drawingType === 'string' ? input.config.drawingType : undefined,
+      template: typeof input.config.template === 'string' ? input.config.template : undefined,
+      enableZoningColor: typeof input.config.enableZoningColor === 'boolean' ? input.config.enableZoningColor : undefined,
+      enableRoomLabels: typeof input.config.enableRoomLabels === 'boolean' ? input.config.enableRoomLabels : undefined,
+      enableFurnitureEnhance: typeof input.config.enableFurnitureEnhance === 'boolean' ? input.config.enableFurnitureEnhance : undefined,
+      enableCirculationArrows: typeof input.config.enableCirculationArrows === 'boolean' ? input.config.enableCirculationArrows : undefined,
+      enableScaleEnhance: typeof input.config.enableScaleEnhance === 'boolean' ? input.config.enableScaleEnhance : undefined,
+      enableLandscapeFill: typeof input.config.enableLandscapeFill === 'boolean' ? input.config.enableLandscapeFill : undefined,
+      preserveLinework: typeof input.config.preserveLinework === 'boolean' ? input.config.preserveLinework : undefined,
     },
     createdAt,
     warnings,
@@ -51,7 +63,7 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
 }
 
 function createMockImageDataUrl(
-  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace',
+  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize',
   prompt: string,
   createdAt: string,
   size: { width: number; height: number },
@@ -63,6 +75,7 @@ function createMockImageDataUrl(
     'model-render': 'Mock Model Snapshot Render',
     'design-variants': 'Mock Design Variant',
     'material-replace': 'Mock Material Replace',
+    'plan-colorize': 'Mock Plan Colorize',
   }[mode];
   const promptPreview = prompt.length > 90 ? `${prompt.slice(0, 90)}...` : prompt;
   const svg = `

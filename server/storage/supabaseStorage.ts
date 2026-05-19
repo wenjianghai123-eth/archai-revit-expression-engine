@@ -441,6 +441,12 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     const patch: Partial<GenerationResultRow> = { updated_at: new Date().toISOString() };
     if (input.isSelected !== undefined) patch.is_selected = input.isSelected;
     if (input.isFavorite !== undefined) patch.is_favorite = input.isFavorite;
+    if (input.metadata !== undefined) {
+      patch.metadata = {
+        ...((current.data as GenerationResultRow).metadata || {}),
+        ...input.metadata,
+      };
+    }
 
     const { data, error } = await this.client
       .from('generation_results')

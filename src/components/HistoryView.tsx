@@ -14,6 +14,7 @@ const stepLabels: Partial<Record<GenerationStep, string>> = {
   [GenerationStep.StyleRender]: '风格渲染',
   [GenerationStep.LocalInpainting]: '局部修饰',
   [GenerationStep.ModelSnapshotRender]: '白模快渲',
+  [GenerationStep.PlanColorize]: '图纸智能表达',
 };
 
 export function HistoryView({ items, onReuse, onDelete, onClear }: HistoryViewProps) {

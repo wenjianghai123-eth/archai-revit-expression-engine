@@ -4,20 +4,25 @@ import { describe, expect, it } from 'vitest';
 import { DesignVariantsPanel } from './DesignVariantsPanel';
 import type { StepState } from '../types';
 
+const defaultProps = {
+  resultOptions: [],
+  selectedResultId: null,
+  previewImage: null,
+  uploadError: null,
+  onUploadInput: () => undefined,
+  onUpdateInputImage: () => undefined,
+  onUpdateConfig: () => undefined,
+  onGenerate: () => undefined,
+  onSelectGenerationResult: () => undefined,
+  onToggleGenerationFavorite: () => undefined,
+  onRenameGenerationResult: () => undefined,
+};
+
 describe('DesignVariantsPanel', () => {
   it('renders the design variants controls and 4-slot matrix by default', () => {
     const html = renderToStaticMarkup(React.createElement(DesignVariantsPanel, {
+      ...defaultProps,
       state: createState({ batchCount: 4 }),
-      resultOptions: [],
-      selectedResultId: null,
-      previewImage: null,
-      uploadError: null,
-      onUploadInput: () => undefined,
-      onUpdateInputImage: () => undefined,
-      onUpdateConfig: () => undefined,
-      onGenerate: () => undefined,
-      onSelectGenerationResult: () => undefined,
-      onToggleGenerationFavorite: () => undefined,
     }));
 
     expect(html).toContain('方案变体');
@@ -25,10 +30,13 @@ describe('DesignVariantsPanel', () => {
     expect(html).toContain('多风格方案矩阵');
     expect(html).toContain('方案 A');
     expect(html).toContain('方案 D');
+    expect(html).toContain('风格包');
+    expect(html).toContain('8 张');
   });
 
   it('renders a 2-result variant matrix with selected and favorite actions', () => {
     const html = renderToStaticMarkup(React.createElement(DesignVariantsPanel, {
+      ...defaultProps,
       state: createState({ batchCount: 2 }),
       resultOptions: [
         { id: 'a', imageUrl: 'data:image/png;base64,a', isSelected: true, isFavorite: false, variantLabel: '方案 A', variantStyleLabel: '现代极简' },
@@ -36,13 +44,6 @@ describe('DesignVariantsPanel', () => {
       ],
       selectedResultId: 'a',
       previewImage: 'data:image/png;base64,a',
-      uploadError: null,
-      onUploadInput: () => undefined,
-      onUpdateInputImage: () => undefined,
-      onUpdateConfig: () => undefined,
-      onGenerate: () => undefined,
-      onSelectGenerationResult: () => undefined,
-      onToggleGenerationFavorite: () => undefined,
     }));
 
     expect(html).toContain('方案 A');
@@ -50,6 +51,17 @@ describe('DesignVariantsPanel', () => {
     expect(html).toContain('设为主方案');
     expect(html).toContain('已设为主方案');
     expect(html).toContain('收藏');
+  });
+
+  it('renders an 8-slot matrix and export actions', () => {
+    const html = renderToStaticMarkup(React.createElement(DesignVariantsPanel, {
+      ...defaultProps,
+      state: createState({ batchCount: 8 }),
+    }));
+
+    expect(html).toContain('方案 H');
+    expect(html).toContain('导出对比页');
+    expect(html).toContain('一键生成汇报页');
   });
 });
 
@@ -60,6 +72,7 @@ function createState(config: Partial<StepState['config']>): StepState {
       lighting: '匹配原图',
       materialStrength: 0.8,
       variantStrategy: 'style-matrix',
+      stylePackId: 'interior-common',
       variantStyles: [],
       preserveStructure: true,
       preserveCamera: true,

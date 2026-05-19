@@ -8,6 +8,7 @@ interface ModelSnapshotRenderPanelProps {
   state: StepState;
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
   onUpdateInputImage: (image: UploadedImage | null) => void;
+  onGenerate: () => void;
 }
 
 const modelAccept = '.glb,.gltf,.obj,.dae,.stl,model/gltf-binary,model/gltf+json,model/vnd.collada+xml,model/stl';
@@ -19,7 +20,7 @@ const spaceTypes = ['外立面', '客厅', '餐厅', '卧室', '大堂', '办公
 const renderStyles = ['现代极简', '自然木质', '轻奢', '侘寂', '工业风', '参数化', '写实建筑表现'];
 const atmospheres = ['日景', '夜景', '暖光', '自然光', '高级灰', '清晨', '黄昏'];
 
-export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputImage }: ModelSnapshotRenderPanelProps) {
+export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputImage, onGenerate }: ModelSnapshotRenderPanelProps) {
   const viewerRef = useRef<ModelViewerHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [models, setModels] = useState<AssetModel[]>([]);
@@ -142,84 +143,9 @@ export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputI
         }}
       />
 
-      <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-r border-slate-200 bg-white p-4 custom-scrollbar">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-950 text-white">
-            <Box className="h-5 w-5" />
-          </div>
-          <div>
-            <p className="text-lg font-bold text-slate-950">白模快渲</p>
-            <p className="mt-1 text-xs text-slate-500">上传 3D 白模，选好角度，一键生成效果图</p>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={isUploadingModel}
-          className="mt-5 inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50"
-        >
-          <Upload className="h-4 w-4" />
-          {isUploadingModel ? '上传中...' : '上传模型'}
-        </button>
-        <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
-          <p className="font-bold text-slate-800">支持 GLB、GLTF、OBJ、DAE、STL 模型，单个模型最大 600MB。推荐使用 GLB 格式。</p>
-          <p>SketchUp 用户建议：从 SketchUp 导出为 GLB、DAE、OBJ 或 STL 后上传。</p>
-          <p className="font-semibold text-amber-700">暂不支持 FBX 和 SKP 原生文件。</p>
-        </div>
-
-        <div className="mt-5 space-y-2">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">模型资产</p>
-          {isLoadingModels ? (
-            <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">正在加载模型资产...</div>
-          ) : models.length > 0 ? (
-            <div className="space-y-2">
-              {models.map(model => (
-                <button
-                  key={model.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedModel(model);
-                    onUpdateInputImage(null);
-                    setMessage(null);
-                  }}
-                  className={`w-full rounded-xl border p-3 text-left transition-colors ${selectedModel?.id === model.id ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-bold text-slate-800">{model.name}</span>
-                    <span className="rounded bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{model.fileType.toUpperCase()}</span>
-                  </div>
-                  <p className="mt-1 truncate text-xs text-slate-500">{model.fileName}</p>
-                  {!model.previewable ? <p className="mt-2 text-[11px] font-semibold text-amber-700">该格式暂不支持截图预览</p> : null}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-xs leading-5 text-slate-500">
-              还没有模型资产，请先上传 GLB、GLTF、OBJ、DAE 或 STL 模型。推荐使用 GLB。
-            </div>
-          )}
-        </div>
-
-        <div className="mt-5 space-y-3 border-t border-slate-100 pt-5">
-          <SelectField label="建筑类型" value={state.config.buildingType || '住宅'} options={buildingTypes} onChange={value => onUpdateConfig({ buildingType: value })} />
-          <SelectField label="空间类型" value={state.config.spaceType || '外立面'} options={spaceTypes} onChange={value => onUpdateConfig({ spaceType: value })} />
-          <SelectField label="渲染风格" value={state.config.renderStyle || state.config.style || '现代极简'} options={renderStyles} onChange={value => onUpdateConfig({ renderStyle: value, style: value })} />
-          <SelectField label="氛围" value={state.config.atmosphere || state.config.lighting || '日景'} options={atmospheres} onChange={value => onUpdateConfig({ atmosphere: value, lighting: value })} />
-          <label className="block">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">自定义提示词</span>
-            <textarea
-              value={state.config.customPrompt || state.config.prompt}
-              onChange={event => onUpdateConfig({ customPrompt: event.target.value, prompt: event.target.value })}
-              placeholder="补充材质、光线、场景或设计意图..."
-              className="mt-2 h-24 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-blue-300"
-            />
-          </label>
-        </div>
-      </aside>
-
       <section className="min-w-0 flex-1 overflow-y-auto bg-slate-100 p-4 custom-scrollbar">
-        <div className="mx-auto max-w-5xl space-y-4">
+        <div className="grid min-h-full gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="min-w-0 space-y-4">
           {message ? (
             <div className="flex items-start gap-2 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-700">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -233,48 +159,141 @@ export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputI
                 <p className="text-sm font-bold text-slate-900">模型视角</p>
                 <p className="mt-1 text-xs text-slate-500">{selectedModelDetails}</p>
               </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={handleCapture}
-                  disabled={!canCapture || isCapturing}
-                  className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
-                >
-                  <Camera className="h-4 w-4" />
-                  {snapshotUrl ? '重新截取' : '截取当前视角'}
-                </button>
+              <div className="hidden text-xs font-semibold text-slate-400 sm:block">
+                旋转、缩放、漫游并截取当前视角
               </div>
             </div>
-            <div className="h-[520px] min-h-[420px]">
+            <div className="h-[calc(100vh-168px)] min-h-[420px] xl:min-h-[560px]">
               {selectedModel ? (
-                <ModelViewer ref={viewerRef} asset={selectedModel} minHeight={420} />
+                <ModelViewer ref={viewerRef} asset={selectedModel} minHeight={560} />
               ) : (
                 <div className="flex h-full items-center justify-center text-sm font-bold text-slate-400">请先选择一个 3D 模型</div>
               )}
             </div>
           </div>
+          </div>
 
-          <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
-            <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-800">
-              截图将作为结构参考，AI 会尽量保留模型的体量、构图和透视关系。
+          <aside className="max-h-none space-y-4 overflow-y-visible rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:max-h-[calc(100vh-112px)] xl:overflow-y-auto custom-scrollbar">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-950 text-white">
+                <Box className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-lg font-bold text-slate-950">白模快渲</p>
+                <p className="mt-1 text-xs text-slate-500">上传 3D 白模，选好角度，一键生成效果图</p>
+              </div>
             </div>
-            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+
+            <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">模型文件信息</p>
+              <p className="mt-2 truncate text-sm font-bold text-slate-800">{selectedModel?.fileName || '尚未选择模型'}</p>
+              <p className="mt-1 text-xs text-slate-500">{selectedModel ? `${selectedModel.fileType.toUpperCase()} / ${selectedModel.size}` : '请上传或选择模型资产'}</p>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">当前视角截图</p>
+              <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
               {snapshotUrl ? (
                 <>
-                  <img src={snapshotUrl} alt="模型视角截图预览" className="h-44 w-full object-cover" />
-                  <div className="flex items-center gap-2 px-3 py-2 text-xs font-bold text-emerald-700">
+                    <img src={snapshotUrl} alt="模型视角截图预览" className="h-40 w-full object-cover" />
+                    <div className="flex items-center gap-2 px-3 py-2 text-xs font-bold text-emerald-700">
                     <CheckCircle2 className="h-4 w-4" />
-                    使用该视角生成
+                      已截取当前视角
                   </div>
                 </>
               ) : (
-                <div className="flex h-52 flex-col items-center justify-center px-4 text-center text-xs leading-5 text-slate-500">
+                  <div className="flex h-36 flex-col items-center justify-center px-4 text-center text-xs leading-5 text-slate-500">
                   <Camera className="mb-3 h-8 w-8 text-slate-300" />
-                  请先截取一个模型视角
+                    尚未截取视角
                 </div>
               )}
             </div>
-          </div>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+              <button
+                type="button"
+                onClick={handleCapture}
+                disabled={!canCapture || isCapturing}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50"
+              >
+                <Camera className="h-4 w-4" />
+                {snapshotUrl ? '重新截取' : '截取当前视角'}
+              </button>
+              <button
+                type="button"
+                onClick={onGenerate}
+                disabled={!snapshotUrl || state.isGenerating}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50"
+              >
+                使用该视角生成
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploadingModel}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-50 px-4 py-2.5 text-sm font-bold text-blue-700 disabled:opacity-50"
+            >
+              <Upload className="h-4 w-4" />
+              {isUploadingModel ? '上传中...' : '上传模型'}
+            </button>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+              <p className="font-bold text-slate-800">支持 GLB、GLTF、OBJ、DAE、STL 模型，单个模型最大 600MB。推荐使用 GLB 格式。</p>
+              <p>SketchUp 用户建议：从 SketchUp 导出为 GLB、DAE、OBJ 或 STL 后上传。</p>
+              <p className="font-semibold text-amber-700">暂不支持 FBX 和 SKP 原生文件。</p>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">模型资产</p>
+              {isLoadingModels ? (
+                <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">正在加载模型资产...</div>
+              ) : models.length > 0 ? (
+                <div className="max-h-60 space-y-2 overflow-y-auto pr-1 custom-scrollbar">
+                  {models.map(model => (
+                    <button
+                      key={model.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedModel(model);
+                        onUpdateInputImage(null);
+                        setMessage(null);
+                      }}
+                      className={`w-full rounded-xl border p-3 text-left transition-colors ${selectedModel?.id === model.id ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate text-sm font-bold text-slate-800">{model.name}</span>
+                        <span className="rounded bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{model.fileType.toUpperCase()}</span>
+                      </div>
+                      <p className="mt-1 truncate text-xs text-slate-500">{model.fileName}</p>
+                      {!model.previewable ? <p className="mt-2 text-[11px] font-semibold text-amber-700">该格式暂不支持截图预览</p> : null}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-xs leading-5 text-slate-500">
+                  还没有模型资产，请先上传 GLB、GLTF、OBJ、DAE 或 STL 模型。推荐使用 GLB。
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-3 border-t border-slate-100 pt-4">
+              <SelectField label="建筑类型" value={state.config.buildingType || '住宅'} options={buildingTypes} onChange={value => onUpdateConfig({ buildingType: value })} />
+              <SelectField label="空间类型" value={state.config.spaceType || '外立面'} options={spaceTypes} onChange={value => onUpdateConfig({ spaceType: value })} />
+              <SelectField label="渲染风格" value={state.config.renderStyle || state.config.style || '现代极简'} options={renderStyles} onChange={value => onUpdateConfig({ renderStyle: value, style: value })} />
+              <SelectField label="氛围" value={state.config.atmosphere || state.config.lighting || '日景'} options={atmospheres} onChange={value => onUpdateConfig({ atmosphere: value, lighting: value })} />
+              <label className="block">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">自定义提示词</span>
+                <textarea
+                  value={state.config.customPrompt || state.config.prompt}
+                  onChange={event => onUpdateConfig({ customPrompt: event.target.value, prompt: event.target.value })}
+                  placeholder="补充材质、光线、场景或设计意图..."
+                  className="mt-2 h-24 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-blue-300"
+                />
+              </label>
+            </div>
+          </aside>
         </div>
       </section>
     </>

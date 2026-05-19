@@ -12,6 +12,7 @@ import {
   Paintbrush,
   Box,
   ScanLine,
+  FileImage,
   LayoutGrid,
   Sparkles,
   ShieldCheck
@@ -176,6 +177,13 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
       image: 'https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&q=80&w=600',
     },
     {
+      id: GenerationStep.PlanColorize,
+      title: '图纸智能表达',
+      desc: '上传黑白平面图，一键生成彩色分区、标注和表达图',
+      icon: FileImage,
+      image: 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&q=80&w=600',
+    },
+    {
       id: GenerationStep.StyleRender,
       title: '风格渲染',
       desc: '参考图生成建筑或室内风格效果',
@@ -235,7 +243,7 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
         </div>
       </div>
 
-      <div className="grid gap-3 px-4 pb-3 md:grid-cols-3 xl:grid-cols-6 md:px-5">
+      <div className="grid gap-3 px-4 pb-3 md:grid-cols-3 xl:grid-cols-7 md:px-5">
         {steps.map((step) => {
           const isActive = currentStep === step.id;
           const Icon = step.icon;

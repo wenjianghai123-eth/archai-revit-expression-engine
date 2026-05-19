@@ -10,7 +10,7 @@ export interface Project {
   deletedAt?: string | null;
 }
 
-export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace';
+export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize';
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
 export type VariantStyleKey =
   | 'modern-minimal'
@@ -322,7 +322,7 @@ export type CreateGenerationResultInput = {
   metadata?: Record<string, unknown>;
 };
 
-export type UpdateGenerationResultInput = Partial<Pick<GenerationResult, 'isSelected' | 'isFavorite'>>;
+export type UpdateGenerationResultInput = Partial<Pick<GenerationResult, 'isSelected' | 'isFavorite' | 'metadata'>>;
 
 export type CreateImageAssetInput = {
   userId: string;

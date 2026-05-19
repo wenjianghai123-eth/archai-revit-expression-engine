@@ -5,13 +5,15 @@ export enum GenerationStep {
   ModelSnapshotRender = 4,
   DesignVariants = 5,
   MaterialReplace = 6,
+  PlanColorize = 7,
 }
 
-export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace';
+export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize';
 export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled';
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
+export type DesignVariantBatchCount = 2 | 4 | 8;
 export type VariantStyleKey =
   | 'modern-minimal'
   | 'wabi-sabi'
@@ -25,6 +27,8 @@ export type VariantStyleKey =
   | 'premium-gray'
   | 'custom';
 export type MaterialReplaceStrength = 'subtle' | 'balanced' | 'strong';
+export type PlanDrawingType = 'residential' | 'commercial' | 'office' | 'hotel' | 'landscape' | 'site-plan' | 'custom';
+export type PlanExpressionTemplate = 'zoning-color' | 'colored-plan' | 'landscape-plan' | 'furniture-enhance' | 'annotation-plan' | 'circulation-analysis';
 export type MaterialReplaceEditMode = 'smart-type' | 'mask';
 export type MaterialReplaceTargetObject =
   | 'floor'
@@ -135,9 +139,11 @@ export interface GenerationConfig {
   preserveStructure?: boolean;
   preserveCamera?: boolean;
   feather?: number;
-  batchCount?: 1 | 2 | 4;
+  batchCount?: 1 | DesignVariantBatchCount;
   variantStrategy?: VariantGenerationStrategy;
+  stylePackId?: string;
   variantStyles?: VariantStyleKey[];
+  variantNames?: string[];
   customStyleLabel?: string;
   maskMode?: 'asset-mask' | 'full-image';
   maskAssetId?: string;
@@ -156,6 +162,16 @@ export interface GenerationConfig {
   sourceImageAssetId?: string;
   snapshotAssetId?: string;
   modelSnapshotMetadata?: ModelSnapshotMetadata;
+  drawingType?: PlanDrawingType;
+  template?: PlanExpressionTemplate;
+  enableZoningColor?: boolean;
+  enableRoomLabels?: boolean;
+  enableFurnitureEnhance?: boolean;
+  enableCirculationArrows?: boolean;
+  enableScaleEnhance?: boolean;
+  enableLandscapeFill?: boolean;
+  preserveLinework?: boolean;
+  manualRoomLabels?: string[];
 }
 
 export interface GenerationResultOption {
@@ -167,9 +183,12 @@ export interface GenerationResultOption {
   createdAt?: string;
   metadata?: Record<string, unknown>;
   variantIndex?: number;
+  variantCode?: string;
+  variantName?: string;
   variantLabel?: string;
   variantStyle?: VariantStyleKey;
   variantStyleLabel?: string;
+  stylePackId?: string;
 }
 
 export interface StepState {
@@ -235,7 +254,7 @@ export interface PromptTemplate {
   id: string;
   title: string;
   category: string;
-  feature: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace';
+  feature: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize';
   supportedModes?: GenerationStep[] | string[];
   description: string;
   previewImage: string;

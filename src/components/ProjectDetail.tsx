@@ -611,6 +611,7 @@ function modeLabel(mode: GenerationRecord['mode']): string {
   if (mode === 'floorplan') return '平面生成';
   if (mode === 'style-render') return '风格渲染';
   if (mode === 'design-variants') return '方案变体';
+  if (mode === 'plan-colorize') return '图纸智能表达';
   if (mode === 'model-render') return '白模快渲';
   if (mode === 'material-replace') return '材质软装替换';
   return '局部重绘';

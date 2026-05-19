@@ -471,6 +471,12 @@ async function updateGenerationResult(id: string, userId: string, input: UpdateG
     result.isSelected = input.isSelected;
   }
   if (input.isFavorite !== undefined) result.isFavorite = input.isFavorite;
+  if (input.metadata !== undefined) {
+    result.metadata = {
+      ...(result.metadata || {}),
+      ...input.metadata,
+    };
+  }
   result.updatedAt = now;
 
   await writeDatabase(db);

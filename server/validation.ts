@@ -17,18 +17,18 @@ export function isNullableString(value: unknown): value is string | null {
 }
 
 export function isGenerationMode(value: unknown): value is GenerationRecord['mode'] {
-  return value === 'floorplan' || value === 'style-render' || value === 'inpaint' || value === 'model-render' || value === 'design-variants' || value === 'material-replace';
+  return value === 'floorplan' || value === 'style-render' || value === 'inpaint' || value === 'model-render' || value === 'design-variants' || value === 'material-replace' || value === 'plan-colorize';
 }
 
 export function isGenerationStatus(value: unknown): value is GenerationRecord['status'] {
   return value === 'succeeded' || value === 'failed';
 }
 
-export function isBatchCount(value: unknown): value is 1 | 2 | 4 {
-  return value === 1 || value === 2 || value === 4;
+export function isBatchCount(value: unknown): value is 1 | 2 | 4 | 8 {
+  return value === 1 || value === 2 || value === 4 || value === 8;
 }
 
-export function readBatchCount(value: unknown): 1 | 2 | 4 {
+export function readBatchCount(value: unknown): 1 | 2 | 4 | 8 {
   return isBatchCount(value) ? value : 1;
 }
 

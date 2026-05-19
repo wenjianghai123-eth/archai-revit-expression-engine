@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { ArrowRight, Box, Clock, Database, History, Layers, LayoutGrid, Paintbrush, ScanLine, Sparkles, Wand2 } from 'lucide-react';
+import { ArrowRight, Box, Clock, Database, FileImage, History, Layers, LayoutGrid, Paintbrush, ScanLine, Sparkles, Wand2 } from 'lucide-react';
 import { AssetModel, GenerationHistoryItem, GenerationStep, PromptTemplate } from '../types';
 
 interface CreativeHomeProps {
@@ -22,6 +22,15 @@ const toolCards = [
     output: '输出：三维彩平',
     icon: ScanLine,
     image: 'https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&q=80&w=900',
+  },
+  {
+    step: GenerationStep.PlanColorize,
+    title: '图纸智能表达',
+    desc: '上传 CAD 导出的黑白平面图，生成彩色分区、标注和表达图。',
+    input: '输入：黑白平面图',
+    output: '输出：彩色图纸表达',
+    icon: FileImage,
+    image: 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&q=80&w=900',
   },
   {
     step: GenerationStep.StyleRender,
@@ -282,6 +291,7 @@ function readStoredAssets(): AssetModel[] {
 function stepLabel(step: GenerationStep): string {
   if (step === GenerationStep.FloorplanTo3D) return '平面-三维';
   if (step === GenerationStep.StyleRender) return '风格渲染';
+  if (step === GenerationStep.PlanColorize) return '图纸智能表达';
   if (step === GenerationStep.ModelSnapshotRender) return '白模快渲';
   return '局部修饰';
 }

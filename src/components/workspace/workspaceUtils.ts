@@ -9,6 +9,7 @@ export function modeLabel(step: GenerationStep): string {
   if (step === GenerationStep.StyleRender) return '风格渲染';
   if (step === GenerationStep.ModelSnapshotRender) return '白模快渲';
   if (step === GenerationStep.DesignVariants) return '方案变体';
+  if (step === GenerationStep.PlanColorize) return '图纸智能表达';
   if (step === GenerationStep.MaterialReplace) return '材质软装替换';
   return '局部重绘';
 }

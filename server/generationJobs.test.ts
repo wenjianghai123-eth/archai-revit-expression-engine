@@ -606,6 +606,93 @@ describe('POST /api/generation-jobs asset ownership', () => {
     expect(response.body.data.job.config).not.toHaveProperty('maskMode');
     expect(response.body.data.job.config).not.toHaveProperty('maskAssetId');
   });
+
+  it('creates a plan-colorize job with default expression config', async () => {
+    const originalBalance = await storage.getCreditBalance(DEV_AUTH_USER_ID);
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Plan colorize project' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'plan-colorize',
+        prompt: '',
+        config: {},
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job).toMatchObject({
+      mode: 'plan-colorize',
+      inputAssetIds: [sourceAsset.id],
+      config: {
+        batchCount: 1,
+        drawingType: 'residential',
+        template: 'colored-plan',
+        enableZoningColor: true,
+        enableRoomLabels: false,
+        enableFurnitureEnhance: true,
+        enableCirculationArrows: false,
+        enableScaleEnhance: true,
+        enableLandscapeFill: false,
+        preserveLinework: true,
+        manualRoomLabels: [],
+      },
+    });
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 10);
+  });
+
+  it('rejects plan-colorize jobs without a source image', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Missing plan source' });
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'plan-colorize',
+        prompt: '',
+        config: {},
+        inputAssetIds: [],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: {
+        code: 'GENERATION_JOB_INPUTS_INVALID',
+        message: '请先上传或选择一张平面图',
+      },
+    });
+  });
+
+  it('normalizes plan-colorize config and rejects another user source image', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Plan ownership' });
+    const otherAsset = await createImageAssetForUser('other-plan-user');
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'plan-colorize',
+        prompt: '',
+        config: {
+          drawingType: 'invalid',
+          template: 'invalid',
+          enableRoomLabels: true,
+          enableCirculationArrows: true,
+          customPrompt: '  Add labels only where readable.  ',
+          manualRoomLabels: ['Lobby', '', 'Meeting'],
+        },
+        inputAssetIds: [otherAsset.id],
+      });
+
+    expect(response.status).toBe(404);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: { code: 'GENERATION_JOB_INPUT_ASSET_NOT_FOUND' },
+    });
+  });
 });
 
 describe('project soft deletion', () => {
@@ -792,7 +879,37 @@ describe('generation job credits', () => {
     expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 40);
   });
 
-  it.each([3, 5])('rejects invalid design-variants batchCount %s', async (batchCount) => {
+  it('creates design-variants jobs with batchCount 8 and charges eight outputs', async () => {
+    const originalBalance = await storage.getCreditBalance(DEV_AUTH_USER_ID);
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Design variants eight' });
+    const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'design-variants',
+        prompt: '',
+        config: {
+          batchCount: 8,
+          stylePackId: 'hotel',
+          variantStrategy: 'style-matrix',
+          variantNames: ['现代极简', '温润木质'],
+        },
+        inputAssetIds: [ownAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).toMatchObject({
+      batchCount: 8,
+      stylePackId: 'hotel',
+      variantNames: ['现代极简', '温润木质'],
+    });
+    expect(response.body.data.job.config.variantStyles).toHaveLength(8);
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 80);
+  });
+
+  it.each([1, 3, 5, 9])('rejects invalid design-variants batchCount %s', async (batchCount) => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: `Invalid variant ${batchCount}` });
     const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
 
@@ -857,9 +974,11 @@ describe('generation job credits', () => {
           mode: 'design-variants',
           prompt: '',
           config: {
-            batchCount: 2,
+            batchCount: 8,
             variantStrategy: 'style-matrix',
-            variantStyles: ['modern-minimal', 'natural-wood'],
+            stylePackId: 'interior-common',
+            variantStyles: ['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby'],
+            variantNames: ['方案 A', '方案 B', '方案 C', '方案 D', '方案 E', '方案 F', '方案 G', '方案 H'],
             customPrompt: 'Keep the original layout and camera angle.',
           },
           inputAssetIds: [ownAsset.id],
@@ -869,12 +988,18 @@ describe('generation job credits', () => {
       const job = await waitForGenerationJob(response.body.data.job.id, 'succeeded');
       const results = await storage.listGenerationResults(job.id, DEV_AUTH_USER_ID);
 
-      expect(job.outputAssetIds).toHaveLength(2);
+      expect(job.outputAssetIds).toHaveLength(8);
       expect(job.outputAssetId).toBe(job.outputAssetIds?.[0]);
-      expect(results).toHaveLength(2);
+      expect(results).toHaveLength(8);
       expect(results[0]).toMatchObject({ isSelected: true, isFavorite: false });
       expect(results[1]).toMatchObject({ isSelected: false, isFavorite: false });
-      expect(results.map(result => result.metadata?.variantStyle)).toEqual(['modern-minimal', 'natural-wood']);
+      expect(results.map(result => result.metadata?.variantStyle)).toEqual(['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby']);
+      expect(results[0].metadata).toMatchObject({
+        variantIndex: 0,
+        variantCode: 'A',
+        variantName: '方案 A',
+        stylePackId: 'interior-common',
+      });
     } finally {
       process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
     }
@@ -971,6 +1096,64 @@ describe('generation job credits', () => {
       expect(job.config).not.toHaveProperty('maskMode');
       expect(results).toHaveLength(1);
       expect(results[0].metadata?.mode).toBe('material-replace');
+    } finally {
+      process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
+    }
+  });
+
+  it('generates plan-colorize with mock provider and saves expression metadata', async () => {
+    const originalWorkerDisabled = process.env.ARCHAI_DISABLE_GENERATION_WORKER;
+    process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'false';
+
+    try {
+      const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Plan colorize worker project' });
+      const sourceAsset = await storage.createImageAsset({
+        userId: DEV_AUTH_USER_ID,
+        url: `data:image/png;base64,${validOnePixelPng.toString('base64')}`,
+        filename: 'plan-input.png',
+        mimeType: 'image/png',
+        size: validOnePixelPng.length,
+      });
+
+      const response = await request(app)
+        .post('/api/generation-jobs')
+        .send({
+          projectId: project.id,
+          mode: 'plan-colorize',
+          prompt: '',
+          config: {
+            drawingType: 'landscape',
+            template: 'landscape-plan',
+            enableRoomLabels: true,
+            enableCirculationArrows: true,
+            enableLandscapeFill: true,
+            preserveLinework: true,
+            manualRoomLabels: ['Entry Plaza', 'Garden'],
+            customPrompt: 'Use soft green landscape fills.',
+          },
+          inputAssetIds: [sourceAsset.id],
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.data.job.config.customPrompt).toBe('Use soft green landscape fills.');
+      const job = await waitForGenerationJob(response.body.data.job.id, 'succeeded');
+      const results = await storage.listGenerationResults(job.id, DEV_AUTH_USER_ID);
+
+      expect(job.mode).toBe('plan-colorize');
+      expect(job.outputAssetIds).toHaveLength(1);
+      expect(job.outputAssetId).toBe(job.outputAssetIds?.[0]);
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({ isSelected: true, isFavorite: false });
+      expect(results[0].metadata).toMatchObject({
+        mode: 'plan-colorize',
+        drawingType: 'landscape',
+        template: 'landscape-plan',
+        enableRoomLabels: true,
+        enableCirculationArrows: true,
+        enableLandscapeFill: true,
+        preserveLinework: true,
+      });
+      expect(JSON.stringify(results[0].metadata)).not.toMatch(/undefined|null/);
     } finally {
       process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
     }

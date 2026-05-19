@@ -232,6 +232,24 @@ export default function App() {
     void updateGenerationResult(result.id, { isFavorite: nextFavorite }).catch(() => undefined);
   }, [currentStep, stepStates]);
 
+  const handleRenameGenerationResult = useCallback((resultId: string, variantName: string) => {
+    const result = stepStates[currentStep].generationResults.find(item => item.id === resultId);
+    if (!result) return;
+    const nextMetadata = { ...(result.metadata || {}), variantName };
+
+    setStepStates(prev => ({
+      ...prev,
+      [currentStep]: {
+        ...prev[currentStep],
+        generationResults: prev[currentStep].generationResults.map(item => item.id === resultId
+          ? { ...item, variantName, variantLabel: variantName, metadata: nextMetadata }
+          : item),
+      },
+    }));
+
+    void updateGenerationResult(result.id, { metadata: { variantName } }).catch(() => undefined);
+  }, [currentStep, stepStates]);
+
   const handleSetViewMode = useCallback((viewMode: StepState['viewMode']) => {
     setStepStates(prev => ({
       ...prev,
@@ -412,6 +430,7 @@ export default function App() {
                         onCancelGeneration={handleCancelGeneration}
                         onSelectGenerationResult={handleSelectGenerationResult}
                         onToggleGenerationFavorite={handleToggleGenerationFavorite}
+                        onRenameGenerationResult={handleRenameGenerationResult}
                         onSetViewMode={handleSetViewMode}
                         onNextStep={handleNextStep}
                         onReset={handleResetConfig}

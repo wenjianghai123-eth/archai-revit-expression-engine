@@ -179,8 +179,11 @@ async function processGenerationJob(jobId: string): Promise<void> {
             config: {
               ...input.config,
               variantIndex: index,
+              variantCode: readVariantCode(index),
               variantLabel: readVariantLabel(index),
+              variantName: resolveVariantName(job.config, index),
               variantStyle,
+              stylePackId: typeof job.config.stylePackId === 'string' ? job.config.stylePackId : 'interior-common',
               batchCount,
             },
           }
@@ -196,7 +199,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
         fallbackProvider: typeof providerOutput.metadata?.fallbackProvider === 'string' ? providerOutput.metadata.fallbackProvider : diagnostics.provider?.fallbackProvider,
         fallbackReason: typeof providerOutput.metadata?.fallbackReason === 'string' ? providerOutput.metadata.fallbackReason : diagnostics.provider?.fallbackReason,
       };
-      await updateGenerationJob(job.id, { progress: 75, diagnostics });
+      await updateGenerationJob(job.id, { progress: job.mode === 'design-variants' ? resolveVariantCompleteProgress(batchCount, index) : 75, diagnostics });
 
       markTiming(diagnostics, 'postprocessStartedAt', 'postprocess');
       let outputDataUrl = await normalizeGeneratedImageDataUrl({
@@ -222,7 +225,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
       await updateGenerationJob(job.id, { progress });
 
       markTiming(diagnostics, 'saveResultStartedAt', 'save-result');
-      await updateGenerationJob(job.id, { progress: 88, diagnostics });
+      await updateGenerationJob(job.id, { progress: job.mode === 'design-variants' ? progress : 88, diagnostics });
       const outputAsset = await saveGeneratedDataUrl(job.userId, output.dataUrl, `generation-${job.id}-${index + 1}`);
       if (!firstOutputAsset) firstOutputAsset = outputAsset;
       outputAssetIds.push(outputAsset.id);
@@ -239,10 +242,27 @@ async function processGenerationJob(jobId: string): Promise<void> {
           ? {
               ...(providerOutput.metadata || {}),
               variantIndex: index,
+              variantCode: readVariantCode(index),
+              variantName: resolveVariantName(job.config, index),
               variantLabel: readVariantLabel(index),
               variantStyle,
+              stylePackId: typeof job.config.stylePackId === 'string' ? job.config.stylePackId : 'interior-common',
               batchCount,
             }
+          : job.mode === 'plan-colorize'
+            ? {
+                ...(providerOutput.metadata || {}),
+                mode: 'plan-colorize',
+                drawingType: typeof job.config.drawingType === 'string' ? job.config.drawingType : 'residential',
+                template: typeof job.config.template === 'string' ? job.config.template : 'colored-plan',
+                enableZoningColor: Boolean(job.config.enableZoningColor),
+                enableRoomLabels: Boolean(job.config.enableRoomLabels),
+                enableFurnitureEnhance: Boolean(job.config.enableFurnitureEnhance),
+                enableCirculationArrows: Boolean(job.config.enableCirculationArrows),
+                enableScaleEnhance: Boolean(job.config.enableScaleEnhance),
+                enableLandscapeFill: Boolean(job.config.enableLandscapeFill),
+                preserveLinework: job.config.preserveLinework !== false,
+              }
           : job.mode === 'material-replace'
             ? {
                 ...(providerOutput.metadata || {}),
@@ -872,9 +892,10 @@ function removeInternalConfig(config: Record<string, unknown>): Record<string, u
   return publicConfig;
 }
 
-const defaultVariantStylesByCount: Record<2 | 4, string[]> = {
+const defaultVariantStylesByCount: Record<2 | 4 | 8, string[]> = {
   2: ['modern-minimal', 'natural-wood'],
   4: ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'],
+  8: ['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby'],
 };
 
 const variantStylePrompts: Record<string, string> = {
@@ -896,6 +917,10 @@ const sameStyleVariantPrompts = [
   'Variant B: warmer, softer, more atmospheric.',
   'Variant C: more premium materials and clearer visual hierarchy.',
   'Variant D: bolder lighting and more expressive styling.',
+  'Variant E: brighter daylight and lighter material contrast.',
+  'Variant F: quieter palette with stronger texture focus.',
+  'Variant G: more expressive feature elements.',
+  'Variant H: refined presentation with distinctive atmosphere.',
 ];
 
 const designVariantBasePrompt = 'Create one distinct design variant from the input image. Preserve the original layout, structure, camera angle, perspective, and main proportions. Change the design through materials, colors, lighting, furniture, landscape, and atmosphere. Keep it realistic and suitable for architectural or interior presentation. Do not alter the core geometry.';
@@ -937,16 +962,16 @@ const materialReplaceMaterialLabels: Record<string, string> = {
 const materialReplaceSmartPrompt = 'Replace the {targetObjectTypeLabel} area with {targetMaterialLabel}. Preserve the original layout, camera angle, perspective, geometry, lighting, shadows, and other non-target areas. Keep the result realistic and naturally integrated. Do not change the room structure or add unrelated objects.';
 const materialReplaceMaskPrompt = 'Edit only the masked area. Replace the selected {targetObjectTypeLabel} with {targetMaterialLabel}. Preserve the original layout, camera angle, perspective, geometry, lighting, shadows, and all unmasked areas. Keep the result realistic and naturally integrated. Do not change the room structure or add unrelated objects.';
 
-function resolveBatchCountForJob(job: GenerationJob): 1 | 2 | 4 {
+function resolveBatchCountForJob(job: GenerationJob): 1 | 2 | 4 | 8 {
   return resolveBatchCountForJobConfig(job.mode, job.config);
 }
 
-function resolveBatchCountForJobConfig(mode: GenerationRecord['mode'], config: Record<string, unknown>): 1 | 2 | 4 {
+function resolveBatchCountForJobConfig(mode: GenerationRecord['mode'], config: Record<string, unknown>): 1 | 2 | 4 | 8 {
   if (mode !== 'design-variants') return 1;
-  return config.batchCount === 2 || config.batchCount === 4 ? config.batchCount : 4;
+  return config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8 ? config.batchCount : 4;
 }
 
-function resolveVariantStyles(config: Record<string, unknown>, batchCount: 1 | 2 | 4): string[] {
+function resolveVariantStyles(config: Record<string, unknown>, batchCount: 1 | 2 | 4 | 8): string[] {
   if (batchCount === 1) return ['modern-minimal'];
   const styles = Array.isArray(config.variantStyles)
     ? config.variantStyles.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
@@ -960,7 +985,7 @@ function resolveVariantStyles(config: Record<string, unknown>, batchCount: 1 | 2
   return resolved.slice(0, batchCount);
 }
 
-function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount: 1 | 2 | 4, style: string): string {
+function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount: 1 | 2 | 4 | 8, style: string): string {
   const strategy = job.config.variantStrategy === 'same-style' ? 'same-style' : 'style-matrix';
   const strength = job.config.strength === 'subtle' || job.config.strength === 'strong' ? job.config.strength : 'balanced';
   const customStyle = style === 'custom' && typeof job.config.customStyleLabel === 'string'
@@ -987,14 +1012,26 @@ function readVariantLabel(index: number): string {
   return `方案 ${String.fromCharCode(65 + index)}`;
 }
 
-function resolveVariantStartProgress(batchCount: 1 | 2 | 4, index: number): number {
-  if (batchCount === 1) return 28;
-  return index === 0 ? 20 : resolveVariantCompleteProgress(batchCount, index - 1);
+function readVariantCode(index: number): string {
+  return String.fromCharCode(65 + index);
 }
 
-function resolveVariantCompleteProgress(batchCount: 1 | 2 | 4, index: number): number {
+function resolveVariantName(config: Record<string, unknown>, index: number): string {
+  const names = Array.isArray(config.variantNames)
+    ? config.variantNames.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+  return names[index] || readVariantLabel(index);
+}
+
+function resolveVariantStartProgress(batchCount: 1 | 2 | 4 | 8, index: number): number {
+  if (batchCount === 1) return 28;
+  return index === 0 ? 15 : resolveVariantCompleteProgress(batchCount, index - 1);
+}
+
+function resolveVariantCompleteProgress(batchCount: 1 | 2 | 4 | 8, index: number): number {
   if (batchCount === 2) return index === 0 ? 60 : 90;
   if (batchCount === 4) return [40, 60, 80, 90][index] || 90;
+  if (batchCount === 8) return [25, 35, 45, 55, 65, 75, 84, 92][index] || 92;
   return 80;
 }
 
@@ -1005,6 +1042,10 @@ function buildProviderPromptForJob(job: GenerationJob): string {
 
   if (job.mode === 'material-replace') {
     return buildMaterialReplacePrompt(job);
+  }
+
+  if (job.mode === 'plan-colorize') {
+    return buildPlanColorizePrompt(job);
   }
 
   if (job.mode !== 'model-render') return job.prompt;
@@ -1047,6 +1088,46 @@ function buildMaterialReplacePrompt(job: GenerationJob): string {
         ? 'Change intensity: strong, but preserve the structure.'
         : 'Change intensity: balanced.',
     customMaterialPrompt ? `User note: ${customMaterialPrompt}` : undefined,
+  ];
+  return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+}
+
+const planColorizeBasePrompt = 'Transform the input black-and-white architectural plan into a clear colored presentation plan. Preserve the original walls, openings, layout, linework, proportions, and spatial relationships. Add professional architectural graphics, clean color fills, readable hierarchy, and presentation-quality details. Do not change the core plan geometry.';
+const planDrawingPrompts: Record<string, string> = {
+  residential: 'Plan type: residential interior plan.',
+  commercial: 'Plan type: commercial space plan.',
+  office: 'Plan type: office plan.',
+  hotel: 'Plan type: hotel or hospitality plan.',
+  landscape: 'Plan type: landscape plan.',
+  'site-plan': 'Plan type: site plan or masterplan.',
+  custom: 'Plan type: custom architectural drawing.',
+};
+const planTemplatePrompts: Record<string, string> = {
+  'zoning-color': 'Focus on functional zoning colors with clear room/area differentiation.',
+  'colored-plan': 'Create a polished colored floor plan with furniture, material fills, and clear visual hierarchy.',
+  'landscape-plan': 'Enhance paving, planting, lawn, water, circulation, and outdoor materials.',
+  'furniture-enhance': 'Clarify and enhance furniture, fixtures, and interior layout symbols.',
+  'annotation-plan': 'Add concise room labels and readable annotation style.',
+  'circulation-analysis': 'Add clear circulation arrows and movement hierarchy.',
+};
+
+function buildPlanColorizePrompt(job: GenerationJob): string {
+  const drawingType = typeof job.config.drawingType === 'string' ? job.config.drawingType : 'residential';
+  const template = typeof job.config.template === 'string' ? job.config.template : 'colored-plan';
+  const labels = readStringArray(job.config.manualRoomLabels);
+  const parts = [
+    planColorizeBasePrompt,
+    planDrawingPrompts[drawingType],
+    planTemplatePrompts[template],
+    job.config.enableZoningColor ? 'Use distinct but harmonious colors for different functional areas.' : undefined,
+    job.config.enableRoomLabels ? 'Add concise room or area labels where appropriate.' : undefined,
+    job.config.enableFurnitureEnhance ? 'Enhance furniture and fixture symbols while preserving layout.' : undefined,
+    job.config.enableCirculationArrows ? 'Add subtle circulation arrows without cluttering the plan.' : undefined,
+    job.config.enableScaleEnhance ? 'Improve scale readability with furniture, paving, texture, and line hierarchy.' : undefined,
+    job.config.enableLandscapeFill ? 'Add landscape fills such as planting, paving, lawn, water, and outdoor texture.' : undefined,
+    job.config.preserveLinework !== false ? 'Keep the original linework crisp and visible.' : undefined,
+    labels.length > 0 ? `Use these labels when appropriate: ${labels.join(', ')}.` : undefined,
+    typeof job.config.customPrompt === 'string' && job.config.customPrompt.trim().length > 0 ? `User note: ${job.config.customPrompt.trim()}` : undefined,
   ];
   return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
 }

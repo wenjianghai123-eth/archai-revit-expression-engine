@@ -195,6 +195,7 @@ function getPublicResultImages(generation: PublicShareGeneration): Array<{ id: s
 function modeLabel(mode: PublicShareGeneration['mode']): string {
   if (mode === 'floorplan') return '平面生成';
   if (mode === 'style-render') return '风格渲染';
+  if (mode === 'plan-colorize') return '图纸智能表达';
   if (mode === 'model-render') return '白模快渲';
   return '局部重绘';
 }

@@ -10,6 +10,7 @@ import { MaterialTexturesPanel, StyleSelectorPanel } from './workspace/Reference
 import { ResultPreviewPanel } from './workspace/ResultPreviewPanel';
 import { ModelSnapshotRenderPanel } from './ModelSnapshotRenderPanel';
 import { DesignVariantsPanel } from './DesignVariantsPanel';
+import { PlanColorizePanel } from './PlanColorizePanel';
 import { MaterialReplaceConfigPanel } from './MaterialReplaceConfigPanel';
 import { UploadErrors, UploadTarget, ViewModeOption } from './workspace/workspaceTypes';
 import { getUploadedImageSrc, isLocalInpaintingStep, maxFurnitureReferences, maxMaterialTextures, readGenerationStatusLabel } from './workspace/workspaceUtils';
@@ -31,6 +32,7 @@ interface WorkspaceProps {
   onCancelGeneration: () => void;
   onSelectGenerationResult: (resultId: string) => void;
   onToggleGenerationFavorite: (resultId: string) => void;
+  onRenameGenerationResult: (resultId: string, variantName: string) => void;
   onSetViewMode: (viewMode: StepState['viewMode']) => void;
   onNextStep: () => void;
   onReset: () => void;
@@ -54,6 +56,7 @@ export function MainWorkspace({
   onCancelGeneration,
   onSelectGenerationResult,
   onToggleGenerationFavorite,
+  onRenameGenerationResult,
   onSetViewMode,
   onNextStep,
   onReset,
@@ -73,6 +76,7 @@ export function MainWorkspace({
   const isStyleRenderStep = step === GenerationStep.StyleRender;
   const isModelSnapshotStep = step === GenerationStep.ModelSnapshotRender;
   const isDesignVariantsStep = step === GenerationStep.DesignVariants;
+  const isPlanColorizeStep = step === GenerationStep.PlanColorize;
   const isMaterialReplaceStep = step === GenerationStep.MaterialReplace;
   const materialReplaceEditMode = state.config.editMode === 'mask' ? 'mask' : 'smart-type';
   const hasMaterialReplaceTarget = Boolean(state.config.targetMaterial || state.materialTextures.length > 0 || (state.config.customMaterialPrompt || '').trim());
@@ -333,11 +337,51 @@ export function MainWorkspace({
           onGenerate={onGenerate}
           onSelectGenerationResult={onSelectGenerationResult}
           onToggleGenerationFavorite={onToggleGenerationFavorite}
+          onRenameGenerationResult={onRenameGenerationResult}
         />
         <GenerationStatusPanel
           step={step}
           state={state}
           title="方案变体结果"
+          statusLabel={statusLabel}
+          elapsedSeconds={elapsedSeconds}
+          canGenerate={canGenerate}
+          previewImage={previewImage}
+          originalImageUrl={originalImageUrl}
+          resultOptions={resultOptions}
+          selectedResultId={selectedResult?.id || null}
+          viewModeOptions={viewModeOptions}
+          topPanels={null}
+          onGenerate={onGenerate}
+          onRegenerate={onRegenerate}
+          onCancelGeneration={onCancelGeneration}
+          onSelectGenerationResult={onSelectGenerationResult}
+          onToggleGenerationFavorite={onToggleGenerationFavorite}
+          onSetViewMode={onSetViewMode}
+          onNextStep={onGenerate}
+          onReset={onReset}
+        />
+      </div>
+    );
+  }
+
+  if (isPlanColorizeStep) {
+    return (
+      <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">
+        <input ref={inputFileRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleFileSelected('input', event.currentTarget.files); event.currentTarget.value = ''; }} />
+        <PlanColorizePanel
+          state={state}
+          previewImage={previewImage}
+          uploadError={uploadErrors.input}
+          onUploadInput={() => handleUploadClick('input')}
+          onUpdateInputImage={onUpdateInputImage}
+          onUpdateConfig={onUpdateConfig}
+          onGenerate={onGenerate}
+        />
+        <GenerationStatusPanel
+          step={step}
+          state={state}
+          title="图纸智能表达结果"
           statusLabel={statusLabel}
           elapsedSeconds={elapsedSeconds}
           canGenerate={canGenerate}
@@ -367,6 +411,7 @@ export function MainWorkspace({
           state={state}
           onUpdateConfig={onUpdateConfig}
           onUpdateInputImage={onUpdateInputImage}
+          onGenerate={onGenerate}
         />
         <GenerationStatusPanel
           step={step}

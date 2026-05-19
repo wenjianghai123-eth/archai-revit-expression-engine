@@ -11,7 +11,7 @@ import {
   uploadImageAsset,
   type CreditBalance,
 } from '../lib/api';
-import { GenerationConfig, GenerationHistoryItem, GenerationMode, GenerationProvider, GenerationStep, StepState, UploadedImage } from '../types';
+import { GenerationConfig, GenerationHistoryItem, GenerationMode, GenerationProvider, GenerationStep, StepState, UploadedImage, VariantStyleKey } from '../types';
 
 interface UseGenerationRunnerOptions {
   currentStep: GenerationStep;
@@ -209,11 +209,13 @@ export function useGenerationRunner({
             ...configForRequest,
             ...targetSizeConfig,
             mode: generationMode,
-            batchCount: currentStep === GenerationStep.DesignVariants && (stateAtStart.config.batchCount === 2 || stateAtStart.config.batchCount === 4)
+            batchCount: currentStep === GenerationStep.DesignVariants && (stateAtStart.config.batchCount === 2 || stateAtStart.config.batchCount === 4 || stateAtStart.config.batchCount === 8)
               ? stateAtStart.config.batchCount
               : 1,
             variantStrategy: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.variantStrategy || 'style-matrix' : undefined,
+            stylePackId: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.stylePackId || 'interior-common' : undefined,
             variantStyles: currentStep === GenerationStep.DesignVariants ? resolveVariantStyles(stateAtStart.config) : undefined,
+            variantNames: currentStep === GenerationStep.DesignVariants ? resolveVariantNames(stateAtStart.config) : undefined,
             customStyleLabel: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.customStyleLabel : undefined,
             userPrompt: stateAtStart.config.prompt,
             editTarget: currentStep === GenerationStep.MaterialReplace
@@ -321,10 +323,13 @@ export function useGenerationRunner({
                 isFavorite: result.isFavorite,
                 createdAt: result.createdAt,
                 metadata: result.metadata,
-                variantIndex: currentStep === GenerationStep.DesignVariants ? index : undefined,
-                variantLabel: currentStep === GenerationStep.DesignVariants ? readVariantLabel(index) : undefined,
-                variantStyle: currentStep === GenerationStep.DesignVariants ? resolveVariantStyles(stateAtStart.config)[index] : undefined,
-                variantStyleLabel: currentStep === GenerationStep.DesignVariants ? readVariantStyleLabel(resolveVariantStyles(stateAtStart.config)[index]) : undefined,
+                variantIndex: currentStep === GenerationStep.DesignVariants ? readMetadataNumber(result.metadata, 'variantIndex') ?? index : undefined,
+                variantCode: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'variantCode') || readVariantCode(index) : undefined,
+                variantName: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'variantName') || resolveVariantNames(stateAtStart.config)[index] : undefined,
+                variantLabel: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'variantName') || readVariantLabel(index) : undefined,
+                variantStyle: currentStep === GenerationStep.DesignVariants ? readVariantStyle(readMetadataString(result.metadata, 'variantStyle') || resolveVariantStyles(stateAtStart.config)[index]) : undefined,
+                variantStyleLabel: currentStep === GenerationStep.DesignVariants ? readVariantStyleLabel(readMetadataString(result.metadata, 'variantStyle') || resolveVariantStyles(stateAtStart.config)[index]) : undefined,
+                stylePackId: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'stylePackId') || stateAtStart.config.stylePackId || 'interior-common' : undefined,
               }))
             : [{
                 id: latestJob.id,
@@ -618,13 +623,14 @@ function getGenerationRecordMode(step: GenerationStep): GenerationMode {
   if (step === GenerationStep.StyleRender) return 'style-render';
   if (step === GenerationStep.ModelSnapshotRender) return 'model-render';
   if (step === GenerationStep.DesignVariants) return 'design-variants';
+  if (step === GenerationStep.PlanColorize) return 'plan-colorize';
   if (step === GenerationStep.MaterialReplace) return 'material-replace';
   return 'inpaint';
 }
 
 function calculateGenerationCreditsCost(step: GenerationStep, config: GenerationConfig): number {
   const baseCost = step === GenerationStep.LocalInpainting || step === GenerationStep.MaterialReplace ? 8 : 10;
-  const batchCount = step === GenerationStep.DesignVariants && (config.batchCount === 2 || config.batchCount === 4)
+  const batchCount = step === GenerationStep.DesignVariants && (config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8)
     ? config.batchCount
     : 1;
   return baseCost * batchCount;
@@ -633,6 +639,10 @@ function calculateGenerationCreditsCost(step: GenerationStep, config: Generation
 function buildPromptForGeneration(step: GenerationStep, prompt: string, state?: StepState): string {
   if (step === GenerationStep.DesignVariants) {
     return prompt || state?.config.customPrompt || 'Design variants';
+  }
+
+  if (step === GenerationStep.PlanColorize) {
+    return prompt || state?.config.customPrompt || 'Plan colorize';
   }
 
   if (step === GenerationStep.ModelSnapshotRender && state) {
@@ -707,10 +717,12 @@ function forceSingleOutputConfig(config: GenerationConfig): GenerationConfig {
 }
 
 function resolveVariantStyles(config: GenerationConfig) {
-  const batchCount = config.batchCount === 2 ? 2 : 4;
+  const batchCount = config.batchCount === 2 || config.batchCount === 8 ? config.batchCount : 4;
   const defaults = batchCount === 2
     ? ['modern-minimal', 'natural-wood']
-    : ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'];
+    : batchCount === 8
+      ? ['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby']
+      : ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'];
   const styles = Array.isArray(config.variantStyles) ? [...config.variantStyles] : [];
   for (const style of defaults) {
     if (styles.length >= batchCount) break;
@@ -719,8 +731,33 @@ function resolveVariantStyles(config: GenerationConfig) {
   return styles.slice(0, batchCount);
 }
 
+function resolveVariantNames(config: GenerationConfig) {
+  const batchCount = config.batchCount === 2 || config.batchCount === 8 ? config.batchCount : 4;
+  const names = Array.isArray(config.variantNames) ? [...config.variantNames] : [];
+  return Array.from({ length: batchCount }, (_, index) => names[index] || readVariantLabel(index));
+}
+
 function readVariantLabel(index: number): string {
   return `方案 ${String.fromCharCode(65 + index)}`;
+}
+
+function readVariantCode(index: number): string {
+  return String.fromCharCode(65 + index);
+}
+
+function readVariantStyle(style: string | undefined): VariantStyleKey | undefined {
+  const allowed: VariantStyleKey[] = ['modern-minimal', 'wabi-sabi', 'cream-style', 'light-luxury', 'industrial', 'commercial-showroom', 'hotel-lobby', 'office-space', 'natural-wood', 'premium-gray', 'custom'];
+  return allowed.find(item => item === style);
+}
+
+function readMetadataString(metadata: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = metadata?.[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function readMetadataNumber(metadata: Record<string, unknown> | undefined, key: string): number | undefined {
+  const value = metadata?.[key];
+  return typeof value === 'number' ? value : undefined;
 }
 
 function readVariantStyleLabel(style: string | undefined): string | undefined {
@@ -743,6 +780,7 @@ function readVariantStyleLabel(style: string | undefined): string | undefined {
 
 function readHistoryStyle(step: GenerationStep, config: GenerationConfig): string {
   if (step === GenerationStep.FloorplanTo3D) return '彩平表达';
+  if (step === GenerationStep.PlanColorize) return config.template || '图纸智能表达';
   if (step === GenerationStep.ModelSnapshotRender) return config.renderStyle || config.style || '白模快渲';
   return config.style || '未设置风格';
 }

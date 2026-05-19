@@ -47,7 +47,7 @@ export interface GenerationRecord {
   userId: string;
   projectId: string;
   jobId?: string | null;
-  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace';
+  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize';
   prompt: string;
   inputImageUrl?: string | null;
   inputImageDataPreview?: string | null;
@@ -119,7 +119,7 @@ export interface GenerationJob {
   id: string;
   userId: string;
   projectId: string;
-  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace';
+  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize';
   prompt: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];
@@ -260,7 +260,7 @@ export interface AdminDashboard {
 
 export async function updateGenerationResult(
   id: string,
-  input: Partial<Pick<GenerationResult, 'isSelected' | 'isFavorite'>>,
+  input: Partial<Pick<GenerationResult, 'isSelected' | 'isFavorite' | 'metadata'>>,
 ): Promise<GenerationResult> {
   const response = await request<{ result: GenerationResult }>(`/api/generation-results/${encodeURIComponent(id)}`, {
     method: 'PATCH',
