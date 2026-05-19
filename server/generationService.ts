@@ -46,7 +46,7 @@ export function getGenerationProviderName(): ProviderName {
 }
 
 export function calculateGenerationCreditsCost(mode: GenerationRecord['mode'], config: Record<string, unknown>): number {
-  const baseCost = mode === 'inpaint' ? 8 : 10;
+  const baseCost = mode === 'inpaint' || mode === 'material-replace' ? 8 : 10;
   return baseCost * resolveBatchCountForJobConfig(mode, config);
 }
 
@@ -237,11 +237,19 @@ async function processGenerationJob(jobId: string): Promise<void> {
         isFavorite: false,
         metadata: job.mode === 'design-variants'
           ? {
+              ...(providerOutput.metadata || {}),
               variantIndex: index,
               variantLabel: readVariantLabel(index),
               variantStyle,
               batchCount,
             }
+          : job.mode === 'material-replace'
+            ? {
+                ...(providerOutput.metadata || {}),
+                mode: 'material-replace',
+                targetObjectType: typeof job.config.targetObjectType === 'string' ? job.config.targetObjectType : undefined,
+                targetMaterial: typeof job.config.targetMaterial === 'string' ? job.config.targetMaterial : undefined,
+              }
           : undefined,
       });
 
@@ -302,9 +310,13 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   imageDiagnostics: NonNullable<GenerationJobDiagnostics['images']>;
   localInpaint?: LocalInpaintContext;
 }> {
+  const materialReferenceAssetIds = Array.from(new Set([
+    ...readStringArray(job.config.materialTextureAssetIds),
+    ...readStringArray(job.config.materialReferenceAssetIds),
+  ]));
   const assetIds = Array.from(new Set([
     ...job.inputAssetIds,
-    ...readStringArray(job.config.materialTextureAssetIds),
+    ...materialReferenceAssetIds,
   ]));
   const imageDataUrls = await Promise.all(assetIds.map(assetId => getImageAssetDataUrl(assetId, job.userId)));
   const inputImageDataUrl = imageDataUrls[0];
@@ -312,7 +324,12 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     throw new Error('Input image asset was not found.');
   }
 
-  const materialReferenceImageDataUrls = await getOwnedAssetDataUrls(readStringArray(job.config.materialTextureAssetIds), job.userId, 3, 'material reference');
+  const ownedMaterialReferenceImageDataUrls = await getOwnedAssetDataUrls(materialReferenceAssetIds, job.userId, 3, 'material reference');
+  const publicMaterialReferenceImageDataUrls = await getMaterialTextureSourceDataUrls(job.config);
+  const materialReferenceImageDataUrls = [
+    ...ownedMaterialReferenceImageDataUrls,
+    ...publicMaterialReferenceImageDataUrls,
+  ].slice(0, 3);
   const furnitureReferenceImageDataUrls = await getOwnedAssetDataUrls(readStringArray(job.config.furnitureReferenceAssetIds), job.userId, 3, 'furniture reference');
   const additionalImageDataUrls = imageDataUrls.slice(1).filter(isNonEmptyString);
   const materialImageDataUrl = materialReferenceImageDataUrls[0] || additionalImageDataUrls[0];
@@ -321,7 +338,8 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     ...additionalImageDataUrls.slice(1).filter(url => !materialReferenceImageDataUrls.includes(url) && !furnitureReferenceImageDataUrls.includes(url)),
     ...floorplanTextureUrls,
   ];
-  const maskMode = job.mode === 'inpaint' && isMaskMode(job.config.maskMode) ? job.config.maskMode : undefined;
+  const isMaskedEditMode = job.mode === 'inpaint' || job.mode === 'material-replace';
+  const maskMode = isMaskedEditMode && isMaskMode(job.config.maskMode) ? job.config.maskMode : undefined;
   const maskAssetId = maskMode === 'asset-mask' && typeof job.config.maskAssetId === 'string' ? job.config.maskAssetId : null;
   const maskImageDataUrl = maskMode === 'full-image'
     ? createFullImageMaskDataUrl()
@@ -342,7 +360,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     targetWidth: targetDimensions.targetWidth,
     targetHeight: targetDimensions.targetHeight,
     targetAspectRatio: targetDimensions.targetAspectRatio,
-    editTarget: readEditTarget(job.config.editTarget),
+    editTarget: job.mode === 'material-replace' ? 'material' : readEditTarget(job.config.editTarget),
   };
 
   const localInpaint = await maybeCreateLocalInpaintContext(rawInput);
@@ -619,6 +637,10 @@ function resolveUploadUrlToPath(url: string): string {
 }
 
 async function getFloorplanTextureDataUrls(config: Record<string, unknown>): Promise<string[]> {
+  return getMaterialTextureSourceDataUrls(config);
+}
+
+async function getMaterialTextureSourceDataUrls(config: Record<string, unknown>): Promise<string[]> {
   const sources = Array.isArray(config.materialTextureSources) ? config.materialTextureSources : [];
   const urls = sources
     .map(source => isRecord(source) && typeof source.url === 'string' ? source.url : undefined)
@@ -629,7 +651,7 @@ async function getFloorplanTextureDataUrls(config: Record<string, unknown>): Pro
       const dataUrl = await readReferenceUrlAsProviderInput(url);
       if (dataUrl) dataUrls.push(dataUrl);
     } catch (error) {
-      console.warn('Unable to read floorplan texture reference; skipping it.', {
+      console.warn('Unable to read material texture reference; skipping it.', {
         url,
         error: error instanceof Error ? error.message : 'unknown error',
       });
@@ -878,6 +900,43 @@ const sameStyleVariantPrompts = [
 
 const designVariantBasePrompt = 'Create one distinct design variant from the input image. Preserve the original layout, structure, camera angle, perspective, and main proportions. Change the design through materials, colors, lighting, furniture, landscape, and atmosphere. Keep it realistic and suitable for architectural or interior presentation. Do not alter the core geometry.';
 
+const materialReplaceObjectLabels: Record<string, string> = {
+  floor: 'floor',
+  wall: 'wall',
+  ceiling: 'ceiling',
+  cabinet: 'cabinet',
+  sofa: 'sofa',
+  'table-chair': 'table and chairs',
+  lighting: 'lighting fixtures',
+  plant: 'plants or greenery',
+  'door-window': 'doors or windows',
+  'feature-wall': 'feature wall',
+  other: 'selected area',
+};
+
+const materialReplaceMaterialLabels: Record<string, string> = {
+  'light-wood': 'light wood finish',
+  'dark-wood': 'dark wood finish',
+  walnut: 'walnut wood finish',
+  microcement: 'microcement finish',
+  'rock-slab': 'sintered stone slab',
+  marble: 'marble finish',
+  terrazzo: 'terrazzo finish',
+  tile: 'ceramic tile finish',
+  leather: 'leather material',
+  fabric: 'fabric upholstery',
+  metal: 'metal finish',
+  glass: 'glass material',
+  'art-paint': 'artistic paint finish',
+  'linear-light': 'linear lighting',
+  'warm-light-strip': 'warm LED light strip',
+  plant: 'natural greenery',
+  custom: 'custom material described by the user',
+};
+
+const materialReplaceSmartPrompt = 'Replace the {targetObjectTypeLabel} area with {targetMaterialLabel}. Preserve the original layout, camera angle, perspective, geometry, lighting, shadows, and other non-target areas. Keep the result realistic and naturally integrated. Do not change the room structure or add unrelated objects.';
+const materialReplaceMaskPrompt = 'Edit only the masked area. Replace the selected {targetObjectTypeLabel} with {targetMaterialLabel}. Preserve the original layout, camera angle, perspective, geometry, lighting, shadows, and all unmasked areas. Keep the result realistic and naturally integrated. Do not change the room structure or add unrelated objects.';
+
 function resolveBatchCountForJob(job: GenerationJob): 1 | 2 | 4 {
   return resolveBatchCountForJobConfig(job.mode, job.config);
 }
@@ -944,6 +1003,10 @@ function buildProviderPromptForJob(job: GenerationJob): string {
     return buildDesignVariantPrompt(job, 0, resolveBatchCountForJob(job), resolveVariantStyles(job.config, resolveBatchCountForJob(job))[0] || 'modern-minimal');
   }
 
+  if (job.mode === 'material-replace') {
+    return buildMaterialReplacePrompt(job);
+  }
+
   if (job.mode !== 'model-render') return job.prompt;
 
   return [
@@ -958,6 +1021,34 @@ function buildProviderPromptForJob(job: GenerationJob): string {
     `Atmosphere: ${readConfigString(job.config.atmosphere, 'natural daylight')}.`,
     `Additional user instruction: ${readConfigString(job.config.customPrompt, job.prompt || 'none')}.`,
   ].join(' ');
+}
+
+function buildMaterialReplacePrompt(job: GenerationJob): string {
+  const targetObjectKey = typeof job.config.targetObjectType === 'string' ? job.config.targetObjectType.trim() : 'other';
+  const targetMaterialKey = typeof job.config.targetMaterial === 'string' ? job.config.targetMaterial.trim() : 'custom';
+  const targetObjectTypeLabel = materialReplaceObjectLabels[targetObjectKey] || materialReplaceObjectLabels.other;
+  const targetMaterialLabel = materialReplaceMaterialLabels[targetMaterialKey] || materialReplaceMaterialLabels.custom;
+  const strength = job.config.strength === 'subtle' || job.config.strength === 'strong' ? job.config.strength : 'balanced';
+  const editMode = job.config.editMode === 'mask' ? 'mask' : 'smart-type';
+  const hasMaterialReference = readStringArray(job.config.materialReferenceAssetIds).length > 0
+    || readStringArray(job.config.materialTextureAssetIds).length > 0;
+  const customMaterialPrompt = typeof job.config.customMaterialPrompt === 'string' ? job.config.customMaterialPrompt.trim() : '';
+  const basePrompt = editMode === 'mask' ? materialReplaceMaskPrompt : materialReplaceSmartPrompt;
+  const parts = [
+    basePrompt
+      .replace('{targetObjectTypeLabel}', targetObjectTypeLabel)
+      .replace('{targetMaterialLabel}', targetMaterialLabel),
+    hasMaterialReference
+      ? 'Use the material reference only for texture, color, finish, and material feeling. Do not copy its composition or objects.'
+      : undefined,
+    strength === 'subtle'
+      ? 'Change intensity: subtle.'
+      : strength === 'strong'
+        ? 'Change intensity: strong, but preserve the structure.'
+        : 'Change intensity: balanced.',
+    customMaterialPrompt ? `User note: ${customMaterialPrompt}` : undefined,
+  ];
+  return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
 }
 
 function readConfigString(value: unknown, fallback: string): string {

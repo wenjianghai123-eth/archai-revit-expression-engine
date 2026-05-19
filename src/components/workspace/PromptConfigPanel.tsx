@@ -47,7 +47,7 @@ export function PromptConfigPanel({
         ) : null}
       </div>
 
-      {isLocalInpaintingStep(step) ? (
+      {step === GenerationStep.LocalInpainting ? (
         <InpaintConfigControls config={config} onUpdateConfig={onUpdateConfig} />
       ) : null}
     </>

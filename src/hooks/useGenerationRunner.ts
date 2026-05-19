@@ -62,6 +62,18 @@ export function useGenerationRunner({
       return;
     }
 
+    if (currentStep === GenerationStep.MaterialReplace && !stateAtStart.inputImage) {
+      setStepStates(prev => ({
+        ...prev,
+        [currentStep]: {
+          ...prev[currentStep],
+          generationStatus: 'error',
+          generationError: '请先上传或选择一张图片。',
+        }
+      }));
+      return;
+    }
+
     if (!stateAtStart.inputImage) {
       setStepStates(prev => ({
         ...prev,
@@ -69,6 +81,52 @@ export function useGenerationRunner({
           ...prev[currentStep],
           generationStatus: 'error',
           generationError: currentStep === GenerationStep.ModelSnapshotRender ? '请先截取一个模型视角' : '请先上传图片后再生成预览。',
+        }
+      }));
+      return;
+    }
+
+    const materialReplaceEditMode = stateAtStart.config.editMode === 'mask' ? 'mask' : 'smart-type';
+    const hasMaterialReplaceTarget = Boolean(
+      stateAtStart.config.targetMaterial ||
+      stateAtStart.materialTextures.length > 0 ||
+      (stateAtStart.config.customMaterialPrompt || '').trim(),
+    );
+
+    if (currentStep === GenerationStep.MaterialReplace && materialReplaceEditMode === 'smart-type' && !stateAtStart.config.targetObjectType) {
+      setStepStates(prev => ({
+        ...prev,
+        [currentStep]: {
+          ...prev[currentStep],
+          generationStatus: 'error',
+          generationError: '请选择要替换的区域类型',
+        }
+      }));
+      return;
+    }
+
+    if (currentStep === GenerationStep.MaterialReplace && materialReplaceEditMode === 'mask' && !stateAtStart.maskImage?.dataUrl && !stateAtStart.useFullImageMask) {
+      setStepStates(prev => ({
+        ...prev,
+        [currentStep]: {
+          ...prev[currentStep],
+          generationStatus: 'error',
+          generationError: '请先选择需要替换的区域。',
+        }
+      }));
+      return;
+    }
+
+    if (
+      currentStep === GenerationStep.MaterialReplace &&
+      !hasMaterialReplaceTarget
+    ) {
+      setStepStates(prev => ({
+        ...prev,
+        [currentStep]: {
+          ...prev[currentStep],
+          generationStatus: 'error',
+          generationError: '请选择目标材质，或输入想要替换成什么效果。',
         }
       }));
       return;
@@ -128,14 +186,16 @@ export function useGenerationRunner({
         ]));
         let maskAssetId: string | undefined;
         const hasPaintedMask = Boolean(stateAtStart.maskImage?.dataUrl);
-        const maskMode = currentStep === GenerationStep.LocalInpainting
+        const isMaskedEditStep = currentStep === GenerationStep.LocalInpainting
+          || (currentStep === GenerationStep.MaterialReplace && materialReplaceEditMode === 'mask');
+        const maskMode = isMaskedEditStep
           ? stateAtStart.useFullImageMask
             ? 'full-image'
             : hasPaintedMask
               ? 'asset-mask'
               : undefined
           : undefined;
-        if (currentStep === GenerationStep.LocalInpainting && maskMode === 'asset-mask' && stateAtStart.maskImage?.dataUrl) {
+        if (isMaskedEditStep && maskMode === 'asset-mask' && stateAtStart.maskImage?.dataUrl) {
           const maskFile = dataUrlToFile(stateAtStart.maskImage.dataUrl, `archai-mask-${Date.now()}`);
           const maskAsset = await uploadImageAsset(maskFile, maskFile.name);
           maskAssetId = maskAsset.id;
@@ -156,13 +216,18 @@ export function useGenerationRunner({
             variantStyles: currentStep === GenerationStep.DesignVariants ? resolveVariantStyles(stateAtStart.config) : undefined,
             customStyleLabel: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.customStyleLabel : undefined,
             userPrompt: stateAtStart.config.prompt,
-            editTarget: currentStep === GenerationStep.LocalInpainting ? stateAtStart.config.editTarget || 'general' : stateAtStart.config.editTarget,
+            editTarget: currentStep === GenerationStep.MaterialReplace
+              ? 'material'
+              : currentStep === GenerationStep.LocalInpainting ? stateAtStart.config.editTarget || 'general' : stateAtStart.config.editTarget,
             strength: currentStep === GenerationStep.DesignVariants
               ? stateAtStart.config.strength || 'balanced'
+              : currentStep === GenerationStep.MaterialReplace
+                ? stateAtStart.config.strength || 'balanced'
               : stateAtStart.config.strength || stateAtStart.config.inpaintingStrength || 'medium',
             preserveStructure: Boolean(stateAtStart.config.preserveStructure ?? stateAtStart.config.keepOriginalMaterial),
             preserveCamera: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.preserveCamera ?? true : undefined,
             feather: stateAtStart.config.feather ?? 0,
+            editMode: currentStep === GenerationStep.MaterialReplace ? materialReplaceEditMode : undefined,
             maskMode,
             maskAssetId,
             sourceModelAssetId: stateAtStart.config.sourceModelAssetId,
@@ -174,8 +239,15 @@ export function useGenerationRunner({
             renderStyle: stateAtStart.config.renderStyle,
             atmosphere: stateAtStart.config.atmosphere,
             customPrompt: stateAtStart.config.customPrompt,
+            targetObjectType: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.targetObjectType : undefined,
+            targetMaterial: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.targetMaterial : undefined,
+            customMaterialPrompt: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.customMaterialPrompt : undefined,
+            preserveLighting: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.preserveLighting ?? true : undefined,
             preserveGeometry: stateAtStart.config.preserveGeometry ?? true,
             materialTextureAssetIds: stateAtStart.materialTextures
+              .map(texture => texture.assetId)
+              .filter((assetId): assetId is string => Boolean(assetId)),
+            materialReferenceAssetIds: stateAtStart.materialTextures
               .map(texture => texture.assetId)
               .filter((assetId): assetId is string => Boolean(assetId)),
             materialTextureSources: stateAtStart.materialTextures.map(texture => ({
@@ -183,6 +255,7 @@ export function useGenerationRunner({
               name: texture.name,
               url: texture.url,
               source: texture.source,
+              targetObjectType: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.targetObjectType : undefined,
             })),
             furnitureReferenceAssetIds,
             furnitureReferenceSources: stateAtStart.furnitureReferences.map(reference => ({
@@ -267,7 +340,7 @@ export function useGenerationRunner({
             id: latestJob.id,
             projectId: selectedProjectId,
             step: currentStep,
-            prompt: stateAtStart.config.prompt,
+            prompt: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.customMaterialPrompt || '' : stateAtStart.config.prompt,
             style: readHistoryStyle(currentStep, stateAtStart.config),
             createdAt: new Date(latestJob.finishedAt || latestJob.updatedAt).toLocaleString('zh-CN', { hour12: false }),
             provider: providerName || 'mock',
@@ -275,7 +348,9 @@ export function useGenerationRunner({
             inputImageUrl: stateAtStart.inputImage.url,
             inputImageDataPreview: stateAtStart.inputImage.url ? undefined : stateAtStart.inputImage.dataUrl,
             inputImageAssetId: stateAtStart.inputImage.assetId,
-            config: stateAtStart.config,
+            config: currentStep === GenerationStep.MaterialReplace
+              ? { ...stateAtStart.config, prompt: '', customMaterialPrompt: stateAtStart.config.customMaterialPrompt || '' }
+              : stateAtStart.config,
             editTarget: stateAtStart.config.editTarget,
             furnitureReferences: stateAtStart.furnitureReferences,
             generationResults,
@@ -409,6 +484,7 @@ export function useGenerationRunner({
           break;
 
         case GenerationStep.LocalInpainting:
+        case GenerationStep.MaterialReplace:
           response = await generateInpainting({
             inputImageDataUrl: stateAtStart.inputImage.dataUrl,
             maskImageDataUrl: stateAtStart.maskImage?.dataUrl,
@@ -438,7 +514,7 @@ export function useGenerationRunner({
         try {
           await createProjectGeneration(selectedProjectId, {
             mode: getGenerationRecordMode(currentStep),
-            prompt: stateAtStart.config.prompt,
+            prompt: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.customMaterialPrompt || '' : stateAtStart.config.prompt,
             inputImageUrl: stateAtStart.inputImage.url,
             inputImageDataPreview: stateAtStart.inputImage.url ? null : stateAtStart.inputImage.dataUrl,
             outputImageUrl,
@@ -460,7 +536,7 @@ export function useGenerationRunner({
           id: response.id,
           projectId: selectedProjectId,
           step: currentStep,
-          prompt: currentState.config.prompt,
+          prompt: currentStep === GenerationStep.MaterialReplace ? currentState.config.customMaterialPrompt || '' : currentState.config.prompt,
           style: readHistoryStyle(currentStep, currentState.config),
           createdAt: new Date(response.createdAt).toLocaleString('zh-CN', { hour12: false }),
           provider: response.provider,
@@ -468,7 +544,9 @@ export function useGenerationRunner({
           inputImageUrl: currentState.inputImage?.url,
           inputImageDataPreview: currentState.inputImage?.url ? undefined : currentState.inputImage?.dataUrl,
           inputImageAssetId: currentState.inputImage?.assetId,
-          config: currentState.config,
+          config: currentStep === GenerationStep.MaterialReplace
+            ? { ...currentState.config, prompt: '', customMaterialPrompt: currentState.config.customMaterialPrompt || '' }
+            : currentState.config,
           editTarget: currentState.config.editTarget,
           furnitureReferences: currentState.furnitureReferences,
           inputImageName: currentState.inputImage?.name,
@@ -540,11 +618,12 @@ function getGenerationRecordMode(step: GenerationStep): GenerationMode {
   if (step === GenerationStep.StyleRender) return 'style-render';
   if (step === GenerationStep.ModelSnapshotRender) return 'model-render';
   if (step === GenerationStep.DesignVariants) return 'design-variants';
+  if (step === GenerationStep.MaterialReplace) return 'material-replace';
   return 'inpaint';
 }
 
 function calculateGenerationCreditsCost(step: GenerationStep, config: GenerationConfig): number {
-  const baseCost = step === GenerationStep.LocalInpainting ? 8 : 10;
+  const baseCost = step === GenerationStep.LocalInpainting || step === GenerationStep.MaterialReplace ? 8 : 10;
   const batchCount = step === GenerationStep.DesignVariants && (config.batchCount === 2 || config.batchCount === 4)
     ? config.batchCount
     : 1;
@@ -558,6 +637,10 @@ function buildPromptForGeneration(step: GenerationStep, prompt: string, state?: 
 
   if (step === GenerationStep.ModelSnapshotRender && state) {
     return buildModelRenderPrompt(state.config);
+  }
+
+  if (step === GenerationStep.MaterialReplace && state) {
+    return state.config.customMaterialPrompt || 'Material replacement';
   }
 
   if (step === GenerationStep.FloorplanTo3D) {

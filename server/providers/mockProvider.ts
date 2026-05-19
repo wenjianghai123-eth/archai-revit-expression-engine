@@ -19,13 +19,13 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
     warnings.push('未提供参考材质图，mock 结果使用默认材质语义。');
   }
 
-  if (input.mode === 'inpaint' && input.maskMode === 'full-image') {
+  if ((input.mode === 'inpaint' || input.mode === 'material-replace') && input.maskMode === 'full-image') {
     warnings.push('Mock inpaint 已明确使用整图重绘 mask。');
-  } else if (input.mode === 'inpaint' && !input.maskImageDataUrl) {
+  } else if ((input.mode === 'inpaint' || input.mode === 'material-replace') && !input.maskImageDataUrl) {
     warnings.push('未提供 maskImageDataUrl，mock 结果未进行真实局部区域约束。');
   }
 
-  if (input.mode === 'inpaint' && input.maskImageDataUrl) {
+  if ((input.mode === 'inpaint' || input.mode === 'material-replace') && input.maskImageDataUrl) {
     warnings.push('Mock inpaint 已接收 maskImageDataUrl，仅用于开发占位，不代表真实局部重绘能力。');
   }
 
@@ -51,7 +51,7 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
 }
 
 function createMockImageDataUrl(
-  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants',
+  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace',
   prompt: string,
   createdAt: string,
   size: { width: number; height: number },
@@ -62,6 +62,7 @@ function createMockImageDataUrl(
     inpaint: 'Mock Inpaint Generation',
     'model-render': 'Mock Model Snapshot Render',
     'design-variants': 'Mock Design Variant',
+    'material-replace': 'Mock Material Replace',
   }[mode];
   const promptPreview = prompt.length > 90 ? `${prompt.slice(0, 90)}...` : prompt;
   const svg = `
@@ -74,7 +75,7 @@ function createMockImageDataUrl(
       </defs>
       <rect width="${size.width}" height="${size.height}" fill="url(#bg)"/>
       <rect x="${size.width * 0.08}" y="${size.height * 0.12}" width="${size.width * 0.84}" height="${size.height * 0.76}" rx="18" fill="#ffffff" opacity="0.82"/>
-      ${mode === 'inpaint' ? '<rect x="360" y="310" width="480" height="230" rx="28" fill="#fb7185" opacity="0.28"/><rect x="380" y="330" width="440" height="190" rx="22" fill="none" stroke="#be123c" stroke-width="8" stroke-dasharray="18 14"/>' : ''}
+      ${mode === 'inpaint' || mode === 'material-replace' ? '<rect x="360" y="310" width="480" height="230" rx="28" fill="#fb7185" opacity="0.28"/><rect x="380" y="330" width="440" height="190" rx="22" fill="none" stroke="#be123c" stroke-width="8" stroke-dasharray="18 14"/>' : ''}
       <path d="M220 560 L360 360 L520 480 L680 260 L980 560 Z" fill="#2563eb" opacity="0.18"/>
       <path d="M220 560 L360 360 L520 480 L680 260 L980 560" fill="none" stroke="#2563eb" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
       <text x="140" y="180" fill="#0f172a" font-family="Arial, sans-serif" font-size="44" font-weight="700">${escapeSvg(title)}</text>

@@ -1,4 +1,5 @@
 import { buildApiUrl } from '../lib/apiBaseUrl';
+import { parseApiResponse } from '../lib/apiResponse';
 import { GenerationConfig, GenerationProvider } from '../types';
 
 interface GenerationRequest {
@@ -43,24 +44,29 @@ async function postGeneration(endpoint: string, request: GenerationRequest): Pro
     throw new Error('无法连接后端服务，请确认后端服务已启动，并检查 VITE_API_BASE_URL 是否指向后端域名。');
   }
 
-  if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
-  }
+  const body = await parseApiResponse<unknown>(response);
 
-  return parseGenerationResponse(await response.json());
-}
-
-async function readErrorMessage(response: Response): Promise<string> {
-  try {
-    const body = await response.json();
-    if (isRecord(body) && typeof body.error === 'string') {
-      return body.error;
+  if (body === null) {
+    if (response.ok) {
+      throw new Error(`生成服务返回空响应。status=${response.status}`);
     }
-  } catch {
-    // Fall through to the generic message below.
+
+    throw new Error(`生成请求失败（HTTP ${response.status}）。`);
   }
 
-  return `生成请求失败（HTTP ${response.status}）。`;
+  if (!response.ok) {
+    if (isRecord(body) && typeof body.error === 'string') {
+      throw new Error(body.error);
+    }
+
+    if (isRecord(body) && isRecord(body.error) && typeof body.error.message === 'string') {
+      throw new Error(body.error.message);
+    }
+
+    throw new Error(`生成请求失败（HTTP ${response.status}）。`);
+  }
+
+  return parseGenerationResponse(body);
 }
 
 function parseGenerationResponse(value: unknown): GenerationResponse {

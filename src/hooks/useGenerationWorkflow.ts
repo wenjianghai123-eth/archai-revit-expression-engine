@@ -40,6 +40,7 @@ function createInitialStepStates(): Record<GenerationStep, StepState> {
     [GenerationStep.LocalInpainting]: createInitialStepState(GenerationStep.LocalInpainting),
     [GenerationStep.ModelSnapshotRender]: createInitialStepState(GenerationStep.ModelSnapshotRender),
     [GenerationStep.DesignVariants]: createInitialStepState(GenerationStep.DesignVariants),
+    [GenerationStep.MaterialReplace]: createInitialStepState(GenerationStep.MaterialReplace),
   };
 }
 
@@ -181,6 +182,8 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
             ? GenerationStep.DesignVariants
           : template.feature === 'model-render'
             ? GenerationStep.ModelSnapshotRender
+            : template.feature === 'material-replace'
+              ? GenerationStep.MaterialReplace
             : GenerationStep.LocalInpainting;
 
     const nextConfig = targetStep === GenerationStep.FloorplanTo3D

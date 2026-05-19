@@ -1188,6 +1188,9 @@ const defaultVariantStylesByCount: Record<2 | 4, string[]> = {
   4: ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'],
 };
 
+const materialReplaceObjectTypes = new Set(['floor', 'wall', 'ceiling', 'cabinet', 'sofa', 'table-chair', 'lighting', 'plant', 'door-window', 'feature-wall', 'other']);
+const materialReplaceMaterials = new Set(['light-wood', 'dark-wood', 'walnut', 'microcement', 'rock-slab', 'marble', 'terrazzo', 'tile', 'leather', 'fabric', 'metal', 'glass', 'art-paint', 'linear-light', 'warm-light-strip', 'plant', 'custom']);
+
 function normalizeDesignVariantConfig(
   mode: GenerationRecord['mode'],
   config: Record<string, unknown>,
@@ -1205,7 +1208,7 @@ function normalizeDesignVariantConfig(
     return {
       ok: false,
       error: {
-        message: 'batchCount must be 2 or 4 for design-variants jobs.',
+        message: '方案数量只能为 2 或 4',
         code: 'GENERATION_JOB_BATCH_COUNT_INVALID',
       },
     };
@@ -1245,6 +1248,75 @@ function normalizeDesignVariantConfig(
   return { ok: true };
 }
 
+function normalizeMaterialReplaceConfig(
+  mode: GenerationRecord['mode'],
+  config: Record<string, unknown>,
+): { ok: true } | { ok: false; error: ApiError } {
+  if (mode !== 'material-replace') {
+    delete config.targetObjectType;
+    delete config.targetMaterial;
+    delete config.customMaterialPrompt;
+    delete config.materialReferenceAssetIds;
+    delete config.preserveLighting;
+    return { ok: true };
+  }
+
+  config.batchCount = 1;
+  config.editTarget = 'material';
+  config.editMode = config.editMode === 'mask' ? 'mask' : 'smart-type';
+  config.preserveLighting = config.preserveLighting !== false;
+  config.preserveGeometry = config.preserveGeometry !== false;
+  config.preserveStructure = config.preserveStructure !== false;
+  config.strength = config.strength === 'subtle' || config.strength === 'strong' ? config.strength : 'balanced';
+
+  if (config.targetObjectType === undefined || config.targetObjectType === null || config.targetObjectType === '') {
+    delete config.targetObjectType;
+  } else if (typeof config.targetObjectType !== 'string' || !materialReplaceObjectTypes.has(config.targetObjectType)) {
+    return { ok: false, error: { message: 'targetObjectType is invalid.', code: 'GENERATION_JOB_MATERIAL_TARGET_OBJECT_INVALID' } };
+  }
+
+  if (config.targetMaterial !== undefined && config.targetMaterial !== null && config.targetMaterial !== '') {
+    if (typeof config.targetMaterial !== 'string' || !materialReplaceMaterials.has(config.targetMaterial)) {
+      return { ok: false, error: { message: 'targetMaterial is invalid.', code: 'GENERATION_JOB_MATERIAL_TARGET_INVALID' } };
+    }
+  } else {
+    delete config.targetMaterial;
+  }
+
+  if (typeof config.customMaterialPrompt === 'string' && config.customMaterialPrompt.trim().length > 0) {
+    config.customMaterialPrompt = config.customMaterialPrompt.trim();
+  } else {
+    delete config.customMaterialPrompt;
+  }
+
+  const materialReferenceAssetIds = readStringArray(config.materialReferenceAssetIds);
+  if (config.editMode === 'smart-type' && !config.targetObjectType) {
+    return {
+      ok: false,
+      error: {
+        message: '请选择要替换的区域类型',
+        code: 'GENERATION_JOB_MATERIAL_TARGET_OBJECT_REQUIRED',
+      },
+    };
+  }
+
+  if (!config.targetMaterial && materialReferenceAssetIds.length === 0 && !config.customMaterialPrompt) {
+    return {
+      ok: false,
+      error: {
+        message: '请选择目标材质、上传贴图，或输入替换描述',
+        code: 'GENERATION_JOB_MATERIAL_TARGET_REQUIRED',
+      },
+    };
+  }
+
+  if (config.materialReferenceAssetIds !== undefined && !isStringArrayWithLimit(config.materialReferenceAssetIds, 3)) {
+    return { ok: false, error: { message: 'materialReferenceAssetIds must contain at most 3 asset ids.', code: 'GENERATION_JOB_MATERIAL_REFERENCES_INVALID' } };
+  }
+
+  return { ok: true };
+}
+
 function resolveChargedOutputCount(mode: GenerationRecord['mode'], config: Record<string, unknown>): number {
   return mode === 'design-variants' && (config.batchCount === 2 || config.batchCount === 4) ? config.batchCount : 1;
 }
@@ -1277,13 +1349,47 @@ function validateGenerationJobCreateBody(
     body.inputAssetIds.length === 0 ||
     !body.inputAssetIds.every(item => typeof item === 'string' && item.trim().length > 0)
   ) {
-    return { ok: false, error: { message: 'inputAssetIds must contain at least one asset id.', code: 'GENERATION_JOB_INPUTS_INVALID' } };
+    return {
+      ok: false,
+      error: {
+        message: body.mode === 'design-variants'
+          ? '请先上传或选择参考图'
+          : 'inputAssetIds must contain at least one asset id.',
+        code: 'GENERATION_JOB_INPUTS_INVALID',
+      },
+    };
   }
 
   const config: Record<string, unknown> = { ...body.config };
+  if (config.sourceImageAssetId === undefined && isNonEmptyString(body.sourceImageAssetId)) {
+    config.sourceImageAssetId = body.sourceImageAssetId.trim();
+  }
+  if (config.maskAssetId === undefined && isNonEmptyString(body.maskAssetId)) {
+    config.maskAssetId = body.maskAssetId.trim();
+  }
+  if (config.maskMode === undefined && isMaskMode(body.maskMode)) {
+    config.maskMode = body.maskMode;
+  }
+  if (config.maskMode === undefined && isNonEmptyString(config.maskAssetId)) {
+    config.maskMode = 'asset-mask';
+  }
+  if (config.materialReferenceAssetIds === undefined && Array.isArray(body.materialReferenceAssetIds)) {
+    config.materialReferenceAssetIds = body.materialReferenceAssetIds;
+  }
+  if (body.mode === 'material-replace') {
+    const sourceImageAssetId = typeof config.sourceImageAssetId === 'string' ? config.sourceImageAssetId.trim() : '';
+    if (!sourceImageAssetId || !body.inputAssetIds.includes(sourceImageAssetId)) {
+      return { ok: false, error: { message: '请先上传或选择一张图片。', code: 'GENERATION_JOB_SOURCE_IMAGE_REQUIRED' } };
+    }
+    config.sourceImageAssetId = sourceImageAssetId;
+  }
   const variantConfig = normalizeDesignVariantConfig(body.mode, config);
   if (variantConfig.ok === false) {
     return { ok: false, error: variantConfig.error };
+  }
+  const materialReplaceConfig = normalizeMaterialReplaceConfig(body.mode, config);
+  if (materialReplaceConfig.ok === false) {
+    return { ok: false, error: materialReplaceConfig.error };
   }
   if (body.mode === 'model-render') {
     if (!isNonEmptyString(config.sourceImageAssetId) && !isNonEmptyString(config.snapshotAssetId)) {
@@ -1310,8 +1416,21 @@ function validateGenerationJobCreateBody(
   if (config.materialTextureAssetIds !== undefined && !isStringArrayWithLimit(config.materialTextureAssetIds, 3)) {
     return { ok: false, error: { message: 'materialTextureAssetIds must contain at most 3 asset ids.', code: 'GENERATION_JOB_MATERIAL_REFERENCES_INVALID' } };
   }
-  if (body.mode === 'inpaint') {
+  if (config.materialReferenceAssetIds !== undefined && !isStringArrayWithLimit(config.materialReferenceAssetIds, 3)) {
+    return { ok: false, error: { message: 'materialReferenceAssetIds must contain at most 3 asset ids.', code: 'GENERATION_JOB_MATERIAL_REFERENCES_INVALID' } };
+  }
+  if (body.mode === 'material-replace') {
+    const sourceImageAssetId = typeof config.sourceImageAssetId === 'string' ? config.sourceImageAssetId.trim() : '';
+    if (!sourceImageAssetId || !body.inputAssetIds.includes(sourceImageAssetId)) {
+      return { ok: false, error: { message: '请先上传或选择一张图片。', code: 'GENERATION_JOB_SOURCE_IMAGE_REQUIRED' } };
+    }
+    config.sourceImageAssetId = sourceImageAssetId;
+  }
+  if (body.mode === 'inpaint' || body.mode === 'material-replace') {
     if (config.maskMode === undefined || config.maskMode === null || config.maskMode === '') {
+      if (body.mode === 'material-replace' && config.editMode === 'mask') {
+        return { ok: false, error: { message: '精细涂抹模式下请先选择需要替换的区域', code: 'GENERATION_JOB_MASK_REQUIRED' } };
+      }
       delete config.maskMode;
       delete config.maskAssetId;
     } else {
@@ -1319,7 +1438,7 @@ function validateGenerationJobCreateBody(
         return {
           ok: false,
           error: {
-            message: 'maskMode must be asset-mask or full-image when provided for inpaint jobs.',
+            message: 'maskMode must be asset-mask or full-image when provided for masked edit jobs.',
             code: 'GENERATION_JOB_MASK_MODE_INVALID',
           },
         };
@@ -1443,7 +1562,7 @@ function isNullableString(value: unknown): value is string | null {
 }
 
 function isGenerationMode(value: unknown): value is GenerationRecord['mode'] {
-  return value === 'floorplan' || value === 'style-render' || value === 'inpaint' || value === 'model-render' || value === 'design-variants';
+  return value === 'floorplan' || value === 'style-render' || value === 'inpaint' || value === 'model-render' || value === 'design-variants' || value === 'material-replace';
 }
 
 function isGenerationStatus(value: unknown): value is GenerationRecord['status'] {
@@ -1483,6 +1602,7 @@ async function validateGenerationJobAssets(
 
   for (const assetId of [
     ...readStringArray(config.materialTextureAssetIds),
+    ...readStringArray(config.materialReferenceAssetIds),
     ...readStringArray(config.furnitureReferenceAssetIds),
   ]) {
     const asset = await getImageAsset(assetId, userId);
@@ -1497,7 +1617,7 @@ async function validateGenerationJobAssets(
     }
   }
 
-  const maskAssetId = mode === 'inpaint' && config.maskMode === 'asset-mask' && typeof config.maskAssetId === 'string'
+  const maskAssetId = (mode === 'inpaint' || mode === 'material-replace') && config.maskMode === 'asset-mask' && typeof config.maskAssetId === 'string'
     ? config.maskAssetId.trim()
     : '';
   if (maskAssetId.length > 0) {
@@ -1508,6 +1628,19 @@ async function validateGenerationJobAssets(
         error: {
           message: 'Mask image asset not found.',
           code: 'GENERATION_JOB_MASK_ASSET_NOT_FOUND',
+        },
+      };
+    }
+  }
+
+  if (mode === 'material-replace') {
+    const sourceImageAssetId = typeof config.sourceImageAssetId === 'string' ? config.sourceImageAssetId.trim() : '';
+    if (!sourceImageAssetId || !inputAssetIds.includes(sourceImageAssetId)) {
+      return {
+        ok: false,
+        error: {
+          message: 'Source image asset is required for material-replace.',
+          code: 'GENERATION_JOB_SOURCE_IMAGE_NOT_FOUND',
         },
       };
     }
@@ -1598,4 +1731,3 @@ function isEmailString(value: unknown): value is string {
 function readNonNegativeInteger(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : fallback;
 }
-

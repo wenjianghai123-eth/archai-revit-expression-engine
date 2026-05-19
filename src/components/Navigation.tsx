@@ -190,6 +190,13 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
       image: 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&q=80&w=600',
     },
     {
+      id: GenerationStep.MaterialReplace,
+      title: '材质软装替换',
+      desc: '选择局部区域，替换地面、墙面、家具、灯光或材质',
+      icon: Layers,
+      image: 'https://images.unsplash.com/photo-1600566752355-35792bedcfea?auto=format&fit=crop&q=80&w=600',
+    },
+    {
       id: GenerationStep.DesignVariants,
       title: '方案变体',
       desc: '一次生成多种设计方向，快速对比方案',
@@ -228,7 +235,7 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
         </div>
       </div>
 
-      <div className="grid gap-3 px-4 pb-3 md:grid-cols-5 md:px-5">
+      <div className="grid gap-3 px-4 pb-3 md:grid-cols-3 xl:grid-cols-6 md:px-5">
         {steps.map((step) => {
           const isActive = currentStep === step.id;
           const Icon = step.icon;

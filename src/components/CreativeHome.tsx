@@ -42,6 +42,15 @@ const toolCards = [
     image: 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&q=80&w=900',
   },
   {
+    step: GenerationStep.MaterialReplace,
+    title: '材质软装替换',
+    desc: '选择局部区域，替换地面、墙面、家具、灯光或材质。',
+    input: '输入：效果图 + mask + 材质',
+    output: '输出：局部替换效果图',
+    icon: Layers,
+    image: 'https://images.unsplash.com/photo-1600566752355-35792bedcfea?auto=format&fit=crop&q=80&w=900',
+  },
+  {
     step: GenerationStep.DesignVariants,
     title: '方案变体',
     desc: '一次生成多种设计方向，快速对比方案',

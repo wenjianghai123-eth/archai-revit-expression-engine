@@ -151,6 +151,238 @@ describe('POST /api/generation-jobs asset ownership', () => {
     });
   });
 
+  it('creates a material-replace job with mask, target material, and material references', async () => {
+    const originalBalance = await storage.getCreditBalance(DEV_AUTH_USER_ID);
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Material replace project' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const maskAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const materialAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          sourceImageAssetId: sourceAsset.id,
+          maskMode: 'asset-mask',
+          maskAssetId: maskAsset.id,
+          targetObjectType: 'floor',
+          targetMaterial: 'light-wood',
+          materialReferenceAssetIds: [materialAsset.id],
+          preserveLighting: true,
+          preserveGeometry: true,
+          strength: 'balanced',
+        },
+        inputAssetIds: [sourceAsset.id, materialAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job).toMatchObject({
+      mode: 'material-replace',
+      inputAssetIds: [sourceAsset.id, materialAsset.id],
+      config: {
+        batchCount: 1,
+        editTarget: 'material',
+        sourceImageAssetId: sourceAsset.id,
+        maskMode: 'asset-mask',
+        maskAssetId: maskAsset.id,
+        targetObjectType: 'floor',
+        targetMaterial: 'light-wood',
+        materialReferenceAssetIds: [materialAsset.id],
+        preserveLighting: true,
+        preserveGeometry: true,
+        strength: 'balanced',
+      },
+    });
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 8);
+  });
+
+  it('creates a material-replace smart-type job without a mask', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Material replace smart type' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          editMode: 'smart-type',
+          sourceImageAssetId: sourceAsset.id,
+          targetObjectType: 'floor',
+          targetMaterial: 'dark-wood',
+          preserveLighting: true,
+          preserveGeometry: true,
+          strength: 'balanced',
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job).toMatchObject({
+      mode: 'material-replace',
+      config: {
+        editMode: 'smart-type',
+        sourceImageAssetId: sourceAsset.id,
+        targetObjectType: 'floor',
+        targetMaterial: 'dark-wood',
+      },
+    });
+    expect(response.body.data.job.config).not.toHaveProperty('maskMode');
+    expect(response.body.data.job.config).not.toHaveProperty('maskAssetId');
+  });
+
+  it('accepts material-replace with legacy top-level maskAssetId payload shape', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Material replace top-level mask' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const maskAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        sourceImageAssetId: sourceAsset.id,
+        maskAssetId: maskAsset.id,
+        config: {
+          targetObjectType: 'floor',
+          targetMaterial: 'microcement',
+          materialReferenceAssetIds: [],
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job).toMatchObject({
+      mode: 'material-replace',
+      config: {
+        sourceImageAssetId: sourceAsset.id,
+        maskMode: 'asset-mask',
+        maskAssetId: maskAsset.id,
+        targetMaterial: 'microcement',
+      },
+    });
+  });
+
+  it('returns a concrete validation error instead of invalid mode for material-replace', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Material replace concrete error' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          editMode: 'mask',
+          sourceImageAssetId: sourceAsset.id,
+          targetMaterial: 'microcement',
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('GENERATION_JOB_MASK_REQUIRED');
+    expect(response.body.error.message).toBe('精细涂抹模式下请先选择需要替换的区域');
+  });
+
+  it('rejects smart-type material-replace without target object type', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Material replace missing smart object' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          editMode: 'smart-type',
+          sourceImageAssetId: sourceAsset.id,
+          targetMaterial: 'microcement',
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('GENERATION_JOB_MATERIAL_TARGET_OBJECT_REQUIRED');
+  });
+
+  it('rejects material-replace without source image, mask, or target material prompt', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Invalid material replace project' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const maskAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const missingSource = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: { maskMode: 'asset-mask', maskAssetId: maskAsset.id, targetMaterial: 'light-wood' },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    const missingMask = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: { editMode: 'mask', sourceImageAssetId: sourceAsset.id, targetMaterial: 'light-wood' },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    const missingTarget = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: { sourceImageAssetId: sourceAsset.id, targetObjectType: 'floor', maskMode: 'asset-mask', maskAssetId: maskAsset.id },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(missingSource.status).toBe(400);
+    expect(missingSource.body.error.code).toBe('GENERATION_JOB_SOURCE_IMAGE_REQUIRED');
+    expect(missingMask.status).toBe(400);
+    expect(missingMask.body.error.code).toBe('GENERATION_JOB_MASK_REQUIRED');
+    expect(missingTarget.status).toBe(400);
+    expect(missingTarget.body.error.code).toBe('GENERATION_JOB_MATERIAL_TARGET_REQUIRED');
+  });
+
+  it('rejects another user material reference for material-replace', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Material reference ownership' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const maskAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const otherMaterialAsset = await createImageAssetForUser('other-user');
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          sourceImageAssetId: sourceAsset.id,
+          maskMode: 'asset-mask',
+          maskAssetId: maskAsset.id,
+          targetObjectType: 'floor',
+          targetMaterial: 'light-wood',
+          materialReferenceAssetIds: [otherMaterialAsset.id],
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe('GENERATION_JOB_REFERENCE_ASSET_NOT_FOUND');
+  });
+
   it('creates a model-render generation job with snapshot and source model metadata', async () => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Model render project' });
     const snapshotAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
@@ -581,6 +813,29 @@ describe('generation job credits', () => {
     });
   });
 
+  it('rejects design-variants jobs without input asset ids', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Missing variant reference' });
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'design-variants',
+        prompt: '',
+        config: { batchCount: 4, variantStrategy: 'style-matrix' },
+        inputAssetIds: [],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: {
+        code: 'GENERATION_JOB_INPUTS_INVALID',
+        message: '请先上传或选择参考图',
+      },
+    });
+  });
+
   it('generates and saves all design-variants results sequentially with mock provider', async () => {
     const originalWorkerDisabled = process.env.ARCHAI_DISABLE_GENERATION_WORKER;
     process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'false';
@@ -620,6 +875,102 @@ describe('generation job credits', () => {
       expect(results[0]).toMatchObject({ isSelected: true, isFavorite: false });
       expect(results[1]).toMatchObject({ isSelected: false, isFavorite: false });
       expect(results.map(result => result.metadata?.variantStyle)).toEqual(['modern-minimal', 'natural-wood']);
+    } finally {
+      process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
+    }
+  });
+
+  it('generates material-replace with mock provider and saves one selected result', async () => {
+    const originalWorkerDisabled = process.env.ARCHAI_DISABLE_GENERATION_WORKER;
+    process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'false';
+
+    try {
+      const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Material replace worker project' });
+      const sourceAsset = await storage.createImageAsset({
+        userId: DEV_AUTH_USER_ID,
+        url: `data:image/png;base64,${validOnePixelPng.toString('base64')}`,
+        filename: 'material-input.png',
+        mimeType: 'image/png',
+        size: validOnePixelPng.length,
+      });
+      const maskAsset = await storage.createImageAsset({
+        userId: DEV_AUTH_USER_ID,
+        url: `data:image/png;base64,${validOnePixelPng.toString('base64')}`,
+        filename: 'material-mask.png',
+        mimeType: 'image/png',
+        size: validOnePixelPng.length,
+      });
+
+      const response = await request(app)
+        .post('/api/generation-jobs')
+        .send({
+          projectId: project.id,
+          mode: 'material-replace',
+          prompt: '',
+          config: {
+            editMode: 'mask',
+            sourceImageAssetId: sourceAsset.id,
+            maskMode: 'asset-mask',
+            maskAssetId: maskAsset.id,
+            targetObjectType: 'wall',
+            targetMaterial: 'microcement',
+            customMaterialPrompt: 'Use a calm warm gray finish.',
+          },
+          inputAssetIds: [sourceAsset.id],
+        });
+
+      expect(response.status).toBe(201);
+      const job = await waitForGenerationJob(response.body.data.job.id, 'succeeded');
+      const results = await storage.listGenerationResults(job.id, DEV_AUTH_USER_ID);
+
+      expect(job.mode).toBe('material-replace');
+      expect(job.outputAssetIds).toHaveLength(1);
+      expect(job.outputAssetId).toBe(job.outputAssetIds?.[0]);
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({ isSelected: true, isFavorite: false });
+      expect(results[0].metadata?.mode).toBe('material-replace');
+    } finally {
+      process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
+    }
+  });
+
+  it('generates smart-type material-replace without mask using mock provider', async () => {
+    const originalWorkerDisabled = process.env.ARCHAI_DISABLE_GENERATION_WORKER;
+    process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'false';
+
+    try {
+      const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Smart material replace worker project' });
+      const sourceAsset = await storage.createImageAsset({
+        userId: DEV_AUTH_USER_ID,
+        url: `data:image/png;base64,${validOnePixelPng.toString('base64')}`,
+        filename: 'smart-material-input.png',
+        mimeType: 'image/png',
+        size: validOnePixelPng.length,
+      });
+
+      const response = await request(app)
+        .post('/api/generation-jobs')
+        .send({
+          projectId: project.id,
+          mode: 'material-replace',
+          prompt: '',
+          config: {
+            editMode: 'smart-type',
+            sourceImageAssetId: sourceAsset.id,
+            targetObjectType: 'floor',
+            targetMaterial: 'dark-wood',
+          },
+          inputAssetIds: [sourceAsset.id],
+        });
+
+      expect(response.status).toBe(201);
+      const job = await waitForGenerationJob(response.body.data.job.id, 'succeeded');
+      const results = await storage.listGenerationResults(job.id, DEV_AUTH_USER_ID);
+
+      expect(job.mode).toBe('material-replace');
+      expect(job.config).not.toHaveProperty('maskMode');
+      expect(results).toHaveLength(1);
+      expect(results[0].metadata?.mode).toBe('material-replace');
     } finally {
       process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
     }

@@ -1,4 +1,5 @@
 import { buildApiUrl, isApiBaseUrlMissingInProduction, isRelativeApiPath } from './apiBaseUrl';
+import { parseApiResponse, readApiErrorMessage } from './apiResponse';
 import { getSupabaseAccessToken } from './supabase';
 
 const MISSING_API_BASE_URL_MESSAGE = '后端 API 未配置或不可访问，请配置 VITE_API_BASE_URL。';
@@ -46,7 +47,7 @@ export interface GenerationRecord {
   userId: string;
   projectId: string;
   jobId?: string | null;
-  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants';
+  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace';
   prompt: string;
   inputImageUrl?: string | null;
   inputImageDataPreview?: string | null;
@@ -118,7 +119,7 @@ export interface GenerationJob {
   id: string;
   userId: string;
   projectId: string;
-  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants';
+  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace';
   prompt: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];
@@ -498,14 +499,22 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error('无法连接后端服务，请确认 npm run dev:server 已启动。');
   }
 
-  const body = await readJson(response);
-
   if (response.status === 404 && isMissingProductionApi(path)) {
     throw new Error(MISSING_API_BASE_URL_MESSAGE);
   }
 
-  if (!response.ok || !isApiResponse<T>(body)) {
-    throw new Error(readApiError(body) || `请求失败（HTTP ${response.status}）。`);
+  const body = await parseApiResponse<unknown>(response);
+
+  if (body === null) {
+    if (response.ok) {
+      return null as T;
+    }
+
+    throw new Error(`请求失败（HTTP ${response.status}）。`);
+  }
+
+  if (!isApiResponse<T>(body)) {
+    throw new Error(readApiErrorMessage(body) || `请求失败（HTTP ${response.status}）。`);
   }
 
   if (body.ok === false) {
@@ -513,14 +522,6 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   return body.data;
-}
-
-async function readJson(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch {
-    return null;
-  }
 }
 
 function isApiResponse<T>(value: unknown): value is ApiResponse<T> {

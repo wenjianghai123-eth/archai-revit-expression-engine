@@ -8,6 +8,8 @@ export function modeLabel(step: GenerationStep): string {
   if (step === GenerationStep.FloorplanTo3D) return '平面生成';
   if (step === GenerationStep.StyleRender) return '风格渲染';
   if (step === GenerationStep.ModelSnapshotRender) return '白模快渲';
+  if (step === GenerationStep.DesignVariants) return '方案变体';
+  if (step === GenerationStep.MaterialReplace) return '材质软装替换';
   return '局部重绘';
 }
 
@@ -42,7 +44,7 @@ export function formatElapsed(seconds: number): string {
 }
 
 export function isLocalInpaintingStep(step: GenerationStep): boolean {
-  return step === GenerationStep.LocalInpainting;
+  return step === GenerationStep.LocalInpainting || step === GenerationStep.MaterialReplace;
 }
 
 export function getUploadedImageSrc(image: UploadedImage): string {

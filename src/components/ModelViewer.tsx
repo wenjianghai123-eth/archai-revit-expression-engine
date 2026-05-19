@@ -61,6 +61,13 @@ interface ViewerCommandApi {
   enterInterior: () => boolean;
 }
 
+export interface StableModelLoadIdentity {
+  assetId: string;
+  fileType: AssetModel['fileType'];
+  modelUrl: string;
+  loaderKind: LoaderKind | null;
+}
+
 const EDGE_TRIANGLE_LIMIT = 160_000;
 const EDGE_VERTEX_LIMIT = 260_000;
 
@@ -123,6 +130,27 @@ export function getModelLoaderDefinition(fileType: AssetModel['fileType']): Mode
   return null;
 }
 
+export function getStableModelLoadIdentity(asset: AssetModel): StableModelLoadIdentity {
+  const loader = getModelLoaderDefinition(asset.fileType);
+  return {
+    assetId: asset.id,
+    fileType: asset.fileType,
+    modelUrl: asset.modelUrl || '',
+    loaderKind: loader?.kind ?? null,
+  };
+}
+
+export function shouldReloadModel(previous: StableModelLoadIdentity, next: StableModelLoadIdentity): boolean {
+  return previous.fileType !== next.fileType || previous.modelUrl !== next.modelUrl;
+}
+
+export function getModelPreviewError(asset: AssetModel): string | null {
+  const identity = getStableModelLoadIdentity(asset);
+  if (!identity.modelUrl) return '模型地址不可访问';
+  if (!identity.loaderKind || !asset.previewable) return '当前格式暂不支持';
+  return null;
+}
+
 export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(function ModelViewer(
   { asset, minHeight = 420 },
   ref,
@@ -137,8 +165,9 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
   const [edgesEnabled, setEdgesEnabled] = useState(true);
   const [modelInfo, setModelInfo] = useState<ModelBoundsInfo | null>(null);
   const [viewerMessage, setViewerMessage] = useState<string | null>(null);
-  const loader = getModelLoaderDefinition(asset.fileType);
-  const canPreview = Boolean(asset.previewable && asset.modelUrl && loader);
+  const loadIdentity = getStableModelLoadIdentity(asset);
+  const previewError = getModelPreviewError(asset);
+  const canPreview = !previewError;
   const hasUsableSize = size.width > 100 && size.height > 100;
 
   useImperativeHandle(ref, () => ({
@@ -168,6 +197,14 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
     setViewerMessage(info.edgesAvailableByDefault ? null : '模型较大，已关闭边线以提升预览性能。');
   }, []);
 
+  const handleCaptureReady = useCallback((capture: () => ModelSnapshotCapture | null) => {
+    captureRef.current = capture;
+  }, []);
+
+  const handleCommandsReady = useCallback((commands: ViewerCommandApi | null) => {
+    commandRef.current = commands;
+  }, []);
+
   const handleEnterInterior = () => {
     const entered = commandRef.current?.enterInterior();
     if (entered) {
@@ -179,58 +216,59 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
   };
 
   if (!canPreview) {
-    return <UnsupportedPreview asset={asset} minHeight={minHeight} />;
+    return <UnsupportedPreview asset={asset} errorMessage={previewError} minHeight={minHeight} />;
   }
 
   return (
     <div ref={sizeRef} className="relative h-full w-full bg-slate-100" style={{ minHeight }}>
-      {!hasUsableSize ? (
-        <ModelPreviewLoading label="正在准备三维预览容器..." minHeight={minHeight} />
-      ) : (
-        <>
-          <PreviewToolbar
+      <PreviewToolbar
+        viewMode={viewMode}
+        clippingEnabled={clippingEnabled}
+        clippingHeight={clippingHeight}
+        xrayEnabled={xrayEnabled}
+        edgesEnabled={edgesEnabled}
+        modelInfo={modelInfo}
+        viewerMessage={viewerMessage}
+        onFitView={() => commandRef.current?.fitView('fit')}
+        onTopView={() => commandRef.current?.fitView('top')}
+        onFrontView={() => commandRef.current?.fitView('front')}
+        onSideView={() => commandRef.current?.fitView('side')}
+        onEnterInterior={handleEnterInterior}
+        onViewModeChange={setViewMode}
+        onClippingEnabledChange={setClippingEnabled}
+        onClippingHeightChange={setClippingHeight}
+        onXrayEnabledChange={setXrayEnabled}
+        onEdgesEnabledChange={setEdgesEnabled}
+      />
+      <PreviewErrorBoundary resetKey={`${loadIdentity.fileType}:${loadIdentity.modelUrl}`} fallback={<LoadFailed minHeight={minHeight} />}>
+        <Canvas
+          className="h-full w-full"
+          style={{ width: '100%', height: '100%' }}
+          frameloop="always"
+          shadows
+          dpr={[1, 2]}
+          gl={{ alpha: false, antialias: true, preserveDrawingBuffer: true, localClippingEnabled: true }}
+        >
+          <Scene
+            assetId={loadIdentity.assetId}
+            fileType={loadIdentity.fileType}
+            modelUrl={loadIdentity.modelUrl}
             viewMode={viewMode}
             clippingEnabled={clippingEnabled}
             clippingHeight={clippingHeight}
             xrayEnabled={xrayEnabled}
             edgesEnabled={edgesEnabled}
-            modelInfo={modelInfo}
-            viewerMessage={viewerMessage}
-            onFitView={() => commandRef.current?.fitView('fit')}
-            onTopView={() => commandRef.current?.fitView('top')}
-            onFrontView={() => commandRef.current?.fitView('front')}
-            onSideView={() => commandRef.current?.fitView('side')}
-            onEnterInterior={handleEnterInterior}
-            onViewModeChange={setViewMode}
-            onClippingEnabledChange={setClippingEnabled}
-            onClippingHeightChange={setClippingHeight}
-            onXrayEnabledChange={setXrayEnabled}
-            onEdgesEnabledChange={setEdgesEnabled}
+            onCaptureReady={handleCaptureReady}
+            onCommandsReady={handleCommandsReady}
+            onModelInfoChange={handleModelInfoChange}
           />
-          <PreviewErrorBoundary resetKey={asset.id} fallback={<LoadFailed minHeight={minHeight} />}>
-            <Canvas
-              className="h-full w-full"
-              style={{ width: '100%', height: '100%' }}
-              frameloop="always"
-              shadows
-              dpr={[1, 2]}
-              gl={{ alpha: false, antialias: true, preserveDrawingBuffer: true, localClippingEnabled: true }}
-            >
-              <Scene
-                asset={asset}
-                viewMode={viewMode}
-                clippingEnabled={clippingEnabled}
-                clippingHeight={clippingHeight}
-                xrayEnabled={xrayEnabled}
-                edgesEnabled={edgesEnabled}
-                onCaptureReady={(capture) => { captureRef.current = capture; }}
-                onCommandsReady={(commands) => { commandRef.current = commands; }}
-                onModelInfoChange={handleModelInfoChange}
-              />
-            </Canvas>
-          </PreviewErrorBoundary>
-        </>
-      )}
+        </Canvas>
+      </PreviewErrorBoundary>
+      {!hasUsableSize ? (
+        <div className="pointer-events-none absolute inset-0 z-20">
+          <ModelPreviewLoading label="正在准备三维预览容器..." minHeight={minHeight} />
+        </div>
+      ) : null}
     </div>
   );
 });
@@ -325,7 +363,9 @@ function ToolButton({ label, active, disabled, onClick }: { label: string; activ
 }
 
 function Scene({
-  asset,
+  assetId,
+  fileType,
+  modelUrl,
   viewMode,
   clippingEnabled,
   clippingHeight,
@@ -335,7 +375,9 @@ function Scene({
   onCommandsReady,
   onModelInfoChange,
 }: {
-  asset: AssetModel;
+  assetId: string;
+  fileType: AssetModel['fileType'];
+  modelUrl: string;
   viewMode: ViewMode;
   clippingEnabled: boolean;
   clippingHeight: number;
@@ -393,25 +435,29 @@ function Scene({
     if (controlsRef.current) controlsRef.current.enabled = viewMode === 'orbit';
   }, [viewMode]);
 
+  const handleModelReady = useCallback((object: Object3D, info: ModelBoundsInfo) => {
+    modelRef.current = object;
+    modelInfoRef.current = info;
+    onModelInfoChange(info);
+  }, [onModelInfoChange]);
+
   return (
     <>
       <color attach="background" args={['#f8fafc']} />
       <PerspectiveCamera makeDefault position={[3.8, 2.6, 4.8]} fov={42} near={0.01} far={1000} />
       <OrbitControls ref={controlsRef} makeDefault target={[0, 0, 0]} minDistance={0.05} maxDistance={80} minPolarAngle={0} maxPolarAngle={Math.PI} enableDamping />
       <WalkthroughControls enabled={viewMode === 'walkthrough'} />
-      {asset.modelUrl ? (
+      {modelUrl ? (
         <LoadedModel
-          asset={asset}
+          assetId={assetId}
+          fileType={fileType}
+          modelUrl={modelUrl}
           controlsRef={controlsRef}
           clippingEnabled={clippingEnabled}
           clippingHeight={clippingHeight}
           xrayEnabled={xrayEnabled}
           edgesEnabled={edgesEnabled}
-          onModelReady={(object, info) => {
-            modelRef.current = object;
-            modelInfoRef.current = info;
-            onModelInfoChange(info);
-          }}
+          onModelReady={handleModelReady}
         />
       ) : null}
       <ambientLight intensity={0.9} />
@@ -512,7 +558,9 @@ function WalkthroughControls({ enabled }: { enabled: boolean }) {
 }
 
 function LoadedModel({
-  asset,
+  assetId,
+  fileType,
+  modelUrl,
   controlsRef,
   clippingEnabled,
   clippingHeight,
@@ -520,7 +568,9 @@ function LoadedModel({
   edgesEnabled,
   onModelReady,
 }: {
-  asset: AssetModel;
+  assetId: string;
+  fileType: AssetModel['fileType'];
+  modelUrl: string;
   controlsRef: React.MutableRefObject<OrbitControlsImpl | null>;
   clippingEnabled: boolean;
   clippingHeight: number;
@@ -529,36 +579,71 @@ function LoadedModel({
   onModelReady: (object: Object3D, info: ModelBoundsInfo) => void;
 }) {
   const [model, setModel] = useState<Object3D | null>(null);
+  const modelRef = useRef<Object3D | null>(null);
   const [error, setError] = useState<string | null>(null);
   const clippingPlaneRef = useRef(new Plane(new Vector3(0, -1, 0), clippingHeight));
+  const loadRequestRef = useRef(0);
+  const assetIdRef = useRef(assetId);
   const { camera } = useThree();
 
   useEffect(() => {
+    assetIdRef.current = assetId;
+  }, [assetId]);
+
+  useEffect(() => {
     let cancelled = false;
-    const loader = getModelLoaderDefinition(asset.fileType);
-    if (!loader || !asset.modelUrl) {
+    const requestId = ++loadRequestRef.current;
+    const loader = getModelLoaderDefinition(fileType);
+    if (!loader || !modelUrl) {
+      if (modelRef.current) {
+        disposeModelObject(modelRef.current);
+        modelRef.current = null;
+      }
+      setModel(null);
       setError('不支持的模型格式。支持格式：GLB、GLTF、OBJ、DAE、STL。');
       return;
     }
 
-    setModel(null);
     setError(null);
-    loader.load(asset.modelUrl)
+    loader.load(modelUrl)
       .then(object => {
-        if (cancelled) return;
-        const { object: normalized, info } = normalizeModelObject(object, asset.fileType);
+        if (cancelled || requestId !== loadRequestRef.current) {
+          disposeModelObject(object);
+          return;
+        }
+        const { object: normalized, info } = normalizeModelObject(object, fileType);
+        if (modelRef.current && modelRef.current !== normalized) {
+          disposeModelObject(modelRef.current);
+        }
+        modelRef.current = normalized;
         fitCameraToObject(camera as ThreePerspectiveCamera, controlsRef.current, normalized, 'fit');
         setModel(normalized);
         onModelReady(normalized, info);
       })
-      .catch(() => {
-        if (!cancelled) setError('模型加载失败。建议将模型转换为 GLB 后重新上传。');
+      .catch(error => {
+        if (cancelled || requestId !== loadRequestRef.current) return;
+        const message = error instanceof Error ? error.message : '模型加载失败。建议将模型转换为 GLB 后重新上传。';
+        console.error('ModelViewer failed to load model', {
+          modelAssetId: assetIdRef.current,
+          stableModelUrl: modelUrl,
+          extension: fileType,
+          loaderType: loader.kind,
+          error: message,
+        });
+        setError(message);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [asset.fileType, asset.modelUrl, camera, controlsRef, onModelReady]);
+  }, [camera, controlsRef, fileType, modelUrl, onModelReady]);
+
+  useEffect(() => () => {
+    if (modelRef.current) {
+      disposeModelObject(modelRef.current);
+      modelRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     if (!model) return;
@@ -725,6 +810,27 @@ function applyMaterialClipping(materialOrMaterials: Material | Material[], clipp
   });
 }
 
+function disposeModelObject(object: Object3D): void {
+  const disposedGeometries = new Set<BufferGeometry>();
+  const disposedMaterials = new Set<Material>();
+  object.traverse(child => {
+    if (child instanceof Mesh || child instanceof LineSegments) {
+      const geometry = child.geometry;
+      if (geometry && !disposedGeometries.has(geometry)) {
+        geometry.dispose();
+        disposedGeometries.add(geometry);
+      }
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      materials.forEach(material => {
+        if (material && !disposedMaterials.has(material)) {
+          material.dispose();
+          disposedMaterials.add(material);
+        }
+      });
+    }
+  });
+}
+
 function fitCameraToObject(
   camera: ThreePerspectiveCamera,
   controls: OrbitControlsImpl | null,
@@ -804,12 +910,10 @@ class PreviewErrorBoundary extends React.Component<
   }
 }
 
-function UnsupportedPreview({ asset, minHeight }: { asset: AssetModel; minHeight: number }) {
+function UnsupportedPreview({ asset, errorMessage, minHeight }: { asset: AssetModel; errorMessage: string | null; minHeight: number }) {
   const supported = '支持格式：GLB、GLTF、OBJ、DAE、STL。推荐格式：GLB。';
   const sketchup = 'SketchUp 用户建议：从 SketchUp 导出为 GLB、DAE、OBJ 或 STL 后上传。暂不支持 FBX 和 SKP 原生文件。';
-  const message = getModelLoaderDefinition(asset.fileType)
-    ? '模型文件未持久化，请重新上传后预览'
-    : '不支持的模型格式';
+  const message = errorMessage || (getModelLoaderDefinition(asset.fileType) ? '模型文件未持久化，请重新上传后预览' : '不支持的模型格式');
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center bg-slate-50 px-8 text-center" style={{ minHeight }}>

@@ -54,5 +54,6 @@ export function mergePromptTemplate(currentPrompt: string, templatePrompt: strin
 function stepToFeature(step: GenerationStep): PromptTemplate['feature'] {
   if (step === GenerationStep.ModelSnapshotRender) return 'model-render';
   if (step === GenerationStep.DesignVariants) return 'design-variants';
+  if (step === GenerationStep.MaterialReplace) return 'material-replace';
   return step === GenerationStep.FloorplanTo3D ? 'floorplan' : step === GenerationStep.StyleRender ? 'style-render' : 'inpaint';
 }

@@ -1,4 +1,5 @@
 import { buildApiUrl } from '../lib/apiBaseUrl';
+import { parseApiResponse } from '../lib/apiResponse';
 import { GenerationProvider } from '../types';
 
 export interface BackendHealth {
@@ -15,11 +16,13 @@ export async function getBackendHealth(): Promise<BackendHealth> {
     throw new Error('无法连接后端服务，请确认后端服务已启动，并检查 VITE_API_BASE_URL 是否指向后端域名。');
   }
 
-  if (!response.ok) {
-    throw new Error(`后端健康检查失败（HTTP ${response.status}）。`);
+  const body = await parseApiResponse<unknown>(response);
+
+  if (body === null) {
+    throw new Error(`后端健康检查返回空响应。status=${response.status}`);
   }
 
-  return parseBackendHealth(await response.json());
+  return parseBackendHealth(body);
 }
 
 function parseBackendHealth(value: unknown): BackendHealth {

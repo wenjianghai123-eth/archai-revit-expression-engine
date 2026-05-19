@@ -4,9 +4,10 @@ export enum GenerationStep {
   LocalInpainting = 3,
   ModelSnapshotRender = 4,
   DesignVariants = 5,
+  MaterialReplace = 6,
 }
 
-export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants';
+export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace';
 export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled';
@@ -22,6 +23,38 @@ export type VariantStyleKey =
   | 'office-space'
   | 'natural-wood'
   | 'premium-gray'
+  | 'custom';
+export type MaterialReplaceStrength = 'subtle' | 'balanced' | 'strong';
+export type MaterialReplaceEditMode = 'smart-type' | 'mask';
+export type MaterialReplaceTargetObject =
+  | 'floor'
+  | 'wall'
+  | 'ceiling'
+  | 'cabinet'
+  | 'sofa'
+  | 'table-chair'
+  | 'lighting'
+  | 'plant'
+  | 'door-window'
+  | 'feature-wall'
+  | 'other';
+export type MaterialReplaceTargetMaterial =
+  | 'light-wood'
+  | 'dark-wood'
+  | 'walnut'
+  | 'microcement'
+  | 'rock-slab'
+  | 'marble'
+  | 'terrazzo'
+  | 'tile'
+  | 'leather'
+  | 'fabric'
+  | 'metal'
+  | 'glass'
+  | 'art-paint'
+  | 'linear-light'
+  | 'warm-light-strip'
+  | 'plant'
   | 'custom';
 
 export interface GenerationJobDiagnostics {
@@ -89,6 +122,7 @@ export interface GenerationConfig {
   targetHeight?: number;
   targetAspectRatio?: string;
   materialTextureAssetIds?: string[];
+  materialReferenceAssetIds?: string[];
   materialTextureSources?: unknown[];
   furnitureReferenceAssetIds?: string[];
   furnitureReferenceSources?: unknown[];
@@ -107,11 +141,16 @@ export interface GenerationConfig {
   customStyleLabel?: string;
   maskMode?: 'asset-mask' | 'full-image';
   maskAssetId?: string;
+  editMode?: MaterialReplaceEditMode;
   buildingType?: string;
   spaceType?: string;
   renderStyle?: string;
   atmosphere?: string;
   customPrompt?: string;
+  targetObjectType?: MaterialReplaceTargetObject;
+  targetMaterial?: MaterialReplaceTargetMaterial;
+  customMaterialPrompt?: string;
+  preserveLighting?: boolean;
   preserveGeometry?: boolean;
   sourceModelAssetId?: string;
   sourceImageAssetId?: string;
@@ -196,7 +235,7 @@ export interface PromptTemplate {
   id: string;
   title: string;
   category: string;
-  feature: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants';
+  feature: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace';
   supportedModes?: GenerationStep[] | string[];
   description: string;
   previewImage: string;

@@ -17,7 +17,7 @@ export function isNullableString(value: unknown): value is string | null {
 }
 
 export function isGenerationMode(value: unknown): value is GenerationRecord['mode'] {
-  return value === 'floorplan' || value === 'style-render' || value === 'inpaint' || value === 'model-render' || value === 'design-variants';
+  return value === 'floorplan' || value === 'style-render' || value === 'inpaint' || value === 'model-render' || value === 'design-variants' || value === 'material-replace';
 }
 
 export function isGenerationStatus(value: unknown): value is GenerationRecord['status'] {

@@ -334,6 +334,22 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
     preserveCamera: true,
     strength: 'balanced',
   },
+  [GenerationStep.MaterialReplace]: {
+    prompt: "",
+    style: "材质软装替换",
+    lighting: "匹配原图",
+    materialStrength: 0.8,
+    batchCount: 1,
+    editTarget: 'material',
+    editMode: 'smart-type',
+    customMaterialPrompt: "",
+    materialReferenceAssetIds: [],
+    preserveLighting: true,
+    preserveGeometry: true,
+    preserveStructure: true,
+    strength: 'balanced',
+    feather: 0,
+  },
 };
 
 export const PROMPT_TEMPLATES: PromptTemplate[] = [

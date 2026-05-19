@@ -10,6 +10,7 @@ import { MaterialTexturesPanel, StyleSelectorPanel } from './workspace/Reference
 import { ResultPreviewPanel } from './workspace/ResultPreviewPanel';
 import { ModelSnapshotRenderPanel } from './ModelSnapshotRenderPanel';
 import { DesignVariantsPanel } from './DesignVariantsPanel';
+import { MaterialReplaceConfigPanel } from './MaterialReplaceConfigPanel';
 import { UploadErrors, UploadTarget, ViewModeOption } from './workspace/workspaceTypes';
 import { getUploadedImageSrc, isLocalInpaintingStep, maxFurnitureReferences, maxMaterialTextures, readGenerationStatusLabel } from './workspace/workspaceUtils';
 
@@ -72,7 +73,18 @@ export function MainWorkspace({
   const isStyleRenderStep = step === GenerationStep.StyleRender;
   const isModelSnapshotStep = step === GenerationStep.ModelSnapshotRender;
   const isDesignVariantsStep = step === GenerationStep.DesignVariants;
-  const canGenerate = Boolean(state.inputImage) && !state.isGenerating && !isCreditsInsufficient;
+  const isMaterialReplaceStep = step === GenerationStep.MaterialReplace;
+  const materialReplaceEditMode = state.config.editMode === 'mask' ? 'mask' : 'smart-type';
+  const hasMaterialReplaceTarget = Boolean(state.config.targetMaterial || state.materialTextures.length > 0 || (state.config.customMaterialPrompt || '').trim());
+  const hasMaskSelection = Boolean(state.maskImage?.dataUrl || state.useFullImageMask);
+  const hasMaterialReplaceObject = Boolean(state.config.targetObjectType);
+  const canGenerate = Boolean(state.inputImage)
+    && !state.isGenerating
+    && !isCreditsInsufficient
+    && (!isMaterialReplaceStep || (
+      hasMaterialReplaceTarget
+      && (materialReplaceEditMode === 'mask' ? hasMaskSelection : hasMaterialReplaceObject)
+    ));
   const providerForStatus = backendProvider || state.generationProvider;
   const originalImageUrl = state.inputImage ? getUploadedImageSrc(state.inputImage) : null;
   const resultOptions = state.generationResults.length > 0
@@ -397,7 +409,7 @@ export function MainWorkspace({
           config={state.config}
           uploadErrors={uploadErrors}
           showMaterialUpload={!isLocalInpaintingStep(step)}
-          showFurnitureReferences={isLocalInpaintingStep(step) && (state.config.editTarget || 'general') === 'furniture'}
+          showFurnitureReferences={step === GenerationStep.LocalInpainting && (state.config.editTarget || 'general') === 'furniture'}
           furnitureReferences={state.furnitureReferences}
           onUploadClick={handleUploadClick}
           onUpdateInputImage={onUpdateInputImage}
@@ -406,18 +418,23 @@ export function MainWorkspace({
           onRemoveFurnitureReference={handleRemoveFurnitureReference}
         />
         <div className="mt-5 space-y-5">
-          <PromptConfigPanel
-            step={step}
-            config={state.config}
-            isFloorplanStep={isFloorplanStep}
-            compactInpaint={isLocalInpaintingStep(step)}
-            onUpdateConfig={onUpdateConfig}
-            onOpenPromptTemplatePanel={() => setIsPromptTemplatePanelOpen(true)}
-          />
+          {!isMaterialReplaceStep ? (
+            <PromptConfigPanel
+              step={step}
+              config={state.config}
+              isFloorplanStep={isFloorplanStep}
+              compactInpaint={isLocalInpaintingStep(step)}
+              onUpdateConfig={onUpdateConfig}
+              onOpenPromptTemplatePanel={() => setIsPromptTemplatePanelOpen(true)}
+            />
+          ) : null}
+          {isMaterialReplaceStep ? (
+            <MaterialReplaceConfigPanel config={state.config} materialReferenceCount={state.materialTextures.length} onUpdateConfig={onUpdateConfig} />
+          ) : null}
         </div>
       </aside>
 
-      {step === GenerationStep.LocalInpainting ? (
+      {step === GenerationStep.LocalInpainting || (isMaterialReplaceStep && materialReplaceEditMode === 'mask') ? (
         <InpaintMaskPanel
           inputImage={state.inputImage}
           maskImageDataUrl={state.maskImage?.dataUrl || null}
@@ -454,7 +471,7 @@ export function MainWorkspace({
         topPanels={(
           <>
             {isStyleRenderStep ? <StyleSelectorPanel config={state.config} onUpdateConfig={onUpdateConfig} /> : null}
-            {isFloorplanStep ? materialTexturesPanel : null}
+            {isFloorplanStep || isMaterialReplaceStep ? materialTexturesPanel : null}
           </>
         )}
         onGenerate={onGenerate}
