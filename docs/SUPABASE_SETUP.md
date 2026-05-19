@@ -156,6 +156,7 @@ create table if not exists public.generation_results (
   image_url text not null,
   is_selected boolean not null default false,
   is_favorite boolean not null default false,
+  metadata jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -581,7 +582,7 @@ Supabase's service role bypasses RLS for server-side operations. Do not put the 
 - `model_assets`: `id`, `user_id`, `url`, `filename`, `original_filename`, `file_type`, `mime_type`, `size`, `created_at`, `deleted_at`
 - `generation_jobs`: `id`, `user_id`, `project_id`, `mode`, `prompt`, `config`, `input_asset_ids`, `status`, `progress`, `provider`, `output_asset_id`, `output_asset_ids`, `error_message`, `created_at`, `updated_at`, `started_at`, `finished_at`
 - `generation_records`: `id`, `user_id`, `project_id`, `job_id`, `mode`, `prompt`, `input_image_url`, `input_image_data_preview`, `output_image_url`, `output_image_data_preview`, `provider`, `status`, `created_at`, `updated_at`
-- `generation_results`: `id`, `user_id`, `project_id`, `job_id`, `asset_id`, `image_url`, `is_selected`, `is_favorite`, `created_at`, `updated_at`
+- `generation_results`: `id`, `user_id`, `project_id`, `job_id`, `asset_id`, `image_url`, `is_selected`, `is_favorite`, `metadata`, `created_at`, `updated_at`
 - `share_links`: `id`, `project_id`, `token`, `permission`, `expires_at`, `created_at`, `revoked_at`
 - `credit_balances`: `user_id`, `balance`, `updated_at`
 - `credit_transactions`: `id`, `user_id`, `type`, `amount`, `balance_after`, `reason`, `reference_type`, `reference_id`, `created_at`

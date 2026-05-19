@@ -11,7 +11,7 @@ import {
   uploadImageAsset,
   type CreditBalance,
 } from '../lib/api';
-import { GenerationConfig, GenerationHistoryItem, GenerationProvider, GenerationStep, StepState, UploadedImage } from '../types';
+import { GenerationConfig, GenerationHistoryItem, GenerationMode, GenerationProvider, GenerationStep, StepState, UploadedImage } from '../types';
 
 interface UseGenerationRunnerOptions {
   currentStep: GenerationStep;
@@ -50,13 +50,25 @@ export function useGenerationRunner({
       return;
     }
 
+    if (currentStep === GenerationStep.ModelSnapshotRender && !stateAtStart.config.sourceModelAssetId) {
+      setStepStates(prev => ({
+        ...prev,
+        [currentStep]: {
+          ...prev[currentStep],
+          generationStatus: 'error',
+          generationError: '请先选择一个 3D 模型',
+        }
+      }));
+      return;
+    }
+
     if (!stateAtStart.inputImage) {
       setStepStates(prev => ({
         ...prev,
         [currentStep]: {
           ...prev[currentStep],
           generationStatus: 'error',
-          generationError: '请先上传图片后再生成预览。',
+          generationError: currentStep === GenerationStep.ModelSnapshotRender ? '请先截取一个模型视角' : '请先上传图片后再生成预览。',
         }
       }));
       return;
@@ -137,14 +149,32 @@ export function useGenerationRunner({
             ...configForRequest,
             ...targetSizeConfig,
             mode: generationMode,
-            batchCount: 1,
+            batchCount: currentStep === GenerationStep.DesignVariants && (stateAtStart.config.batchCount === 2 || stateAtStart.config.batchCount === 4)
+              ? stateAtStart.config.batchCount
+              : 1,
+            variantStrategy: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.variantStrategy || 'style-matrix' : undefined,
+            variantStyles: currentStep === GenerationStep.DesignVariants ? resolveVariantStyles(stateAtStart.config) : undefined,
+            customStyleLabel: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.customStyleLabel : undefined,
             userPrompt: stateAtStart.config.prompt,
             editTarget: currentStep === GenerationStep.LocalInpainting ? stateAtStart.config.editTarget || 'general' : stateAtStart.config.editTarget,
-            strength: stateAtStart.config.strength || stateAtStart.config.inpaintingStrength || 'medium',
+            strength: currentStep === GenerationStep.DesignVariants
+              ? stateAtStart.config.strength || 'balanced'
+              : stateAtStart.config.strength || stateAtStart.config.inpaintingStrength || 'medium',
             preserveStructure: Boolean(stateAtStart.config.preserveStructure ?? stateAtStart.config.keepOriginalMaterial),
+            preserveCamera: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.preserveCamera ?? true : undefined,
             feather: stateAtStart.config.feather ?? 0,
             maskMode,
             maskAssetId,
+            sourceModelAssetId: stateAtStart.config.sourceModelAssetId,
+            sourceImageAssetId: stateAtStart.inputImage.assetId,
+            snapshotAssetId: currentStep === GenerationStep.ModelSnapshotRender ? stateAtStart.inputImage.assetId : undefined,
+            modelSnapshotMetadata: stateAtStart.config.modelSnapshotMetadata,
+            buildingType: stateAtStart.config.buildingType,
+            spaceType: stateAtStart.config.spaceType,
+            renderStyle: stateAtStart.config.renderStyle,
+            atmosphere: stateAtStart.config.atmosphere,
+            customPrompt: stateAtStart.config.customPrompt,
+            preserveGeometry: stateAtStart.config.preserveGeometry ?? true,
             materialTextureAssetIds: stateAtStart.materialTextures
               .map(texture => texture.assetId)
               .filter((assetId): assetId is string => Boolean(assetId)),
@@ -210,13 +240,18 @@ export function useGenerationRunner({
           const outputAsset = await getImageAsset(latestJob.outputAssetId);
           const providerName = parseGenerationProvider(latestJob.provider);
           const generationResults = latestJob.results && latestJob.results.length > 0
-            ? latestJob.results.map(result => ({
+            ? latestJob.results.map((result, index) => ({
                 id: result.id,
                 imageUrl: result.imageUrl,
                 assetId: result.assetId,
                 isSelected: result.isSelected,
                 isFavorite: result.isFavorite,
                 createdAt: result.createdAt,
+                metadata: result.metadata,
+                variantIndex: currentStep === GenerationStep.DesignVariants ? index : undefined,
+                variantLabel: currentStep === GenerationStep.DesignVariants ? readVariantLabel(index) : undefined,
+                variantStyle: currentStep === GenerationStep.DesignVariants ? resolveVariantStyles(stateAtStart.config)[index] : undefined,
+                variantStyleLabel: currentStep === GenerationStep.DesignVariants ? readVariantStyleLabel(resolveVariantStyles(stateAtStart.config)[index]) : undefined,
               }))
             : [{
                 id: latestJob.id,
@@ -243,9 +278,13 @@ export function useGenerationRunner({
             config: stateAtStart.config,
             editTarget: stateAtStart.config.editTarget,
             furnitureReferences: stateAtStart.furnitureReferences,
+            generationResults,
             inputImageName: stateAtStart.inputImage.name,
             materialImageName: stateAtStart.materialImage?.name,
             maskImageName: stateAtStart.maskImage?.name,
+            sourceModelAssetId: stateAtStart.config.sourceModelAssetId,
+            snapshotAssetId: stateAtStart.inputImage.assetId,
+            modelSnapshotMetadata: stateAtStart.config.modelSnapshotMetadata,
           });
           setHistoryItems(items => [record, ...items.filter(item => item.id !== record.id)]);
 
@@ -377,6 +416,10 @@ export function useGenerationRunner({
             config: forceSingleOutputConfig(stateAtStart.config),
           });
           break;
+
+        case GenerationStep.ModelSnapshotRender:
+        case GenerationStep.DesignVariants:
+          throw new Error('白模快渲需要通过项目任务系统生成，请先选择项目并截取模型视角。');
       }
 
       let projectSaveWarning: string | null = null;
@@ -431,6 +474,9 @@ export function useGenerationRunner({
           inputImageName: currentState.inputImage?.name,
           materialImageName: currentState.materialImage?.name,
           maskImageName: currentState.maskImage?.name,
+          sourceModelAssetId: currentState.config.sourceModelAssetId,
+          snapshotAssetId: currentState.inputImage?.assetId,
+          modelSnapshotMetadata: currentState.config.modelSnapshotMetadata,
         });
       setHistoryItems(items => [record, ...items.filter(item => item.id !== record.id)]);
       const warnings = [
@@ -489,18 +535,31 @@ export function useGenerationRunner({
   };
 }
 
-function getGenerationRecordMode(step: GenerationStep): 'floorplan' | 'style-render' | 'inpaint' {
+function getGenerationRecordMode(step: GenerationStep): GenerationMode {
   if (step === GenerationStep.FloorplanTo3D) return 'floorplan';
   if (step === GenerationStep.StyleRender) return 'style-render';
+  if (step === GenerationStep.ModelSnapshotRender) return 'model-render';
+  if (step === GenerationStep.DesignVariants) return 'design-variants';
   return 'inpaint';
 }
 
 function calculateGenerationCreditsCost(step: GenerationStep, config: GenerationConfig): number {
   const baseCost = step === GenerationStep.LocalInpainting ? 8 : 10;
-  return baseCost;
+  const batchCount = step === GenerationStep.DesignVariants && (config.batchCount === 2 || config.batchCount === 4)
+    ? config.batchCount
+    : 1;
+  return baseCost * batchCount;
 }
 
 function buildPromptForGeneration(step: GenerationStep, prompt: string, state?: StepState): string {
+  if (step === GenerationStep.DesignVariants) {
+    return prompt || state?.config.customPrompt || 'Design variants';
+  }
+
+  if (step === GenerationStep.ModelSnapshotRender && state) {
+    return buildModelRenderPrompt(state.config);
+  }
+
   if (step === GenerationStep.FloorplanTo3D) {
     return buildFloorplanColorPrompt({
       userPrompt: prompt,
@@ -564,9 +623,59 @@ function forceSingleOutputConfig(config: GenerationConfig): GenerationConfig {
   return { ...config, batchCount: 1 };
 }
 
+function resolveVariantStyles(config: GenerationConfig) {
+  const batchCount = config.batchCount === 2 ? 2 : 4;
+  const defaults = batchCount === 2
+    ? ['modern-minimal', 'natural-wood']
+    : ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'];
+  const styles = Array.isArray(config.variantStyles) ? [...config.variantStyles] : [];
+  for (const style of defaults) {
+    if (styles.length >= batchCount) break;
+    if (!styles.includes(style as never)) styles.push(style as never);
+  }
+  return styles.slice(0, batchCount);
+}
+
+function readVariantLabel(index: number): string {
+  return `方案 ${String.fromCharCode(65 + index)}`;
+}
+
+function readVariantStyleLabel(style: string | undefined): string | undefined {
+  if (!style) return undefined;
+  const labels: Record<string, string> = {
+    'modern-minimal': '现代极简',
+    'wabi-sabi': '侘寂',
+    'cream-style': '奶油风',
+    'light-luxury': '轻奢',
+    industrial: '工业风',
+    'commercial-showroom': '商业展示风',
+    'hotel-lobby': '酒店大堂风',
+    'office-space': '办公空间风',
+    'natural-wood': '自然木质',
+    'premium-gray': '高级灰',
+    custom: '自定义',
+  };
+  return labels[style] || style;
+}
+
 function readHistoryStyle(step: GenerationStep, config: GenerationConfig): string {
   if (step === GenerationStep.FloorplanTo3D) return '彩平表达';
+  if (step === GenerationStep.ModelSnapshotRender) return config.renderStyle || config.style || '白模快渲';
   return config.style || '未设置风格';
+}
+
+function buildModelRenderPrompt(config: GenerationConfig): string {
+  return [
+    'Transform this 3D clay/white model viewport snapshot into a realistic architectural/interior rendering.',
+    'Preserve the original massing, geometry, layout, spatial proportions, camera angle, perspective, and composition.',
+    'Add appropriate architectural materials, lighting, shadows, environment, furniture, landscape, and atmosphere based on the selected style.',
+    'Do not alter the fundamental structure unless explicitly requested.',
+    `Building type: ${config.buildingType || 'unspecified'}.`,
+    `Space type: ${config.spaceType || 'unspecified'}.`,
+    `Rendering style: ${config.renderStyle || config.style || 'realistic architectural visualization'}.`,
+    `Atmosphere: ${config.atmosphere || config.lighting || 'natural daylight'}.`,
+    `Additional user instruction: ${config.customPrompt || config.prompt || 'none'}.`,
+  ].join(' ');
 }
 
 function delay(ms: number): Promise<void> {

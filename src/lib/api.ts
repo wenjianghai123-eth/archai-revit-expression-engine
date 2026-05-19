@@ -46,7 +46,7 @@ export interface GenerationRecord {
   userId: string;
   projectId: string;
   jobId?: string | null;
-  mode: 'floorplan' | 'style-render' | 'inpaint';
+  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants';
   prompt: string;
   inputImageUrl?: string | null;
   inputImageDataPreview?: string | null;
@@ -57,6 +57,9 @@ export interface GenerationRecord {
   createdAt: string;
   updatedAt: string;
   results?: GenerationResult[];
+  sourceModelAssetId?: string | null;
+  snapshotAssetId?: string | null;
+  modelSnapshotMetadata?: Record<string, unknown> | null;
 }
 
 export interface GenerationResult {
@@ -68,6 +71,7 @@ export interface GenerationResult {
   imageUrl: string;
   isSelected: boolean;
   isFavorite: boolean;
+  metadata?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -81,6 +85,9 @@ export interface GenerationRecordInput {
   outputImageDataPreview?: string | null;
   provider: string;
   status?: GenerationRecord['status'];
+  sourceModelAssetId?: string | null;
+  snapshotAssetId?: string | null;
+  modelSnapshotMetadata?: Record<string, unknown> | null;
 }
 
 export interface ImageAsset {
@@ -99,7 +106,8 @@ export interface ModelAssetRecord {
   url: string;
   filename: string;
   originalFilename: string;
-  fileType: 'glb' | 'gltf' | 'obj';
+  fileType: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
+  format?: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
   mimeType: string;
   size: number;
   createdAt: string;
@@ -110,7 +118,7 @@ export interface GenerationJob {
   id: string;
   userId: string;
   projectId: string;
-  mode: 'floorplan' | 'style-render' | 'inpaint';
+  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants';
   prompt: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];

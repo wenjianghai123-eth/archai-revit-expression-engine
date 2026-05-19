@@ -10,7 +10,9 @@ import {
   Layers,
   Wand2,
   Paintbrush,
+  Box,
   ScanLine,
+  LayoutGrid,
   Sparkles,
   ShieldCheck
 } from 'lucide-react';
@@ -187,6 +189,20 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
       icon: Paintbrush,
       image: 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&q=80&w=600',
     },
+    {
+      id: GenerationStep.DesignVariants,
+      title: '方案变体',
+      desc: '一次生成多种设计方向，快速对比方案',
+      icon: LayoutGrid,
+      image: 'https://images.unsplash.com/photo-1600607688969-a5bfcd646154?auto=format&fit=crop&q=80&w=600',
+    },
+    {
+      id: GenerationStep.ModelSnapshotRender,
+      title: '白模快渲',
+      desc: '上传 3D 白模，选好角度，一键生成效果图',
+      icon: Box,
+      image: 'https://images.unsplash.com/photo-1486718448742-163732cd1544?auto=format&fit=crop&q=80&w=600',
+    },
   ];
 
   return (
@@ -212,7 +228,7 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
         </div>
       </div>
 
-      <div className="grid gap-3 px-4 pb-3 md:grid-cols-3 md:px-5">
+      <div className="grid gap-3 px-4 pb-3 md:grid-cols-5 md:px-5">
         {steps.map((step) => {
           const isActive = currentStep === step.id;
           const Icon = step.icon;

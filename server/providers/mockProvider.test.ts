@@ -37,4 +37,16 @@ describe('mock provider', () => {
     expect(svg).toContain('height="600"');
     expect(svg).toContain('viewBox="0 0 800 600"');
   });
+
+  it('handles model-render mode with recognizable metadata', async () => {
+    const output = await mockProvider.generateImage({
+      ...input,
+      mode: 'model-render',
+      prompt: 'render model snapshot',
+    });
+    const svg = Buffer.from(output.dataUrl.split(',')[1] || '', 'base64').toString('utf8');
+
+    expect(output.metadata).toMatchObject({ mode: 'model-render' });
+    expect(svg).toContain('Mock Model Snapshot Render');
+  });
 });

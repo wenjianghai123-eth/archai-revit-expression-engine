@@ -90,16 +90,18 @@ export default function App() {
         },
         inputImage: historyInputImage || prev[item.step].inputImage,
         outputImage: item.outputImage,
-        generationResults: item.outputImage
-          ? [{
-              id: item.id,
-              imageUrl: item.outputImage,
-              isSelected: true,
-              isFavorite: false,
-              createdAt: item.createdAt,
-            }]
-          : [],
-        selectedGenerationResultId: item.outputImage ? item.id : null,
+        generationResults: item.generationResults?.length
+          ? item.generationResults
+          : item.outputImage
+            ? [{
+                id: item.id,
+                imageUrl: item.outputImage,
+                isSelected: true,
+                isFavorite: false,
+                createdAt: item.createdAt,
+              }]
+            : [],
+        selectedGenerationResultId: item.generationResults?.find(result => result.isSelected)?.id || item.generationResults?.[0]?.id || (item.outputImage ? item.id : null),
         generationProvider: item.provider,
         generationResultId: item.id,
         generationCreatedAt: item.createdAt,

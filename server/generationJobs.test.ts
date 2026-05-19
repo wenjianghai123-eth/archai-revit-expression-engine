@@ -10,6 +10,7 @@ import { DEV_AUTH_USER_ID } from './auth';
 import type { app as ExpressApp } from './index';
 import type * as GenerationService from './generationService';
 import type * as Storage from './storage';
+import { isUploadOverLimit } from './upload';
 
 type App = typeof ExpressApp;
 type StorageModule = typeof Storage;
@@ -37,6 +38,7 @@ beforeAll(async () => {
   process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'true';
   process.env.GENERATION_JOB_RATE_LIMIT_PER_MINUTE = '1000';
   process.env.MAX_IMAGE_MB = '0.0001';
+  process.env.MAX_MODEL_MB = '600';
   process.env.DATA_DIR = path.join(tempRoot, 'data');
   process.env.UPLOADS_DIR = path.join(tempRoot, 'uploads');
 
@@ -146,6 +148,90 @@ describe('POST /api/generation-jobs asset ownership', () => {
           },
         },
       },
+    });
+  });
+
+  it('creates a model-render generation job with snapshot and source model metadata', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Model render project' });
+    const snapshotAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const modelAsset = await createModelAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'model-render',
+        prompt: 'render the white model',
+        config: {
+          sourceImageAssetId: snapshotAsset.id,
+          snapshotAssetId: snapshotAsset.id,
+          sourceModelAssetId: modelAsset.id,
+          modelSnapshotMetadata: {
+            sourceType: 'model-snapshot',
+            sourceModelAssetId: modelAsset.id,
+            width: 800,
+            height: 600,
+            createdAt: new Date().toISOString(),
+          },
+        },
+        inputAssetIds: [snapshotAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job).toMatchObject({
+      mode: 'model-render',
+      inputAssetIds: [snapshotAsset.id],
+      config: {
+        sourceModelAssetId: modelAsset.id,
+        snapshotAssetId: snapshotAsset.id,
+      },
+    });
+  });
+
+  it('rejects model-render jobs without a snapshot image asset field', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Missing snapshot' });
+    const snapshotAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'model-render',
+        prompt: 'render the white model',
+        config: {},
+        inputAssetIds: [snapshotAsset.id],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: { code: 'GENERATION_JOB_SNAPSHOT_ASSET_REQUIRED' },
+    });
+  });
+
+  it('rejects model-render jobs when source model asset belongs to another user', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Other model owner' });
+    const snapshotAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const otherModelAsset = await createModelAssetForUser('other-user');
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'model-render',
+        prompt: 'render the white model',
+        config: {
+          sourceImageAssetId: snapshotAsset.id,
+          snapshotAssetId: snapshotAsset.id,
+          sourceModelAssetId: otherModelAsset.id,
+        },
+        inputAssetIds: [snapshotAsset.id],
+      });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: { code: 'GENERATION_JOB_SOURCE_MODEL_NOT_FOUND' },
     });
   });
 
@@ -429,6 +515,116 @@ describe('generation job credits', () => {
     expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 10);
   });
 
+  it('creates design-variants jobs with batchCount 2 and charges two outputs', async () => {
+    const originalBalance = await storage.getCreditBalance(DEV_AUTH_USER_ID);
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Design variants two' });
+    const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'design-variants',
+        prompt: '',
+        config: { batchCount: 2, variantStrategy: 'style-matrix', variantStyles: [] },
+        inputAssetIds: [ownAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).toMatchObject({
+      batchCount: 2,
+      variantStrategy: 'style-matrix',
+      variantStyles: ['modern-minimal', 'natural-wood'],
+    });
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 20);
+  });
+
+  it('creates design-variants jobs with default batchCount 4 and charges four outputs', async () => {
+    const originalBalance = await storage.getCreditBalance(DEV_AUTH_USER_ID);
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Design variants four' });
+    const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'design-variants',
+        prompt: '',
+        config: {},
+        inputAssetIds: [ownAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config.batchCount).toBe(4);
+    expect(response.body.data.job.config.variantStyles).toEqual(['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood']);
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 40);
+  });
+
+  it.each([3, 5])('rejects invalid design-variants batchCount %s', async (batchCount) => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: `Invalid variant ${batchCount}` });
+    const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'design-variants',
+        prompt: '',
+        config: { batchCount },
+        inputAssetIds: [ownAsset.id],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: { code: 'GENERATION_JOB_BATCH_COUNT_INVALID' },
+    });
+  });
+
+  it('generates and saves all design-variants results sequentially with mock provider', async () => {
+    const originalWorkerDisabled = process.env.ARCHAI_DISABLE_GENERATION_WORKER;
+    process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'false';
+
+    try {
+      const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Variant worker project' });
+      const ownAsset = await storage.createImageAsset({
+        userId: DEV_AUTH_USER_ID,
+        url: `data:image/png;base64,${validOnePixelPng.toString('base64')}`,
+        filename: 'variant-input.png',
+        mimeType: 'image/png',
+        size: validOnePixelPng.length,
+      });
+
+      const response = await request(app)
+        .post('/api/generation-jobs')
+        .send({
+          projectId: project.id,
+          mode: 'design-variants',
+          prompt: '',
+          config: {
+            batchCount: 2,
+            variantStrategy: 'style-matrix',
+            variantStyles: ['modern-minimal', 'natural-wood'],
+            customPrompt: 'Keep the original layout and camera angle.',
+          },
+          inputAssetIds: [ownAsset.id],
+        });
+
+      expect(response.status).toBe(201);
+      const job = await waitForGenerationJob(response.body.data.job.id, 'succeeded');
+      const results = await storage.listGenerationResults(job.id, DEV_AUTH_USER_ID);
+
+      expect(job.outputAssetIds).toHaveLength(2);
+      expect(job.outputAssetId).toBe(job.outputAssetIds?.[0]);
+      expect(results).toHaveLength(2);
+      expect(results[0]).toMatchObject({ isSelected: true, isFavorite: false });
+      expect(results[1]).toMatchObject({ isSelected: false, isFavorite: false });
+      expect(results.map(result => result.metadata?.variantStyle)).toEqual(['modern-minimal', 'natural-wood']);
+    } finally {
+      process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
+    }
+  });
+
   it('refunds credits when a job fails and does not double refund', async () => {
     const originalBalance = await storage.getCreditBalance(DEV_AUTH_USER_ID);
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Failed refund project' });
@@ -676,6 +872,24 @@ describe('asset uploads', () => {
       ok: false,
       error: { code: 'UPLOAD_FILE_TOO_LARGE' },
     });
+    expect(response.body.error.message).toContain('图片文件过大');
+  });
+
+  it.each([
+    ['jpg', Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0x00]), Buffer.alloc(200)]), 'image/jpeg'],
+    ['png', Buffer.concat([tinyPngBuffer(), Buffer.alloc(200)]), 'image/png'],
+    ['webp', Buffer.concat([webpHeaderBuffer(), Buffer.alloc(200)]), 'image/webp'],
+  ])('uses the image upload limit for oversized .%s images', async (extension, content, contentType) => {
+    const response = await request(app)
+      .post('/api/assets/images')
+      .attach('file', content, { filename: `large.${extension}`, contentType });
+
+    expect(response.status).toBe(413);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: { code: 'UPLOAD_FILE_TOO_LARGE' },
+    });
+    expect(response.body.error.message).toContain('图片文件过大');
   });
 
   it('rejects multipart uploads without a file field', async () => {
@@ -687,6 +901,74 @@ describe('asset uploads', () => {
     expect(response.body).toMatchObject({
       ok: false,
       error: { code: 'UPLOAD_FILE_MISSING' },
+    });
+  });
+
+  it.each([
+    ['glb', Buffer.from('glTFmock'), 'model/gltf-binary'],
+    ['gltf', Buffer.from('{"asset":{"version":"2.0"}}'), 'model/gltf+json'],
+    ['obj', Buffer.from('o cube\nv 0 0 0\nf 1 1 1\n'), 'application/octet-stream'],
+    ['dae', Buffer.from('<?xml version="1.0"?><COLLADA></COLLADA>'), 'application/octet-stream'],
+    ['stl', Buffer.from([0, 1, 2, 3, 4, 5]), 'application/octet-stream'],
+  ])('uploads a valid .%s model asset', async (extension, content, contentType) => {
+    const response = await request(app)
+      .post('/api/assets/models')
+      .attach('file', content, { filename: `model.${extension}`, contentType });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toMatchObject({
+      ok: true,
+      data: {
+        asset: {
+          userId: DEV_AUTH_USER_ID,
+          fileType: extension,
+          format: extension,
+          originalFilename: `model.${extension}`,
+          mimeType: expect.any(String),
+          size: content.length,
+        },
+      },
+    });
+  });
+
+  it('allows a .glb model over 50MB when it is below the 600MB model limit', async () => {
+    const fiftyOneMbGlb = Buffer.concat([
+      Buffer.from('glTF'),
+      Buffer.alloc(51 * 1024 * 1024 - 4),
+    ]);
+
+    const response = await request(app)
+      .post('/api/assets/models')
+      .attach('file', fiftyOneMbGlb, { filename: 'large-model.glb', contentType: 'model/gltf-binary' });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toMatchObject({
+      ok: true,
+      data: {
+        asset: {
+          fileType: 'glb',
+          format: 'glb',
+          size: fiftyOneMbGlb.length,
+        },
+      },
+    });
+  });
+
+  it('treats files over 600MB as over the model upload limit', () => {
+    expect(isUploadOverLimit(50 * 1024 * 1024 + 1, 600)).toBe(false);
+    expect(isUploadOverLimit(600 * 1024 * 1024, 600)).toBe(false);
+    expect(isUploadOverLimit(600 * 1024 * 1024 + 1, 600)).toBe(true);
+  });
+
+  it.each(['fbx', 'skp'])('rejects unsupported .%s model uploads', async (extension) => {
+    const response = await request(app)
+      .post('/api/assets/models')
+      .attach('file', Buffer.from('unsupported model'), { filename: `model.${extension}`, contentType: 'application/octet-stream' });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: { code: 'MODEL_ASSET_TYPE_INVALID' },
     });
   });
 
@@ -808,6 +1090,10 @@ function tinyPngBuffer() {
   return Buffer.from('iVBORw0KGgo=', 'base64');
 }
 
+function webpHeaderBuffer() {
+  return Buffer.from('RIFF0000WEBP', 'ascii');
+}
+
 async function drainDevUserCredits(label: string) {
   const balance = await storage.getCreditBalance(DEV_AUTH_USER_ID);
   if (balance.balance <= 0) return;
@@ -834,6 +1120,18 @@ async function restoreDevUserCredits(targetBalance: number, label: string) {
     reason: `Restore credits for ${label}`,
     referenceType: 'system',
     referenceId: `restore_${label}_${Date.now()}`,
+  });
+}
+
+function createModelAssetForUser(userId: string) {
+  return storage.createModelAsset({
+    userId,
+    url: `/uploads/users/${userId}/models/model.glb`,
+    filename: `${userId}-model.glb`,
+    originalFilename: `${userId}-model.glb`,
+    fileType: 'glb',
+    mimeType: 'model/gltf-binary',
+    size: 32,
   });
 }
 

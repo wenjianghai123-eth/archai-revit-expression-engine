@@ -27,6 +27,9 @@ function createInitialStepState(step: GenerationStep): StepState {
     generationProgress: 0,
     generationLogs: [],
     viewMode: 'original',
+    selectedModelAsset: null,
+    modelSnapshot: null,
+    modelSnapshotMetadata: null,
   };
 }
 
@@ -35,6 +38,8 @@ function createInitialStepStates(): Record<GenerationStep, StepState> {
     [GenerationStep.FloorplanTo3D]: createInitialStepState(GenerationStep.FloorplanTo3D),
     [GenerationStep.StyleRender]: createInitialStepState(GenerationStep.StyleRender),
     [GenerationStep.LocalInpainting]: createInitialStepState(GenerationStep.LocalInpainting),
+    [GenerationStep.ModelSnapshotRender]: createInitialStepState(GenerationStep.ModelSnapshotRender),
+    [GenerationStep.DesignVariants]: createInitialStepState(GenerationStep.DesignVariants),
   };
 }
 
@@ -172,7 +177,11 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
         ? GenerationStep.FloorplanTo3D
         : template.feature === 'style-render'
           ? GenerationStep.StyleRender
-          : GenerationStep.LocalInpainting;
+          : template.feature === 'design-variants'
+            ? GenerationStep.DesignVariants
+          : template.feature === 'model-render'
+            ? GenerationStep.ModelSnapshotRender
+            : GenerationStep.LocalInpainting;
 
     const nextConfig = targetStep === GenerationStep.FloorplanTo3D
       ? omitFloorplanStyle(template.config)

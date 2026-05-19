@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { ArrowRight, Box, Clock, Database, History, Layers, Paintbrush, ScanLine, Sparkles, Wand2 } from 'lucide-react';
+import { ArrowRight, Box, Clock, Database, History, Layers, LayoutGrid, Paintbrush, ScanLine, Sparkles, Wand2 } from 'lucide-react';
 import { AssetModel, GenerationHistoryItem, GenerationStep, PromptTemplate } from '../types';
 
 interface CreativeHomeProps {
@@ -40,6 +40,24 @@ const toolCards = [
     output: '输出：局部修饰图',
     icon: Paintbrush,
     image: 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&q=80&w=900',
+  },
+  {
+    step: GenerationStep.DesignVariants,
+    title: '方案变体',
+    desc: '一次生成多种设计方向，快速对比方案',
+    input: '输入：原始空间图',
+    output: '输出：2 / 4 张方案矩阵',
+    icon: LayoutGrid,
+    image: 'https://images.unsplash.com/photo-1600607688969-a5bfcd646154?auto=format&fit=crop&q=80&w=900',
+  },
+  {
+    step: GenerationStep.ModelSnapshotRender,
+    title: '白模快渲',
+    desc: '上传 3D 白模，选好角度，一键生成效果图',
+    input: '输入：GLB / GLTF 白模',
+    output: '输出：建筑/室内效果图',
+    icon: Box,
+    image: 'https://images.unsplash.com/photo-1486718448742-163732cd1544?auto=format&fit=crop&q=80&w=900',
   },
 ];
 
@@ -255,5 +273,6 @@ function readStoredAssets(): AssetModel[] {
 function stepLabel(step: GenerationStep): string {
   if (step === GenerationStep.FloorplanTo3D) return '平面-三维';
   if (step === GenerationStep.StyleRender) return '风格渲染';
+  if (step === GenerationStep.ModelSnapshotRender) return '白模快渲';
   return '局部修饰';
 }

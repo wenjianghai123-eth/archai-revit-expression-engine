@@ -35,10 +35,10 @@ type ModelCategory = NonNullable<AssetModel['category']>;
 type StatusFilter = '全部' | '可用' | '待优化' | '失败';
 
 const STORAGE_KEY = 'archai-model-assets-v1';
-const MAX_MODEL_SIZE_MB = 50;
+const MAX_MODEL_SIZE_MB = 600;
 const MAX_MODEL_SIZE_BYTES = MAX_MODEL_SIZE_MB * 1024 * 1024;
 const PREVIEWABLE_TYPES = new Set<AssetModel['fileType']>(['glb', 'gltf']);
-const ALLOWED_TYPES = new Set<AssetModel['fileType']>(['glb', 'gltf', 'obj']);
+const ALLOWED_TYPES = new Set<AssetModel['fileType']>(['glb', 'gltf', 'obj', 'dae', 'stl']);
 const CATEGORIES: Array<'全部' | ModelCategory> = ['全部', '家具', '建筑构件', '景观构件', '灯具', '植物', '装饰品', '未分类'];
 const STATUS_FILTERS: StatusFilter[] = ['全部', '可用', '待优化', '失败'];
 
@@ -112,7 +112,7 @@ const SAMPLE_ASSETS: AssetModel[] = [
 
 function getFileExtension(fileName: string): AssetModel['fileType'] {
   const extension = fileName.split('.').pop()?.toLowerCase();
-  if (extension === 'glb' || extension === 'gltf' || extension === 'obj') {
+  if (extension === 'glb' || extension === 'gltf' || extension === 'obj' || extension === 'dae' || extension === 'stl') {
     return extension;
   }
   return 'unknown';
@@ -122,11 +122,11 @@ function validateModelFile(file: File): string | null {
   const fileType = getFileExtension(file.name);
 
   if (!ALLOWED_TYPES.has(fileType)) {
-    return '仅支持上传 .glb、.gltf、.obj 文件；OBJ 当前仅保存元数据。';
+    return '仅支持上传 .glb、.gltf、.obj、.dae、.stl 文件；暂不支持 FBX 和 SKP 原生文件。';
   }
 
   if (file.size > MAX_MODEL_SIZE_BYTES) {
-    return `模型文件不能超过 ${MAX_MODEL_SIZE_MB}MB。`;
+    return `模型文件过大，最大支持 ${MAX_MODEL_SIZE_MB}MB。建议压缩模型或导出为 GLB 后重新上传。`;
   }
 
   return null;
@@ -161,6 +161,7 @@ function mapModelAssetRecord(asset: ModelAssetRecord): AssetModel {
     name: asset.originalFilename.replace(/\.[^.]+$/, ''),
     fileName: asset.originalFilename,
     fileType: asset.fileType,
+    format: asset.format || asset.fileType,
     modelUrl: asset.url,
     thumbnail: createModelThumbnail(asset.fileType),
     size: formatFileSize(asset.size),
@@ -176,7 +177,7 @@ function mapModelAssetRecord(asset: ModelAssetRecord): AssetModel {
     tags: previewable ? ['后端上传', '可预览'] : ['后端上传', 'OBJ 元数据'],
     category: '未分类',
     previewable,
-    storageWarning: asset.fileType === 'obj' ? 'OBJ 当前暂不支持在线预览，已作为模型元数据保存。' : undefined,
+    storageWarning: undefined,
   };
 }
 
@@ -507,7 +508,7 @@ export function AssetBank() {
   const handleFileUpload = () => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.glb,.gltf,.obj,model/gltf-binary,model/gltf+json';
+    input.accept = '.glb,.gltf,.obj,.dae,.stl,model/gltf-binary,model/gltf+json,model/vnd.collada+xml,model/stl';
     input.onchange = (event: Event) => {
       const target = event.target as HTMLInputElement;
       const file = target.files?.[0];
@@ -669,7 +670,7 @@ export function AssetBank() {
                 </div>
                 <div>
                   <h2 className="text-xl font-bold tracking-tight text-slate-950">三维模型资产库</h2>
-                  <p className="mt-1 text-sm text-slate-500">管理由参考图生成或手动上传的 GLB/GLTF/OBJ 模型资产</p>
+                  <p className="mt-1 text-sm text-slate-500">支持 GLB、GLTF、OBJ、DAE、STL 模型，单个模型最大 600MB。推荐使用 GLB 格式。</p>
                 </div>
               </div>
               <button
@@ -846,7 +847,7 @@ export function AssetBank() {
                 <p className="mt-3 max-w-xl text-sm leading-6 text-slate-500">
                   {hasAnyAsset
                     ? '请尝试更换关键词、分类或质量筛选条件。'
-                    : '还没有三维模型资产。上传 GLB/GLTF/OBJ，或通过参考图片生成模型后在这里统一管理。'}
+                    : '还没有三维模型资产。上传 GLB、GLTF、OBJ、DAE 或 STL 模型，推荐使用 GLB；SketchUp 用户建议导出为 GLB、DAE、OBJ 或 STL 后上传。'}
                 </p>
                 <button onClick={handleFileUpload} className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-blue-100 hover:bg-blue-700">
                   <Upload className="h-4 w-4" />

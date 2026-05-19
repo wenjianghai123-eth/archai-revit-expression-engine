@@ -10,12 +10,46 @@ export interface Project {
   deletedAt?: string | null;
 }
 
+export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants';
+export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
+export type VariantStyleKey =
+  | 'modern-minimal'
+  | 'wabi-sabi'
+  | 'cream-style'
+  | 'light-luxury'
+  | 'industrial'
+  | 'commercial-showroom'
+  | 'hotel-lobby'
+  | 'office-space'
+  | 'natural-wood'
+  | 'premium-gray'
+  | 'custom';
+
+export interface ModelSnapshotMetadata {
+  sourceType: 'model-snapshot';
+  sourceModelAssetId: string;
+  width: number;
+  height: number;
+  camera?: {
+    position?: number[];
+    rotation?: number[];
+    target?: number[];
+    fov?: number;
+  };
+  viewMode?: 'orbit' | 'walkthrough';
+  clippingEnabled?: boolean;
+  clippingHeight?: number;
+  xrayEnabled?: boolean;
+  edgesEnabled?: boolean;
+  createdAt: string;
+}
+
 export interface GenerationRecord {
   id: string;
   userId: string;
   projectId: string;
   jobId?: string | null;
-  mode: 'floorplan' | 'style-render' | 'inpaint';
+  mode: GenerationMode;
   prompt: string;
   inputImageUrl?: string | null;
   inputImageDataPreview?: string | null;
@@ -26,13 +60,16 @@ export interface GenerationRecord {
   createdAt: string;
   updatedAt: string;
   results?: GenerationResult[];
+  sourceModelAssetId?: string | null;
+  snapshotAssetId?: string | null;
+  modelSnapshotMetadata?: ModelSnapshotMetadata | null;
 }
 
 export interface GenerationJob {
   id: string;
   userId: string;
   projectId: string;
-  mode: 'floorplan' | 'style-render' | 'inpaint';
+  mode: GenerationMode;
   prompt: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];
@@ -48,6 +85,9 @@ export interface GenerationJob {
   finishedAt: string | null;
   diagnostics?: GenerationJobDiagnostics;
   results?: GenerationResult[];
+  sourceModelAssetId?: string | null;
+  snapshotAssetId?: string | null;
+  modelSnapshotMetadata?: ModelSnapshotMetadata | null;
 }
 
 export type GenerationJobPhase =
@@ -125,6 +165,7 @@ export interface GenerationResult {
   imageUrl: string;
   isSelected: boolean;
   isFavorite: boolean;
+  metadata?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -145,7 +186,8 @@ export interface ModelAsset {
   url: string;
   filename: string;
   originalFilename: string;
-  fileType: 'glb' | 'gltf' | 'obj';
+  fileType: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
+  format?: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
   mimeType: string;
   size: number;
   createdAt: string;
@@ -248,6 +290,9 @@ export type CreateGenerationRecordInput = {
   outputImageDataPreview?: string | null;
   provider: string;
   status?: GenerationRecord['status'];
+  sourceModelAssetId?: string | null;
+  snapshotAssetId?: string | null;
+  modelSnapshotMetadata?: ModelSnapshotMetadata | null;
 };
 
 export type CreateGenerationJobInput = {
@@ -274,6 +319,7 @@ export type CreateGenerationResultInput = {
   imageUrl: string;
   isSelected?: boolean;
   isFavorite?: boolean;
+  metadata?: Record<string, unknown>;
 };
 
 export type UpdateGenerationResultInput = Partial<Pick<GenerationResult, 'isSelected' | 'isFavorite'>>;

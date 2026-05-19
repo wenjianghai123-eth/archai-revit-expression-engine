@@ -8,6 +8,8 @@ import { InpaintMaskPanel } from './workspace/InpaintMaskPanel';
 import { PromptConfigPanel } from './workspace/PromptConfigPanel';
 import { MaterialTexturesPanel, StyleSelectorPanel } from './workspace/ReferenceImagesPanel';
 import { ResultPreviewPanel } from './workspace/ResultPreviewPanel';
+import { ModelSnapshotRenderPanel } from './ModelSnapshotRenderPanel';
+import { DesignVariantsPanel } from './DesignVariantsPanel';
 import { UploadErrors, UploadTarget, ViewModeOption } from './workspace/workspaceTypes';
 import { getUploadedImageSrc, isLocalInpaintingStep, maxFurnitureReferences, maxMaterialTextures, readGenerationStatusLabel } from './workspace/workspaceUtils';
 
@@ -68,6 +70,8 @@ export function MainWorkspace({
 
   const isFloorplanStep = step === GenerationStep.FloorplanTo3D;
   const isStyleRenderStep = step === GenerationStep.StyleRender;
+  const isModelSnapshotStep = step === GenerationStep.ModelSnapshotRender;
+  const isDesignVariantsStep = step === GenerationStep.DesignVariants;
   const canGenerate = Boolean(state.inputImage) && !state.isGenerating && !isCreditsInsufficient;
   const providerForStatus = backendProvider || state.generationProvider;
   const originalImageUrl = state.inputImage ? getUploadedImageSrc(state.inputImage) : null;
@@ -83,7 +87,7 @@ export function MainWorkspace({
   const previewImage = selectedResult?.imageUrl || state.outputImage;
   const generationStartedAt = state.generationJobDiagnostics?.timing?.jobStartedAt || state.generationCreatedAt;
   const statusLabel = readGenerationStatusLabel(state.generationJobDiagnostics?.phase, state.generationJobStatus, state.generationStatus);
-  const resultPanelTitle = isFloorplanStep ? '材质设置与结果' : isStyleRenderStep ? '渲染设置与结果' : '输出 / 状态';
+  const resultPanelTitle = isModelSnapshotStep ? '白模快渲结果' : isFloorplanStep ? '材质设置与结果' : isStyleRenderStep ? '渲染设置与结果' : '输出 / 状态';
   const viewModeOptions: ViewModeOption[] = [
     { value: 'after', label: '结果图', disabled: !previewImage },
     { value: 'original', label: '原图', disabled: !originalImageUrl },
@@ -300,6 +304,83 @@ export function MainWorkspace({
       onTextureLimit={handleTextureLimit}
     />
   );
+
+  if (isDesignVariantsStep) {
+    return (
+      <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">
+        <input ref={inputFileRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleFileSelected('input', event.currentTarget.files); event.currentTarget.value = ''; }} />
+        <DesignVariantsPanel
+          state={state}
+          resultOptions={resultOptions}
+          selectedResultId={selectedResult?.id || null}
+          previewImage={previewImage}
+          uploadError={uploadErrors.input}
+          onUploadInput={() => handleUploadClick('input')}
+          onUpdateInputImage={onUpdateInputImage}
+          onUpdateConfig={onUpdateConfig}
+          onGenerate={onGenerate}
+          onSelectGenerationResult={onSelectGenerationResult}
+          onToggleGenerationFavorite={onToggleGenerationFavorite}
+        />
+        <GenerationStatusPanel
+          step={step}
+          state={state}
+          title="方案变体结果"
+          statusLabel={statusLabel}
+          elapsedSeconds={elapsedSeconds}
+          canGenerate={canGenerate}
+          previewImage={previewImage}
+          originalImageUrl={originalImageUrl}
+          resultOptions={resultOptions}
+          selectedResultId={selectedResult?.id || null}
+          viewModeOptions={viewModeOptions}
+          topPanels={null}
+          onGenerate={onGenerate}
+          onRegenerate={onRegenerate}
+          onCancelGeneration={onCancelGeneration}
+          onSelectGenerationResult={onSelectGenerationResult}
+          onToggleGenerationFavorite={onToggleGenerationFavorite}
+          onSetViewMode={onSetViewMode}
+          onNextStep={onGenerate}
+          onReset={onReset}
+        />
+      </div>
+    );
+  }
+
+  if (isModelSnapshotStep) {
+    return (
+      <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">
+        <ModelSnapshotRenderPanel
+          state={state}
+          onUpdateConfig={onUpdateConfig}
+          onUpdateInputImage={onUpdateInputImage}
+        />
+        <GenerationStatusPanel
+          step={step}
+          state={state}
+          title={resultPanelTitle}
+          statusLabel={statusLabel}
+          elapsedSeconds={elapsedSeconds}
+          canGenerate={Boolean(state.inputImage) && !state.isGenerating && !isCreditsInsufficient}
+          previewImage={previewImage}
+          originalImageUrl={originalImageUrl}
+          resultOptions={resultOptions}
+          selectedResultId={selectedResult?.id || null}
+          viewModeOptions={viewModeOptions}
+          topPanels={null}
+          onGenerate={onGenerate}
+          onRegenerate={onRegenerate}
+          onCancelGeneration={onCancelGeneration}
+          onSelectGenerationResult={onSelectGenerationResult}
+          onToggleGenerationFavorite={onToggleGenerationFavorite}
+          onSetViewMode={onSetViewMode}
+          onNextStep={onGenerate}
+          onReset={onReset}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">

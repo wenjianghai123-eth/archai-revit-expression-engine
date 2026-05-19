@@ -29,18 +29,29 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
     warnings.push('Mock inpaint 已接收 maskImageDataUrl，仅用于开发占位，不代表真实局部重绘能力。');
   }
 
+  if (input.mode === 'model-render') {
+    warnings.push('Mock model-render 已接收模型视角截图，结果仅用于开发占位。');
+  }
+
   return {
     id: crypto.randomUUID(),
     provider: 'mock',
     dataUrl: createMockImageDataUrl(input.mode, input.prompt, createdAt, readMockSize(input)),
     mimeType: 'image/svg+xml',
+    metadata: {
+      mode: input.mode,
+      variantIndex: typeof input.config.variantIndex === 'number' ? input.config.variantIndex : undefined,
+      variantLabel: typeof input.config.variantLabel === 'string' ? input.config.variantLabel : undefined,
+      variantStyle: typeof input.config.variantStyle === 'string' ? input.config.variantStyle : undefined,
+      batchCount: typeof input.config.batchCount === 'number' ? input.config.batchCount : undefined,
+    },
     createdAt,
     warnings,
   };
 }
 
 function createMockImageDataUrl(
-  mode: 'floorplan' | 'style-render' | 'inpaint',
+  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants',
   prompt: string,
   createdAt: string,
   size: { width: number; height: number },
@@ -49,6 +60,8 @@ function createMockImageDataUrl(
     floorplan: 'Mock Floorplan Generation',
     'style-render': 'Mock Style Render Generation',
     inpaint: 'Mock Inpaint Generation',
+    'model-render': 'Mock Model Snapshot Render',
+    'design-variants': 'Mock Design Variant',
   }[mode];
   const promptPreview = prompt.length > 90 ? `${prompt.slice(0, 90)}...` : prompt;
   const svg = `

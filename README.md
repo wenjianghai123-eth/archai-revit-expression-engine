@@ -115,7 +115,7 @@ Backend/runtime variables, never expose with a `VITE_` prefix:
 - `DATA_DIR`: JSON backend directory. Defaults to `data`.
 - `UPLOADS_DIR`: local file storage directory. Defaults to `uploads`.
 - `MAX_IMAGE_MB`: per-image server validation limit. Defaults to `10`.
-- `MAX_MODEL_MB`: per-model server validation limit. Defaults to `50`.
+- `MAX_MODEL_MB`: per-model server validation limit. Defaults to `600`.
 - `GENERATION_JOB_RATE_LIMIT_PER_MINUTE`: per-user generation job creation limit. Defaults to `10`.
 - `ARCHAI_DISABLE_GENERATION_WORKER`: test/dev switch. Set to `true` to stop the in-process generation worker from automatically processing queued jobs.
 - `CORS_ORIGIN`: comma-separated browser origins allowed to call the backend. Defaults to local Vite origins.

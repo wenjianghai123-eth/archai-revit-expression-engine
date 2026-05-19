@@ -16,7 +16,7 @@ jobs:
       FILE_STORAGE: local
       PORT: 8787
       MAX_IMAGE_MB: 10
-      MAX_MODEL_MB: 50
+      MAX_MODEL_MB: 600
       GENERATION_JOB_RATE_LIMIT_PER_MINUTE: 100
       CORS_ORIGIN: http://127.0.0.1:3000,http://localhost:3000
     steps:
@@ -54,7 +54,7 @@ jobs:
       FILE_STORAGE: local
       PORT: 8787
       MAX_IMAGE_MB: 10
-      MAX_MODEL_MB: 50
+      MAX_MODEL_MB: 600
       GENERATION_JOB_RATE_LIMIT_PER_MINUTE: 100
       CORS_ORIGIN: http://127.0.0.1:3000,http://localhost:3000
     steps:

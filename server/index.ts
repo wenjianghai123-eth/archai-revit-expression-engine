@@ -91,7 +91,7 @@ const port = Number(process.env.PORT || 8787);
 const host = process.env.HOST || '0.0.0.0';
 const version = '0.1.0';
 const maxImageMb = Number(process.env.MAX_IMAGE_MB || 10);
-const maxModelMb = Number(process.env.MAX_MODEL_MB || 50);
+const maxModelMb = Number(process.env.MAX_MODEL_MB || 600);
 const jsonLimit = `${Math.max(maxImageMb * 3, 15)}mb`;
 const generationJobRateLimitPerMinute = Number(process.env.GENERATION_JOB_RATE_LIMIT_PER_MINUTE || 10);
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
@@ -402,7 +402,8 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
 
     const assetValidation = await validateGenerationJobAssets(body.value.inputAssetIds, body.value.mode, body.value.config, user.id);
     if (assetValidation.ok === false) {
-      res.status(404).json(apiError(assetValidation.error.message, assetValidation.error.code));
+      const status = assetValidation.error.code === 'GENERATION_JOB_SOURCE_MODEL_NOT_FOUND' ? 403 : 404;
+      res.status(status).json(apiError(assetValidation.error.message, assetValidation.error.code));
       return;
     }
 
@@ -417,7 +418,7 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
       userId: user.id,
       type: 'debit',
       amount: -creditsCost,
-      reason: `Generation job ${job.mode} x1`,
+      reason: `Generation job ${job.mode} x${resolveChargedOutputCount(body.value.mode, body.value.config)}`,
       referenceType: 'generation_job',
       referenceId: job.id,
     });
@@ -1169,6 +1170,85 @@ function validateGenerationRecordCreateBody(
   };
 }
 
+const variantStyleKeys = new Set([
+  'modern-minimal',
+  'wabi-sabi',
+  'cream-style',
+  'light-luxury',
+  'industrial',
+  'commercial-showroom',
+  'hotel-lobby',
+  'office-space',
+  'natural-wood',
+  'premium-gray',
+  'custom',
+]);
+const defaultVariantStylesByCount: Record<2 | 4, string[]> = {
+  2: ['modern-minimal', 'natural-wood'],
+  4: ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'],
+};
+
+function normalizeDesignVariantConfig(
+  mode: GenerationRecord['mode'],
+  config: Record<string, unknown>,
+): { ok: true } | { ok: false; error: ApiError } {
+  if (mode !== 'design-variants') {
+    config.batchCount = 1;
+    delete config.variantStrategy;
+    delete config.variantStyles;
+    delete config.customStyleLabel;
+    return { ok: true };
+  }
+
+  const batchCount = config.batchCount === undefined ? 4 : config.batchCount;
+  if (batchCount !== 2 && batchCount !== 4) {
+    return {
+      ok: false,
+      error: {
+        message: 'batchCount must be 2 or 4 for design-variants jobs.',
+        code: 'GENERATION_JOB_BATCH_COUNT_INVALID',
+      },
+    };
+  }
+
+  const variantStrategy = config.variantStrategy === undefined ? 'style-matrix' : config.variantStrategy;
+  if (variantStrategy !== 'style-matrix' && variantStrategy !== 'same-style') {
+    return {
+      ok: false,
+      error: {
+        message: 'variantStrategy must be style-matrix or same-style.',
+        code: 'GENERATION_JOB_VARIANT_STRATEGY_INVALID',
+      },
+    };
+  }
+
+  const requestedStyles = Array.isArray(config.variantStyles)
+    ? config.variantStyles.filter((item): item is string => typeof item === 'string' && variantStyleKeys.has(item))
+    : [];
+  const defaults = defaultVariantStylesByCount[batchCount];
+  const styles = [...requestedStyles];
+  for (const style of defaults) {
+    if (styles.length >= batchCount) break;
+    if (!styles.includes(style)) styles.push(style);
+  }
+
+  config.batchCount = batchCount;
+  config.variantStrategy = variantStrategy;
+  config.variantStyles = styles.slice(0, batchCount);
+  config.preserveStructure = config.preserveStructure !== false;
+  config.preserveCamera = config.preserveCamera !== false;
+  config.strength = config.strength === 'subtle' || config.strength === 'strong' ? config.strength : 'balanced';
+  if (typeof config.customPrompt !== 'string' || config.customPrompt.trim().length === 0) delete config.customPrompt;
+  else config.customPrompt = config.customPrompt.trim();
+  if (typeof config.customStyleLabel !== 'string' || config.customStyleLabel.trim().length === 0) delete config.customStyleLabel;
+  else config.customStyleLabel = config.customStyleLabel.trim();
+  return { ok: true };
+}
+
+function resolveChargedOutputCount(mode: GenerationRecord['mode'], config: Record<string, unknown>): number {
+  return mode === 'design-variants' && (config.batchCount === 2 || config.batchCount === 4) ? config.batchCount : 1;
+}
+
 function validateGenerationJobCreateBody(
   body: unknown,
 ): { ok: true; value: Omit<Parameters<typeof createGenerationJob>[0], 'provider' | 'userId'> } | { ok: false; error: ApiError } {
@@ -1201,7 +1281,18 @@ function validateGenerationJobCreateBody(
   }
 
   const config: Record<string, unknown> = { ...body.config };
-  config.batchCount = 1;
+  const variantConfig = normalizeDesignVariantConfig(body.mode, config);
+  if (variantConfig.ok === false) {
+    return { ok: false, error: variantConfig.error };
+  }
+  if (body.mode === 'model-render') {
+    if (!isNonEmptyString(config.sourceImageAssetId) && !isNonEmptyString(config.snapshotAssetId)) {
+      return { ok: false, error: { message: 'sourceImageAssetId is required for model-render jobs.', code: 'GENERATION_JOB_SNAPSHOT_ASSET_REQUIRED' } };
+    }
+    if (isNonEmptyString(config.sourceImageAssetId)) config.sourceImageAssetId = config.sourceImageAssetId.trim();
+    if (isNonEmptyString(config.snapshotAssetId)) config.snapshotAssetId = config.snapshotAssetId.trim();
+    if (isNonEmptyString(config.sourceModelAssetId)) config.sourceModelAssetId = config.sourceModelAssetId.trim();
+  }
   if (config.editTarget !== undefined && config.editTarget !== 'general' && config.editTarget !== 'material' && config.editTarget !== 'furniture') {
     return { ok: false, error: { message: 'editTarget must be general, material, or furniture.', code: 'GENERATION_JOB_EDIT_TARGET_INVALID' } };
   }
@@ -1352,7 +1443,7 @@ function isNullableString(value: unknown): value is string | null {
 }
 
 function isGenerationMode(value: unknown): value is GenerationRecord['mode'] {
-  return value === 'floorplan' || value === 'style-render' || value === 'inpaint';
+  return value === 'floorplan' || value === 'style-render' || value === 'inpaint' || value === 'model-render' || value === 'design-variants';
 }
 
 function isGenerationStatus(value: unknown): value is GenerationRecord['status'] {
@@ -1419,6 +1510,37 @@ async function validateGenerationJobAssets(
           code: 'GENERATION_JOB_MASK_ASSET_NOT_FOUND',
         },
       };
+    }
+  }
+
+  if (mode === 'model-render') {
+    const sourceImageAssetId = typeof config.sourceImageAssetId === 'string'
+      ? config.sourceImageAssetId.trim()
+      : typeof config.snapshotAssetId === 'string'
+        ? config.snapshotAssetId.trim()
+        : '';
+    if (!sourceImageAssetId || !inputAssetIds.includes(sourceImageAssetId)) {
+      return {
+        ok: false,
+        error: {
+          message: 'Snapshot image asset is required for model-render.',
+          code: 'GENERATION_JOB_SNAPSHOT_ASSET_NOT_FOUND',
+        },
+      };
+    }
+
+    const sourceModelAssetId = typeof config.sourceModelAssetId === 'string' ? config.sourceModelAssetId.trim() : '';
+    if (sourceModelAssetId) {
+      const modelAsset = await getModelAsset(sourceModelAssetId, userId);
+      if (!modelAsset) {
+        return {
+          ok: false,
+          error: {
+            message: 'Source model asset not found.',
+            code: 'GENERATION_JOB_SOURCE_MODEL_NOT_FOUND',
+          },
+        };
+      }
     }
   }
 

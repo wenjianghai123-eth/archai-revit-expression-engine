@@ -47,7 +47,7 @@ export function getGenerationProviderName(): ProviderName {
 
 export function calculateGenerationCreditsCost(mode: GenerationRecord['mode'], config: Record<string, unknown>): number {
   const baseCost = mode === 'inpaint' ? 8 : 10;
-  return baseCost;
+  return baseCost * resolveBatchCountForJobConfig(mode, config);
 }
 
 export async function refundGenerationJobCredits(jobId: string): Promise<void> {
@@ -162,15 +162,30 @@ async function processGenerationJob(jobId: string): Promise<void> {
     markTiming(diagnostics, 'prepareInputFinishedAt');
     await updateGenerationJob(job.id, { progress: 22, diagnostics });
 
-    const batchCount = 1;
+    const batchCount = resolveBatchCountForJob(job);
+    const variantStyles = resolveVariantStyles(job.config, batchCount);
     const outputAssetIds: string[] = [];
     let firstOutput: GenerateImageOutput | null = null;
     let firstOutputAsset: ImageAsset | null = null;
 
     for (let index = 0; index < batchCount; index += 1) {
       markTiming(diagnostics, 'providerRequestStartedAt', 'provider-request');
-      await updateGenerationJob(job.id, { progress: 28, diagnostics });
-      const providerOutput = await generateWithFallback(input);
+      await updateGenerationJob(job.id, { progress: resolveVariantStartProgress(batchCount, index), diagnostics });
+      const variantStyle = variantStyles[index] || 'modern-minimal';
+      const providerInput = job.mode === 'design-variants'
+        ? {
+            ...input,
+            prompt: buildDesignVariantPrompt(job, index, batchCount, variantStyle),
+            config: {
+              ...input.config,
+              variantIndex: index,
+              variantLabel: readVariantLabel(index),
+              variantStyle,
+              batchCount,
+            },
+          }
+        : input;
+      const providerOutput = await generateWithFallback(providerInput);
       markTiming(diagnostics, 'providerRequestFinishedAt');
       diagnostics.provider = {
         ...diagnostics.provider,
@@ -203,7 +218,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
         dataUrl: outputDataUrl,
       };
       markTiming(diagnostics, 'postprocessFinishedAt');
-      const progress = 25 + Math.round(((index + 1) / batchCount) * 55);
+      const progress = resolveVariantCompleteProgress(batchCount, index);
       await updateGenerationJob(job.id, { progress });
 
       markTiming(diagnostics, 'saveResultStartedAt', 'save-result');
@@ -220,6 +235,14 @@ async function processGenerationJob(jobId: string): Promise<void> {
         imageUrl: outputAsset.url,
         isSelected: index === 0,
         isFavorite: false,
+        metadata: job.mode === 'design-variants'
+          ? {
+              variantIndex: index,
+              variantLabel: readVariantLabel(index),
+              variantStyle,
+              batchCount,
+            }
+          : undefined,
       });
 
       if (!firstOutput) firstOutput = output;
@@ -253,6 +276,9 @@ async function processGenerationJob(jobId: string): Promise<void> {
       outputImageUrl: firstOutputAsset.url,
       provider: firstOutput.provider,
       status: 'succeeded',
+      sourceModelAssetId: typeof job.config.sourceModelAssetId === 'string' ? job.config.sourceModelAssetId : null,
+      snapshotAssetId: typeof job.config.snapshotAssetId === 'string' ? job.config.snapshotAssetId : job.inputAssetIds[0] || null,
+      modelSnapshotMetadata: readModelSnapshotMetadata(job.config.modelSnapshotMetadata),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Generation failed.';
@@ -311,7 +337,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     furnitureReferenceImageDataUrls,
     maskImageDataUrl,
     maskMode,
-    prompt: job.prompt,
+    prompt: buildProviderPromptForJob(job),
     config: removeInternalConfig(job.config),
     targetWidth: targetDimensions.targetWidth,
     targetHeight: targetDimensions.targetHeight,
@@ -822,6 +848,139 @@ function readRequestedProviderVariableName(): string {
 function removeInternalConfig(config: Record<string, unknown>): Record<string, unknown> {
   const { __diagnostics: _diagnostics, ...publicConfig } = config;
   return publicConfig;
+}
+
+const defaultVariantStylesByCount: Record<2 | 4, string[]> = {
+  2: ['modern-minimal', 'natural-wood'],
+  4: ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'],
+};
+
+const variantStylePrompts: Record<string, string> = {
+  'modern-minimal': 'Direction: modern minimalist, clean lines, calm neutral palette, refined materials.',
+  'wabi-sabi': 'Direction: wabi-sabi, natural textures, warm muted tones, imperfect handcrafted feeling.',
+  'cream-style': 'Direction: warm cream style, soft beige palette, cozy lighting, gentle materials.',
+  'light-luxury': 'Direction: modern light luxury, premium stone, metal accents, elegant lighting.',
+  industrial: 'Direction: industrial style, exposed texture, darker tones, metal and concrete.',
+  'commercial-showroom': 'Direction: commercial showroom, clear display focus, polished materials, attractive lighting.',
+  'hotel-lobby': 'Direction: hotel lobby style, premium atmosphere, layered lighting, elegant finishes.',
+  'office-space': 'Direction: modern office space, efficient layout, clean materials, professional lighting.',
+  'natural-wood': 'Direction: natural wood style, warm timber, soft daylight, relaxed atmosphere.',
+  'premium-gray': 'Direction: premium gray palette, restrained contrast, refined stone and metal.',
+  custom: 'Direction: custom design direction.',
+};
+
+const sameStyleVariantPrompts = [
+  'Variant A: conservative, clean, balanced.',
+  'Variant B: warmer, softer, more atmospheric.',
+  'Variant C: more premium materials and clearer visual hierarchy.',
+  'Variant D: bolder lighting and more expressive styling.',
+];
+
+const designVariantBasePrompt = 'Create one distinct design variant from the input image. Preserve the original layout, structure, camera angle, perspective, and main proportions. Change the design through materials, colors, lighting, furniture, landscape, and atmosphere. Keep it realistic and suitable for architectural or interior presentation. Do not alter the core geometry.';
+
+function resolveBatchCountForJob(job: GenerationJob): 1 | 2 | 4 {
+  return resolveBatchCountForJobConfig(job.mode, job.config);
+}
+
+function resolveBatchCountForJobConfig(mode: GenerationRecord['mode'], config: Record<string, unknown>): 1 | 2 | 4 {
+  if (mode !== 'design-variants') return 1;
+  return config.batchCount === 2 || config.batchCount === 4 ? config.batchCount : 4;
+}
+
+function resolveVariantStyles(config: Record<string, unknown>, batchCount: 1 | 2 | 4): string[] {
+  if (batchCount === 1) return ['modern-minimal'];
+  const styles = Array.isArray(config.variantStyles)
+    ? config.variantStyles.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+  const defaults = defaultVariantStylesByCount[batchCount];
+  const resolved = [...styles];
+  for (const style of defaults) {
+    if (resolved.length >= batchCount) break;
+    if (!resolved.includes(style)) resolved.push(style);
+  }
+  return resolved.slice(0, batchCount);
+}
+
+function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount: 1 | 2 | 4, style: string): string {
+  const strategy = job.config.variantStrategy === 'same-style' ? 'same-style' : 'style-matrix';
+  const strength = job.config.strength === 'subtle' || job.config.strength === 'strong' ? job.config.strength : 'balanced';
+  const customStyle = style === 'custom' && typeof job.config.customStyleLabel === 'string'
+    ? `Direction: ${job.config.customStyleLabel.trim()}.`
+    : variantStylePrompts[style] || variantStylePrompts['modern-minimal'];
+  const parts = [
+    designVariantBasePrompt,
+    customStyle,
+    strategy === 'same-style' ? sameStyleVariantPrompts[index] : undefined,
+    strength === 'subtle'
+      ? 'Change intensity: subtle.'
+      : strength === 'strong'
+        ? 'Change intensity: strong, but keep the structure.'
+        : 'Change intensity: balanced.',
+    typeof job.config.customPrompt === 'string' && job.config.customPrompt.trim().length > 0
+      ? `User note: ${job.config.customPrompt.trim()}`
+      : undefined,
+    `This is ${readVariantLabel(index)} of ${batchCount}.`,
+  ];
+  return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+}
+
+function readVariantLabel(index: number): string {
+  return `方案 ${String.fromCharCode(65 + index)}`;
+}
+
+function resolveVariantStartProgress(batchCount: 1 | 2 | 4, index: number): number {
+  if (batchCount === 1) return 28;
+  return index === 0 ? 20 : resolveVariantCompleteProgress(batchCount, index - 1);
+}
+
+function resolveVariantCompleteProgress(batchCount: 1 | 2 | 4, index: number): number {
+  if (batchCount === 2) return index === 0 ? 60 : 90;
+  if (batchCount === 4) return [40, 60, 80, 90][index] || 90;
+  return 80;
+}
+
+function buildProviderPromptForJob(job: GenerationJob): string {
+  if (job.mode === 'design-variants') {
+    return buildDesignVariantPrompt(job, 0, resolveBatchCountForJob(job), resolveVariantStyles(job.config, resolveBatchCountForJob(job))[0] || 'modern-minimal');
+  }
+
+  if (job.mode !== 'model-render') return job.prompt;
+
+  return [
+    'This is a viewport snapshot from a 3D clay/white model.',
+    'Transform this 3D clay/white model viewport snapshot into a realistic architectural/interior rendering.',
+    'Preserve the original geometry, massing, layout, camera angle, perspective, composition, and spatial proportions.',
+    'Add materials, lighting, shadows, environment, furniture, landscape details, and atmosphere as appropriate.',
+    'Do not change the fundamental structure unless the user explicitly asks.',
+    `Building type: ${readConfigString(job.config.buildingType, 'unspecified')}.`,
+    `Space type: ${readConfigString(job.config.spaceType, 'unspecified')}.`,
+    `Rendering style: ${readConfigString(job.config.renderStyle, 'realistic architectural visualization')}.`,
+    `Atmosphere: ${readConfigString(job.config.atmosphere, 'natural daylight')}.`,
+    `Additional user instruction: ${readConfigString(job.config.customPrompt, job.prompt || 'none')}.`,
+  ].join(' ');
+}
+
+function readConfigString(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
+}
+
+function readModelSnapshotMetadata(value: unknown): GenerationRecord['modelSnapshotMetadata'] {
+  if (!isRecord(value)) return null;
+  if (value.sourceType !== 'model-snapshot' || typeof value.sourceModelAssetId !== 'string') return null;
+  if (typeof value.width !== 'number' || typeof value.height !== 'number' || typeof value.createdAt !== 'string') return null;
+  return {
+    sourceType: 'model-snapshot',
+    sourceModelAssetId: value.sourceModelAssetId,
+    width: value.width,
+    height: value.height,
+    camera: isRecord(value.camera) ? value.camera as GenerationRecord['modelSnapshotMetadata'] extends infer M ? M extends { camera?: infer C } ? C : never : never : undefined,
+    viewMode: value.viewMode === 'orbit' || value.viewMode === 'walkthrough' ? value.viewMode : undefined,
+    clippingEnabled: typeof value.clippingEnabled === 'boolean' ? value.clippingEnabled : undefined,
+    clippingHeight: typeof value.clippingHeight === 'number' ? value.clippingHeight : undefined,
+    xrayEnabled: typeof value.xrayEnabled === 'boolean' ? value.xrayEnabled : undefined,
+    edgesEnabled: typeof value.edgesEnabled === 'boolean' ? value.edgesEnabled : undefined,
+    createdAt: value.createdAt,
+  };
 }
 
 function markTiming(

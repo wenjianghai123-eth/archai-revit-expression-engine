@@ -309,6 +309,31 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
     preserveStructure: true,
     feather: 0,
   },
+  [GenerationStep.ModelSnapshotRender]: {
+    prompt: "",
+    style: "写实建筑表现",
+    lighting: "自然光",
+    materialStrength: 0.8,
+    batchCount: 1,
+    buildingType: "住宅",
+    spaceType: "外立面",
+    renderStyle: "现代极简",
+    atmosphere: "日景",
+    preserveGeometry: true,
+  },
+  [GenerationStep.DesignVariants]: {
+    prompt: "",
+    style: "方案变体",
+    lighting: "匹配原图",
+    materialStrength: 0.8,
+    batchCount: 4,
+    variantStrategy: 'style-matrix',
+    variantStyles: ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'],
+    customPrompt: "",
+    preserveStructure: true,
+    preserveCamera: true,
+    strength: 'balanced',
+  },
 };
 
 export const PROMPT_TEMPLATES: PromptTemplate[] = [

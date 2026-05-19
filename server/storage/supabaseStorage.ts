@@ -87,6 +87,7 @@ type GenerationResultRow = {
   image_url: string;
   is_selected: boolean;
   is_favorite: boolean;
+  metadata?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 };
@@ -415,6 +416,7 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       image_url: input.imageUrl,
       is_selected: input.isSelected ?? false,
       is_favorite: input.isFavorite ?? false,
+      metadata: input.metadata ?? null,
       created_at: now,
       updated_at: now,
     };
@@ -870,6 +872,7 @@ function mapGenerationResultRow(row: GenerationResultRow): GenerationResult {
     imageUrl: row.image_url,
     isSelected: row.is_selected,
     isFavorite: row.is_favorite,
+    metadata: row.metadata ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -895,6 +898,7 @@ function mapModelAssetRow(row: ModelAssetRow): ModelAsset {
     filename: row.filename,
     originalFilename: row.original_filename,
     fileType: row.file_type,
+    format: row.file_type,
     mimeType: row.mime_type,
     size: row.size,
     createdAt: row.created_at,

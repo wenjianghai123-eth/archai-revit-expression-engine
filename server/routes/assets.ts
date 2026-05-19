@@ -16,6 +16,7 @@ import {
   getDefaultModelMimeType,
   getImageExtension,
   getModelFileType,
+  isUploadOverLimit,
   isAllowedModelMimeType,
   readMultipartFile,
   readMultipartImage,
@@ -96,7 +97,13 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
     next: NextFunction,
   ) => {
     try {
-      const uploadedFile = await readMultipartFile(req, options.maxModelMb * 1024 * 1024 + 1024 * 1024, options.maxModelMb);
+      const modelTooLargeMessage = `模型文件过大，最大支持 ${options.maxModelMb}MB。建议压缩模型或导出为 GLB 后重新上传。`;
+      const uploadedFile = await readMultipartFile(
+        req,
+        options.maxModelMb * 1024 * 1024 + 1024 * 1024,
+        options.maxModelMb,
+        modelTooLargeMessage,
+      );
       if (uploadedFile.ok === false) {
         res.status(uploadedFile.status).json(apiError(uploadedFile.error.message, uploadedFile.error.code));
         return;
@@ -104,12 +111,12 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
 
       const fileType = getModelFileType(uploadedFile.value.originalFilename);
       if (!fileType) {
-        res.status(400).json(apiError('Only GLB, GLTF, and OBJ model files are supported.', 'MODEL_ASSET_TYPE_INVALID'));
+        res.status(400).json(apiError('Only GLB, GLTF, OBJ, DAE, and STL model files are supported. FBX and native SKP files are not supported.', 'MODEL_ASSET_TYPE_INVALID'));
         return;
       }
 
-      if (uploadedFile.value.content.length > options.maxModelMb * 1024 * 1024) {
-        res.status(413).json(apiError(`Model file cannot exceed ${options.maxModelMb}MB.`, 'MODEL_ASSET_TOO_LARGE'));
+      if (isUploadOverLimit(uploadedFile.value.content.length, options.maxModelMb)) {
+        res.status(413).json(apiError(modelTooLargeMessage, 'MODEL_ASSET_TOO_LARGE'));
         return;
       }
 

@@ -363,6 +363,9 @@ async function createGenerationRecord(input: {
   outputImageDataPreview?: string | null;
   provider: string;
   status?: GenerationRecord['status'];
+  sourceModelAssetId?: string | null;
+  snapshotAssetId?: string | null;
+  modelSnapshotMetadata?: GenerationRecord['modelSnapshotMetadata'];
 }): Promise<GenerationRecord | null> {
   const db = await readDatabase();
   const project = db.projects.find(item => item.id === input.projectId && item.userId === input.userId && !item.deletedAt);
@@ -387,6 +390,9 @@ async function createGenerationRecord(input: {
     status: input.status ?? 'succeeded',
     createdAt: now,
     updatedAt: now,
+    sourceModelAssetId: input.sourceModelAssetId ?? null,
+    snapshotAssetId: input.snapshotAssetId ?? null,
+    modelSnapshotMetadata: input.modelSnapshotMetadata ?? null,
   };
 
   db.generationRecords.unshift(record);
@@ -401,7 +407,9 @@ async function createGenerationRecord(input: {
 
 async function listGenerationResults(jobId: string, userId?: string): Promise<GenerationResult[]> {
   const db = await readDatabase();
-  return db.generationResults.filter(result => result.jobId === jobId && (!userId || result.userId === userId));
+  return db.generationResults
+    .filter(result => result.jobId === jobId && (!userId || result.userId === userId))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
 async function createGenerationResult(input: CreateGenerationResultInput): Promise<GenerationResult | null> {
@@ -423,6 +431,7 @@ async function createGenerationResult(input: CreateGenerationResultInput): Promi
     imageUrl: input.imageUrl,
     isSelected: input.isSelected ?? false,
     isFavorite: input.isFavorite ?? false,
+    metadata: input.metadata,
     createdAt: now,
     updatedAt: now,
   };
@@ -629,6 +638,7 @@ async function createModelAsset(input: {
     filename: input.filename,
     originalFilename: input.originalFilename,
     fileType: input.fileType,
+    format: input.fileType,
     mimeType: input.mimeType,
     size: input.size,
     createdAt: now,

@@ -610,6 +610,8 @@ function buildReportKey(generationId: string, resultId: string): string {
 function modeLabel(mode: GenerationRecord['mode']): string {
   if (mode === 'floorplan') return '平面生成';
   if (mode === 'style-render') return '风格渲染';
+  if (mode === 'design-variants') return '方案变体';
+  if (mode === 'model-render') return '白模快渲';
   return '局部重绘';
 }
 

@@ -7,6 +7,7 @@ export const styleOptions = ['现代主义', '极简风格', '北欧风格', '�
 export function modeLabel(step: GenerationStep): string {
   if (step === GenerationStep.FloorplanTo3D) return '平面生成';
   if (step === GenerationStep.StyleRender) return '风格渲染';
+  if (step === GenerationStep.ModelSnapshotRender) return '白模快渲';
   return '局部重绘';
 }
 

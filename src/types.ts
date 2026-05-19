@@ -1,12 +1,28 @@
 export enum GenerationStep {
-  FloorplanTo3D = 1, // 平面转三维
-  StyleRender = 2, // 风格渲染
-  LocalInpainting = 3, // 局部重绘
+  FloorplanTo3D = 1,
+  StyleRender = 2,
+  LocalInpainting = 3,
+  ModelSnapshotRender = 4,
+  DesignVariants = 5,
 }
 
+export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants';
 export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled';
+export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
+export type VariantStyleKey =
+  | 'modern-minimal'
+  | 'wabi-sabi'
+  | 'cream-style'
+  | 'light-luxury'
+  | 'industrial'
+  | 'commercial-showroom'
+  | 'hotel-lobby'
+  | 'office-space'
+  | 'natural-wood'
+  | 'premium-gray'
+  | 'custom';
 
 export interface GenerationJobDiagnostics {
   phase?: GenerationJobPhase;
@@ -28,6 +44,39 @@ export interface GenerationJobDiagnostics {
   };
 }
 
+export interface ModelSnapshotCamera {
+  position?: number[];
+  rotation?: number[];
+  target?: number[];
+  fov?: number;
+}
+
+export interface ModelSnapshotCapture {
+  dataUrl: string;
+  width: number;
+  height: number;
+  camera?: ModelSnapshotCamera;
+  viewMode?: 'orbit' | 'walkthrough';
+  clippingEnabled?: boolean;
+  clippingHeight?: number;
+  xrayEnabled?: boolean;
+  edgesEnabled?: boolean;
+}
+
+export interface ModelSnapshotMetadata {
+  sourceType: 'model-snapshot';
+  sourceModelAssetId: string;
+  width: number;
+  height: number;
+  camera?: ModelSnapshotCamera;
+  viewMode?: 'orbit' | 'walkthrough';
+  clippingEnabled?: boolean;
+  clippingHeight?: number;
+  xrayEnabled?: boolean;
+  edgesEnabled?: boolean;
+  createdAt: string;
+}
+
 export interface GenerationConfig {
   prompt: string;
   style?: string;
@@ -47,13 +96,27 @@ export interface GenerationConfig {
   enhanceInterior?: boolean;
   addCharacters?: boolean;
   inpaintingStrength?: 'weak' | 'medium' | 'strong';
-  strength?: 'weak' | 'medium' | 'strong';
+  strength?: 'weak' | 'medium' | 'strong' | 'subtle' | 'balanced';
   keepOriginalMaterial?: boolean;
   preserveStructure?: boolean;
+  preserveCamera?: boolean;
   feather?: number;
   batchCount?: 1 | 2 | 4;
+  variantStrategy?: VariantGenerationStrategy;
+  variantStyles?: VariantStyleKey[];
+  customStyleLabel?: string;
   maskMode?: 'asset-mask' | 'full-image';
   maskAssetId?: string;
+  buildingType?: string;
+  spaceType?: string;
+  renderStyle?: string;
+  atmosphere?: string;
+  customPrompt?: string;
+  preserveGeometry?: boolean;
+  sourceModelAssetId?: string;
+  sourceImageAssetId?: string;
+  snapshotAssetId?: string;
+  modelSnapshotMetadata?: ModelSnapshotMetadata;
 }
 
 export interface GenerationResultOption {
@@ -63,6 +126,11 @@ export interface GenerationResultOption {
   isSelected: boolean;
   isFavorite: boolean;
   createdAt?: string;
+  metadata?: Record<string, unknown>;
+  variantIndex?: number;
+  variantLabel?: string;
+  variantStyle?: VariantStyleKey;
+  variantStyleLabel?: string;
 }
 
 export interface StepState {
@@ -89,6 +157,9 @@ export interface StepState {
   generationProgress: number;
   generationLogs: string[];
   viewMode: 'original' | 'after' | 'compare' | 'overlay';
+  selectedModelAsset?: AssetModel | null;
+  modelSnapshot?: UploadedImage | null;
+  modelSnapshotMetadata?: ModelSnapshotMetadata | null;
 }
 
 export interface UploadedImage {
@@ -125,7 +196,7 @@ export interface PromptTemplate {
   id: string;
   title: string;
   category: string;
-  feature: 'floorplan' | 'style-render' | 'inpaint';
+  feature: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants';
   supportedModes?: GenerationStep[] | string[];
   description: string;
   previewImage: string;
@@ -164,6 +235,10 @@ export interface GenerationHistoryItem {
   maskImageName?: string;
   editTarget?: GenerationConfig['editTarget'];
   furnitureReferences?: ReferenceImage[];
+  generationResults?: GenerationResultOption[];
+  sourceModelAssetId?: string;
+  snapshotAssetId?: string;
+  modelSnapshotMetadata?: ModelSnapshotMetadata;
   resultStored?: boolean;
   storageWarning?: string;
 }
@@ -172,7 +247,8 @@ export interface AssetModel {
   id: string;
   name: string;
   fileName: string;
-  fileType: 'glb' | 'gltf' | 'obj' | 'unknown';
+  fileType: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl' | 'unknown';
+  format?: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
   modelUrl?: string;
   thumbnail: string;
   size: string;
@@ -189,7 +265,7 @@ export interface AssetModel {
   materials?: string;
   textures?: string;
   tags?: string[];
-  category?: '家具' | '建筑构件' | '景观构件' | '灯具' | '植物' | '装饰品' | '未分类';
+  category?: string;
   storageWarning?: string;
   type?: string;
   previewable?: boolean;

@@ -15,7 +15,7 @@ export const WORKSPACE_PROMPT_TEMPLATES: PromptTemplate[] = [
 ];
 
 function tpl(id: string, title: string, category: string, step: GenerationStep, description: string, tags: string[], prompt: string, variables?: PromptTemplate['variables']): PromptTemplate {
-  const feature = step === GenerationStep.FloorplanTo3D ? 'floorplan' : step === GenerationStep.StyleRender ? 'style-render' : 'inpaint';
+  const feature = stepToFeature(step);
   return { id, title, category, feature, supportedModes: [step], description, previewImage: '', prompt, promptText: prompt, tags, variables, config: { prompt } };
 }
 
@@ -33,6 +33,7 @@ export function filterPromptTemplates(input: { templates?: PromptTemplate[]; ste
 export function defaultPromptTemplateCategory(step: GenerationStep, editTarget?: string): string {
   if (step === GenerationStep.FloorplanTo3D) return '平面彩平';
   if (step === GenerationStep.StyleRender) return '风格渲染';
+  if (step === GenerationStep.ModelSnapshotRender) return '风格渲染';
   if (editTarget === 'furniture') return '家具修改';
   if (editTarget === 'material') return '材质替换';
   return '局部修饰';
@@ -51,5 +52,7 @@ export function mergePromptTemplate(currentPrompt: string, templatePrompt: strin
 }
 
 function stepToFeature(step: GenerationStep): PromptTemplate['feature'] {
+  if (step === GenerationStep.ModelSnapshotRender) return 'model-render';
+  if (step === GenerationStep.DesignVariants) return 'design-variants';
   return step === GenerationStep.FloorplanTo3D ? 'floorplan' : step === GenerationStep.StyleRender ? 'style-render' : 'inpaint';
 }

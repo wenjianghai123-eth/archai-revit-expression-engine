@@ -1,4 +1,4 @@
-export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint';
+export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants';
 export type ProviderName = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type MaskMode = 'asset-mask' | 'full-image';
 

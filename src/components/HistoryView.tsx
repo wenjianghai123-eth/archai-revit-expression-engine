@@ -9,10 +9,11 @@ interface HistoryViewProps {
   onClear: () => void;
 }
 
-const stepLabels: Record<GenerationStep, string> = {
+const stepLabels: Partial<Record<GenerationStep, string>> = {
   [GenerationStep.FloorplanTo3D]: '平面转效果图',
   [GenerationStep.StyleRender]: '风格渲染',
   [GenerationStep.LocalInpainting]: '局部修饰',
+  [GenerationStep.ModelSnapshotRender]: '白模快渲',
 };
 
 export function HistoryView({ items, onReuse, onDelete, onClear }: HistoryViewProps) {
@@ -60,7 +61,7 @@ export function HistoryView({ items, onReuse, onDelete, onClear }: HistoryViewPr
                 <div className="space-y-2 p-3">
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
-                      <span className="arch-pill bg-blue-50 text-blue-700">{stepLabels[item.step]}</span>
+                      <span className="arch-pill bg-blue-50 text-blue-700">{stepLabels[item.step] || '方案变体'}</span>
                       <span className="arch-pill uppercase">{item.provider}</span>
                     </div>
                     <time className="text-[10px] font-mono text-slate-400">{item.createdAt}</time>

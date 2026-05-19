@@ -11,14 +11,15 @@ export async function readMultipartImage(
   | { ok: true; value: { content: Buffer; mimeType: string; originalFilename: string } }
   | { ok: false; status: number; error: ApiError }
 > {
-  const parsed = await readMultipartFile(req, maxImageMb * 1024 * 1024 + 1024 * 1024, maxImageMb);
+  const tooLargeMessage = `图片文件过大，最大支持 ${maxImageMb}MB。`;
+  const parsed = await readMultipartFile(req, maxImageMb * 1024 * 1024 + 1024 * 1024, maxImageMb, tooLargeMessage);
   if (parsed.ok === false) return parsed;
 
   if (parsed.value.content.length > maxImageMb * 1024 * 1024) {
     return {
       ok: false,
       status: 413,
-      error: { message: `Image file cannot exceed ${maxImageMb}MB.`, code: 'UPLOAD_FILE_TOO_LARGE' },
+      error: { message: tooLargeMessage, code: 'UPLOAD_FILE_TOO_LARGE' },
     };
   }
 
@@ -45,6 +46,7 @@ export async function readMultipartFile(
   req: Request,
   maxBytes: number,
   displayMaxMb: number,
+  tooLargeMessage = `上传文件过大，最大支持 ${displayMaxMb}MB。`,
 ): Promise<
   | { ok: true; value: { content: Buffer; mimeType: string; originalFilename: string } }
   | { ok: false; status: number; error: ApiError }
@@ -122,7 +124,7 @@ export async function readMultipartFile(
 
       file.on('limit', () => {
         failOnce(413, {
-          message: `Upload request cannot exceed ${displayMaxMb}MB.`,
+          message: tooLargeMessage,
           code: 'UPLOAD_TOO_LARGE',
         });
       });
@@ -135,7 +137,7 @@ export async function readMultipartFile(
         totalBytes += chunk.length;
         if (totalBytes > maxBytes) {
           failOnce(413, {
-            message: `Upload request cannot exceed ${displayMaxMb}MB.`,
+            message: tooLargeMessage,
             code: 'UPLOAD_TOO_LARGE',
           });
           return;
@@ -208,9 +210,13 @@ export function getImageExtension(mimeType: string): string {
   return 'jpg';
 }
 
+export function isUploadOverLimit(sizeBytes: number, maxMb: number): boolean {
+  return sizeBytes > maxMb * 1024 * 1024;
+}
+
 export function getModelFileType(filename: string): ModelAsset['fileType'] | null {
   const extension = filename.split('.').pop()?.toLowerCase();
-  if (extension === 'glb' || extension === 'gltf' || extension === 'obj') {
+  if (extension === 'glb' || extension === 'gltf' || extension === 'obj' || extension === 'dae' || extension === 'stl') {
     return extension;
   }
 
@@ -220,6 +226,8 @@ export function getModelFileType(filename: string): ModelAsset['fileType'] | nul
 export function getDefaultModelMimeType(fileType: ModelAsset['fileType']): string {
   if (fileType === 'glb') return 'model/gltf-binary';
   if (fileType === 'gltf') return 'model/gltf+json';
+  if (fileType === 'dae') return 'model/vnd.collada+xml';
+  if (fileType === 'stl') return 'model/stl';
   return 'model/obj';
 }
 
@@ -236,6 +244,16 @@ export function isAllowedModelMimeType(fileType: ModelAsset['fileType'], mimeTyp
       || commonBinaryMimeTypes.has(normalizedMimeType);
   }
 
+  if (fileType === 'dae') {
+    return ['model/vnd.collada+xml', 'application/xml', 'text/xml', 'text/plain'].includes(normalizedMimeType)
+      || commonBinaryMimeTypes.has(normalizedMimeType);
+  }
+
+  if (fileType === 'stl') {
+    return ['model/stl', 'application/sla', 'application/vnd.ms-pki.stl', 'text/plain'].includes(normalizedMimeType)
+      || commonBinaryMimeTypes.has(normalizedMimeType);
+  }
+
   return ['model/obj', 'text/plain', 'application/wavefront-obj'].includes(normalizedMimeType)
     || commonBinaryMimeTypes.has(normalizedMimeType);
 }
@@ -247,12 +265,19 @@ export function sniffModelFile(fileType: ModelAsset['fileType'], content: Buffer
     return content.length >= 4 && content.slice(0, 4).toString('ascii') === 'glTF';
   }
 
+  if (fileType === 'stl') {
+    return content.length > 0;
+  }
+
   const preview = content.subarray(0, Math.min(content.length, 4096));
   if (preview.includes(0)) return false;
-
   const trimmedPreview = preview.toString('utf8').trimStart();
   if (fileType === 'gltf') {
     return trimmedPreview.startsWith('{');
+  }
+
+  if (fileType === 'dae') {
+    return trimmedPreview.startsWith('<');
   }
 
   return trimmedPreview.length > 0;

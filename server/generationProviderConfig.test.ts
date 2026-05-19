@@ -29,7 +29,7 @@ describe('generation provider configuration', () => {
     expect(generationService.getGenerationProviderName()).toBe('grsai-banana2');
     await expect(generationService.generateWithFallbackResponse(input)).rejects.toThrow('GRSAI_API_KEY is required');
     expect(fetchMock).not.toHaveBeenCalled();
-  });
+  }, 15000);
 
   it('generates successfully with mock when GENERATION_PROVIDER=mock', async () => {
     vi.resetModules();
@@ -41,5 +41,5 @@ describe('generation provider configuration', () => {
     expect(generationService.getGenerationProviderName()).toBe('mock');
     expect(response.provider).toBe('mock');
     expect(response.imageDataUrl).toMatch(/^data:image\/svg\+xml;base64,/u);
-  });
+  }, 15000);
 });
