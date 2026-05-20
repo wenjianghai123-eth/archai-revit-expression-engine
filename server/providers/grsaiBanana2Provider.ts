@@ -12,6 +12,7 @@ const defaultDownloadTimeoutMs = 30000;
 const defaultRequestTimeoutMs = 120000;
 const defaultMaxRetries = 1;
 const defaultRetryBackoffMs = 1500;
+const modelMaintenanceUserMessage = '当前生成模型正在维护，请稍后重试，或切换其他生成模型。';
 
 interface GrsaiBanana2ProviderOptions {
   apiKey?: string;
@@ -228,7 +229,7 @@ async function pollGeneration(input: {
     }
 
     if (status === 'failed') {
-      throw new Error(formatTaskFailure(result));
+      throw createTaskFailureError(result);
     }
 
     await delay(input.pollIntervalMs);
@@ -414,6 +415,13 @@ function buildPrompt(input: GenerateImageInput): string {
     return buildInpaintPrompt(input);
   }
 
+  if (input.mode === 'model-render') {
+    return [
+      input.prompt,
+      'Do not add text, watermarks, labels, borders, or UI elements.',
+    ].filter(isNonEmptyString).join('\n');
+  }
+
   const pieces: string[] = [];
   pieces.push(
     'The first image is the original scene to edit or render.',
@@ -512,8 +520,21 @@ function normalizeTaskResult(value: unknown): GrsaiTaskResult {
   return isRecord(value) ? value as GrsaiTaskResult : {};
 }
 
-function formatTaskFailure(result: GrsaiTaskResult): string {
-  return result.failure_reason || result.error || 'Grsai Banana2 task failed.';
+function createTaskFailureError(result: GrsaiTaskResult): Error {
+  if (String(result.error || '').toLowerCase() === 'model maintenance') {
+    const error = new Error(modelMaintenanceUserMessage) as Error & {
+      providerError?: string;
+      providerStatus?: string;
+      failureReason?: string;
+      userMessage?: string;
+    };
+    error.providerError = 'model maintenance';
+    error.providerStatus = String(result.status || 'failed');
+    error.failureReason = result.failure_reason;
+    error.userMessage = modelMaintenanceUserMessage;
+    return error;
+  }
+  return new Error(result.failure_reason || result.error || 'Grsai Banana2 task failed.');
 }
 
 function formatResponseSummary(value: unknown): string {

@@ -40,6 +40,7 @@ const maxImageMb = Number(process.env.MAX_IMAGE_MB || 10);
 const provider = selectProvider();
 const queuedGenerationJobIds: string[] = [];
 let isGenerationWorkerRunning = false;
+const providerMaintenanceUserMessage = '当前生成模型正在维护，请稍后重试，或切换其他生成模型。';
 
 export function getGenerationProviderName(): ProviderName {
   return provider.name;
@@ -309,7 +310,16 @@ async function processGenerationJob(jobId: string): Promise<void> {
       modelSnapshotMetadata: readModelSnapshotMetadata(job.config.modelSnapshotMetadata),
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Generation failed.';
+    const providerError = normalizeProviderFailure(error);
+    const message = providerError.userMessage || (error instanceof Error ? error.message : 'Generation failed.');
+    if (providerError.userMessage || providerError.providerError || providerError.providerStatus) {
+      diagnostics.provider = {
+        ...diagnostics.provider,
+        providerError: providerError.providerError,
+        providerStatus: providerError.providerStatus,
+        userMessage: providerError.userMessage,
+      };
+    }
     markTiming(diagnostics, 'jobFinishedAt', 'failed');
     finalizeDurations(diagnostics);
     logJobTiming(job.id, diagnostics, message);
@@ -365,7 +375,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     ? createFullImageMaskDataUrl()
     : maskAssetId ? await getImageAssetDataUrl(maskAssetId, job.userId) : undefined;
 
-  const targetDimensions = await resolveTargetDimensions(job.config, inputImageDataUrl);
+  const targetDimensions = await resolveTargetDimensions(job.mode, job.config, inputImageDataUrl);
   const rawInput: GenerateImageInput = {
     mode: job.mode,
     inputImageDataUrl,
@@ -408,6 +418,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
 }
 
 async function resolveTargetDimensions(
+  mode: GenerationRecord['mode'],
   config: Record<string, unknown>,
   inputImageDataUrl: string,
 ): Promise<{ targetWidth?: number; targetHeight?: number; targetAspectRatio?: string }> {
@@ -417,7 +428,7 @@ async function resolveTargetDimensions(
     return {
       targetWidth: configWidth,
       targetHeight: configHeight,
-      targetAspectRatio: typeof config.targetAspectRatio === 'string' ? config.targetAspectRatio : getAspectRatioString(configWidth, configHeight),
+      targetAspectRatio: typeof config.targetAspectRatio === 'string' ? config.targetAspectRatio : getAspectRatioString(configWidth, configHeight, mode),
     };
   }
 
@@ -426,7 +437,7 @@ async function resolveTargetDimensions(
     return {
       targetWidth: size.width,
       targetHeight: size.height,
-      targetAspectRatio: getAspectRatioString(size.width, size.height),
+      targetAspectRatio: typeof config.targetAspectRatio === 'string' ? config.targetAspectRatio : getAspectRatioString(size.width, size.height, mode),
     };
   } catch (error) {
     console.warn('Unable to infer target image size; generated output will not be resized.', {
@@ -547,7 +558,7 @@ async function prepareReferenceImage(
   return image;
 }
 
-function getAspectRatioString(width: number, height: number): string {
+function getAspectRatioString(width: number, height: number, mode?: GenerationRecord['mode']): string {
   const ratio = width / height;
   const candidates = [
     { value: '1:1', ratio: 1 },
@@ -556,9 +567,13 @@ function getAspectRatioString(width: number, height: number): string {
     { value: '16:9', ratio: 16 / 9 },
     { value: '9:16', ratio: 9 / 16 },
   ];
-  return candidates.reduce((best, candidate) => (
-    Math.abs(candidate.ratio - ratio) < Math.abs(best.ratio - ratio) ? candidate : best
-  )).value;
+  const best = candidates.reduce((currentBest, candidate) => (
+    Math.abs(candidate.ratio - ratio) < Math.abs(currentBest.ratio - ratio) ? candidate : currentBest
+  ));
+  if (mode === 'model-render' && Math.abs(best.ratio - ratio) > 0.08) {
+    return 'auto';
+  }
+  return best.value;
 }
 
 async function getOwnedAssetDataUrls(assetIds: string[], userId: string, maxCount: number, label: string): Promise<string[]> {
@@ -839,8 +854,35 @@ function isRetryableProviderFailure(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const status = readErrorStatus(error);
   return error.message.includes('timed out')
+    || isProviderMaintenanceError(error)
     || status === 429
     || (typeof status === 'number' && status >= 500);
+}
+
+function normalizeProviderFailure(error: unknown): { providerError?: string; providerStatus?: string; userMessage?: string } {
+  if (!isProviderMaintenanceError(error)) return {};
+  const providerError = readErrorStringField(error, 'providerError') || 'model maintenance';
+  const providerStatus = readErrorStringField(error, 'providerStatus') || 'failed';
+  return {
+    providerError,
+    providerStatus,
+    userMessage: providerMaintenanceUserMessage,
+  };
+}
+
+function isProviderMaintenanceError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const providerError = readErrorStringField(error, 'providerError');
+  const userMessage = readErrorStringField(error, 'userMessage');
+  return error.message.toLowerCase().includes('model maintenance')
+    || providerError?.toLowerCase() === 'model maintenance'
+    || userMessage === providerMaintenanceUserMessage;
+}
+
+function readErrorStringField(error: unknown, field: string): string | undefined {
+  if (!isRecord(error)) return undefined;
+  const value = error[field];
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function isValidImageDataUrl(value: unknown): value is string {
@@ -1050,18 +1092,20 @@ function buildProviderPromptForJob(job: GenerationJob): string {
 
   if (job.mode !== 'model-render') return job.prompt;
 
-  return [
-    'This is a viewport snapshot from a 3D clay/white model.',
-    'Transform this 3D clay/white model viewport snapshot into a realistic architectural/interior rendering.',
-    'Preserve the original geometry, massing, layout, camera angle, perspective, composition, and spatial proportions.',
-    'Add materials, lighting, shadows, environment, furniture, landscape details, and atmosphere as appropriate.',
-    'Do not change the fundamental structure unless the user explicitly asks.',
-    `Building type: ${readConfigString(job.config.buildingType, 'unspecified')}.`,
-    `Space type: ${readConfigString(job.config.spaceType, 'unspecified')}.`,
-    `Rendering style: ${readConfigString(job.config.renderStyle, 'realistic architectural visualization')}.`,
-    `Atmosphere: ${readConfigString(job.config.atmosphere, 'natural daylight')}.`,
-    `Additional user instruction: ${readConfigString(job.config.customPrompt, job.prompt || 'none')}.`,
-  ].join(' ');
+  const buildingType = readMeaningfulConfigString(job.config.buildingType);
+  const spaceType = readMeaningfulConfigString(job.config.spaceType);
+  const renderStyle = readMeaningfulConfigString(job.config.renderStyle) || readMeaningfulConfigString(job.config.style);
+  const atmosphere = readMeaningfulConfigString(job.config.atmosphere) || readMeaningfulConfigString(job.config.lighting);
+  const customPrompt = readMeaningfulConfigString(job.config.customPrompt) || readMeaningfulConfigString(job.config.userPrompt);
+  const parts = [
+    'The input image is a 3D clay or white model viewport snapshot. Transform it into a realistic architectural or interior rendering. Preserve the original geometry, massing, layout, camera angle, perspective, composition, and spatial proportions. Add appropriate materials, lighting, shadows, environment, furniture, landscape details, and atmosphere. Do not change the fundamental structure unless explicitly requested.',
+    buildingType ? `Building type: ${buildingType}.` : undefined,
+    spaceType ? `Space type: ${spaceType}.` : undefined,
+    renderStyle ? `Rendering style: ${renderStyle}.` : undefined,
+    atmosphere ? `Atmosphere: ${atmosphere}.` : undefined,
+    customPrompt ? `User note: ${customPrompt}.` : undefined,
+  ];
+  return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
 }
 
 function buildMaterialReplacePrompt(job: GenerationJob): string {
@@ -1132,19 +1176,29 @@ function buildPlanColorizePrompt(job: GenerationJob): string {
   return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
 }
 
-function readConfigString(value: unknown, fallback: string): string {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
+function readMeaningfulConfigString(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const normalized = trimmed.toLowerCase();
+  if (normalized === 'none' || normalized === 'null' || normalized === 'undefined') return '';
+  return trimmed;
 }
 
 function readModelSnapshotMetadata(value: unknown): GenerationRecord['modelSnapshotMetadata'] {
   if (!isRecord(value)) return null;
-  if (value.sourceType !== 'model-snapshot' || typeof value.sourceModelAssetId !== 'string') return null;
-  if (typeof value.width !== 'number' || typeof value.height !== 'number' || typeof value.createdAt !== 'string') return null;
+  if (value.sourceType !== 'model-snapshot') return null;
+  if (typeof value.createdAt !== 'string') return null;
   return {
     sourceType: 'model-snapshot',
-    sourceModelAssetId: value.sourceModelAssetId,
-    width: value.width,
-    height: value.height,
+    inputSource: value.inputSource === 'uploaded-snapshot' ? 'uploaded-snapshot' : value.inputSource === 'model-capture' ? 'model-capture' : undefined,
+    sourceModelAssetId: typeof value.sourceModelAssetId === 'string' ? value.sourceModelAssetId : undefined,
+    snapshotAssetId: typeof value.snapshotAssetId === 'string' ? value.snapshotAssetId : undefined,
+    modelPreviewUrl: typeof value.modelPreviewUrl === 'string' ? value.modelPreviewUrl : undefined,
+    usedOptimizedModel: typeof value.usedOptimizedModel === 'boolean' ? value.usedOptimizedModel : undefined,
+    optimizationStatus: value.optimizationStatus === 'pending' || value.optimizationStatus === 'processing' || value.optimizationStatus === 'succeeded' || value.optimizationStatus === 'failed' || value.optimizationStatus === 'skipped' ? value.optimizationStatus : undefined,
+    width: typeof value.width === 'number' && value.width > 0 ? value.width : undefined,
+    height: typeof value.height === 'number' && value.height > 0 ? value.height : undefined,
     camera: isRecord(value.camera) ? value.camera as GenerationRecord['modelSnapshotMetadata'] extends infer M ? M extends { camera?: infer C } ? C : never : never : undefined,
     viewMode: value.viewMode === 'orbit' || value.viewMode === 'walkthrough' ? value.viewMode : undefined,
     clippingEnabled: typeof value.clippingEnabled === 'boolean' ? value.clippingEnabled : undefined,

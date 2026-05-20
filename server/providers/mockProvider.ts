@@ -43,6 +43,11 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
     mimeType: 'image/svg+xml',
     metadata: {
       mode: input.mode,
+      inputSource: typeof input.config.inputSource === 'string'
+        ? input.config.inputSource
+        : typeof input.config.modelSnapshotMetadata === 'object' && input.config.modelSnapshotMetadata && 'inputSource' in input.config.modelSnapshotMetadata
+          ? (input.config.modelSnapshotMetadata as { inputSource?: string }).inputSource
+          : undefined,
       variantIndex: typeof input.config.variantIndex === 'number' ? input.config.variantIndex : undefined,
       variantLabel: typeof input.config.variantLabel === 'string' ? input.config.variantLabel : undefined,
       variantStyle: typeof input.config.variantStyle === 'string' ? input.config.variantStyle : undefined,

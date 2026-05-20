@@ -7,6 +7,7 @@ import {
   CreateGenerationResultInput,
   CreateImageAssetInput,
   CreateModelAssetInput,
+  UpdateModelAssetInput,
   CreateProjectInput,
   CreateShareLinkInput,
   CreditBalance,
@@ -106,11 +107,15 @@ type ModelAssetRow = {
   id: string;
   user_id: string;
   url: string;
+  preview_url?: string | null;
+  optimized_url?: string | null;
+  thumbnail_url?: string | null;
   filename: string;
   original_filename: string;
   file_type: ModelAsset['fileType'];
   mime_type: string;
   size: number;
+  metadata?: ModelAsset['metadata'] | null;
   created_at: string;
   deleted_at: string | null;
 };
@@ -611,11 +616,15 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       id: `model_${randomUUID()}`,
       user_id: input.userId,
       url: input.url,
+      preview_url: input.previewUrl ?? null,
+      optimized_url: input.optimizedUrl ?? null,
+      thumbnail_url: input.thumbnailUrl ?? null,
       filename: input.filename,
       original_filename: input.originalFilename,
       file_type: input.fileType,
       mime_type: input.mimeType,
       size: input.size,
+      metadata: input.metadata ?? null,
       created_at: new Date().toISOString(),
       deleted_at: null,
     };
@@ -623,6 +632,25 @@ export class SupabaseStorageAdapter implements StorageAdapter {
 
     assertNoSupabaseError(error, 'creating model asset');
     return mapModelAssetRow(data as ModelAssetRow);
+  }
+
+  async updateModelAsset(id: string, input: UpdateModelAssetInput): Promise<ModelAsset | null> {
+    const row: Partial<ModelAssetRow> = {};
+    if (input.previewUrl !== undefined) row.preview_url = input.previewUrl;
+    if (input.optimizedUrl !== undefined) row.optimized_url = input.optimizedUrl;
+    if (input.thumbnailUrl !== undefined) row.thumbnail_url = input.thumbnailUrl;
+    if (input.metadata !== undefined) row.metadata = input.metadata;
+
+    const { data, error } = await this.client
+      .from('model_assets')
+      .update(row)
+      .eq('id', id)
+      .is('deleted_at', null)
+      .select('*')
+      .maybeSingle();
+
+    assertNoSupabaseError(error, 'updating model asset');
+    return data ? mapModelAssetRow(data as ModelAssetRow) : null;
   }
 
   async deleteModelAsset(id: string, userId: string): Promise<ModelAsset | null> {
@@ -901,12 +929,16 @@ function mapModelAssetRow(row: ModelAssetRow): ModelAsset {
     id: row.id,
     userId: row.user_id,
     url: row.url,
+    previewUrl: row.preview_url ?? undefined,
+    optimizedUrl: row.optimized_url ?? undefined,
+    thumbnailUrl: row.thumbnail_url ?? undefined,
     filename: row.filename,
     originalFilename: row.original_filename,
     fileType: row.file_type,
     format: row.file_type,
     mimeType: row.mime_type,
     size: row.size,
+    metadata: row.metadata ?? undefined,
     createdAt: row.created_at,
     deletedAt: row.deleted_at,
   };

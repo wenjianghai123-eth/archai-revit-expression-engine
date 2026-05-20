@@ -19,10 +19,12 @@ import {
   GenerationResult,
   ImageAsset,
   ModelAsset,
+  ModelOptimizationMetadata,
   Project,
   ShareLink,
   StorageAdapter,
   UpdateGenerationJobInput,
+  UpdateModelAssetInput,
   UpdateGenerationResultInput,
   UpdateProjectInput,
   UpdateUserProfileInput,
@@ -48,10 +50,12 @@ export type {
   GenerationResult,
   ImageAsset,
   ModelAsset,
+  ModelOptimizationMetadata,
   Project,
   ShareLink,
   StorageAdapter,
   UpdateGenerationJobInput,
+  UpdateModelAssetInput,
   UpdateGenerationResultInput,
   UpdateProjectInput,
   UpdateUserProfileInput,
@@ -176,6 +180,10 @@ export function getModelAsset(id: string, userId?: string): Promise<ModelAsset |
 
 export function createModelAsset(input: CreateModelAssetInput): Promise<ModelAsset> {
   return storageAdapter.createModelAsset(input);
+}
+
+export function updateModelAsset(id: string, input: UpdateModelAssetInput): Promise<ModelAsset | null> {
+  return storageAdapter.updateModelAsset(id, input);
 }
 
 export function deleteModelAsset(id: string, userId: string): Promise<ModelAsset | null> {

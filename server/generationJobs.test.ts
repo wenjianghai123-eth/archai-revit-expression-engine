@@ -36,6 +36,7 @@ beforeAll(async () => {
   process.env.GENERATION_PROVIDER = 'mock';
   process.env.AI_PROVIDER = 'mock';
   process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'true';
+  process.env.ARCHAI_DISABLE_MODEL_OPTIMIZATION_WORKER = 'true';
   process.env.GENERATION_JOB_RATE_LIMIT_PER_MINUTE = '1000';
   process.env.MAX_IMAGE_MB = '0.0001';
   process.env.MAX_MODEL_MB = '600';
@@ -418,6 +419,43 @@ describe('POST /api/generation-jobs asset ownership', () => {
         snapshotAssetId: snapshotAsset.id,
       },
     });
+  });
+
+  it('creates a model-render job from an uploaded snapshot without a source model asset', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Uploaded model snapshot' });
+    const snapshotAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'model-render',
+        prompt: 'render the uploaded white model screenshot',
+        config: {
+          sourceImageAssetId: snapshotAsset.id,
+          snapshotAssetId: snapshotAsset.id,
+          modelSnapshotMetadata: {
+            sourceType: 'model-snapshot',
+            inputSource: 'uploaded-snapshot',
+            snapshotAssetId: snapshotAsset.id,
+            width: 1200,
+            height: 800,
+            createdAt: new Date().toISOString(),
+          },
+        },
+        inputAssetIds: [snapshotAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job).toMatchObject({
+      mode: 'model-render',
+      inputAssetIds: [snapshotAsset.id],
+      config: {
+        sourceImageAssetId: snapshotAsset.id,
+        snapshotAssetId: snapshotAsset.id,
+      },
+    });
+    expect(response.body.data.job.config).not.toHaveProperty('sourceModelAssetId');
   });
 
   it('rejects model-render jobs without a snapshot image asset field', async () => {
@@ -1483,9 +1521,71 @@ describe('asset uploads', () => {
           fileType: 'glb',
           format: 'glb',
           size: fiftyOneMbGlb.length,
+          metadata: {
+            optimizationStatus: expect.stringMatching(/pending|processing|succeeded|failed|skipped/),
+            originalFileSize: fiftyOneMbGlb.length,
+          },
         },
       },
     });
+  });
+
+  it('marks large STL uploads for model preview optimization without failing upload', async () => {
+    const originalThreshold = process.env.MODEL_OPTIMIZATION_THRESHOLD_MB;
+    process.env.MODEL_OPTIMIZATION_THRESHOLD_MB = '0';
+
+    try {
+      const response = await request(app)
+        .post('/api/assets/models')
+        .attach('file', Buffer.from([0, 1, 2, 3, 4, 5]), { filename: 'large-preview.stl', contentType: 'application/octet-stream' });
+
+      expect(response.status).toBe(201);
+      expect(response.body.data.asset).toMatchObject({
+        fileType: 'stl',
+        metadata: {
+          originalUrl: expect.any(String),
+          format: 'stl',
+          originalFileSize: 6,
+          optimizationStatus: 'pending',
+        },
+      });
+
+      const assetId = response.body.data.asset.id;
+      const getResponse = await request(app).get(`/api/assets/models/${encodeURIComponent(assetId)}`);
+      expect(getResponse.status).toBe(200);
+      expect(getResponse.body.data.asset.metadata).toMatchObject({
+        format: 'stl',
+        originalFileSize: 6,
+      });
+    } finally {
+      if (originalThreshold === undefined) delete process.env.MODEL_OPTIMIZATION_THRESHOLD_MB;
+      else process.env.MODEL_OPTIMIZATION_THRESHOLD_MB = originalThreshold;
+    }
+  });
+
+  it('can manually trigger optimization for an uploaded GLB and write preview urls', async () => {
+    const response = await request(app)
+      .post('/api/assets/models')
+      .attach('file', Buffer.from('glTFmock'), { filename: 'manual-preview.glb', contentType: 'model/gltf-binary' });
+
+    expect(response.status).toBe(201);
+    const assetId = response.body.data.asset.id;
+
+    const optimizeResponse = await request(app).post(`/api/assets/models/${encodeURIComponent(assetId)}/optimize`);
+    expect(optimizeResponse.status).toBe(200);
+    expect(optimizeResponse.body.data.asset.metadata.optimizationStatus).toBe('processing');
+
+    const deadline = Date.now() + 3000;
+    let optimizedAsset = optimizeResponse.body.data.asset;
+    while (Date.now() < deadline) {
+      const getResponse = await request(app).get(`/api/assets/models/${encodeURIComponent(assetId)}`);
+      optimizedAsset = getResponse.body.data.asset;
+      if (optimizedAsset.metadata?.optimizationStatus === 'succeeded') break;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+
+    expect(optimizedAsset.metadata.optimizationStatus).toBe('succeeded');
+    expect(optimizedAsset.previewUrl || optimizedAsset.optimizedUrl).toContain('/uploads/models/preview/');
   });
 
   it('treats files over 600MB as over the model upload limit', () => {

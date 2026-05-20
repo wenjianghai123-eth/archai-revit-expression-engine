@@ -131,13 +131,25 @@ export function getModelLoaderDefinition(fileType: AssetModel['fileType']): Mode
 }
 
 export function getStableModelLoadIdentity(asset: AssetModel): StableModelLoadIdentity {
-  const loader = getModelLoaderDefinition(asset.fileType);
+  const modelUrl = resolveModelPreviewUrl(asset);
+  const fileType = modelUrl !== asset.modelUrl && modelUrl ? 'glb' : asset.fileType;
+  const loader = getModelLoaderDefinition(fileType);
   return {
     assetId: asset.id,
-    fileType: asset.fileType,
-    modelUrl: asset.modelUrl || '',
+    fileType,
+    modelUrl,
     loaderKind: loader?.kind ?? null,
   };
+}
+
+export function resolveModelPreviewUrl(asset: AssetModel): string {
+  return asset.optimizedUrl
+    || asset.previewUrl
+    || asset.metadata?.optimizedUrl
+    || asset.metadata?.previewUrl
+    || asset.modelUrl
+    || asset.originalUrl
+    || '';
 }
 
 export function shouldReloadModel(previous: StableModelLoadIdentity, next: StableModelLoadIdentity): boolean {

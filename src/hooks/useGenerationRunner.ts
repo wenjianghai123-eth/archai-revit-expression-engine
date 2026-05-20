@@ -50,18 +50,6 @@ export function useGenerationRunner({
       return;
     }
 
-    if (currentStep === GenerationStep.ModelSnapshotRender && !stateAtStart.config.sourceModelAssetId) {
-      setStepStates(prev => ({
-        ...prev,
-        [currentStep]: {
-          ...prev[currentStep],
-          generationStatus: 'error',
-          generationError: '请先选择一个 3D 模型',
-        }
-      }));
-      return;
-    }
-
     if (currentStep === GenerationStep.MaterialReplace && !stateAtStart.inputImage) {
       setStepStates(prev => ({
         ...prev,
@@ -80,7 +68,7 @@ export function useGenerationRunner({
         [currentStep]: {
           ...prev[currentStep],
           generationStatus: 'error',
-          generationError: currentStep === GenerationStep.ModelSnapshotRender ? '请先截取一个模型视角' : '请先上传图片后再生成预览。',
+          generationError: currentStep === GenerationStep.ModelSnapshotRender ? '请先截取或上传一张模型截图。' : '请先上传图片后再生成预览。',
         }
       }));
       return;
@@ -217,7 +205,9 @@ export function useGenerationRunner({
             variantStyles: currentStep === GenerationStep.DesignVariants ? resolveVariantStyles(stateAtStart.config) : undefined,
             variantNames: currentStep === GenerationStep.DesignVariants ? resolveVariantNames(stateAtStart.config) : undefined,
             customStyleLabel: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.customStyleLabel : undefined,
-            userPrompt: stateAtStart.config.prompt,
+            userPrompt: currentStep === GenerationStep.ModelSnapshotRender
+              ? stateAtStart.config.customPrompt
+              : stateAtStart.config.prompt,
             editTarget: currentStep === GenerationStep.MaterialReplace
               ? 'material'
               : currentStep === GenerationStep.LocalInpainting ? stateAtStart.config.editTarget || 'general' : stateAtStart.config.editTarget,
@@ -235,6 +225,7 @@ export function useGenerationRunner({
             sourceModelAssetId: stateAtStart.config.sourceModelAssetId,
             sourceImageAssetId: stateAtStart.inputImage.assetId,
             snapshotAssetId: currentStep === GenerationStep.ModelSnapshotRender ? stateAtStart.inputImage.assetId : undefined,
+            inputSource: currentStep === GenerationStep.ModelSnapshotRender ? stateAtStart.config.inputSource : undefined,
             modelSnapshotMetadata: stateAtStart.config.modelSnapshotMetadata,
             buildingType: stateAtStart.config.buildingType,
             spaceType: stateAtStart.config.spaceType,
@@ -398,11 +389,13 @@ export function useGenerationRunner({
             ...prev[currentStep],
             isGenerating: false,
             generationStatus: 'error',
-            generationError: latestJob.status === 'cancelled' ? '生成任务已取消。' : latestJob.errorMessage || '生成任务失败。',
+            generationError: latestJob.status === 'cancelled'
+              ? '生成任务已取消。'
+              : latestJob.diagnostics?.provider?.userMessage || latestJob.errorMessage || '生成任务失败。',
             generationJobStatus: latestJob.status,
             generationJobDiagnostics: latestJob.diagnostics || null,
             generationProgress: latestJob.progress,
-            generationLogs: [...prev[currentStep].generationLogs, `${latestJob.status}: ${latestJob.errorMessage || '任务结束。'}`].slice(-8),
+            generationLogs: [...prev[currentStep].generationLogs, `${latestJob.status}: ${latestJob.diagnostics?.provider?.userMessage || latestJob.errorMessage || '任务结束。'}`].slice(-8),
           },
         }));
         void refreshCreditBalance();
@@ -698,9 +691,10 @@ function getAspectRatioString(width: number, height: number): string {
     { value: '16:9', ratio: 16 / 9 },
     { value: '9:16', ratio: 9 / 16 },
   ];
-  return candidates.reduce((best, candidate) => (
-    Math.abs(candidate.ratio - ratio) < Math.abs(best.ratio - ratio) ? candidate : best
-  )).value;
+  const best = candidates.reduce((currentBest, candidate) => (
+    Math.abs(candidate.ratio - ratio) < Math.abs(currentBest.ratio - ratio) ? candidate : currentBest
+  ));
+  return Math.abs(best.ratio - ratio) <= 0.08 ? best.value : 'auto';
 }
 
 function buildConfigForGeneration(step: GenerationStep, config: GenerationConfig): GenerationConfig {
@@ -786,17 +780,24 @@ function readHistoryStyle(step: GenerationStep, config: GenerationConfig): strin
 }
 
 function buildModelRenderPrompt(config: GenerationConfig): string {
+  const customPrompt = readMeaningfulPrompt(config.customPrompt || config.prompt);
   return [
-    'Transform this 3D clay/white model viewport snapshot into a realistic architectural/interior rendering.',
-    'Preserve the original massing, geometry, layout, spatial proportions, camera angle, perspective, and composition.',
-    'Add appropriate architectural materials, lighting, shadows, environment, furniture, landscape, and atmosphere based on the selected style.',
-    'Do not alter the fundamental structure unless explicitly requested.',
-    `Building type: ${config.buildingType || 'unspecified'}.`,
-    `Space type: ${config.spaceType || 'unspecified'}.`,
-    `Rendering style: ${config.renderStyle || config.style || 'realistic architectural visualization'}.`,
-    `Atmosphere: ${config.atmosphere || config.lighting || 'natural daylight'}.`,
-    `Additional user instruction: ${config.customPrompt || config.prompt || 'none'}.`,
-  ].join(' ');
+    'The input image is a 3D clay or white model viewport snapshot. Transform it into a realistic architectural or interior rendering. Preserve the original geometry, massing, layout, camera angle, perspective, composition, and spatial proportions. Add appropriate materials, lighting, shadows, environment, furniture, landscape details, and atmosphere. Do not change the fundamental structure unless explicitly requested.',
+    readMeaningfulPrompt(config.buildingType) ? `Building type: ${config.buildingType}.` : undefined,
+    readMeaningfulPrompt(config.spaceType) ? `Space type: ${config.spaceType}.` : undefined,
+    readMeaningfulPrompt(config.renderStyle || config.style) ? `Rendering style: ${config.renderStyle || config.style}.` : undefined,
+    readMeaningfulPrompt(config.atmosphere || config.lighting) ? `Atmosphere: ${config.atmosphere || config.lighting}.` : undefined,
+    customPrompt ? `User note: ${customPrompt}.` : undefined,
+  ].filter((item): item is string => Boolean(item)).join(' ');
+}
+
+function readMeaningfulPrompt(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const normalized = trimmed.toLowerCase();
+  if (normalized === 'none' || normalized === 'null' || normalized === 'undefined') return '';
+  return trimmed;
 }
 
 function delay(ms: number): Promise<void> {

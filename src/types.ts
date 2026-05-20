@@ -73,8 +73,13 @@ export interface GenerationJobDiagnostics {
   provider?: {
     name?: string;
     model?: string;
+    httpStatus?: number;
     retryCount?: number;
     fallbackProvider?: string;
+    fallbackReason?: string;
+    providerError?: string;
+    providerStatus?: string;
+    userMessage?: string;
   };
   images?: {
     payloadBytesApprox?: number;
@@ -102,9 +107,14 @@ export interface ModelSnapshotCapture {
 
 export interface ModelSnapshotMetadata {
   sourceType: 'model-snapshot';
-  sourceModelAssetId: string;
-  width: number;
-  height: number;
+  inputSource?: 'model-capture' | 'uploaded-snapshot';
+  sourceModelAssetId?: string;
+  snapshotAssetId?: string;
+  modelPreviewUrl?: string;
+  usedOptimizedModel?: boolean;
+  optimizationStatus?: ModelOptimizationMetadata['optimizationStatus'];
+  width?: number;
+  height?: number;
   camera?: ModelSnapshotCamera;
   viewMode?: 'orbit' | 'walkthrough';
   clippingEnabled?: boolean;
@@ -112,6 +122,22 @@ export interface ModelSnapshotMetadata {
   xrayEnabled?: boolean;
   edgesEnabled?: boolean;
   createdAt: string;
+}
+
+export interface ModelOptimizationMetadata {
+  originalUrl: string;
+  previewUrl?: string;
+  optimizedUrl?: string;
+  thumbnailUrl?: string;
+  format: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
+  originalFileSize: number;
+  optimizedFileSize?: number;
+  optimizationStatus: 'pending' | 'processing' | 'succeeded' | 'failed' | 'skipped';
+  optimizationError?: string;
+  faceCount?: number;
+  optimizedFaceCount?: number;
+  createdAt?: string;
+  completedAt?: string;
 }
 
 export interface GenerationConfig {
@@ -161,6 +187,7 @@ export interface GenerationConfig {
   sourceModelAssetId?: string;
   sourceImageAssetId?: string;
   snapshotAssetId?: string;
+  inputSource?: 'model-capture' | 'uploaded-snapshot';
   modelSnapshotMetadata?: ModelSnapshotMetadata;
   drawingType?: PlanDrawingType;
   template?: PlanExpressionTemplate;
@@ -308,6 +335,17 @@ export interface AssetModel {
   fileType: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl' | 'unknown';
   format?: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
   modelUrl?: string;
+  originalUrl?: string;
+  previewUrl?: string;
+  optimizedUrl?: string;
+  thumbnailUrl?: string;
+  metadata?: ModelOptimizationMetadata;
+  optimizationStatus?: ModelOptimizationMetadata['optimizationStatus'];
+  optimizationError?: string;
+  originalFileSize?: number;
+  optimizedFileSize?: number;
+  usesOptimizedPreview?: boolean;
+  allowOriginalModelLoad?: boolean;
   thumbnail: string;
   size: string;
   date: string;

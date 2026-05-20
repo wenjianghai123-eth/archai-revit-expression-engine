@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getModelLoaderDefinition, getModelPreviewError, getStableModelLoadIdentity, shouldReloadModel } from './ModelViewer';
+import { getModelLoaderDefinition, getModelPreviewError, getStableModelLoadIdentity, resolveModelPreviewUrl, shouldReloadModel } from './ModelViewer';
 import type { AssetModel } from '../types';
 
 function createAsset(overrides: Partial<AssetModel> = {}): AssetModel {
@@ -66,6 +66,45 @@ describe('stable model preview identity', () => {
     expect(shouldReloadModel(glb, sameUrlDifferentId)).toBe(false);
     expect(shouldReloadModel(glb, differentUrl)).toBe(true);
     expect(shouldReloadModel(glb, differentType)).toBe(true);
+  });
+
+  it('prefers optimized and preview urls over the original model url', () => {
+    const optimized = createAsset({
+      fileType: 'stl',
+      modelUrl: '/uploads/original.stl',
+      optimizedUrl: '/uploads/models/preview/model-1.glb',
+    });
+    const preview = createAsset({
+      fileType: 'obj',
+      modelUrl: '/uploads/original.obj',
+      previewUrl: '/uploads/models/preview/model-1.glb',
+    });
+
+    expect(resolveModelPreviewUrl(optimized)).toBe('/uploads/models/preview/model-1.glb');
+    expect(getStableModelLoadIdentity(optimized)).toMatchObject({
+      fileType: 'glb',
+      modelUrl: '/uploads/models/preview/model-1.glb',
+      loaderKind: 'GLTFLoader',
+    });
+    expect(resolveModelPreviewUrl(preview)).toBe('/uploads/models/preview/model-1.glb');
+    expect(getStableModelLoadIdentity(preview).fileType).toBe('glb');
+  });
+
+  it('falls back to optimization metadata preview urls', () => {
+    const asset = createAsset({
+      fileType: 'dae',
+      modelUrl: '/uploads/original.dae',
+      metadata: {
+        originalUrl: '/uploads/original.dae',
+        previewUrl: '/uploads/models/preview/model-1.glb',
+        format: 'dae',
+        originalFileSize: 40 * 1024 * 1024,
+        optimizationStatus: 'succeeded',
+      },
+    });
+
+    expect(resolveModelPreviewUrl(asset)).toBe('/uploads/models/preview/model-1.glb');
+    expect(getStableModelLoadIdentity(asset).loaderKind).toBe('GLTFLoader');
   });
 
   it('reports missing model urls and unsupported formats before mounting the canvas', () => {

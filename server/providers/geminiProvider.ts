@@ -84,13 +84,9 @@ function buildRequestParts(input: GenerateImageInput, warnings: string[]): Part[
 function buildPrompt(input: GenerateImageInput): string {
   if (input.mode === 'model-render') {
     return [
-      'Generate a high-quality realistic architectural or interior rendering from the uploaded 3D clay/white model viewport snapshot.',
-      'Preserve the original geometry, massing, layout, spatial proportions, camera angle, perspective, composition, framing, and canvas aspect ratio.',
-      'Add appropriate materials, lighting, shadows, environment, furniture, landscape, and atmosphere according to the user prompt.',
-      'Do not alter the fundamental structure unless explicitly requested. Do not add text, watermarks, labels, borders, or UI elements.',
-      `User prompt: ${input.prompt}`,
-      `Generation config JSON: ${JSON.stringify(input.config)}`,
-    ].join('\n');
+      input.prompt,
+      'Do not add text, watermarks, labels, borders, or UI elements.',
+    ].filter(Boolean).join('\n');
   }
 
   if (input.mode === 'style-render') {

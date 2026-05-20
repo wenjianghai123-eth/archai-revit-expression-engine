@@ -27,9 +27,14 @@ export type VariantStyleKey =
 
 export interface ModelSnapshotMetadata {
   sourceType: 'model-snapshot';
-  sourceModelAssetId: string;
-  width: number;
-  height: number;
+  inputSource?: 'model-capture' | 'uploaded-snapshot';
+  sourceModelAssetId?: string;
+  snapshotAssetId?: string;
+  modelPreviewUrl?: string;
+  usedOptimizedModel?: boolean;
+  optimizationStatus?: ModelOptimizationMetadata['optimizationStatus'];
+  width?: number;
+  height?: number;
   camera?: {
     position?: number[];
     rotation?: number[];
@@ -127,6 +132,9 @@ export interface GenerationJobDiagnostics {
     retryCount?: number;
     fallbackProvider?: string;
     fallbackReason?: string;
+    providerError?: string;
+    providerStatus?: string;
+    userMessage?: string;
   };
   images?: {
     inputImages?: number;
@@ -184,14 +192,34 @@ export interface ModelAsset {
   id: string;
   userId: string;
   url: string;
+  previewUrl?: string;
+  optimizedUrl?: string;
+  thumbnailUrl?: string;
   filename: string;
   originalFilename: string;
   fileType: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
   format?: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
   mimeType: string;
   size: number;
+  metadata?: ModelOptimizationMetadata;
   createdAt: string;
   deletedAt?: string | null;
+}
+
+export interface ModelOptimizationMetadata {
+  originalUrl: string;
+  previewUrl?: string;
+  optimizedUrl?: string;
+  thumbnailUrl?: string;
+  format: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
+  originalFileSize: number;
+  optimizedFileSize?: number;
+  optimizationStatus: 'pending' | 'processing' | 'succeeded' | 'failed' | 'skipped';
+  optimizationError?: string;
+  faceCount?: number;
+  optimizedFaceCount?: number;
+  createdAt?: string;
+  completedAt?: string;
 }
 
 export interface ShareLink {
@@ -335,12 +363,18 @@ export type CreateImageAssetInput = {
 export type CreateModelAssetInput = {
   userId: string;
   url: string;
+  previewUrl?: string;
+  optimizedUrl?: string;
+  thumbnailUrl?: string;
   filename: string;
   originalFilename: string;
   fileType: ModelAsset['fileType'];
   mimeType: string;
   size: number;
+  metadata?: ModelOptimizationMetadata;
 };
+
+export type UpdateModelAssetInput = Partial<Pick<ModelAsset, 'previewUrl' | 'optimizedUrl' | 'thumbnailUrl' | 'metadata'>>;
 
 export type CreateShareLinkInput = {
   userId: string;
@@ -391,6 +425,7 @@ export interface StorageAdapter {
   listModelAssets(userId: string): Promise<ModelAsset[]>;
   getModelAsset(id: string, userId?: string): Promise<ModelAsset | null>;
   createModelAsset(input: CreateModelAssetInput): Promise<ModelAsset>;
+  updateModelAsset(id: string, input: UpdateModelAssetInput): Promise<ModelAsset | null>;
   deleteModelAsset(id: string, userId: string): Promise<ModelAsset | null>;
 
   createShareLink(input: CreateShareLinkInput): Promise<ShareLink | null>;

@@ -81,6 +81,42 @@ describe('Grsai Banana2 provider timing, timeout and retry', () => {
     await expect(createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage(input))
       .rejects.toThrow('Grsai request timed out after 1ms');
   });
+
+  it('keeps model-render prompt clean without config JSON or empty none notes', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: 'task-1' }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { id: 'task-1', status: 'succeeded', progress: 100, results: [{ url: tinyPngDataUrl }] } }));
+    globalThis.fetch = fetchMock;
+
+    await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage({
+      mode: 'model-render',
+      inputImageDataUrl: tinyPngDataUrl,
+      prompt: 'The input image is a 3D clay or white model viewport snapshot. Building type: residential.',
+      config: { customPrompt: '', sourceModelAssetId: undefined },
+      targetAspectRatio: 'auto',
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as { prompt: string; aspectRatio: string };
+    expect(body.prompt).toContain('The input image is a 3D clay or white model viewport snapshot.');
+    expect(body.prompt).not.toContain('Generation config JSON');
+    expect(body.prompt).not.toMatch(/\bnone\b/i);
+    expect(body.aspectRatio).toBe('auto');
+  });
+
+  it('maps model maintenance task failures to a user-facing message with metadata', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: 'task-1' }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { id: 'task-1', status: 'failed', error: 'model maintenance', failure_reason: 'error' } }));
+    globalThis.fetch = fetchMock;
+
+    await expect(createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage(input))
+      .rejects.toMatchObject({
+        message: '当前生成模型正在维护，请稍后重试，或切换其他生成模型。',
+        providerError: 'model maintenance',
+        providerStatus: 'failed',
+        userMessage: '当前生成模型正在维护，请稍后重试，或切换其他生成模型。',
+      });
+  });
 });
 
 function jsonResponse(body: unknown, status = 200): Response {

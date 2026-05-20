@@ -3,6 +3,11 @@ import { getRequiredCurrentUser, requireAuth } from '../auth';
 import { createStoredFilename, fileStorageProvider } from '../fileStorage';
 import { ApiResponse, apiError, apiOk } from '../http';
 import {
+  buildInitialModelOptimizationMetadata,
+  shouldOptimizeModelAsset,
+  startModelOptimization,
+} from '../modelOptimizationService';
+import {
   createImageAsset,
   createModelAsset,
   deleteModelAsset,
@@ -11,6 +16,7 @@ import {
   ImageAsset,
   listModelAssets,
   ModelAsset,
+  updateModelAsset,
 } from '../storage';
 import {
   getDefaultModelMimeType,
@@ -146,7 +152,16 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
         fileType,
         mimeType: storedFile.mimeType,
         size: storedFile.size,
+        metadata: buildInitialModelOptimizationMetadata({
+          url: storedFile.url,
+          fileType,
+          size: storedFile.size,
+        }),
       });
+
+      if (shouldOptimizeModelAsset(asset)) {
+        startModelOptimization(asset.id);
+      }
 
       res.status(201).json(apiOk({ asset }));
     } catch (error) {
@@ -172,6 +187,26 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
     }
   });
 
+  router.post('/models/:id/optimize', requireAuth, async (
+    req: Request,
+    res: Response<ApiResponse<{ asset: ModelAsset }>>,
+    next: NextFunction,
+  ) => {
+    try {
+      const asset = await getModelAsset(req.params.id, getRequiredCurrentUser(req).id);
+      if (!asset) {
+        res.status(404).json(apiError('Model asset not found.', 'MODEL_ASSET_NOT_FOUND'));
+        return;
+      }
+
+      const processingAsset = await updateOptimizationProcessing(asset);
+      startModelOptimization(asset.id, { force: true });
+      res.json(apiOk({ asset: processingAsset }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.delete('/models/:id', requireAuth, async (
     req: Request,
     res: Response<ApiResponse<{ asset: ModelAsset }>>,
@@ -192,4 +227,19 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
   });
 
   return router;
+}
+
+async function updateOptimizationProcessing(asset: ModelAsset): Promise<ModelAsset> {
+  const updated = await updateModelAsset(asset.id, {
+    metadata: {
+      ...(asset.metadata || buildInitialModelOptimizationMetadata({
+        url: asset.url,
+        fileType: asset.fileType,
+        size: asset.size,
+      })),
+      optimizationStatus: 'processing',
+      optimizationError: undefined,
+    },
+  });
+  return updated || asset;
 }

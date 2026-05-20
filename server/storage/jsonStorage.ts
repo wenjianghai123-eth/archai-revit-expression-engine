@@ -1,4 +1,4 @@
-﻿import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { DEV_AUTH_USER_ID } from '../auth';
@@ -21,6 +21,7 @@ import {
   GenerationResult,
   ImageAsset,
   ModelAsset,
+  UpdateModelAssetInput,
   Project,
   ShareLink,
   StorageAdapter,
@@ -151,6 +152,10 @@ export class JsonStorageAdapter implements StorageAdapter {
 
   createModelAsset(input: CreateModelAssetInput): Promise<ModelAsset> {
     return createModelAsset(input);
+  }
+
+  updateModelAsset(id: string, input: UpdateModelAssetInput): Promise<ModelAsset | null> {
+    return updateModelAsset(id, input);
   }
 
   deleteModelAsset(id: string, userId: string): Promise<ModelAsset | null> {
@@ -630,29 +635,51 @@ async function getModelAsset(id: string, userId?: string): Promise<ModelAsset | 
 async function createModelAsset(input: {
   userId: string;
   url: string;
+  previewUrl?: string;
+  optimizedUrl?: string;
+  thumbnailUrl?: string;
   filename: string;
   originalFilename: string;
   fileType: ModelAsset['fileType'];
   mimeType: string;
   size: number;
+  metadata?: ModelAsset['metadata'];
 }): Promise<ModelAsset> {
   const now = new Date().toISOString();
   const asset: ModelAsset = {
     id: `model_${randomUUID()}`,
     userId: input.userId,
     url: input.url,
+    previewUrl: input.previewUrl,
+    optimizedUrl: input.optimizedUrl,
+    thumbnailUrl: input.thumbnailUrl,
     filename: input.filename,
     originalFilename: input.originalFilename,
     fileType: input.fileType,
     format: input.fileType,
     mimeType: input.mimeType,
     size: input.size,
+    metadata: input.metadata,
     createdAt: now,
     deletedAt: null,
   };
 
   const db = await readDatabase();
   db.modelAssets.unshift(asset);
+  await writeDatabase(db);
+  return asset;
+}
+
+async function updateModelAsset(id: string, input: UpdateModelAssetInput): Promise<ModelAsset | null> {
+  const db = await readDatabase();
+  const asset = db.modelAssets.find(item => item.id === id && !item.deletedAt);
+  if (!asset) return null;
+
+  if (input.previewUrl !== undefined) asset.previewUrl = input.previewUrl;
+  if (input.optimizedUrl !== undefined) asset.optimizedUrl = input.optimizedUrl;
+  if (input.thumbnailUrl !== undefined) asset.thumbnailUrl = input.thumbnailUrl;
+  if (input.metadata !== undefined) asset.metadata = input.metadata;
+
   await writeDatabase(db);
   return asset;
 }
@@ -858,6 +885,7 @@ async function getAdminDashboard(): Promise<AdminDashboard> {
 
 async function readDatabase(): Promise<AppDatabase> {
   await ensureAppDatabase();
+  await writeQueue.catch(() => undefined);
   const content = await readFile(dbPath, 'utf8');
   const parsed = JSON.parse(content) as Partial<AppDatabase>;
 

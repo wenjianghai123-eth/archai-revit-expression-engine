@@ -105,12 +105,30 @@ export interface ModelAssetRecord {
   id: string;
   userId: string;
   url: string;
+  previewUrl?: string;
+  optimizedUrl?: string;
+  thumbnailUrl?: string;
   filename: string;
   originalFilename: string;
   fileType: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
   format?: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
   mimeType: string;
   size: number;
+  metadata?: {
+    originalUrl: string;
+    previewUrl?: string;
+    optimizedUrl?: string;
+    thumbnailUrl?: string;
+    format: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
+    originalFileSize: number;
+    optimizedFileSize?: number;
+    optimizationStatus: 'pending' | 'processing' | 'succeeded' | 'failed' | 'skipped';
+    optimizationError?: string;
+    faceCount?: number;
+    optimizedFaceCount?: number;
+    createdAt?: string;
+    completedAt?: string;
+  };
   createdAt: string;
   deletedAt?: string | null;
 }
@@ -164,6 +182,9 @@ export interface GenerationJobDiagnostics {
     retryCount?: number;
     fallbackProvider?: string;
     fallbackReason?: string;
+    providerError?: string;
+    providerStatus?: string;
+    userMessage?: string;
   };
   images?: {
     inputImages?: number;
@@ -432,6 +453,13 @@ export async function listModelAssets(): Promise<ModelAssetRecord[]> {
 
 export async function getModelAsset(id: string): Promise<ModelAssetRecord> {
   const response = await request<{ asset: ModelAssetRecord }>(`/api/assets/models/${encodeURIComponent(id)}`);
+  return response.asset;
+}
+
+export async function optimizeModelAsset(id: string): Promise<ModelAssetRecord> {
+  const response = await request<{ asset: ModelAssetRecord }>(`/api/assets/models/${encodeURIComponent(id)}/optimize`, {
+    method: 'POST',
+  });
   return response.asset;
 }
 
