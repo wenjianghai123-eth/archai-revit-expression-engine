@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { ArrowRight, Box, Clock, Database, FileImage, History, Layers, LayoutGrid, Paintbrush, ScanLine, Sparkles, Wand2 } from 'lucide-react';
+import { ArrowRight, Box, Camera, Clock, Database, FileImage, History, Layers, LayoutGrid, Paintbrush, ScanLine, Sparkles, Wand2 } from 'lucide-react';
 import { AssetModel, GenerationHistoryItem, GenerationStep, PromptTemplate } from '../types';
 
 interface CreativeHomeProps {
@@ -76,6 +76,15 @@ const toolCards = [
     output: '输出：建筑/室内效果图',
     icon: Box,
     image: 'https://images.unsplash.com/photo-1486718448742-163732cd1544?auto=format&fit=crop&q=80&w=900',
+  },
+  {
+    step: GenerationStep.PanoramaQuickRender,
+    title: '漫游全景快渲',
+    desc: '上传 GLB / GLTF 模型，漫游查看并捕捉当前全景视点。',
+    input: '输入：GLB / GLTF 模型',
+    output: '输出：全景视点 payload',
+    icon: Camera,
+    image: 'https://images.unsplash.com/photo-1518005020951-eccb494ad742?auto=format&fit=crop&q=80&w=900',
   },
 ];
 
@@ -293,5 +302,6 @@ function stepLabel(step: GenerationStep): string {
   if (step === GenerationStep.StyleRender) return '风格渲染';
   if (step === GenerationStep.PlanColorize) return '图纸智能表达';
   if (step === GenerationStep.ModelSnapshotRender) return '白模快渲';
+  if (step === GenerationStep.PanoramaQuickRender) return '漫游全景快渲';
   return '局部修饰';
 }

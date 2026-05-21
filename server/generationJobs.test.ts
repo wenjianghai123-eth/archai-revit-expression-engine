@@ -458,6 +458,66 @@ describe('POST /api/generation-jobs asset ownership', () => {
     expect(response.body.data.job.config).not.toHaveProperty('sourceModelAssetId');
   });
 
+  it('creates a panorama-roam-render job from a captured panorama image', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Panorama render project' });
+    const panoramaAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const modelAsset = await createModelAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'panorama-roam-render',
+        prompt: 'render the panorama',
+        config: {
+          sourceImageAssetId: panoramaAsset.id,
+          panoramaAssetId: panoramaAsset.id,
+          sourceModelAssetId: modelAsset.id,
+          targetWidth: 2048,
+          targetHeight: 1024,
+          targetAspectRatio: '2:1',
+          buildingType: '住宅',
+          spaceType: '客厅',
+          renderStyle: '电影级写实',
+          atmosphere: '自然日光',
+        },
+        inputAssetIds: [panoramaAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job).toMatchObject({
+      mode: 'panorama-roam-render',
+      inputAssetIds: [panoramaAsset.id],
+      config: {
+        sourceImageAssetId: panoramaAsset.id,
+        panoramaAssetId: panoramaAsset.id,
+        sourceModelAssetId: modelAsset.id,
+        targetAspectRatio: '2:1',
+      },
+    });
+  });
+
+  it('rejects panorama-roam-render jobs without a panorama image asset', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Missing panorama' });
+    const panoramaAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'panorama-roam-render',
+        prompt: 'render the panorama',
+        config: {},
+        inputAssetIds: [panoramaAsset.id],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: { code: 'GENERATION_JOB_PANORAMA_ASSET_REQUIRED' },
+    });
+  });
+
   it('rejects model-render jobs without a snapshot image asset field', async () => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Missing snapshot' });
     const snapshotAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);

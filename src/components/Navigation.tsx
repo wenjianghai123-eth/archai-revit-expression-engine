@@ -15,7 +15,8 @@ import {
   FileImage,
   LayoutGrid,
   Sparkles,
-  ShieldCheck
+  ShieldCheck,
+  Camera
 } from 'lucide-react';
 import { GenerationStep } from '../types';
 
@@ -218,6 +219,13 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
       icon: Box,
       image: 'https://images.unsplash.com/photo-1486718448742-163732cd1544?auto=format&fit=crop&q=80&w=600',
     },
+    {
+      id: GenerationStep.PanoramaQuickRender,
+      title: '漫游全景快渲',
+      desc: '上传模型，漫游取点，捕捉全景视点',
+      icon: Camera,
+      image: 'https://images.unsplash.com/photo-1518005020951-eccb494ad742?auto=format&fit=crop&q=80&w=600',
+    },
   ];
 
   return (
@@ -243,7 +251,7 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
         </div>
       </div>
 
-      <div className="grid gap-3 px-4 pb-3 md:grid-cols-3 xl:grid-cols-7 md:px-5">
+      <div className="grid gap-3 px-4 pb-3 md:grid-cols-3 xl:grid-cols-8 md:px-5">
         {steps.map((step) => {
           const isActive = currentStep === step.id;
           const Icon = step.icon;

@@ -31,6 +31,7 @@ const AssetBank = lazy(() => import('./components/AssetBank').then(module => ({ 
 const TemplatesLibrary = lazy(() => import('./components/TemplatesLibrary').then(module => ({ default: module.TemplatesLibrary })));
 const ProjectDetail = lazy(() => import('./components/ProjectDetail').then(module => ({ default: module.ProjectDetail })));
 const PublicSharePreview = lazy(() => import('./components/PublicSharePreview').then(module => ({ default: module.PublicSharePreview })));
+const PanoramaSharePage = lazy(() => import('./components/PanoramaSharePage').then(module => ({ default: module.PanoramaSharePage })));
 const AdminPage = lazy(() => import('./components/AdminPage').then(module => ({ default: module.AdminPage })));
 
 export default function App() {
@@ -72,6 +73,7 @@ export default function App() {
   const [historyItems, setHistoryItems] = useState<GenerationHistoryItem[]>(() => listGenerationRecords());
   const { backendHealth, refreshBackendHealth } = useBackendHealth(isSettingsOpen);
   const { creditBalance, creditError, refreshCreditBalance } = useCreditBalance(Boolean(currentUser));
+  const panoramaShareId = readPanoramaShareId();
   const publicShareToken = readPublicShareToken();
   const isAdminPath = window.location.pathname === '/admin';
 
@@ -302,6 +304,14 @@ export default function App() {
     startCreate(setCurrentStep, step);
   }, [setCurrentStep, startCreate]);
 
+  if (panoramaShareId) {
+    return (
+      <Suspense fallback={<PageLoading />}>
+        <PanoramaSharePage shareId={panoramaShareId} />
+      </Suspense>
+    );
+  }
+
   if (publicShareToken) {
     return (
       <Suspense fallback={<PageLoading />}>
@@ -419,6 +429,7 @@ export default function App() {
                       <MainWorkspace
                         step={currentStep}
                         state={stepStates[currentStep]}
+                        selectedProjectId={selectedProjectId}
                         onUpdateConfig={handleUpdateConfig}
                         onUpdateInputImage={handleUpdateInputImage}
                         onUpdateMaterialImage={handleUpdateMaterialImage}
@@ -434,6 +445,7 @@ export default function App() {
                         onSetViewMode={handleSetViewMode}
                         onNextStep={handleNextStep}
                         onReset={handleResetConfig}
+                        onHistoryRecord={record => setHistoryItems(items => [record, ...items.filter(item => item.id !== record.id)])}
                         backendProvider={backendHealth.data?.provider || null}
                         isCreditsInsufficient={isCreditsInsufficient}
                       />
@@ -524,7 +536,13 @@ function PanelLoading() {
 }
 
 function readPublicShareToken(): string | null {
+  if (window.location.pathname.startsWith('/share/panorama/')) return null;
   const match = /^\/share\/([^/?#]+)/u.exec(window.location.pathname);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function readPanoramaShareId(): string | null {
+  const match = /^\/share\/panorama\/([^/?#]+)/u.exec(window.location.pathname);
   return match ? decodeURIComponent(match[1]) : null;
 }
 

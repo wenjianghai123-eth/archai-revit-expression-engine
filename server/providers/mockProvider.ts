@@ -32,6 +32,9 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
   if (input.mode === 'model-render') {
     warnings.push('Mock model-render 已接收模型视角截图，结果仅用于开发占位。');
   }
+  if (input.mode === 'panorama-roam-render') {
+    warnings.push('Mock panorama-roam-render received a 2:1 panorama input; result is a development placeholder.');
+  }
   if (input.mode === 'plan-colorize') {
     warnings.push('Mock plan-colorize 已接收图纸智能表达配置，结果仅用于开发占位。');
   }
@@ -68,7 +71,7 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
 }
 
 function createMockImageDataUrl(
-  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize',
+  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render',
   prompt: string,
   createdAt: string,
   size: { width: number; height: number },
@@ -81,6 +84,7 @@ function createMockImageDataUrl(
     'design-variants': 'Mock Design Variant',
     'material-replace': 'Mock Material Replace',
     'plan-colorize': 'Mock Plan Colorize',
+    'panorama-roam-render': 'Mock Panorama Roam Render',
   }[mode];
   const promptPreview = prompt.length > 90 ? `${prompt.slice(0, 90)}...` : prompt;
   const svg = `

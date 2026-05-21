@@ -271,6 +271,14 @@ async function processGenerationJob(jobId: string): Promise<void> {
                 targetObjectType: typeof job.config.targetObjectType === 'string' ? job.config.targetObjectType : undefined,
                 targetMaterial: typeof job.config.targetMaterial === 'string' ? job.config.targetMaterial : undefined,
               }
+          : job.mode === 'panorama-roam-render'
+            ? {
+                ...(providerOutput.metadata || {}),
+                mode: 'panorama-roam-render',
+                panoramaAssetId: typeof job.config.panoramaAssetId === 'string' ? job.config.panoramaAssetId : job.inputAssetIds[0],
+                sourceModelAssetId: typeof job.config.sourceModelAssetId === 'string' ? job.config.sourceModelAssetId : undefined,
+                inputSource: 'panorama-capture',
+              }
           : undefined,
       });
 
@@ -560,6 +568,9 @@ async function prepareReferenceImage(
 
 function getAspectRatioString(width: number, height: number, mode?: GenerationRecord['mode']): string {
   const ratio = width / height;
+  if (mode === 'panorama-roam-render' && Math.abs(ratio - 2) <= 0.12) {
+    return '2:1';
+  }
   const candidates = [
     { value: '1:1', ratio: 1 },
     { value: '4:3', ratio: 4 / 3 },
@@ -1090,6 +1101,10 @@ function buildProviderPromptForJob(job: GenerationJob): string {
     return buildPlanColorizePrompt(job);
   }
 
+  if (job.mode === 'panorama-roam-render') {
+    return buildPanoramaRoamRenderPrompt(job);
+  }
+
   if (job.mode !== 'model-render') return job.prompt;
 
   const buildingType = readMeaningfulConfigString(job.config.buildingType);
@@ -1099,6 +1114,23 @@ function buildProviderPromptForJob(job: GenerationJob): string {
   const customPrompt = readMeaningfulConfigString(job.config.customPrompt) || readMeaningfulConfigString(job.config.userPrompt);
   const parts = [
     'The input image is a 3D clay or white model viewport snapshot. Transform it into a realistic architectural or interior rendering. Preserve the original geometry, massing, layout, camera angle, perspective, composition, and spatial proportions. Add appropriate materials, lighting, shadows, environment, furniture, landscape details, and atmosphere. Do not change the fundamental structure unless explicitly requested.',
+    buildingType ? `Building type: ${buildingType}.` : undefined,
+    spaceType ? `Space type: ${spaceType}.` : undefined,
+    renderStyle ? `Rendering style: ${renderStyle}.` : undefined,
+    atmosphere ? `Atmosphere: ${atmosphere}.` : undefined,
+    customPrompt ? `User note: ${customPrompt}.` : undefined,
+  ];
+  return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+}
+
+function buildPanoramaRoamRenderPrompt(job: GenerationJob): string {
+  const buildingType = readMeaningfulConfigString(job.config.buildingType);
+  const spaceType = readMeaningfulConfigString(job.config.spaceType);
+  const renderStyle = readMeaningfulConfigString(job.config.renderStyle) || readMeaningfulConfigString(job.config.style);
+  const atmosphere = readMeaningfulConfigString(job.config.atmosphere) || readMeaningfulConfigString(job.config.lighting);
+  const customPrompt = readMeaningfulConfigString(job.config.customPrompt) || readMeaningfulConfigString(job.config.userPrompt);
+  const parts = [
+    'The input image is a 2:1 equirectangular 360 panorama captured from a 3D clay or white model. Transform it into a cinematic, photorealistic architectural or interior 360 panorama rendering. Preserve the exact equirectangular 2:1 canvas, full 360 continuity, camera position, spatial layout, geometry, proportions, horizon, and room or building structure. Add realistic materials, lighting, shadows, environment, furniture, landscape details, and atmosphere. Do not convert it into a normal perspective view. Do not crop, pad, add borders, labels, or watermarks.',
     buildingType ? `Building type: ${buildingType}.` : undefined,
     spaceType ? `Space type: ${spaceType}.` : undefined,
     renderStyle ? `Rendering style: ${renderStyle}.` : undefined,

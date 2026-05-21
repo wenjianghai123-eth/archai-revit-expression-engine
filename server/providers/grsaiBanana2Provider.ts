@@ -415,7 +415,7 @@ function buildPrompt(input: GenerateImageInput): string {
     return buildInpaintPrompt(input);
   }
 
-  if (input.mode === 'model-render') {
+  if (input.mode === 'model-render' || input.mode === 'panorama-roam-render') {
     return [
       input.prompt,
       'Do not add text, watermarks, labels, borders, or UI elements.',

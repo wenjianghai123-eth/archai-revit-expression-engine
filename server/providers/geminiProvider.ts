@@ -82,7 +82,7 @@ function buildRequestParts(input: GenerateImageInput, warnings: string[]): Part[
 }
 
 function buildPrompt(input: GenerateImageInput): string {
-  if (input.mode === 'model-render') {
+  if (input.mode === 'model-render' || input.mode === 'panorama-roam-render') {
     return [
       input.prompt,
       'Do not add text, watermarks, labels, borders, or UI elements.',

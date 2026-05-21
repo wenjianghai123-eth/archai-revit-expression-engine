@@ -17,16 +17,19 @@ import {
   PerspectiveCamera as ThreePerspectiveCamera,
   Plane,
   Vector3,
+  WebGLRenderer,
+  WebGLRenderTarget,
 } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { ColladaLoader } from 'three/examples/jsm/loaders/ColladaLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import { AssetModel, ModelSnapshotCapture } from '../types';
+import { AssetModel, ModelSnapshotCapture, PanoramaImageCapture } from '../types';
 
 export interface ModelViewerHandle {
   captureSnapshot: () => Promise<ModelSnapshotCapture>;
+  capturePanorama: (options?: { width?: number; height?: number }) => Promise<PanoramaImageCapture>;
 }
 
 interface ModelViewerProps {
@@ -169,6 +172,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
 ) {
   const { ref: sizeRef, size } = useElementSize<HTMLDivElement>();
   const captureRef = useRef<() => ModelSnapshotCapture | null>(() => null);
+  const panoramaRef = useRef<(options?: { width?: number; height?: number }) => PanoramaImageCapture | null>(() => null);
   const commandRef = useRef<ViewerCommandApi | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('orbit');
   const [clippingEnabled, setClippingEnabled] = useState(false);
@@ -187,6 +191,13 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
       const capture = captureRef.current();
       if (!capture) {
         throw new Error('当前模型预览无法截图，请检查模型资源是否允许 canvas 导出。');
+      }
+      return capture;
+    },
+    async capturePanorama(options) {
+      const capture = panoramaRef.current(options);
+      if (!capture) {
+        throw new Error('当前模型预览无法生成全景图，请稍后再试。');
       }
       return capture;
     },
@@ -211,6 +222,10 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
 
   const handleCaptureReady = useCallback((capture: () => ModelSnapshotCapture | null) => {
     captureRef.current = capture;
+  }, []);
+
+  const handlePanoramaReady = useCallback((capture: (options?: { width?: number; height?: number }) => PanoramaImageCapture | null) => {
+    panoramaRef.current = capture;
   }, []);
 
   const handleCommandsReady = useCallback((commands: ViewerCommandApi | null) => {
@@ -271,6 +286,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
             xrayEnabled={xrayEnabled}
             edgesEnabled={edgesEnabled}
             onCaptureReady={handleCaptureReady}
+            onPanoramaReady={handlePanoramaReady}
             onCommandsReady={handleCommandsReady}
             onModelInfoChange={handleModelInfoChange}
           />
@@ -384,6 +400,7 @@ function Scene({
   xrayEnabled,
   edgesEnabled,
   onCaptureReady,
+  onPanoramaReady,
   onCommandsReady,
   onModelInfoChange,
 }: {
@@ -396,6 +413,7 @@ function Scene({
   xrayEnabled: boolean;
   edgesEnabled: boolean;
   onCaptureReady: (capture: () => ModelSnapshotCapture | null) => void;
+  onPanoramaReady: (capture: (options?: { width?: number; height?: number }) => PanoramaImageCapture | null) => void;
   onCommandsReady: (commands: ViewerCommandApi | null) => void;
   onModelInfoChange: (info: ModelBoundsInfo | null) => void;
 }) {
@@ -432,6 +450,34 @@ function Scene({
       };
     });
   }, [camera, clippingEnabled, clippingHeight, edgesEnabled, gl, onCaptureReady, scene, viewMode, xrayEnabled]);
+
+  useLayoutEffect(() => {
+    onPanoramaReady((options) => {
+      const perspectiveCamera = camera instanceof ThreePerspectiveCamera ? camera : null;
+      const width = options?.width || 2048;
+      const height = options?.height || 1024;
+      const dataUrl = renderEquirectangularPanorama({
+        renderer: gl,
+        scene,
+        sourceCamera: camera as ThreePerspectiveCamera,
+        width,
+        height,
+      });
+      return {
+        dataUrl,
+        width,
+        height,
+        camera: {
+          position: camera.position.toArray(),
+          rotation: [camera.rotation.x, camera.rotation.y, camera.rotation.z],
+          target: controlsRef.current?.target.toArray(),
+          fov: perspectiveCamera?.fov,
+        },
+        fov: perspectiveCamera?.fov,
+        viewMode,
+      };
+    });
+  }, [camera, gl, onPanoramaReady, scene, viewMode]);
 
   useEffect(() => {
     onCommandsReady({
@@ -899,6 +945,117 @@ function enterModelInterior(
     controls.update();
   }
   return true;
+}
+
+function renderEquirectangularPanorama({
+  renderer,
+  scene,
+  sourceCamera,
+  width,
+  height,
+}: {
+  renderer: WebGLRenderer;
+  scene: Parameters<WebGLRenderer['render']>[0];
+  sourceCamera: ThreePerspectiveCamera;
+  width: number;
+  height: number;
+}): string {
+  const faceSize = Math.max(256, Math.min(1024, Math.round(width / 4)));
+  const directions = [
+    { key: 'px', direction: new Vector3(1, 0, 0), up: new Vector3(0, -1, 0) },
+    { key: 'nx', direction: new Vector3(-1, 0, 0), up: new Vector3(0, -1, 0) },
+    { key: 'py', direction: new Vector3(0, 1, 0), up: new Vector3(0, 0, 1) },
+    { key: 'ny', direction: new Vector3(0, -1, 0), up: new Vector3(0, 0, -1) },
+    { key: 'pz', direction: new Vector3(0, 0, 1), up: new Vector3(0, -1, 0) },
+    { key: 'nz', direction: new Vector3(0, 0, -1), up: new Vector3(0, -1, 0) },
+  ] as const;
+  type FaceKey = typeof directions[number]['key'];
+  const faces = {} as Record<FaceKey, Uint8Array>;
+  const renderTarget = new WebGLRenderTarget(faceSize, faceSize, { depthBuffer: true, stencilBuffer: false });
+  const captureCamera = new ThreePerspectiveCamera(90, 1, sourceCamera.near, sourceCamera.far);
+  captureCamera.position.copy(sourceCamera.position);
+  const previousTarget = renderer.getRenderTarget();
+
+  try {
+    for (const face of directions) {
+      captureCamera.up.copy(face.up);
+      captureCamera.lookAt(sourceCamera.position.clone().add(face.direction));
+      captureCamera.updateProjectionMatrix();
+      renderer.setRenderTarget(renderTarget);
+      renderer.render(scene, captureCamera);
+      const pixels = new Uint8Array(faceSize * faceSize * 4);
+      renderer.readRenderTargetPixels(renderTarget, 0, 0, faceSize, faceSize, pixels);
+      faces[face.key] = pixels;
+    }
+  } finally {
+    renderer.setRenderTarget(previousTarget);
+    renderTarget.dispose();
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('无法创建全景图画布。');
+  const output = context.createImageData(width, height);
+  const direction = new Vector3();
+
+  for (let y = 0; y < height; y += 1) {
+    const v = 0.5 - y / height;
+    const pitch = v * Math.PI;
+    const cosPitch = Math.cos(pitch);
+    for (let x = 0; x < width; x += 1) {
+      const yaw = (x / width - 0.5) * Math.PI * 2;
+      direction.set(
+        Math.sin(yaw) * cosPitch,
+        Math.sin(pitch),
+        Math.cos(yaw) * cosPitch,
+      ).normalize();
+      const sample = sampleCubeFaces(faces, direction, faceSize);
+      const index = (y * width + x) * 4;
+      output.data[index] = sample[0];
+      output.data[index + 1] = sample[1];
+      output.data[index + 2] = sample[2];
+      output.data[index + 3] = 255;
+    }
+  }
+
+  context.putImageData(output, 0, 0);
+  renderer.render(scene, sourceCamera);
+  return canvas.toDataURL('image/png');
+}
+
+function sampleCubeFaces(faces: Record<'px' | 'nx' | 'py' | 'ny' | 'pz' | 'nz', Uint8Array>, direction: Vector3, faceSize: number): [number, number, number] {
+  const absX = Math.abs(direction.x);
+  const absY = Math.abs(direction.y);
+  const absZ = Math.abs(direction.z);
+  let face: 'px' | 'nx' | 'py' | 'ny' | 'pz' | 'nz';
+  let u = 0;
+  let v = 0;
+
+  if (absX >= absY && absX >= absZ) {
+    face = direction.x > 0 ? 'px' : 'nx';
+    u = direction.x > 0 ? -direction.z / absX : direction.z / absX;
+    v = -direction.y / absX;
+  } else if (absY >= absX && absY >= absZ) {
+    face = direction.y > 0 ? 'py' : 'ny';
+    u = direction.x / absY;
+    v = direction.y > 0 ? direction.z / absY : -direction.z / absY;
+  } else {
+    face = direction.z > 0 ? 'pz' : 'nz';
+    u = direction.z > 0 ? direction.x / absZ : -direction.x / absZ;
+    v = -direction.y / absZ;
+  }
+
+  const px = clamp(Math.round(((u + 1) / 2) * (faceSize - 1)), 0, faceSize - 1);
+  const py = clamp(faceSize - 1 - Math.round(((v + 1) / 2) * (faceSize - 1)), 0, faceSize - 1);
+  const index = (py * faceSize + px) * 4;
+  const data = faces[face];
+  return [data[index], data[index + 1], data[index + 2]];
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 class PreviewErrorBoundary extends React.Component<

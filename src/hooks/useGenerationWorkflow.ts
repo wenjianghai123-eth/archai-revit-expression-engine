@@ -42,6 +42,7 @@ function createInitialStepStates(): Record<GenerationStep, StepState> {
     [GenerationStep.DesignVariants]: createInitialStepState(GenerationStep.DesignVariants),
     [GenerationStep.PlanColorize]: createInitialStepState(GenerationStep.PlanColorize),
     [GenerationStep.MaterialReplace]: createInitialStepState(GenerationStep.MaterialReplace),
+    [GenerationStep.PanoramaQuickRender]: createInitialStepState(GenerationStep.PanoramaQuickRender),
   };
 }
 
@@ -185,6 +186,8 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
             ? GenerationStep.PlanColorize
           : template.feature === 'model-render'
             ? GenerationStep.ModelSnapshotRender
+          : template.feature === 'panorama-roam-render'
+            ? GenerationStep.PanoramaQuickRender
             : template.feature === 'material-replace'
               ? GenerationStep.MaterialReplace
             : GenerationStep.LocalInpainting;

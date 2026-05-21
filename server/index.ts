@@ -1452,6 +1452,24 @@ function validateGenerationJobCreateBody(
     if (isNonEmptyString(config.snapshotAssetId)) config.snapshotAssetId = config.snapshotAssetId.trim();
     if (isNonEmptyString(config.sourceModelAssetId)) config.sourceModelAssetId = config.sourceModelAssetId.trim();
   }
+  if (body.mode === 'panorama-roam-render') {
+    const panoramaAssetId = isNonEmptyString(config.panoramaAssetId)
+      ? config.panoramaAssetId.trim()
+      : isNonEmptyString(config.sourceImageAssetId)
+        ? config.sourceImageAssetId.trim()
+        : '';
+    if (!panoramaAssetId || !body.inputAssetIds.includes(panoramaAssetId)) {
+      return { ok: false, error: { message: 'panoramaAssetId is required for panorama-roam-render jobs.', code: 'GENERATION_JOB_PANORAMA_ASSET_REQUIRED' } };
+    }
+    config.sourceImageAssetId = panoramaAssetId;
+    config.panoramaAssetId = panoramaAssetId;
+    config.targetAspectRatio = typeof config.targetAspectRatio === 'string' && config.targetAspectRatio.trim().length > 0
+      ? config.targetAspectRatio.trim()
+      : '2:1';
+    config.targetWidth = isReasonableImageDimension(config.targetWidth) ? config.targetWidth : 2048;
+    config.targetHeight = isReasonableImageDimension(config.targetHeight) ? config.targetHeight : 1024;
+    if (isNonEmptyString(config.sourceModelAssetId)) config.sourceModelAssetId = config.sourceModelAssetId.trim();
+  }
   if (config.editTarget !== undefined && config.editTarget !== 'general' && config.editTarget !== 'material' && config.editTarget !== 'furniture') {
     return { ok: false, error: { message: 'editTarget must be general, material, or furniture.', code: 'GENERATION_JOB_EDIT_TARGET_INVALID' } };
   }
@@ -1625,7 +1643,7 @@ function isNullableString(value: unknown): value is string | null {
 }
 
 function isGenerationMode(value: unknown): value is GenerationRecord['mode'] {
-  return value === 'floorplan' || value === 'style-render' || value === 'inpaint' || value === 'model-render' || value === 'design-variants' || value === 'material-replace' || value === 'plan-colorize';
+  return value === 'floorplan' || value === 'style-render' || value === 'inpaint' || value === 'model-render' || value === 'design-variants' || value === 'material-replace' || value === 'plan-colorize' || value === 'panorama-roam-render';
 }
 
 function isGenerationStatus(value: unknown): value is GenerationRecord['status'] {
@@ -1721,6 +1739,37 @@ async function validateGenerationJobAssets(
         error: {
           message: 'Snapshot image asset is required for model-render.',
           code: 'GENERATION_JOB_SNAPSHOT_ASSET_NOT_FOUND',
+        },
+      };
+    }
+
+    const sourceModelAssetId = typeof config.sourceModelAssetId === 'string' ? config.sourceModelAssetId.trim() : '';
+    if (sourceModelAssetId) {
+      const modelAsset = await getModelAsset(sourceModelAssetId, userId);
+      if (!modelAsset) {
+        return {
+          ok: false,
+          error: {
+            message: 'Source model asset not found.',
+            code: 'GENERATION_JOB_SOURCE_MODEL_NOT_FOUND',
+          },
+        };
+      }
+    }
+  }
+
+  if (mode === 'panorama-roam-render') {
+    const panoramaAssetId = typeof config.panoramaAssetId === 'string'
+      ? config.panoramaAssetId.trim()
+      : typeof config.sourceImageAssetId === 'string'
+        ? config.sourceImageAssetId.trim()
+        : '';
+    if (!panoramaAssetId || !inputAssetIds.includes(panoramaAssetId)) {
+      return {
+        ok: false,
+        error: {
+          message: 'Panorama image asset is required for panorama-roam-render.',
+          code: 'GENERATION_JOB_PANORAMA_ASSET_NOT_FOUND',
         },
       };
     }

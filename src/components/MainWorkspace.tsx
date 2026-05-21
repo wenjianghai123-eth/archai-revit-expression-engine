@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
-import { GenerationConfig, GenerationProvider, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, StepState, UploadedImage } from '../types';
+import { GenerationConfig, GenerationHistoryItem, GenerationProvider, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, StepState, UploadedImage } from '../types';
 import { createUploadedImage, validateImageFile } from '../utils/file';
 import { uploadImageAsset } from '../lib/api';
 import { GenerationStatusPanel } from './workspace/GenerationStatusPanel';
@@ -9,6 +9,7 @@ import { PromptConfigPanel } from './workspace/PromptConfigPanel';
 import { MaterialTexturesPanel, StyleSelectorPanel } from './workspace/ReferenceImagesPanel';
 import { ResultPreviewPanel } from './workspace/ResultPreviewPanel';
 import { ModelSnapshotRenderPanel } from './ModelSnapshotRenderPanel';
+import { PanoramaQuickRenderPanel } from './PanoramaQuickRenderPanel';
 import { DesignVariantsPanel } from './DesignVariantsPanel';
 import { PlanColorizePanel } from './PlanColorizePanel';
 import { MaterialReplaceConfigPanel } from './MaterialReplaceConfigPanel';
@@ -21,6 +22,7 @@ const PromptTemplatePanel = lazy(() => import('./PromptTemplatePanel').then(modu
 interface WorkspaceProps {
   step: GenerationStep;
   state: StepState;
+  selectedProjectId?: string | null;
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
   onUpdateInputImage: (image: UploadedImage | null) => void;
   onUpdateMaterialImage: (image: UploadedImage | null) => void;
@@ -36,6 +38,7 @@ interface WorkspaceProps {
   onSetViewMode: (viewMode: StepState['viewMode']) => void;
   onNextStep: () => void;
   onReset: () => void;
+  onHistoryRecord?: (record: GenerationHistoryItem) => void;
   backendProvider: GenerationProvider | null;
   isCreditsInsufficient: boolean;
 }
@@ -45,6 +48,7 @@ const acceptedImageTypes = 'image/png,image/jpeg,image/webp';
 export function MainWorkspace({
   step,
   state,
+  selectedProjectId,
   onUpdateConfig,
   onUpdateInputImage,
   onUpdateMaterialImage,
@@ -60,6 +64,7 @@ export function MainWorkspace({
   onSetViewMode,
   onNextStep,
   onReset,
+  onHistoryRecord,
   backendProvider,
   isCreditsInsufficient,
 }: WorkspaceProps) {
@@ -78,6 +83,7 @@ export function MainWorkspace({
   const isDesignVariantsStep = step === GenerationStep.DesignVariants;
   const isPlanColorizeStep = step === GenerationStep.PlanColorize;
   const isMaterialReplaceStep = step === GenerationStep.MaterialReplace;
+  const isPanoramaQuickRenderStep = step === GenerationStep.PanoramaQuickRender;
   const materialReplaceEditMode = state.config.editMode === 'mask' ? 'mask' : 'smart-type';
   const hasMaterialReplaceTarget = Boolean(state.config.targetMaterial || state.materialTextures.length > 0 || (state.config.customMaterialPrompt || '').trim());
   const hasMaskSelection = Boolean(state.maskImage?.dataUrl || state.useFullImageMask);
@@ -434,6 +440,23 @@ export function MainWorkspace({
           onSetViewMode={onSetViewMode}
           onNextStep={onGenerate}
           onReset={onReset}
+        />
+      </div>
+    );
+  }
+
+  if (isPanoramaQuickRenderStep) {
+    return (
+      <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">
+        <PanoramaQuickRenderPanel
+          state={state}
+          config={state.config}
+          projectId={selectedProjectId}
+          provider={providerForStatus}
+          onUpdateConfig={onUpdateConfig}
+          onUpdateInputImage={onUpdateInputImage}
+          onGenerate={onGenerate}
+          onHistoryRecord={onHistoryRecord}
         />
       </div>
     );

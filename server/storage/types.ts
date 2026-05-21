@@ -10,7 +10,7 @@ export interface Project {
   deletedAt?: string | null;
 }
 
-export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize';
+export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
 export type VariantStyleKey =
   | 'modern-minimal'

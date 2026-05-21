@@ -35,4 +35,14 @@ describe('Stepper', () => {
     expect(html).toContain('上传 3D 白模，选好角度，一键生成效果图');
     expect(html).toContain('04');
   });
+  it('shows the panorama quick render entry as a generation mode', () => {
+    const html = renderToStaticMarkup(React.createElement(Stepper, {
+      currentStep: GenerationStep.PanoramaQuickRender,
+      onStepChange: () => undefined,
+    }));
+
+    expect(html).toContain('漫游全景快渲');
+    expect(html).toContain('捕捉全景视点');
+    expect(html).toContain('08');
+  });
 });

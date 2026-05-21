@@ -205,7 +205,7 @@ export function useGenerationRunner({
             variantStyles: currentStep === GenerationStep.DesignVariants ? resolveVariantStyles(stateAtStart.config) : undefined,
             variantNames: currentStep === GenerationStep.DesignVariants ? resolveVariantNames(stateAtStart.config) : undefined,
             customStyleLabel: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.customStyleLabel : undefined,
-            userPrompt: currentStep === GenerationStep.ModelSnapshotRender
+            userPrompt: currentStep === GenerationStep.ModelSnapshotRender || currentStep === GenerationStep.PanoramaQuickRender
               ? stateAtStart.config.customPrompt
               : stateAtStart.config.prompt,
             editTarget: currentStep === GenerationStep.MaterialReplace
@@ -225,8 +225,10 @@ export function useGenerationRunner({
             sourceModelAssetId: stateAtStart.config.sourceModelAssetId,
             sourceImageAssetId: stateAtStart.inputImage.assetId,
             snapshotAssetId: currentStep === GenerationStep.ModelSnapshotRender ? stateAtStart.inputImage.assetId : undefined,
-            inputSource: currentStep === GenerationStep.ModelSnapshotRender ? stateAtStart.config.inputSource : undefined,
+            panoramaAssetId: currentStep === GenerationStep.PanoramaQuickRender ? stateAtStart.inputImage.assetId : undefined,
+            inputSource: currentStep === GenerationStep.ModelSnapshotRender ? stateAtStart.config.inputSource : currentStep === GenerationStep.PanoramaQuickRender ? 'panorama-capture' : undefined,
             modelSnapshotMetadata: stateAtStart.config.modelSnapshotMetadata,
+            panoramaCapture: currentStep === GenerationStep.PanoramaQuickRender ? stateAtStart.config.panoramaCapture : undefined,
             buildingType: stateAtStart.config.buildingType,
             spaceType: stateAtStart.config.spaceType,
             renderStyle: stateAtStart.config.renderStyle,
@@ -337,7 +339,9 @@ export function useGenerationRunner({
             projectId: selectedProjectId,
             step: currentStep,
             prompt: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.customMaterialPrompt || '' : stateAtStart.config.prompt,
-            style: readHistoryStyle(currentStep, stateAtStart.config),
+            style: currentStep === GenerationStep.PanoramaQuickRender
+              ? stateAtStart.config.renderStyle || stateAtStart.config.style || '漫游全景快渲'
+              : readHistoryStyle(currentStep, stateAtStart.config),
             createdAt: new Date(latestJob.finishedAt || latestJob.updatedAt).toLocaleString('zh-CN', { hour12: false }),
             provider: providerName || 'mock',
             outputImage: selectedResult.imageUrl,
@@ -492,6 +496,7 @@ export function useGenerationRunner({
           break;
 
         case GenerationStep.ModelSnapshotRender:
+        case GenerationStep.PanoramaQuickRender:
         case GenerationStep.DesignVariants:
           throw new Error('白模快渲需要通过项目任务系统生成，请先选择项目并截取模型视角。');
       }
@@ -615,6 +620,7 @@ function getGenerationRecordMode(step: GenerationStep): GenerationMode {
   if (step === GenerationStep.FloorplanTo3D) return 'floorplan';
   if (step === GenerationStep.StyleRender) return 'style-render';
   if (step === GenerationStep.ModelSnapshotRender) return 'model-render';
+  if (step === GenerationStep.PanoramaQuickRender) return 'panorama-roam-render';
   if (step === GenerationStep.DesignVariants) return 'design-variants';
   if (step === GenerationStep.PlanColorize) return 'plan-colorize';
   if (step === GenerationStep.MaterialReplace) return 'material-replace';
@@ -640,6 +646,10 @@ function buildPromptForGeneration(step: GenerationStep, prompt: string, state?: 
 
   if (step === GenerationStep.ModelSnapshotRender && state) {
     return buildModelRenderPrompt(state.config);
+  }
+
+  if (step === GenerationStep.PanoramaQuickRender && state) {
+    return buildPanoramaRoamRenderPrompt(state.config);
   }
 
   if (step === GenerationStep.MaterialReplace && state) {
@@ -684,6 +694,7 @@ function buildTargetSizeConfig(image: UploadedImage): Pick<GenerationConfig, 'so
 
 function getAspectRatioString(width: number, height: number): string {
   const ratio = width / height;
+  if (Math.abs(ratio - 2) <= 0.08) return '2:1';
   const candidates = [
     { value: '1:1', ratio: 1 },
     { value: '4:3', ratio: 4 / 3 },
@@ -699,7 +710,14 @@ function getAspectRatioString(width: number, height: number): string {
 
 function buildConfigForGeneration(step: GenerationStep, config: GenerationConfig): GenerationConfig {
   if (step !== GenerationStep.FloorplanTo3D) {
-    return config;
+    return step === GenerationStep.PanoramaQuickRender
+      ? {
+          ...config,
+          targetWidth: config.targetWidth || 2048,
+          targetHeight: config.targetHeight || 1024,
+          targetAspectRatio: config.targetAspectRatio || '2:1',
+        }
+      : config;
   }
 
   const { style: _style, ...floorplanConfig } = config;
@@ -783,6 +801,18 @@ function buildModelRenderPrompt(config: GenerationConfig): string {
   const customPrompt = readMeaningfulPrompt(config.customPrompt || config.prompt);
   return [
     'The input image is a 3D clay or white model viewport snapshot. Transform it into a realistic architectural or interior rendering. Preserve the original geometry, massing, layout, camera angle, perspective, composition, and spatial proportions. Add appropriate materials, lighting, shadows, environment, furniture, landscape details, and atmosphere. Do not change the fundamental structure unless explicitly requested.',
+    readMeaningfulPrompt(config.buildingType) ? `Building type: ${config.buildingType}.` : undefined,
+    readMeaningfulPrompt(config.spaceType) ? `Space type: ${config.spaceType}.` : undefined,
+    readMeaningfulPrompt(config.renderStyle || config.style) ? `Rendering style: ${config.renderStyle || config.style}.` : undefined,
+    readMeaningfulPrompt(config.atmosphere || config.lighting) ? `Atmosphere: ${config.atmosphere || config.lighting}.` : undefined,
+    customPrompt ? `User note: ${customPrompt}.` : undefined,
+  ].filter((item): item is string => Boolean(item)).join(' ');
+}
+
+function buildPanoramaRoamRenderPrompt(config: GenerationConfig): string {
+  const customPrompt = readMeaningfulPrompt(config.customPrompt || config.prompt);
+  return [
+    'The input image is a 2:1 equirectangular 360 panorama captured from a 3D clay or white model. Transform it into a cinematic, photorealistic architectural or interior 360 panorama rendering. Preserve the exact equirectangular 2:1 canvas, full 360 continuity, camera position, spatial layout, geometry, proportions, horizon, and room or building structure. Add realistic materials, lighting, shadows, environment, furniture, landscape details, and atmosphere. Do not convert it into a normal perspective view. Do not crop, pad, add borders, labels, or watermarks.',
     readMeaningfulPrompt(config.buildingType) ? `Building type: ${config.buildingType}.` : undefined,
     readMeaningfulPrompt(config.spaceType) ? `Space type: ${config.spaceType}.` : undefined,
     readMeaningfulPrompt(config.renderStyle || config.style) ? `Rendering style: ${config.renderStyle || config.style}.` : undefined,

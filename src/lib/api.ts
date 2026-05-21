@@ -47,7 +47,7 @@ export interface GenerationRecord {
   userId: string;
   projectId: string;
   jobId?: string | null;
-  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize';
+  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
   prompt: string;
   inputImageUrl?: string | null;
   inputImageDataPreview?: string | null;
@@ -137,7 +137,7 @@ export interface GenerationJob {
   id: string;
   userId: string;
   projectId: string;
-  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize';
+  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
   prompt: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];

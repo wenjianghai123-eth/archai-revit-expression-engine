@@ -370,6 +370,14 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
     strength: 'balanced',
     feather: 0,
   },
+  [GenerationStep.PanoramaQuickRender]: {
+    prompt: "",
+    style: "漫游全景快渲",
+    lighting: "自然光",
+    materialStrength: 0.8,
+    batchCount: 1,
+    preserveGeometry: true,
+  },
 };
 
 export const PROMPT_TEMPLATES: PromptTemplate[] = [

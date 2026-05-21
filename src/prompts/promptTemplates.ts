@@ -56,5 +56,6 @@ function stepToFeature(step: GenerationStep): PromptTemplate['feature'] {
   if (step === GenerationStep.DesignVariants) return 'design-variants';
   if (step === GenerationStep.MaterialReplace) return 'material-replace';
   if (step === GenerationStep.PlanColorize) return 'plan-colorize';
+  if (step === GenerationStep.PanoramaQuickRender) return 'panorama-roam-render';
   return step === GenerationStep.FloorplanTo3D ? 'floorplan' : step === GenerationStep.StyleRender ? 'style-render' : 'inpaint';
 }

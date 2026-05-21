@@ -11,6 +11,7 @@ export function modeLabel(step: GenerationStep): string {
   if (step === GenerationStep.DesignVariants) return '方案变体';
   if (step === GenerationStep.PlanColorize) return '图纸智能表达';
   if (step === GenerationStep.MaterialReplace) return '材质软装替换';
+  if (step === GenerationStep.PanoramaQuickRender) return '漫游全景快渲';
   return '局部重绘';
 }
 

@@ -6,9 +6,10 @@ export enum GenerationStep {
   DesignVariants = 5,
   MaterialReplace = 6,
   PlanColorize = 7,
+  PanoramaQuickRender = 8,
 }
 
-export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize';
+export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
 export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled';
@@ -105,6 +106,38 @@ export interface ModelSnapshotCapture {
   edgesEnabled?: boolean;
 }
 
+export interface PanoramaImageCapture {
+  dataUrl: string;
+  width: number;
+  height: number;
+  camera: ModelSnapshotCamera;
+  fov?: number;
+  viewMode?: 'orbit' | 'walkthrough';
+}
+
+export interface PanoramaCapturePayload {
+  captureType: 'panorama-viewpoint';
+  sourceModelAssetId: string;
+  sourceModelUrl?: string;
+  modelFileType?: 'glb' | 'gltf';
+  camera: ModelSnapshotCamera;
+  fov?: number;
+  viewMode?: 'orbit' | 'walkthrough';
+  capturedAt: string;
+}
+
+export interface PanoramaRecord {
+  id: string;
+  projectId?: string | null;
+  modelUrl: string;
+  cameraState: ModelSnapshotCamera;
+  panoramaUrl: string;
+  renderedPanoramaUrl?: string;
+  thumbnailUrl?: string;
+  shareId: string;
+  createdAt: string;
+}
+
 export interface ModelSnapshotMetadata {
   sourceType: 'model-snapshot';
   inputSource?: 'model-capture' | 'uploaded-snapshot';
@@ -187,8 +220,10 @@ export interface GenerationConfig {
   sourceModelAssetId?: string;
   sourceImageAssetId?: string;
   snapshotAssetId?: string;
+  panoramaAssetId?: string;
   inputSource?: 'model-capture' | 'uploaded-snapshot';
   modelSnapshotMetadata?: ModelSnapshotMetadata;
+  panoramaCapture?: PanoramaCapturePayload;
   drawingType?: PlanDrawingType;
   template?: PlanExpressionTemplate;
   enableZoningColor?: boolean;
@@ -281,7 +316,7 @@ export interface PromptTemplate {
   id: string;
   title: string;
   category: string;
-  feature: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize';
+  feature: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
   supportedModes?: GenerationStep[] | string[];
   description: string;
   previewImage: string;
@@ -326,6 +361,7 @@ export interface GenerationHistoryItem {
   modelSnapshotMetadata?: ModelSnapshotMetadata;
   resultStored?: boolean;
   storageWarning?: string;
+  panoramaRecord?: PanoramaRecord;
 }
 
 export interface AssetModel {

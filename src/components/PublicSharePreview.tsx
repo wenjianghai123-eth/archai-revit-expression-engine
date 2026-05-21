@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Clock, ImageIcon, Loader2, Lock, Share2 } from 'lucide-react';
 import { getPublicShare, PublicShareGeneration, PublicSharePayload } from '../lib/api';
+import { PanoramaViewer } from './PanoramaViewer';
 
 interface PublicSharePreviewProps {
   token: string;
@@ -124,8 +125,10 @@ function PublicGenerationCard({
   onToggleCompare: () => void;
 }) {
   const resultImages = useMemo(() => getPublicResultImages(generation), [generation]);
+  const [panoramaMode, setPanoramaMode] = useState<'360' | 'image'>('360');
   const inputImage = generation.inputImageDataPreview || generation.inputImageUrl || null;
   const primaryResult = resultImages.find(result => result.isSelected) || resultImages[0] || null;
+  const isPanorama = generation.mode === 'panorama-roam-render';
 
   return (
     <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -146,9 +149,21 @@ function PublicGenerationCard({
         >
           原图 / 结果对比
         </button>
+        {isPanorama && primaryResult ? (
+          <div className="inline-flex rounded-xl bg-slate-100 p-1 text-xs font-bold">
+            <button type="button" onClick={() => setPanoramaMode('360')} className={`rounded-lg px-3 py-2 ${panoramaMode === '360' ? 'bg-slate-950 text-white' : 'text-slate-500'}`}>
+              360预览
+            </button>
+            <button type="button" onClick={() => setPanoramaMode('image')} className={`rounded-lg px-3 py-2 ${panoramaMode === 'image' ? 'bg-slate-950 text-white' : 'text-slate-500'}`}>
+              普通图
+            </button>
+          </div>
+        ) : null}
       </div>
 
-      {isComparing && inputImage && primaryResult ? (
+      {isPanorama && primaryResult && panoramaMode === '360' ? (
+        <PanoramaViewer imageUrl={primaryResult.imageUrl} className="h-[520px] rounded-xl" minHeight={520} />
+      ) : isComparing && inputImage && primaryResult ? (
         <div className="grid gap-3 md:grid-cols-2">
           <PreviewImage src={inputImage} label="原图" />
           <PreviewImage src={primaryResult.imageUrl} label="结果图" />
@@ -196,6 +211,7 @@ function modeLabel(mode: PublicShareGeneration['mode']): string {
   if (mode === 'floorplan') return '平面生成';
   if (mode === 'style-render') return '风格渲染';
   if (mode === 'plan-colorize') return '图纸智能表达';
+  if (mode === 'panorama-roam-render') return '漫游全景快渲';
   if (mode === 'model-render') return '白模快渲';
   return '局部重绘';
 }
