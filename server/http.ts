@@ -121,6 +121,7 @@ export function sanitizeErrorForLog(error: unknown): { name: string; message: st
 export function sanitizeLogText(value: string): string {
   return value
     .replace(/[\r\n\t]/g, ' ')
+    .replace(/(password|passwd|pwd)(["'\s:=]+)([^"',\s}]+)/giu, '$1$2[REDACTED]')
     .replace(/[^\x20-\x7E]/g, '?')
     .slice(0, 500);
 }

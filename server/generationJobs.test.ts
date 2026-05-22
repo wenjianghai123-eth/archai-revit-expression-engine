@@ -1376,6 +1376,32 @@ describe('legacy generation endpoints', () => {
     }
   });
 
+  it('requires authentication even when explicitly enabled for debugging', async () => {
+    const originalAuthMode = process.env.AUTH_MODE;
+    const originalLegacyFlag = process.env.ENABLE_LEGACY_GENERATION_ENDPOINTS;
+    process.env.AUTH_MODE = 'unknown';
+    process.env.ENABLE_LEGACY_GENERATION_ENDPOINTS = 'true';
+
+    try {
+      const response = await request(app)
+        .post('/api/generate/style-render')
+        .send({
+          inputImageDataUrl: tinyPngDataUrl,
+          prompt: 'render this',
+          config: {},
+        });
+
+      expect(response.status).toBe(401);
+      expect(response.body).toMatchObject({
+        ok: false,
+        error: { code: 'AUTH_REQUIRED' },
+      });
+    } finally {
+      restoreEnv('AUTH_MODE', originalAuthMode);
+      restoreEnv('ENABLE_LEGACY_GENERATION_ENDPOINTS', originalLegacyFlag);
+    }
+  });
+
   it('are disabled by default in production-like configuration', async () => {
     const originalNodeEnv = process.env.NODE_ENV;
     const originalLegacyFlag = process.env.ENABLE_LEGACY_GENERATION_ENDPOINTS;
@@ -1841,4 +1867,9 @@ async function waitForGenerationJob(jobId: string, status: 'succeeded' | 'failed
   }
 
   throw new Error(`Timed out waiting for generation job ${jobId} to become ${status}.`);
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
 }

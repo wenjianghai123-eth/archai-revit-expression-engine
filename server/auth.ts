@@ -21,13 +21,24 @@ export const devAuthUser: AuthUser = {
   createdAt: '2026-01-01T00:00:00.000Z',
 };
 
-type AuthFailure = { status: 403; message: string; code: string };
+export type AuthMode = 'dev' | 'supabase';
+
+type AuthFailure = { status: 401 | 403; message: string; code: string };
 type RequestWithUser = Request & { authUser?: AuthUser; authFailure?: AuthFailure };
 
 let supabaseAdminClient: SupabaseClient | null = null;
 
 export async function attachAuthUser(req: Request, _res: Response, next: NextFunction): Promise<void> {
-  const authMode = process.env.AUTH_MODE || 'dev';
+  const authMode = readAuthMode();
+  if (!authMode) {
+    (req as RequestWithUser).authFailure = {
+      status: 401,
+      message: 'Authentication is required.',
+      code: 'AUTH_REQUIRED',
+    };
+    next();
+    return;
+  }
 
   if (authMode === 'dev') {
     const role = req.headers['x-dev-user-role'] === 'member' ? 'member' : 'admin';
@@ -47,13 +58,6 @@ export async function attachAuthUser(req: Request, _res: Response, next: NextFun
         status,
       };
     }
-    next();
-    return;
-  }
-
-  if (authMode !== 'supabase') {
-    console.warn(`Unsupported AUTH_MODE=${authMode}; falling back to dev auth user.`);
-    (req as RequestWithUser).authUser = devAuthUser;
     next();
     return;
   }
@@ -146,6 +150,12 @@ export function getCurrentUser(req: Request): AuthUser | null {
 
 export function getRequiredCurrentUser(req: Request): AuthUser {
   return (req as RequestWithUser).authUser ?? devAuthUser;
+}
+
+export function readAuthMode(): AuthMode | null {
+  const authMode = process.env.AUTH_MODE || 'dev';
+  if (authMode === 'dev' || authMode === 'supabase') return authMode;
+  return null;
 }
 
 function readBearerToken(req: Request): string | null {

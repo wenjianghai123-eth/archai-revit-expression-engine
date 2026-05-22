@@ -1,13 +1,28 @@
 import 'dotenv/config';
-import { createSupabaseAuthUser, findSupabaseAuthUserByEmail } from '../server/supabaseAdmin';
-import { adjustCredits, createUserProfile, ensureAppDatabase, getUserProfileByEmail } from '../server/storage';
 
 async function main(): Promise<void> {
   const email = readRequiredEnv('ADMIN_EMAIL').trim().toLowerCase();
   const password = readRequiredEnv('ADMIN_PASSWORD');
   const name = process.env.ADMIN_NAME?.trim() || 'ArchAI Admin';
+  const initialCredits = readPositiveIntegerEnv('ADMIN_INITIAL_CREDITS', process.env.DEFAULT_INITIAL_CREDITS || '1000');
 
   process.env.AUTH_MODE = 'supabase';
+  if (!process.env.DATA_BACKEND) {
+    process.env.DATA_BACKEND = 'supabase';
+  }
+  if (process.env.DATA_BACKEND !== 'supabase') {
+    throw new Error('seed:admin requires DATA_BACKEND=supabase so the admin profile is created in Supabase.');
+  }
+
+  const [{ createSupabaseAuthUser, findSupabaseAuthUserByEmail }, {
+    adjustCredits,
+    createUserProfile,
+    ensureAppDatabase,
+    getUserProfileByEmail,
+  }] = await Promise.all([
+    import('../server/supabaseAdmin'),
+    import('../server/storage'),
+  ]);
 
   await ensureAppDatabase();
 
@@ -37,13 +52,13 @@ async function main(): Promise<void> {
   await adjustCredits({
     userId: profile.id,
     type: 'grant',
-    amount: Number(process.env.ADMIN_INITIAL_CREDITS || process.env.DEFAULT_INITIAL_CREDITS || 1000),
+    amount: initialCredits,
     reason: 'seed_admin',
     referenceType: 'system',
     referenceId: `seed_admin_${profile.id}`,
   });
 
-  console.log('Admin seed completed. Password was not printed.');
+  console.log(`Admin seed completed for ${email}. Password was not printed. Credit grant is idempotent.`);
 }
 
 function readRequiredEnv(name: string): string {
@@ -52,6 +67,15 @@ function readRequiredEnv(name: string): string {
     throw new Error(`${name} is required.`);
   }
   return value;
+}
+
+function readPositiveIntegerEnv(name: string, fallback: string): number {
+  const value = process.env[name] || fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return parsed;
 }
 
 main().catch(error => {

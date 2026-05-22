@@ -4,6 +4,18 @@ This document describes the Supabase Auth, database, RPC, RLS, and Storage setup
 
 The app does not use direct frontend table writes. The Express backend uses `SUPABASE_SERVICE_ROLE_KEY` for storage adapter writes and still performs project/asset/user checks in application code. RLS policies are included as a defense-in-depth baseline and for future browser read features.
 
+## Production Account Model
+
+Production uses an administrator-assigned account model:
+
+1. `AUTH_MODE=supabase` is required in production. `AUTH_MODE=dev` is local-only and the server rejects it when `NODE_ENV=production`.
+2. Public registration is forbidden. Do not add a public sign-up UI, do not expose a self-serve registration route, and disable or restrict public sign-ups in Supabase Authentication settings.
+3. Seed exactly one first admin after the Supabase schema/RPC/storage setup is ready.
+4. The first admin signs in at `/admin` and creates all other admin/member accounts from the user management page.
+5. Users must have both a Supabase Auth user and an active `profiles` row. A Supabase Auth user without an active profile cannot access business APIs.
+
+Legacy generation endpoints (`/api/generate/floorplan`, `/api/generate/style-render`, and `/api/generate/inpaint`) must stay disabled in production with `ENABLE_LEGACY_GENERATION_ENDPOINTS=false`. They are development helpers only; production generation must go through `/api/generation-jobs` so login, ownership checks, job persistence, and credit debits are enforced. Keep `VITE_ENABLE_LEGACY_GENERATION_FALLBACK=false` for production frontend builds.
+
 ## Environment
 
 Local development should continue to use JSON storage:
@@ -17,9 +29,11 @@ Production storage can use Supabase. Keep frontend `VITE_*` variables and backen
 
 ```bash
 # Backend/runtime environment on the Express service:
+NODE_ENV=production
 DATA_BACKEND=supabase
 AUTH_MODE=supabase
 FILE_STORAGE=supabase
+ENABLE_LEGACY_GENERATION_ENDPOINTS=false
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your_public_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_backend_only_service_role_key
@@ -29,32 +43,42 @@ SUPABASE_STORAGE_BUCKET=archai-assets
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your_public_anon_key
 VITE_API_BASE_URL=https://your-api-domain.com
+VITE_ENABLE_LEGACY_GENERATION_FALLBACK=false
 ```
 
 `SUPABASE_SERVICE_ROLE_KEY`, provider keys, `DATA_BACKEND`, `FILE_STORAGE`, and `AUTH_MODE` are backend-only. Do not expose them in frontend code or client-visible config. `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `VITE_API_BASE_URL` are frontend build-time values and are expected to be visible in the browser bundle.
 
-`VITE_*` variables are Vite build-time variables. After changing `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, or `VITE_API_BASE_URL`, rebuild and redeploy the frontend; changing only the server environment will not update already-built browser bundles.
+`VITE_*` variables are Vite build-time variables. After changing `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_BASE_URL`, or `VITE_ENABLE_LEGACY_GENERATION_FALLBACK`, run `npm run build` again and redeploy the frontend; changing only the server environment will not update already-built browser bundles.
 
 If frontend and backend are deployed separately, such as Netlify static frontend plus Render/Railway backend, `VITE_API_BASE_URL` is required and must be set to the backend origin only, for example `https://api.example.com`. The frontend will call `${VITE_API_BASE_URL}/api/...`. If it is empty, the app calls same-origin `/api/...`, which only works for single-service deployments where Express serves both `dist` and `/api`.
 
 For production deploys, put `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the frontend host's build-time environment settings. Backend-only variables such as `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `GRSAI_API_KEY` are not injected into Vite browser code. After changing frontend env vars, run `npm run build` again and redeploy the frontend; restarting only the Express backend will not make the login page pick up new `VITE_*` values.
 
-Production login uses an administrator-created account model. Do not expose a public sign-up UI, and disable or restrict public sign-ups in Supabase Authentication settings. The backend authorizes users through the `profiles` table, so a Supabase Auth user without an active profile cannot access business APIs.
+## Seed the First Admin
 
-Create the first admin with:
+After running the SQL in this document and configuring backend Supabase variables, create the first admin with:
 
 ```bash
+DATA_BACKEND=supabase
+AUTH_MODE=supabase
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_backend_only_service_role_key
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=replace-with-a-strong-password
 ADMIN_NAME="ArchAI Admin"
+ADMIN_INITIAL_CREDITS=1000
 npm run seed:admin
 ```
 
-The script does not print the password. After seeding, log in at `/admin` and create member accounts from the user management page.
+The seed script forces Supabase auth mode internally and requires Supabase storage metadata (`DATA_BACKEND=supabase`, defaulted when unset). It creates the Supabase Auth user from `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and `ADMIN_NAME` if needed, or reuses an existing Auth user with the same email. It then creates or updates the matching `profiles` row as `role=admin` and `status=active`.
+
+The script grants `ADMIN_INITIAL_CREDITS` (or `DEFAULT_INITIAL_CREDITS`, or `1000`) with a deterministic `seed_admin_{profile.id}` reference. Re-running `npm run seed:admin` is safe: it updates the admin profile, does not create duplicate Auth users, and does not duplicate the same credit grant. The script does not print the password. Keep `ADMIN_PASSWORD` out of shell history and CI logs where possible.
+
+After seeding, log in at `/admin` with that admin account and create all member/admin accounts from the user management page. Do not invite users through public registration. If Supabase Auth public sign-ups remain enabled for other reasons, the app still requires an active `profiles` row before business API access, but production operations should keep account creation admin-controlled.
 
 ## Auth
 
-Use Supabase Auth when `AUTH_MODE=supabase`. The frontend uses only `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` to sign in with email and password, then attach Bearer tokens. Magic link login and public sign-up are intentionally not used. The backend validates tokens with the service role key.
+Use Supabase Auth when `AUTH_MODE=supabase`. Production must use `AUTH_MODE=supabase`; do not deploy production with `AUTH_MODE=dev`. The frontend uses only `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` to sign in with email and password, then attach Bearer tokens. Magic link login and public sign-up are intentionally not used. The backend validates tokens with the service role key.
 
 For local mock development, keep `AUTH_MODE=dev`; no Supabase project is required.
 

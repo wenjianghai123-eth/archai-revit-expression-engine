@@ -16,8 +16,12 @@ import {
   LayoutGrid,
   Sparkles,
   ShieldCheck,
-  Camera
+  Camera,
+  LogOut,
+  WalletCards,
+  AlertCircle,
 } from 'lucide-react';
+import { AuthUser, CreditBalance } from '../lib/api';
 import { GenerationStep } from '../types';
 
 interface SidebarProps {
@@ -25,9 +29,22 @@ interface SidebarProps {
   onTabChange: (id: string) => void;
   onSettingsOpen: () => void;
   isAdmin?: boolean;
+  currentUser?: AuthUser | null;
+  creditBalance?: CreditBalance | null;
+  creditError?: string | null;
+  onSignOut?: () => void;
 }
 
-export function Sidebar({ activeTab, onTabChange, onSettingsOpen, isAdmin = false }: SidebarProps) {
+export function Sidebar({
+  activeTab,
+  onTabChange,
+  onSettingsOpen,
+  isAdmin = false,
+  currentUser = null,
+  creditBalance = null,
+  creditError = null,
+  onSignOut,
+}: SidebarProps) {
   const groups = [
     {
       title: '创作',
@@ -84,6 +101,14 @@ export function Sidebar({ activeTab, onTabChange, onSettingsOpen, isAdmin = fals
       </nav>
 
       <div className="border-t border-white/10 p-4">
+        {currentUser ? (
+          <AccountPanel
+            currentUser={currentUser}
+            creditBalance={creditBalance}
+            creditError={creditError}
+            onSignOut={onSignOut}
+          />
+        ) : null}
         <p className="mb-2 px-3 text-[10px] font-bold uppercase tracking-[0.24em] text-slate-600">系统</p>
         <button onClick={onSettingsOpen} className="group flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-slate-400 transition-colors hover:bg-white/5 hover:text-white" title="设置">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/5 group-hover:bg-white/10">
@@ -126,6 +151,59 @@ export function Sidebar({ activeTab, onTabChange, onSettingsOpen, isAdmin = fals
       </button>
     </div>
     </>
+  );
+}
+
+function AccountPanel({
+  currentUser,
+  creditBalance,
+  creditError,
+  onSignOut,
+}: {
+  currentUser: AuthUser;
+  creditBalance: CreditBalance | null;
+  creditError: string | null;
+  onSignOut?: () => void;
+}) {
+  return (
+    <div className="mb-4 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-slate-500">当前账号</p>
+          <p className="mt-1 truncate text-sm font-bold text-white">{currentUser.email}</p>
+        </div>
+        {onSignOut ? (
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/5 text-slate-300 transition hover:bg-rose-500/15 hover:text-rose-200"
+            title="退出登录"
+            aria-label="退出登录"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
+        ) : null}
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] font-bold">
+        <span className="rounded-lg bg-white/5 px-2 py-1.5 text-slate-300">role: {currentUser.role}</span>
+        <span className="rounded-lg bg-white/5 px-2 py-1.5 text-slate-300">status: {currentUser.status}</span>
+      </div>
+
+      <div className="mt-2 flex items-center gap-2 rounded-xl bg-white/5 px-2.5 py-2 text-xs font-bold">
+        {creditError ? (
+          <>
+            <AlertCircle className="h-4 w-4 shrink-0 text-amber-300" />
+            <span className="min-w-0 text-amber-100">额度读取失败，可继续退出登录</span>
+          </>
+        ) : (
+          <>
+            <WalletCards className="h-4 w-4 shrink-0 text-emerald-300" />
+            <span className="text-slate-200">剩余 credits：{creditBalance?.balance ?? '读取中'}</span>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 

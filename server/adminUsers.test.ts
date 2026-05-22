@@ -4,6 +4,7 @@ import path from 'node:path';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { sanitizeLogText } from './http';
 import type { app as ExpressApp } from './index';
 import type * as Storage from './storage';
 
@@ -43,14 +44,30 @@ describe('admin user management', () => {
     const oldAuthMode = process.env.AUTH_MODE;
     process.env.AUTH_MODE = 'supabase';
 
-    const response = await request(app)
-      .post('/api/admin/users')
-      .send({});
+    try {
+      const response = await request(app)
+        .post('/api/admin/users')
+        .send({});
 
-    expect(response.status).toBe(401);
-    expect(response.body.error.code).toBe('AUTH_REQUIRED');
+      expect(response.status).toBe(401);
+      expect(response.body.error.code).toBe('AUTH_REQUIRED');
+    } finally {
+      restoreEnv('AUTH_MODE', oldAuthMode);
+    }
+  });
 
-    process.env.AUTH_MODE = oldAuthMode;
+  it('does not fall back to dev auth for unknown AUTH_MODE', async () => {
+    const oldAuthMode = process.env.AUTH_MODE;
+    process.env.AUTH_MODE = 'unknown';
+
+    try {
+      const response = await request(app).get('/api/projects');
+
+      expect(response.status).toBe(401);
+      expect(response.body.error.code).toBe('AUTH_REQUIRED');
+    } finally {
+      restoreEnv('AUTH_MODE', oldAuthMode);
+    }
   });
 
   it('returns 403 when a member accesses admin users', async () => {
@@ -90,6 +107,90 @@ describe('admin user management', () => {
     expect(balance.balance).toBe(123);
   });
 
+  it('returns a clear conflict for duplicate admin user emails', async () => {
+    const payload = {
+      name: 'Duplicate User',
+      email: 'duplicate-user@example.com',
+      password: 'strong-password-1',
+      role: 'member',
+      initialCredits: 10,
+    };
+
+    const firstResponse = await request(app).post('/api/admin/users').send(payload);
+    const duplicateResponse = await request(app).post('/api/admin/users').send({
+      ...payload,
+      password: 'another-strong-password',
+    });
+
+    expect(firstResponse.status).toBe(201);
+    expect(duplicateResponse.status).toBe(409);
+    expect(duplicateResponse.body).toMatchObject({
+      ok: false,
+      error: {
+        code: 'ADMIN_USER_EMAIL_EXISTS',
+        message: 'Email already exists.',
+      },
+    });
+    expect(JSON.stringify(duplicateResponse.body)).not.toContain('another-strong-password');
+  });
+
+  it('returns a clear validation error for short admin user passwords', async () => {
+    const response = await request(app)
+      .post('/api/admin/users')
+      .send({
+        name: 'Short Password',
+        email: 'short-password@example.com',
+        password: 'short',
+        role: 'member',
+        initialCredits: 10,
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: {
+        code: 'ADMIN_USER_PASSWORD_INVALID',
+        message: 'password must be at least 8 characters.',
+      },
+    });
+    expect(JSON.stringify(response.body)).not.toContain('short');
+  });
+
+  it.each([
+    ['negative', -1],
+    ['decimal', 1.5],
+    ['string', '10'],
+  ])('returns a clear validation error for %s initial credits', async (_label, initialCredits) => {
+    const response = await request(app)
+      .post('/api/admin/users')
+      .send({
+        name: `Invalid Credits ${_label}`,
+        email: `invalid-credits-${_label}@example.com`,
+        password: 'strong-password-1',
+        role: 'member',
+        initialCredits,
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: {
+        code: 'ADMIN_USER_INITIAL_CREDITS_INVALID',
+        message: 'initialCredits must be a non-negative integer.',
+      },
+    });
+    expect(JSON.stringify(response.body)).not.toContain('strong-password-1');
+  });
+
+  it('redacts password-shaped fields from log text', () => {
+    const sanitized = sanitizeLogText('create failed password=strong-password-1 payload {"password":"another-secret"}');
+
+    expect(sanitized).toContain('password=[REDACTED]');
+    expect(sanitized).toContain('"password":"[REDACTED]"');
+    expect(sanitized).not.toContain('strong-password-1');
+    expect(sanitized).not.toContain('another-secret');
+  });
+
   it('does not expose reset passwords in responses', async () => {
     const created = await request(app)
       .post('/api/admin/users')
@@ -107,6 +208,62 @@ describe('admin user management', () => {
 
     expect(response.status).toBe(200);
     expect(JSON.stringify(response.body)).not.toContain('new-strong-password');
+  });
+
+  it('allows admins to update user name and email', async () => {
+    const created = await request(app)
+      .post('/api/admin/users')
+      .send({
+        name: 'Editable User',
+        email: 'editable-user@example.com',
+        password: 'strong-password-1',
+        role: 'member',
+        initialCredits: 0,
+      });
+
+    const response = await request(app)
+      .patch(`/api/admin/users/${encodeURIComponent(created.body.data.user.id)}`)
+      .send({
+        name: 'Edited User',
+        email: 'Edited-User@Example.com',
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.user).toMatchObject({
+      name: 'Edited User',
+      email: 'edited-user@example.com',
+    });
+
+    const users = await storage.listUserProfiles();
+    expect(users.find(user => user.id === created.body.data.user.id)).toMatchObject({
+      name: 'Edited User',
+      email: 'edited-user@example.com',
+    });
+  });
+
+  it('returns a clear validation error for invalid profile edit email', async () => {
+    const created = await request(app)
+      .post('/api/admin/users')
+      .send({
+        name: 'Invalid Edit Email',
+        email: 'invalid-edit-email@example.com',
+        password: 'strong-password-1',
+        role: 'member',
+        initialCredits: 0,
+      });
+
+    const response = await request(app)
+      .patch(`/api/admin/users/${encodeURIComponent(created.body.data.user.id)}`)
+      .send({ email: 'not-an-email' });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      ok: false,
+      error: {
+        code: 'ADMIN_USER_EMAIL_INVALID',
+        message: 'email is invalid.',
+      },
+    });
   });
 
   it('blocks disabled users from business APIs', async () => {
@@ -155,9 +312,27 @@ describe('admin user management', () => {
     process.env.NODE_ENV = 'production';
     process.env.AUTH_MODE = 'dev';
 
-    expect(() => validateAuthEnvironment()).toThrow('AUTH_MODE=dev is not allowed');
+    try {
+      expect(() => validateAuthEnvironment()).toThrow('AUTH_MODE=dev is not allowed');
+    } finally {
+      restoreEnv('NODE_ENV', oldNodeEnv);
+      restoreEnv('AUTH_MODE', oldAuthMode);
+    }
+  });
 
-    process.env.NODE_ENV = oldNodeEnv;
-    process.env.AUTH_MODE = oldAuthMode;
+  it('rejects unknown AUTH_MODE during startup validation', () => {
+    const oldAuthMode = process.env.AUTH_MODE;
+    process.env.AUTH_MODE = 'unknown';
+
+    try {
+      expect(() => validateAuthEnvironment()).toThrow('AUTH_MODE must be dev or supabase');
+    } finally {
+      restoreEnv('AUTH_MODE', oldAuthMode);
+    }
   });
 });
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}

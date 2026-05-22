@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { NextFunction, Request, Response } from 'express';
-import { attachAuthUser, getCurrentUser, getRequiredCurrentUser, requireAuth } from './auth';
+import { attachAuthUser, getCurrentUser, getRequiredCurrentUser, readAuthMode, requireAuth } from './auth';
 import { createStoredFilename, fileStorageProvider, uploadsDir } from './fileStorage';
 import {
   cancelGenerationJob,
@@ -506,12 +506,7 @@ app.patch('/api/generation-results/:id', requireAuth, async (
   }
 });
 
-app.post('/api/generate/floorplan', async (req: Request, res: Response, next: NextFunction) => {
-  if (!isLegacyGenerationEndpointEnabled()) {
-    res.status(404).json(apiError('Legacy generation endpoints are disabled. Use /api/generation-jobs instead.', 'LEGACY_GENERATION_ENDPOINT_DISABLED'));
-    return;
-  }
-
+app.post('/api/generate/floorplan', requireLegacyGenerationEndpoint, requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   const body = validateGenerateBody(req.body, { promptRequired: false });
   if (body.ok === false) {
     res.status(400).json(apiError(body.error, 'INVALID_GENERATE_REQUEST'));
@@ -525,12 +520,7 @@ app.post('/api/generate/floorplan', async (req: Request, res: Response, next: Ne
   }
 });
 
-app.post('/api/generate/style-render', async (req: Request, res: Response, next: NextFunction) => {
-  if (!isLegacyGenerationEndpointEnabled()) {
-    res.status(404).json(apiError('Legacy generation endpoints are disabled. Use /api/generation-jobs instead.', 'LEGACY_GENERATION_ENDPOINT_DISABLED'));
-    return;
-  }
-
+app.post('/api/generate/style-render', requireLegacyGenerationEndpoint, requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   const body = validateGenerateBody(req.body);
   if (body.ok === false) {
     res.status(400).json(apiError(body.error, 'INVALID_GENERATE_REQUEST'));
@@ -544,12 +534,7 @@ app.post('/api/generate/style-render', async (req: Request, res: Response, next:
   }
 });
 
-app.post('/api/generate/inpaint', async (req: Request, res: Response, next: NextFunction) => {
-  if (!isLegacyGenerationEndpointEnabled()) {
-    res.status(404).json(apiError('Legacy generation endpoints are disabled. Use /api/generation-jobs instead.', 'LEGACY_GENERATION_ENDPOINT_DISABLED'));
-    return;
-  }
-
+app.post('/api/generate/inpaint', requireLegacyGenerationEndpoint, requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   const body = validateGenerateBody(req.body, { promptRequired: true });
   if (body.ok === false) {
     res.status(400).json(apiError(body.error, 'INVALID_GENERATE_REQUEST'));
@@ -790,7 +775,11 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 export function validateAuthEnvironment(): void {
-  const authMode = process.env.AUTH_MODE || 'dev';
+  const authMode = readAuthMode();
+  if (!authMode) {
+    throw new Error(`Unsupported AUTH_MODE=${process.env.AUTH_MODE}. AUTH_MODE must be dev or supabase.`);
+  }
+
   if (process.env.NODE_ENV === 'production' && authMode === 'dev') {
     throw new Error('AUTH_MODE=dev is not allowed when NODE_ENV=production.');
   }
@@ -802,6 +791,15 @@ export function validateAuthEnvironment(): void {
       throw new Error(`AUTH_MODE=supabase requires ${missing.join(', ')}.`);
     }
   }
+}
+
+function requireLegacyGenerationEndpoint(_req: Request, res: Response, next: NextFunction): void {
+  if (!isLegacyGenerationEndpointEnabled()) {
+    res.status(404).json(apiError('Legacy generation endpoints are disabled. Use /api/generation-jobs instead.', 'LEGACY_GENERATION_ENDPOINT_DISABLED'));
+    return;
+  }
+
+  next();
 }
 
 function validateGenerateBody(
@@ -1034,7 +1032,12 @@ function validateAdminUserCreateBody(
   }
 
   const role = body.role === 'admin' ? 'admin' : 'member';
-  const initialCredits = readNonNegativeInteger(body.initialCredits, Number(process.env.DEFAULT_INITIAL_CREDITS || 100));
+  const initialCreditsValue = body.initialCredits === undefined
+    ? Number(process.env.DEFAULT_INITIAL_CREDITS || 100)
+    : body.initialCredits;
+  if (typeof initialCreditsValue !== 'number' || !Number.isInteger(initialCreditsValue) || initialCreditsValue < 0) {
+    return { ok: false, error: { message: 'initialCredits must be a non-negative integer.', code: 'ADMIN_USER_INITIAL_CREDITS_INVALID' } };
+  }
 
   return {
     ok: true,
@@ -1043,7 +1046,7 @@ function validateAdminUserCreateBody(
       email: body.email.trim().toLowerCase(),
       password: body.password,
       role,
-      initialCredits,
+      initialCredits: initialCreditsValue,
     },
   };
 }

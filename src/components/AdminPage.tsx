@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AlertCircle, ArrowLeft, Coins, KeyRound, Loader2, LogOut, ShieldCheck, UserPlus } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Coins, KeyRound, Loader2, LogOut, Pencil, Save, ShieldCheck, UserPlus, X } from 'lucide-react';
 import {
   AdminDashboard,
   AuthUser,
@@ -18,6 +18,11 @@ interface AdminPageProps {
   onSignOut: () => void;
 }
 
+interface UserEditForm {
+  name: string;
+  email: string;
+}
+
 export function AdminPage({ currentUser, onBackToApp, onSignOut }: AdminPageProps) {
   const [dashboard, setDashboard] = useState<AdminDashboard | null>(null);
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -28,6 +33,9 @@ export function AdminPage({ currentUser, onBackToApp, onSignOut }: AdminPageProp
   const [form, setForm] = useState({ name: '', email: '', password: '', role: 'member' as UserProfile['role'], initialCredits: 100 });
   const [resetPasswords, setResetPasswords] = useState<Record<string, string>>({});
   const [creditAmounts, setCreditAmounts] = useState<Record<string, number>>({});
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [editForms, setEditForms] = useState<Record<string, UserEditForm>>({});
+  const [savingUserId, setSavingUserId] = useState<string | null>(null);
 
   const load = async () => {
     setIsLoading(true);
@@ -54,9 +62,9 @@ export function AdminPage({ currentUser, onBackToApp, onSignOut }: AdminPageProp
     setError(null);
     setMessage(null);
     try {
-      await createAdminUser(form);
+      const result = await createAdminUser(form);
       setForm({ name: '', email: '', password: '', role: 'member', initialCredits: 100 });
-      setMessage('用户已创建。请通过安全渠道把邮箱和初始密码发送给用户。');
+      setMessage(formatAdminCreateSuccessMessage(result.user.email, result.balance.balance));
       await load();
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : '创建用户失败。');
@@ -74,6 +82,59 @@ export function AdminPage({ currentUser, onBackToApp, onSignOut }: AdminPageProp
       await load();
     } catch (updateError) {
       setError(updateError instanceof Error ? updateError.message : '更新用户失败。');
+    }
+  };
+
+  const handleStartEditUser = (user: UserProfile) => {
+    setError(null);
+    setMessage(null);
+    setEditingUserId(user.id);
+    setEditForms(prev => ({
+      ...prev,
+      [user.id]: { name: user.name, email: user.email },
+    }));
+  };
+
+  const handleCancelEditUser = (userId: string) => {
+    setEditingUserId(null);
+    setEditForms(prev => {
+      const next = { ...prev };
+      delete next[userId];
+      return next;
+    });
+  };
+
+  const handleSaveUserProfile = async (user: UserProfile) => {
+    const editForm = editForms[user.id] || { name: user.name, email: user.email };
+    const name = editForm.name.trim();
+    const email = editForm.email.trim().toLowerCase();
+
+    if (!name) {
+      setError('请输入用户姓名。');
+      return;
+    }
+    if (!isValidAdminEmail(email)) {
+      setError('请输入有效的邮箱地址。');
+      return;
+    }
+
+    setSavingUserId(user.id);
+    setError(null);
+    setMessage(null);
+    try {
+      await updateAdminUser(user.id, { name, email });
+      setEditingUserId(null);
+      setEditForms(prev => {
+        const next = { ...prev };
+        delete next[user.id];
+        return next;
+      });
+      setMessage(`用户 ${email} 的姓名和邮箱已更新。`);
+      await load();
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : '更新姓名或邮箱失败。');
+    } finally {
+      setSavingUserId(null);
     }
   };
 
@@ -211,9 +272,49 @@ export function AdminPage({ currentUser, onBackToApp, onSignOut }: AdminPageProp
                   {users.map(user => (
                     <tr key={user.id}>
                       <td className="px-3 py-3">
-                        <div className="font-bold text-slate-900">{user.name}</div>
-                        <div className="text-slate-500">{user.email}</div>
-                        <div className="font-mono text-[10px] text-slate-400">{user.id}</div>
+                        {editingUserId === user.id ? (
+                          <div className="space-y-2">
+                            <input
+                              value={editForms[user.id]?.name ?? user.name}
+                              onChange={event => setEditForms(prev => ({
+                                ...prev,
+                                [user.id]: { name: event.target.value, email: prev[user.id]?.email ?? user.email },
+                              }))}
+                              className="w-48 rounded-lg border border-slate-200 px-2 py-1 font-bold text-slate-900 outline-none focus:border-blue-300"
+                              aria-label="编辑姓名"
+                            />
+                            <input
+                              type="email"
+                              value={editForms[user.id]?.email ?? user.email}
+                              onChange={event => setEditForms(prev => ({
+                                ...prev,
+                                [user.id]: { name: prev[user.id]?.name ?? user.name, email: event.target.value },
+                              }))}
+                              className="w-56 rounded-lg border border-slate-200 px-2 py-1 text-slate-600 outline-none focus:border-blue-300"
+                              aria-label="编辑邮箱"
+                            />
+                            <div className="flex gap-2">
+                              <button type="button" onClick={() => void handleSaveUserProfile(user)} disabled={savingUserId === user.id} className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-2 py-1 font-bold text-white disabled:opacity-50">
+                                {savingUserId === user.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                                保存
+                              </button>
+                              <button type="button" onClick={() => handleCancelEditUser(user.id)} disabled={savingUserId === user.id} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 font-bold text-slate-600 disabled:opacity-50">
+                                <X className="h-3.5 w-3.5" />
+                                取消
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="space-y-1">
+                            <div className="font-bold text-slate-900">{user.name}</div>
+                            <div className="text-slate-500">{user.email}</div>
+                            <button type="button" onClick={() => handleStartEditUser(user)} className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1 font-bold text-slate-600 hover:bg-slate-200">
+                              <Pencil className="h-3.5 w-3.5" />
+                              编辑
+                            </button>
+                          </div>
+                        )}
+                        <div className="mt-1 font-mono text-[10px] text-slate-400">{user.id}</div>
                       </td>
                       <td className="px-3 py-3">
                         <select value={user.role} onChange={event => void handlePatchUser(user, { role: event.target.value as UserProfile['role'] })} className="rounded-lg border border-slate-200 bg-white px-2 py-1">
@@ -257,6 +358,14 @@ function TextInput({ label, value, onChange, type = 'text', required = false }: 
       <input type={type} value={value} onChange={event => onChange(event.target.value)} required={required} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-300" />
     </label>
   );
+}
+
+export function formatAdminCreateSuccessMessage(email: string, credits: number): string {
+  return `用户 ${email} 创建成功，初始积分 ${credits} credits。请通过安全渠道单独发送初始密码。`;
+}
+
+export function isValidAdminEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email.trim());
 }
 
 function StatCard({ label, value }: { label: string; value: number }) {

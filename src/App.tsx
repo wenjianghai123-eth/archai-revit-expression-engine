@@ -351,7 +351,16 @@ export default function App() {
   return (
     <div className="flex h-screen w-full overflow-hidden bg-slate-100 text-slate-900 selection:bg-arch-accent selection:text-arch-bg">
       {/* Sidebar */}
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onSettingsOpen={() => setIsSettingsOpen(true)} isAdmin={currentUser.role === 'admin'} />
+      <Sidebar
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        onSettingsOpen={() => setIsSettingsOpen(true)}
+        isAdmin={currentUser.role === 'admin'}
+        currentUser={currentUser}
+        creditBalance={creditBalance}
+        creditError={creditError}
+        onSignOut={() => { void handleSignOut(); }}
+      />
 
       {/* Main Content Area */}
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden min-w-0 pb-20 lg:pb-0">

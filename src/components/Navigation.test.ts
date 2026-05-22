@@ -1,48 +1,47 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { Stepper } from './Navigation';
-import { GenerationStep } from '../types';
+import { Sidebar } from './Navigation';
 
-describe('Stepper', () => {
-  it('shows the design variants entry as a generation mode', () => {
-    const html = renderToStaticMarkup(React.createElement(Stepper, {
-      currentStep: GenerationStep.DesignVariants,
-      onStepChange: () => undefined,
+const currentUser = {
+  id: 'user_1',
+  email: 'member@example.com',
+  name: 'Member User',
+  role: 'member' as const,
+  status: 'active' as const,
+  createdAt: '2026-01-01T00:00:00.000Z',
+};
+
+describe('Sidebar account panel', () => {
+  it('shows current user identity, credits, and sign out action', () => {
+    const html = renderToStaticMarkup(React.createElement(Sidebar, {
+      activeTab: 'home',
+      onTabChange: () => undefined,
+      onSettingsOpen: () => undefined,
+      currentUser,
+      creditBalance: { userId: currentUser.id, balance: 88, updatedAt: '2026-01-01T00:00:00.000Z' },
+      onSignOut: () => undefined,
     }));
 
-    expect(html).toContain('方案变体');
-    expect(html).toContain('一次生成多种设计方向，快速对比方案');
+    expect(html).toContain('member@example.com');
+    expect(html).toContain('role: member');
+    expect(html).toContain('status: active');
+    expect(html).toContain('剩余 credits：88');
+    expect(html).toContain('退出登录');
   });
 
-  it('shows the material replace entry as a generation mode', () => {
-    const html = renderToStaticMarkup(React.createElement(Stepper, {
-      currentStep: GenerationStep.MaterialReplace,
-      onStepChange: () => undefined,
+  it('shows a friendly credit error without hiding sign out', () => {
+    const html = renderToStaticMarkup(React.createElement(Sidebar, {
+      activeTab: 'home',
+      onTabChange: () => undefined,
+      onSettingsOpen: () => undefined,
+      currentUser,
+      creditError: 'HTTP 500',
+      onSignOut: () => undefined,
     }));
 
-    expect(html).toContain('材质软装替换');
-    expect(html).toContain('选择局部区域，替换地面、墙面、家具、灯光或材质');
-  });
-
-  it('shows the model snapshot render entry as a generation mode', () => {
-    const html = renderToStaticMarkup(React.createElement(Stepper, {
-      currentStep: GenerationStep.ModelSnapshotRender,
-      onStepChange: () => undefined,
-    }));
-
-    expect(html).toContain('白模快渲');
-    expect(html).toContain('上传 3D 白模，选好角度，一键生成效果图');
-    expect(html).toContain('04');
-  });
-  it('shows the panorama quick render entry as a generation mode', () => {
-    const html = renderToStaticMarkup(React.createElement(Stepper, {
-      currentStep: GenerationStep.PanoramaQuickRender,
-      onStepChange: () => undefined,
-    }));
-
-    expect(html).toContain('漫游全景快渲');
-    expect(html).toContain('捕捉全景视点');
-    expect(html).toContain('08');
+    expect(html).toContain('额度读取失败，可继续退出登录');
+    expect(html).toContain('退出登录');
+    expect(html).not.toContain('HTTP 500');
   });
 });
