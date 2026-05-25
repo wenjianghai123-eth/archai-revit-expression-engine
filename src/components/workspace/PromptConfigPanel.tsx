@@ -47,6 +47,26 @@ export function PromptConfigPanel({
         ) : null}
       </div>
 
+      <div className="space-y-2">
+        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">生成质量</label>
+        <div className="grid grid-cols-3 gap-2">
+          {(['fast', 'balanced', 'high'] as const).map(value => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => onUpdateConfig({ qualityMode: value })}
+              className={`rounded-lg border px-3 py-2 text-[10px] font-bold ${
+                (config.qualityMode || 'balanced') === value
+                  ? 'border-blue-600 bg-blue-50 text-blue-700'
+                  : 'border-slate-200 bg-white text-slate-500'
+              }`}
+            >
+              {value === 'fast' ? '快速' : value === 'balanced' ? '均衡' : '高质'}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {step === GenerationStep.LocalInpainting ? (
         <InpaintConfigControls config={config} onUpdateConfig={onUpdateConfig} />
       ) : null}

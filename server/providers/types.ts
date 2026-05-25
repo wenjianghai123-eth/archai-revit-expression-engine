@@ -25,6 +25,9 @@ export interface GenerateImageOutput {
   id: string;
   provider: ProviderName;
   dataUrl: string;
+  // TODO(perf): allow providers to return binary image content here so storage can
+  // upload Buffer/mimeType directly without remote URL -> data URL -> Buffer churn.
+  binary?: { content: Uint8Array; mimeType: string };
   remoteUrl?: string;
   mimeType?: string;
   metadata?: Record<string, unknown>;

@@ -5,6 +5,10 @@ import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider } from
 export const mockProvider: ImageGenerationProvider = {
   name: 'mock',
   async generateImage(input: GenerateImageInput): Promise<GenerateImageOutput> {
+    const delayMs = Number(process.env.MOCK_PROVIDER_DELAY_MS || 0);
+    if (Number.isFinite(delayMs) && delayMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
     return createMockGeneration(input);
   },
 };

@@ -39,7 +39,8 @@ export interface GenerateResponseBody {
 const maxImageMb = Number(process.env.MAX_IMAGE_MB || 10);
 const provider = selectProvider();
 const queuedGenerationJobIds: string[] = [];
-let isGenerationWorkerRunning = false;
+let isGenerationWorkerScheduling = false;
+const activeGenerationJobIds = new Set<string>();
 const providerMaintenanceUserMessage = '当前生成模型正在维护，请稍后重试，或切换其他生成模型。';
 
 export function getGenerationProviderName(): ProviderName {
@@ -109,7 +110,7 @@ async function markInterruptedGenerationJobFailed(job: GenerationJob): Promise<v
 }
 
 export function enqueueGenerationJob(jobId: string): void {
-  if (!queuedGenerationJobIds.includes(jobId)) {
+  if (!queuedGenerationJobIds.includes(jobId) && !activeGenerationJobIds.has(jobId)) {
     queuedGenerationJobIds.push(jobId);
   }
 
@@ -148,17 +149,27 @@ export async function generateWithFallbackResponse(input: GenerateImageInput): P
 }
 
 async function runGenerationWorker(): Promise<void> {
-  if (isGenerationWorkerRunning) return;
-  isGenerationWorkerRunning = true;
+  if (isGenerationWorkerScheduling) return;
+  isGenerationWorkerScheduling = true;
 
   try {
-    while (queuedGenerationJobIds.length > 0) {
+    const workerConcurrency = readPositiveInteger(process.env.GENERATION_WORKER_CONCURRENCY, 1);
+    while (queuedGenerationJobIds.length > 0 && activeGenerationJobIds.size < workerConcurrency) {
       const jobId = queuedGenerationJobIds.shift();
       if (!jobId) continue;
-      await processGenerationJob(jobId);
+      if (activeGenerationJobIds.has(jobId)) continue;
+
+      activeGenerationJobIds.add(jobId);
+      void processGenerationJob(jobId)
+        .finally(() => {
+          activeGenerationJobIds.delete(jobId);
+          if (queuedGenerationJobIds.length > 0) {
+            void runGenerationWorker();
+          }
+        });
     }
   } finally {
-    isGenerationWorkerRunning = false;
+    isGenerationWorkerScheduling = false;
   }
 }
 
@@ -197,38 +208,15 @@ async function processGenerationJob(jobId: string): Promise<void> {
     let firstOutput: GenerateImageOutput | null = null;
     let firstOutputAsset: ImageAsset | null = null;
 
-    for (let index = 0; index < batchCount; index += 1) {
-      markTiming(diagnostics, 'providerRequestStartedAt', 'provider-request');
-      await updateGenerationJob(job.id, { progress: resolveVariantStartProgress(batchCount, index), diagnostics });
-      const variantStyle = variantStyles[index] || 'modern-minimal';
-      const providerInput = job.mode === 'design-variants'
-        ? {
-            ...input,
-            prompt: buildDesignVariantPrompt(job, index, batchCount, variantStyle),
-            config: {
-              ...input.config,
-              variantIndex: index,
-              variantCode: readVariantCode(index),
-              variantLabel: readVariantLabel(index),
-              variantName: resolveVariantName(job.config, index),
-              variantStyle,
-              stylePackId: typeof job.config.stylePackId === 'string' ? job.config.stylePackId : 'interior-common',
-              batchCount,
-            },
-          }
-        : input;
-      const providerOutput = await generateWithFallback(providerInput);
-      markTiming(diagnostics, 'providerRequestFinishedAt');
-      diagnostics.provider = {
-        ...diagnostics.provider,
-        name: providerOutput.provider,
-        model: typeof providerOutput.metadata?.model === 'string' ? providerOutput.metadata.model : diagnostics.provider?.model,
-        httpStatus: typeof providerOutput.metadata?.httpStatus === 'number' ? providerOutput.metadata.httpStatus : diagnostics.provider?.httpStatus,
-        retryCount: typeof providerOutput.metadata?.retryCount === 'number' ? providerOutput.metadata.retryCount : diagnostics.provider?.retryCount,
-        fallbackProvider: typeof providerOutput.metadata?.fallbackProvider === 'string' ? providerOutput.metadata.fallbackProvider : diagnostics.provider?.fallbackProvider,
-        fallbackReason: typeof providerOutput.metadata?.fallbackReason === 'string' ? providerOutput.metadata.fallbackReason : diagnostics.provider?.fallbackReason,
-      };
-      await updateGenerationJob(job.id, { progress: job.mode === 'design-variants' ? resolveVariantCompleteProgress(batchCount, index) : 75, diagnostics });
+    markTiming(diagnostics, 'providerRequestStartedAt', 'provider-request');
+    await updateGenerationJob(job.id, { progress: resolveVariantStartProgress(batchCount, 0), diagnostics });
+    const providerOutputs = await generateProviderOutputs(job, input, batchCount, variantStyles);
+    markTiming(diagnostics, 'providerRequestFinishedAt');
+    applyProviderDiagnostics(diagnostics, providerOutputs.map(output => output.providerOutput));
+    await updateGenerationJob(job.id, { progress: job.mode === 'design-variants' ? 72 : 75, diagnostics });
+
+    for (const { index, variantStyle, providerOutput } of providerOutputs) {
+      const progress = resolveVariantCompleteProgress(batchCount, index);
 
       markTiming(diagnostics, 'postprocessStartedAt', 'postprocess');
       let outputDataUrl = await normalizeGeneratedImageDataUrl({
@@ -250,7 +238,6 @@ async function processGenerationJob(jobId: string): Promise<void> {
         dataUrl: outputDataUrl,
       };
       markTiming(diagnostics, 'postprocessFinishedAt');
-      const progress = resolveVariantCompleteProgress(batchCount, index);
       await updateGenerationJob(job.id, { progress });
 
       markTiming(diagnostics, 'saveResultStartedAt', 'save-result');
@@ -371,6 +358,93 @@ async function processGenerationJob(jobId: string): Promise<void> {
   }
 }
 
+interface ProviderVariantOutput {
+  index: number;
+  variantStyle: string;
+  providerOutput: GenerateImageOutput;
+}
+
+async function generateProviderOutputs(
+  job: GenerationJob,
+  input: GenerateImageInput,
+  batchCount: 1 | 2 | 4 | 8,
+  variantStyles: string[],
+): Promise<ProviderVariantOutput[]> {
+  const indexes = Array.from({ length: batchCount }, (_value, index) => index);
+  const concurrency = job.mode === 'design-variants'
+    ? Math.min(batchCount, readPositiveInteger(process.env.GENERATION_VARIANT_CONCURRENCY, 1))
+    : 1;
+
+  const outputs = await mapWithConcurrency(indexes, concurrency, async (index) => {
+    const variantStyle = variantStyles[index] || 'modern-minimal';
+    const providerInput = buildProviderInputForVariant(job, input, index, batchCount, variantStyle);
+    return {
+      index,
+      variantStyle,
+      providerOutput: await generateWithFallback(providerInput),
+    };
+  });
+
+  return outputs.sort((a, b) => a.index - b.index);
+}
+
+function buildProviderInputForVariant(
+  job: GenerationJob,
+  input: GenerateImageInput,
+  index: number,
+  batchCount: 1 | 2 | 4 | 8,
+  variantStyle: string,
+): GenerateImageInput {
+  if (job.mode !== 'design-variants') return input;
+
+  return {
+    ...input,
+    prompt: buildDesignVariantPrompt(job, index, batchCount, variantStyle),
+    config: {
+      ...input.config,
+      variantIndex: index,
+      variantCode: readVariantCode(index),
+      variantLabel: readVariantLabel(index),
+      variantName: resolveVariantName(job.config, index),
+      variantStyle,
+      stylePackId: typeof job.config.stylePackId === 'string' ? job.config.stylePackId : 'interior-common',
+      batchCount,
+    },
+  };
+}
+
+function applyProviderDiagnostics(diagnostics: GenerationJobDiagnostics, outputs: GenerateImageOutput[]): void {
+  diagnostics.provider = {
+    ...diagnostics.provider,
+    name: outputs[0]?.provider || diagnostics.provider?.name,
+    model: readLastMetadataString(outputs, 'model') || diagnostics.provider?.model,
+    httpStatus: readLastMetadataNumber(outputs, 'httpStatus') || diagnostics.provider?.httpStatus,
+    retryCount: outputs.reduce((sum, output) => sum + (typeof output.metadata?.retryCount === 'number' ? output.metadata.retryCount : 0), 0),
+    fallbackProvider: readLastMetadataString(outputs, 'fallbackProvider') || diagnostics.provider?.fallbackProvider,
+    fallbackReason: readLastMetadataString(outputs, 'fallbackReason') || diagnostics.provider?.fallbackReason,
+  };
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index], index);
+    }
+  }));
+
+  return results;
+}
+
 async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   input: GenerateImageInput;
   imageDiagnostics: NonNullable<GenerationJobDiagnostics['images']>;
@@ -484,11 +558,12 @@ async function resolveTargetDimensions(
 }
 
 async function prepareGenerateInputForProvider(input: GenerateImageInput): Promise<{ input: GenerateImageInput; imageDiagnostics: NonNullable<GenerationJobDiagnostics['images']> }> {
-  const imageMaxLongSide = readPositiveInteger(process.env.PROVIDER_IMAGE_MAX_LONG_SIDE, 1536);
-  const referenceMaxLongSide = readPositiveInteger(process.env.PROVIDER_REFERENCE_MAX_LONG_SIDE, 1024);
-  const quality = readPositiveInteger(process.env.PROVIDER_IMAGE_JPEG_QUALITY, 85);
-  const maxReferenceImages = readPositiveInteger(process.env.MAX_PROVIDER_REFERENCE_IMAGES, 6);
-  const maxPayloadBytes = readPositiveInteger(process.env.MAX_PROVIDER_PAYLOAD_BYTES, 8_000_000);
+  const providerSettings = resolveProviderImageSettings(input.config.qualityMode);
+  const imageMaxLongSide = providerSettings.imageMaxLongSide;
+  const referenceMaxLongSide = providerSettings.referenceMaxLongSide;
+  const quality = providerSettings.quality;
+  const maxReferenceImages = providerSettings.maxReferenceImages;
+  const maxPayloadBytes = providerSettings.maxPayloadBytes;
   const prepared: Array<{ role: string; image: PreparedProviderImage }> = [];
 
   const inputImage = await prepareImageForProvider({
@@ -502,8 +577,10 @@ async function prepareGenerateInputForProvider(input: GenerateImageInput): Promi
   const materialImage = input.materialImageDataUrl
     ? await prepareReferenceImage(input.materialImageDataUrl, 'material', referenceMaxLongSide, quality, prepared)
     : undefined;
-  const materialReferences = await prepareReferenceImages(input.materialReferenceImageDataUrls, 'material-reference', 3, referenceMaxLongSide, quality, prepared);
-  const furnitureReferences = await prepareReferenceImages(input.furnitureReferenceImageDataUrls, 'furniture-reference', 3, referenceMaxLongSide, quality, prepared);
+  const materialReferenceSlots = Math.max(0, Math.min(3, maxReferenceImages - (materialImage ? 1 : 0)));
+  const materialReferences = await prepareReferenceImages(input.materialReferenceImageDataUrls, 'material-reference', materialReferenceSlots, referenceMaxLongSide, quality, prepared);
+  const furnitureReferenceSlots = Math.max(0, Math.min(3, maxReferenceImages - materialReferences.length - (materialImage ? 1 : 0)));
+  const furnitureReferences = await prepareReferenceImages(input.furnitureReferenceImageDataUrls, 'furniture-reference', furnitureReferenceSlots, referenceMaxLongSide, quality, prepared);
   const remainingReferenceSlots = Math.max(0, maxReferenceImages - materialReferences.length - furnitureReferences.length - (materialImage ? 1 : 0));
   const additionalReferences = await prepareReferenceImages(input.referenceImageDataUrls, 'reference', remainingReferenceSlots, referenceMaxLongSide, quality, prepared);
   let maskImage: PreparedProviderImage | undefined;
@@ -540,6 +617,7 @@ async function prepareGenerateInputForProvider(input: GenerateImageInput): Promi
       referenceBytesBefore: images.slice(1).reduce((sum, image) => sum + image.originalBytes, 0),
       referenceBytesAfter: images.slice(1).reduce((sum, image) => sum + image.outputBytes, 0),
       payloadBytesApprox,
+      qualityMode: providerSettings.qualityMode,
       prepared: prepared.map(item => ({
         role: item.role,
         width: item.image.width,
@@ -554,9 +632,35 @@ async function prepareGenerateInputForProvider(input: GenerateImageInput): Promi
   };
 }
 
+type QualityMode = 'fast' | 'balanced' | 'high';
+
+function resolveProviderImageSettings(value: unknown): {
+  qualityMode: QualityMode;
+  imageMaxLongSide: number;
+  referenceMaxLongSide: number;
+  quality: number;
+  maxReferenceImages: number;
+  maxPayloadBytes: number;
+} {
+  const qualityMode: QualityMode = value === 'fast' || value === 'high' ? value : 'balanced';
+  const defaults = {
+    fast: { imageMaxLongSide: 1024, referenceMaxLongSide: 768, quality: 76, maxReferenceImages: 3, maxPayloadBytes: 4_000_000 },
+    balanced: { imageMaxLongSide: 1280, referenceMaxLongSide: 768, quality: 80, maxReferenceImages: 3, maxPayloadBytes: 4_000_000 },
+    high: { imageMaxLongSide: 1536, referenceMaxLongSide: 1024, quality: 85, maxReferenceImages: 6, maxPayloadBytes: 8_000_000 },
+  }[qualityMode];
+
+  return {
+    qualityMode,
+    imageMaxLongSide: readPositiveInteger(process.env.PROVIDER_IMAGE_MAX_LONG_SIDE, defaults.imageMaxLongSide),
+    referenceMaxLongSide: readPositiveInteger(process.env.PROVIDER_REFERENCE_MAX_LONG_SIDE, defaults.referenceMaxLongSide),
+    quality: readPositiveInteger(process.env.PROVIDER_IMAGE_JPEG_QUALITY, defaults.quality),
+    maxReferenceImages: readPositiveInteger(process.env.MAX_PROVIDER_REFERENCE_IMAGES, defaults.maxReferenceImages),
+    maxPayloadBytes: readPositiveInteger(process.env.MAX_PROVIDER_PAYLOAD_BYTES, defaults.maxPayloadBytes),
+  };
+}
+
 async function maybeCreateLocalInpaintContext(input: GenerateImageInput): Promise<LocalInpaintContext | null> {
-  if (input.mode !== 'inpaint') return null;
-  if (input.editTarget !== 'furniture') return null;
+  if (input.mode !== 'inpaint' && input.mode !== 'material-replace') return null;
   if (input.maskMode !== 'asset-mask' || !input.maskImageDataUrl) return null;
 
   return createLocalInpaintContext({
@@ -1245,6 +1349,22 @@ function readMeaningfulConfigString(value: unknown): string {
   return trimmed;
 }
 
+function readLastMetadataString(outputs: GenerateImageOutput[], key: string): string | undefined {
+  for (let index = outputs.length - 1; index >= 0; index -= 1) {
+    const value = outputs[index]?.metadata?.[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+function readLastMetadataNumber(outputs: GenerateImageOutput[], key: string): number | undefined {
+  for (let index = outputs.length - 1; index >= 0; index -= 1) {
+    const value = outputs[index]?.metadata?.[key];
+    if (typeof value === 'number') return value;
+  }
+  return undefined;
+}
+
 function readModelSnapshotMetadata(value: unknown): GenerationRecord['modelSnapshotMetadata'] {
   if (!isRecord(value)) return null;
   if (value.sourceType !== 'model-snapshot') return null;
@@ -1310,7 +1430,12 @@ function logJobTiming(jobId: string, diagnostics: GenerationJobDiagnostics, erro
     model: diagnostics.provider?.model,
     inputImages: diagnostics.images?.inputImages,
     referenceImages: diagnostics.images?.referenceImages,
+    inputBytesBefore: diagnostics.images?.inputBytesBefore,
+    inputBytesAfter: diagnostics.images?.inputBytesAfter,
+    referenceBytesBefore: diagnostics.images?.referenceBytesBefore,
+    referenceBytesAfter: diagnostics.images?.referenceBytesAfter,
     payloadBytesApprox: diagnostics.images?.payloadBytesApprox,
+    qualityMode: diagnostics.images?.qualityMode,
     localInpaintEnabled: diagnostics.images?.localInpaintEnabled,
     maskBbox: diagnostics.images?.maskBbox,
     originalSize: diagnostics.images?.originalWidth && diagnostics.images?.originalHeight ? `${diagnostics.images.originalWidth}x${diagnostics.images.originalHeight}` : undefined,

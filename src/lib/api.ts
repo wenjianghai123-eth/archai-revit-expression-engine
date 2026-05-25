@@ -195,6 +195,7 @@ export interface GenerationJobDiagnostics {
     referenceBytesBefore?: number;
     referenceBytesAfter?: number;
     payloadBytesApprox?: number;
+    qualityMode?: 'fast' | 'balanced' | 'high';
   };
 }
 

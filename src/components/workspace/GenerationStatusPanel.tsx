@@ -130,6 +130,16 @@ function GenerationProgress({ state, statusLabel, elapsedSeconds, onCancelGenera
           ) : null}
         </div>
       ) : null}
+      {state.generationJobDiagnostics ? (
+        <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg bg-white px-3 py-2 text-[10px] font-semibold leading-5 text-slate-500">
+          <span>prepare {formatMs(state.generationJobDiagnostics.timing?.prepareInputDurationMs)}</span>
+          <span>provider {formatMs(state.generationJobDiagnostics.timing?.providerDurationMs)}</span>
+          <span>post {formatMs(state.generationJobDiagnostics.timing?.postprocessDurationMs)}</span>
+          <span>save {formatMs(state.generationJobDiagnostics.timing?.saveResultDurationMs)}</span>
+          <span>total {formatMs(state.generationJobDiagnostics.timing?.totalDurationMs)}</span>
+          <span>payload {formatBytes(state.generationJobDiagnostics.images?.payloadBytesApprox)}</span>
+        </div>
+      ) : null}
       {state.isGenerating && state.generationJobId && (
         <button type="button" onClick={onCancelGeneration} className="mt-3 w-full rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-600">
           取消任务
@@ -137,6 +147,18 @@ function GenerationProgress({ state, statusLabel, elapsedSeconds, onCancelGenera
       )}
     </div>
   );
+}
+
+function formatMs(value: number | undefined): string {
+  if (!Number.isFinite(value)) return '-';
+  if ((value || 0) >= 1000) return `${((value || 0) / 1000).toFixed(1)}s`;
+  return `${Math.round(value || 0)}ms`;
+}
+
+function formatBytes(value: number | undefined): string {
+  if (!Number.isFinite(value)) return '-';
+  if ((value || 0) >= 1024 * 1024) return `${((value || 0) / (1024 * 1024)).toFixed(1)}MB`;
+  return `${Math.round((value || 0) / 1024)}KB`;
 }
 
 interface ResultActionsProps {

@@ -116,6 +116,7 @@ describe('Grsai Banana2 provider timing, timeout and retry', () => {
         providerStatus: 'failed',
         userMessage: '当前生成模型正在维护，请稍后重试，或切换其他生成模型。',
       });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 

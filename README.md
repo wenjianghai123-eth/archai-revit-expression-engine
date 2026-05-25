@@ -107,9 +107,10 @@ Backend/runtime variables, never expose with a `VITE_` prefix:
 - `GRSAI_MODEL`: optional Grsai model name. Defaults to `nano-banana-2`.
 - `GRSAI_IMAGE_SIZE`: optional Grsai output size. Defaults to `1K`.
 - `GRSAI_ASPECT_RATIO`: optional Grsai aspect ratio. Defaults to `auto`.
-- `GRSAI_POLL_INTERVAL_MS`: optional Grsai result polling interval. Defaults to `2500`.
+- `GRSAI_POLL_INTERVAL_MS`: optional Grsai result polling interval. Defaults to `2500`; `1000` or `1500` improves perceived latency when provider rate limits allow it.
 - `GRSAI_POLL_TIMEOUT_MS`: optional Grsai result polling timeout. Defaults to `180000`.
 - `GRSAI_DOWNLOAD_TIMEOUT_MS`: optional timeout for downloading Grsai temporary result URLs. Defaults to `30000`.
+- `GRSAI_MAX_RETRIES`: retry count for retryable Grsai HTTP/network failures. Defaults to `1`; task-level failed/maintenance statuses fail immediately and refund through the job flow.
 - `PORT`: Express backend port. Defaults to `8787`.
 - `HOST`: Express bind host. Defaults to `0.0.0.0`.
 - `DATA_DIR`: JSON backend directory. Defaults to `data`.
@@ -117,6 +118,9 @@ Backend/runtime variables, never expose with a `VITE_` prefix:
 - `MAX_IMAGE_MB`: per-image server validation limit. Defaults to `10`.
 - `MAX_MODEL_MB`: per-model server validation limit. Defaults to `600`.
 - `GENERATION_JOB_RATE_LIMIT_PER_MINUTE`: per-user generation job creation limit. Defaults to `10`.
+- `GENERATION_WORKER_CONCURRENCY`: number of in-process generation jobs to run at once. Defaults to `1`; use `2` only if the provider quota can handle it.
+- `GENERATION_VARIANT_CONCURRENCY`: concurrent provider requests inside one `design-variants` job. Defaults to `1`; production can try `2`.
+- `PROVIDER_IMAGE_MAX_LONG_SIDE`, `PROVIDER_REFERENCE_MAX_LONG_SIDE`, `PROVIDER_IMAGE_JPEG_QUALITY`, `MAX_PROVIDER_REFERENCE_IMAGES`, `MAX_PROVIDER_PAYLOAD_BYTES`: provider input preprocessing caps. `qualityMode` controls defaults per job, and these env vars override those defaults.
 - `ARCHAI_DISABLE_GENERATION_WORKER`: test/dev switch. Set to `true` to stop the in-process generation worker from automatically processing queued jobs.
 - `CORS_ORIGIN`: comma-separated browser origins allowed to call the backend. Defaults to local Vite origins.
 - `CORS_ORIGINS`: alternate comma-separated CORS variable name; `CORS_ORIGIN` takes precedence.
@@ -174,6 +178,16 @@ GRSAI_BASE_URL=https://grsai.dakka.com.cn
 GRSAI_MODEL=nano-banana-2
 GRSAI_IMAGE_SIZE=1K
 GRSAI_ASPECT_RATIO=auto
+GRSAI_POLL_INTERVAL_MS=1000
+GRSAI_POLL_TIMEOUT_MS=240000
+GRSAI_MAX_RETRIES=1
+PROVIDER_IMAGE_MAX_LONG_SIDE=1024
+PROVIDER_REFERENCE_MAX_LONG_SIDE=768
+PROVIDER_IMAGE_JPEG_QUALITY=78
+MAX_PROVIDER_REFERENCE_IMAGES=3
+MAX_PROVIDER_PAYLOAD_BYTES=4000000
+GENERATION_VARIANT_CONCURRENCY=2
+GENERATION_WORKER_CONCURRENCY=2
 PORT=8787
 MAX_IMAGE_MB=10
 ```

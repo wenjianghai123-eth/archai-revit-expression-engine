@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import request from 'supertest';
+import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { DEV_AUTH_USER_ID } from './auth';
@@ -1052,9 +1053,13 @@ describe('generation job credits', () => {
     });
   });
 
-  it('generates and saves all design-variants results sequentially with mock provider', async () => {
+  it('generates and saves all design-variants results in order with limited provider concurrency', async () => {
     const originalWorkerDisabled = process.env.ARCHAI_DISABLE_GENERATION_WORKER;
+    const originalVariantConcurrency = process.env.GENERATION_VARIANT_CONCURRENCY;
+    const originalMockDelay = process.env.MOCK_PROVIDER_DELAY_MS;
     process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'false';
+    process.env.GENERATION_VARIANT_CONCURRENCY = '2';
+    process.env.MOCK_PROVIDER_DELAY_MS = '100';
 
     try {
       const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Variant worker project' });
@@ -1083,10 +1088,12 @@ describe('generation job credits', () => {
           inputAssetIds: [ownAsset.id],
         });
 
+      const startedAt = Date.now();
       expect(response.status).toBe(201);
       const job = await waitForGenerationJob(response.body.data.job.id, 'succeeded');
       const results = await storage.listGenerationResults(job.id, DEV_AUTH_USER_ID);
 
+      expect(Date.now() - startedAt).toBeLessThan(650);
       expect(job.outputAssetIds).toHaveLength(8);
       expect(job.outputAssetId).toBe(job.outputAssetIds?.[0]);
       expect(results).toHaveLength(8);
@@ -1101,6 +1108,63 @@ describe('generation job credits', () => {
       });
     } finally {
       process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
+      restoreEnv('GENERATION_VARIANT_CONCURRENCY', originalVariantConcurrency);
+      restoreEnv('MOCK_PROVIDER_DELAY_MS', originalMockDelay);
+    }
+  });
+
+  it('processes multiple generation jobs concurrently without duplicate processing', async () => {
+    const originalWorkerDisabled = process.env.ARCHAI_DISABLE_GENERATION_WORKER;
+    const originalWorkerConcurrency = process.env.GENERATION_WORKER_CONCURRENCY;
+    const originalMockDelay = process.env.MOCK_PROVIDER_DELAY_MS;
+    process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'true';
+    process.env.GENERATION_WORKER_CONCURRENCY = '2';
+    process.env.MOCK_PROVIDER_DELAY_MS = '250';
+
+    try {
+      const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Concurrent worker project' });
+      const firstAsset = await storage.createImageAsset({
+        userId: DEV_AUTH_USER_ID,
+        url: `data:image/png;base64,${validOnePixelPng.toString('base64')}`,
+        filename: 'worker-first.png',
+        mimeType: 'image/png',
+        size: validOnePixelPng.length,
+      });
+      const secondAsset = await storage.createImageAsset({
+        userId: DEV_AUTH_USER_ID,
+        url: `data:image/png;base64,${validOnePixelPng.toString('base64')}`,
+        filename: 'worker-second.png',
+        mimeType: 'image/png',
+        size: validOnePixelPng.length,
+      });
+
+      const firstResponse = await request(app)
+        .post('/api/generation-jobs')
+        .send({ projectId: project.id, mode: 'style-render', prompt: 'first', config: {}, inputAssetIds: [firstAsset.id] });
+      const secondResponse = await request(app)
+        .post('/api/generation-jobs')
+        .send({ projectId: project.id, mode: 'style-render', prompt: 'second', config: {}, inputAssetIds: [secondAsset.id] });
+
+      expect(firstResponse.status).toBe(201);
+      expect(secondResponse.status).toBe(201);
+      process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'false';
+      const startedAt = Date.now();
+      generationService.enqueueGenerationJob(firstResponse.body.data.job.id);
+      generationService.enqueueGenerationJob(secondResponse.body.data.job.id);
+      generationService.enqueueGenerationJob(firstResponse.body.data.job.id);
+
+      const [firstJob, secondJob] = await Promise.all([
+        waitForGenerationJob(firstResponse.body.data.job.id, 'succeeded'),
+        waitForGenerationJob(secondResponse.body.data.job.id, 'succeeded'),
+      ]);
+
+      expect(Date.now() - startedAt).toBeLessThan(450);
+      expect(await storage.listGenerationResults(firstJob.id, DEV_AUTH_USER_ID)).toHaveLength(1);
+      expect(await storage.listGenerationResults(secondJob.id, DEV_AUTH_USER_ID)).toHaveLength(1);
+    } finally {
+      restoreEnv('ARCHAI_DISABLE_GENERATION_WORKER', originalWorkerDisabled);
+      restoreEnv('GENERATION_WORKER_CONCURRENCY', originalWorkerConcurrency);
+      restoreEnv('MOCK_PROVIDER_DELAY_MS', originalMockDelay);
     }
   });
 
@@ -1110,19 +1174,21 @@ describe('generation job credits', () => {
 
     try {
       const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Material replace worker project' });
+      const sourceImageDataUrl = await createSolidPngDataUrl(16, 16, { r: 240, g: 240, b: 240, alpha: 1 });
+      const maskImageDataUrl = await createMaskPngDataUrl(16, 16, { left: 5, top: 5, width: 6, height: 6 });
       const sourceAsset = await storage.createImageAsset({
         userId: DEV_AUTH_USER_ID,
-        url: `data:image/png;base64,${validOnePixelPng.toString('base64')}`,
+        url: sourceImageDataUrl,
         filename: 'material-input.png',
         mimeType: 'image/png',
-        size: validOnePixelPng.length,
+        size: sourceImageDataUrl.length,
       });
       const maskAsset = await storage.createImageAsset({
         userId: DEV_AUTH_USER_ID,
-        url: `data:image/png;base64,${validOnePixelPng.toString('base64')}`,
+        url: maskImageDataUrl,
         filename: 'material-mask.png',
         mimeType: 'image/png',
-        size: validOnePixelPng.length,
+        size: maskImageDataUrl.length,
       });
 
       const response = await request(app)
@@ -1150,6 +1216,8 @@ describe('generation job credits', () => {
       expect(job.mode).toBe('material-replace');
       expect(job.outputAssetIds).toHaveLength(1);
       expect(job.outputAssetId).toBe(job.outputAssetIds?.[0]);
+      expect(job.diagnostics?.images?.localInpaintEnabled).toBe(true);
+      expect(job.diagnostics?.images?.maskBbox).toEqual(expect.objectContaining({ width: expect.any(Number), height: expect.any(Number) }));
       expect(results).toHaveLength(1);
       expect(results[0]).toMatchObject({ isSelected: true, isFavorite: false });
       expect(results[0].metadata?.mode).toBe('material-replace');
@@ -1373,6 +1441,7 @@ describe('generation worker image inputs', () => {
       expect(job.status).toBe('succeeded');
       expect(job.outputAssetId).toEqual(expect.any(String));
       expect(job.diagnostics?.images?.inputImages).toBe(1);
+      expect(job.diagnostics?.images?.qualityMode).toBe('balanced');
       expect(job.diagnostics?.images?.prepared?.[0]).toMatchObject({
         role: 'input',
         mime: expect.stringMatching(/^image\//u),
@@ -1382,6 +1451,43 @@ describe('generation worker image inputs', () => {
       await new Promise<void>((resolve, reject) => {
         imageServer.close(error => (error ? reject(error) : resolve()));
       });
+    }
+  });
+
+  it('applies fast quality mode provider preprocessing limits', async () => {
+    const originalWorkerDisabled = process.env.ARCHAI_DISABLE_GENERATION_WORKER;
+    process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'false';
+
+    try {
+      const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Fast quality project' });
+      const sourceImageDataUrl = await createSolidPngDataUrl(1600, 800, { r: 220, g: 230, b: 240, alpha: 1 });
+      const sourceAsset = await storage.createImageAsset({
+        userId: DEV_AUTH_USER_ID,
+        url: sourceImageDataUrl,
+        filename: 'large-fast-input.png',
+        mimeType: 'image/png',
+        size: sourceImageDataUrl.length,
+      });
+
+      const response = await request(app)
+        .post('/api/generation-jobs')
+        .send({
+          projectId: project.id,
+          mode: 'style-render',
+          prompt: 'fast render',
+          config: { qualityMode: 'fast' },
+          inputAssetIds: [sourceAsset.id],
+        });
+
+      expect(response.status).toBe(201);
+      const job = await waitForGenerationJob(response.body.data.job.id, 'succeeded');
+      const preparedInput = job.diagnostics?.images?.prepared?.find(item => item.role === 'input');
+
+      expect(job.diagnostics?.images?.qualityMode).toBe('fast');
+      expect(preparedInput?.width).toBeLessThanOrEqual(1024);
+      expect(preparedInput?.outputBytes).toEqual(expect.any(Number));
+    } finally {
+      process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
     }
   });
 });
@@ -1850,6 +1956,39 @@ function tinyPngBuffer() {
 
 function webpHeaderBuffer() {
   return Buffer.from('RIFF0000WEBP', 'ascii');
+}
+
+async function createSolidPngDataUrl(width: number, height: number, color: { r: number; g: number; b: number; alpha: number }) {
+  const buffer = await sharp({
+    create: {
+      width,
+      height,
+      channels: 4,
+      background: color,
+    },
+  }).png().toBuffer();
+  return `data:image/png;base64,${buffer.toString('base64')}`;
+}
+
+async function createMaskPngDataUrl(width: number, height: number, box: { left: number; top: number; width: number; height: number }) {
+  const background = await sharp({
+    create: {
+      width,
+      height,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 1 },
+    },
+  }).png().toBuffer();
+  const foreground = await sharp({
+    create: {
+      width: box.width,
+      height: box.height,
+      channels: 4,
+      background: { r: 255, g: 255, b: 255, alpha: 1 },
+    },
+  }).png().toBuffer();
+  const buffer = await sharp(background).composite([{ input: foreground, left: box.left, top: box.top }]).png().toBuffer();
+  return `data:image/png;base64,${buffer.toString('base64')}`;
 }
 
 async function drainDevUserCredits(label: string) {

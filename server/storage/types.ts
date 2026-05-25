@@ -145,6 +145,7 @@ export interface GenerationJobDiagnostics {
     referenceBytesBefore?: number;
     referenceBytesAfter?: number;
     payloadBytesApprox?: number;
+    qualityMode?: 'fast' | 'balanced' | 'high';
     localInpaintEnabled?: boolean;
     originalWidth?: number;
     originalHeight?: number;

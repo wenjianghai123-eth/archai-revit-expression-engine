@@ -69,8 +69,19 @@ export interface GenerationJobDiagnostics {
   timing?: {
     jobCreatedAt?: string;
     jobStartedAt?: string;
+    prepareInputStartedAt?: string;
+    prepareInputFinishedAt?: string;
+    providerRequestStartedAt?: string;
+    providerRequestFinishedAt?: string;
+    postprocessStartedAt?: string;
+    postprocessFinishedAt?: string;
+    saveResultStartedAt?: string;
+    saveResultFinishedAt?: string;
     jobFinishedAt?: string;
+    prepareInputDurationMs?: number;
     providerDurationMs?: number;
+    postprocessDurationMs?: number;
+    saveResultDurationMs?: number;
     totalDurationMs?: number;
   };
   provider?: {
@@ -85,7 +96,14 @@ export interface GenerationJobDiagnostics {
     userMessage?: string;
   };
   images?: {
+    inputImages?: number;
+    referenceImages?: number;
+    inputBytesBefore?: number;
+    inputBytesAfter?: number;
+    referenceBytesBefore?: number;
+    referenceBytesAfter?: number;
     payloadBytesApprox?: number;
+    qualityMode?: 'fast' | 'balanced' | 'high';
   };
 }
 
@@ -177,6 +195,7 @@ export interface ModelOptimizationMetadata {
 
 export interface GenerationConfig {
   prompt: string;
+  qualityMode?: 'fast' | 'balanced' | 'high';
   style?: string;
   lighting: string;
   materialStrength: number;

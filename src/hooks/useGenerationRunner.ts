@@ -198,6 +198,7 @@ export function useGenerationRunner({
             ...configForRequest,
             ...targetSizeConfig,
             mode: generationMode,
+            qualityMode: stateAtStart.config.qualityMode || 'balanced',
             batchCount: currentStep === GenerationStep.DesignVariants && (stateAtStart.config.batchCount === 2 || stateAtStart.config.batchCount === 4 || stateAtStart.config.batchCount === 8)
               ? stateAtStart.config.batchCount
               : 1,
