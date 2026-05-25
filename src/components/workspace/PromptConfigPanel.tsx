@@ -47,10 +47,48 @@ export function PromptConfigPanel({
         ) : null}
       </div>
 
+      <QualityModeControls config={config} onUpdateConfig={onUpdateConfig} />
+
       {step === GenerationStep.LocalInpainting ? (
         <InpaintConfigControls config={config} onUpdateConfig={onUpdateConfig} />
       ) : null}
     </>
+  );
+}
+
+interface QualityModeControlsProps {
+  config: GenerationConfig;
+  onUpdateConfig: (config: Partial<GenerationConfig>) => void;
+}
+
+function QualityModeControls({ config, onUpdateConfig }: QualityModeControlsProps) {
+  const value = config.qualityMode || 'balanced';
+  const options = [
+    { value: 'fast', label: '快速' },
+    { value: 'balanced', label: '均衡' },
+    { value: 'high', label: '高质' },
+  ] as const;
+
+  return (
+    <div className="space-y-2">
+      <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">质量模式</label>
+      <div className="grid grid-cols-3 gap-2">
+        {options.map(option => (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onUpdateConfig({ qualityMode: option.value })}
+            className={`rounded-lg border px-3 py-2 text-[10px] font-bold ${
+              value === option.value
+                ? 'border-blue-600 bg-blue-50 text-blue-700'
+                : 'border-slate-200 bg-white text-slate-500'
+            }`}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

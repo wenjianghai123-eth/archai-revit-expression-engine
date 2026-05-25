@@ -137,6 +137,7 @@ export interface GenerationJobDiagnostics {
     userMessage?: string;
   };
   images?: {
+    qualityMode?: 'fast' | 'balanced' | 'high';
     inputImages?: number;
     referenceImages?: number;
     inputBytesBefore?: number;

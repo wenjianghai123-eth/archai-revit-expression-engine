@@ -6,7 +6,7 @@ import { createGeminiProvider } from './providers/geminiProvider';
 import { createGrsaiBanana2Provider } from './providers/grsaiBanana2Provider';
 import { createGrsaiNanoBananaProvider } from './providers/grsaiNanoBananaProvider';
 import { createMockGeneration, mockProvider } from './providers/mockProvider';
-import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider, MaskMode, ProviderName } from './providers/types';
+import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider, MaskMode, ProviderName, QualityMode } from './providers/types';
 import { getImageSizeFromDataUrl, isValidTargetDimension } from './image/imageMetadata';
 import { normalizeGeneratedImageDataUrl } from './image/normalizeImage';
 import { prepareImageForProvider, prepareMaskForProvider, PreparedProviderImage } from './image/prepareProviderImage';
@@ -39,7 +39,8 @@ export interface GenerateResponseBody {
 const maxImageMb = Number(process.env.MAX_IMAGE_MB || 10);
 const provider = selectProvider();
 const queuedGenerationJobIds: string[] = [];
-let isGenerationWorkerRunning = false;
+const activeGenerationJobIds = new Set<string>();
+let isGenerationWorkerScheduling = false;
 const providerMaintenanceUserMessage = '当前生成模型正在维护，请稍后重试，或切换其他生成模型。';
 
 export function getGenerationProviderName(): ProviderName {
@@ -81,7 +82,7 @@ export async function restorePendingGenerationJobs(): Promise<void> {
 }
 
 export function enqueueGenerationJob(jobId: string): void {
-  if (!queuedGenerationJobIds.includes(jobId)) {
+  if (!queuedGenerationJobIds.includes(jobId) && !activeGenerationJobIds.has(jobId)) {
     queuedGenerationJobIds.push(jobId);
   }
 
@@ -120,17 +121,34 @@ export async function generateWithFallbackResponse(input: GenerateImageInput): P
 }
 
 async function runGenerationWorker(): Promise<void> {
-  if (isGenerationWorkerRunning) return;
-  isGenerationWorkerRunning = true;
+  if (isGenerationWorkerScheduling) return;
+  isGenerationWorkerScheduling = true;
 
   try {
-    while (queuedGenerationJobIds.length > 0) {
+    const concurrency = readPositiveInteger(process.env.GENERATION_WORKER_CONCURRENCY, 1);
+    while (queuedGenerationJobIds.length > 0 && activeGenerationJobIds.size < concurrency) {
       const jobId = queuedGenerationJobIds.shift();
       if (!jobId) continue;
-      await processGenerationJob(jobId);
+      if (activeGenerationJobIds.has(jobId)) continue;
+      activeGenerationJobIds.add(jobId);
+      void processGenerationJob(jobId)
+        .catch(error => {
+          console.error('Generation worker crashed while processing a job', {
+            jobId,
+            error: error instanceof Error ? error.message : 'unknown error',
+          });
+        })
+        .finally(() => {
+          activeGenerationJobIds.delete(jobId);
+          if (queuedGenerationJobIds.length > 0) {
+            setTimeout(() => {
+              void runGenerationWorker();
+            }, 0);
+          }
+        });
     }
   } finally {
-    isGenerationWorkerRunning = false;
+    isGenerationWorkerScheduling = false;
   }
 }
 
@@ -169,38 +187,27 @@ async function processGenerationJob(jobId: string): Promise<void> {
     let firstOutput: GenerateImageOutput | null = null;
     let firstOutputAsset: ImageAsset | null = null;
 
-    for (let index = 0; index < batchCount; index += 1) {
-      markTiming(diagnostics, 'providerRequestStartedAt', 'provider-request');
-      await updateGenerationJob(job.id, { progress: resolveVariantStartProgress(batchCount, index), diagnostics });
-      const variantStyle = variantStyles[index] || 'modern-minimal';
-      const providerInput = job.mode === 'design-variants'
-        ? {
-            ...input,
-            prompt: buildDesignVariantPrompt(job, index, batchCount, variantStyle),
-            config: {
-              ...input.config,
-              variantIndex: index,
-              variantCode: readVariantCode(index),
-              variantLabel: readVariantLabel(index),
-              variantName: resolveVariantName(job.config, index),
-              variantStyle,
-              stylePackId: typeof job.config.stylePackId === 'string' ? job.config.stylePackId : 'interior-common',
-              batchCount,
-            },
-          }
-        : input;
-      const providerOutput = await generateWithFallback(providerInput);
-      markTiming(diagnostics, 'providerRequestFinishedAt');
-      diagnostics.provider = {
-        ...diagnostics.provider,
-        name: providerOutput.provider,
-        model: typeof providerOutput.metadata?.model === 'string' ? providerOutput.metadata.model : diagnostics.provider?.model,
-        httpStatus: typeof providerOutput.metadata?.httpStatus === 'number' ? providerOutput.metadata.httpStatus : diagnostics.provider?.httpStatus,
-        retryCount: typeof providerOutput.metadata?.retryCount === 'number' ? providerOutput.metadata.retryCount : diagnostics.provider?.retryCount,
-        fallbackProvider: typeof providerOutput.metadata?.fallbackProvider === 'string' ? providerOutput.metadata.fallbackProvider : diagnostics.provider?.fallbackProvider,
-        fallbackReason: typeof providerOutput.metadata?.fallbackReason === 'string' ? providerOutput.metadata.fallbackReason : diagnostics.provider?.fallbackReason,
-      };
-      await updateGenerationJob(job.id, { progress: job.mode === 'design-variants' ? resolveVariantCompleteProgress(batchCount, index) : 75, diagnostics });
+    markTiming(diagnostics, 'providerRequestStartedAt', 'provider-request');
+    await updateGenerationJob(job.id, { progress: resolveVariantStartProgress(batchCount, 0), diagnostics });
+    const providerResults = await mapWithConcurrency(
+      Array.from({ length: batchCount }, (_, index) => index),
+      job.mode === 'design-variants' ? readPositiveInteger(process.env.GENERATION_VARIANT_CONCURRENCY, 1) : 1,
+      async (index) => {
+        const variantStyle = variantStyles[index] || 'modern-minimal';
+        const providerInput = buildProviderInputForVariant(job, input, index, batchCount, variantStyle);
+        const providerOutput = await generateWithFallback(providerInput);
+        await updateGenerationJob(job.id, {
+          progress: job.mode === 'design-variants' ? resolveVariantCompleteProgress(batchCount, index) : 75,
+          diagnostics,
+        });
+        return { index, variantStyle, providerOutput };
+      },
+    );
+    markTiming(diagnostics, 'providerRequestFinishedAt');
+    mergeProviderDiagnostics(diagnostics, providerResults.map(result => result.providerOutput));
+    await updateGenerationJob(job.id, { progress: job.mode === 'design-variants' ? 75 : 75, diagnostics });
+
+    for (const { index, variantStyle, providerOutput } of providerResults) {
 
       markTiming(diagnostics, 'postprocessStartedAt', 'postprocess');
       let outputDataUrl = await normalizeGeneratedImageDataUrl({
@@ -399,6 +406,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     targetHeight: targetDimensions.targetHeight,
     targetAspectRatio: targetDimensions.targetAspectRatio,
     editTarget: job.mode === 'material-replace' ? 'material' : readEditTarget(job.config.editTarget),
+    qualityMode: readQualityMode(job.config.qualityMode),
   };
 
   const localInpaint = await maybeCreateLocalInpaintContext(rawInput);
@@ -456,28 +464,26 @@ async function resolveTargetDimensions(
 }
 
 async function prepareGenerateInputForProvider(input: GenerateImageInput): Promise<{ input: GenerateImageInput; imageDiagnostics: NonNullable<GenerationJobDiagnostics['images']> }> {
-  const imageMaxLongSide = readPositiveInteger(process.env.PROVIDER_IMAGE_MAX_LONG_SIDE, 1536);
-  const referenceMaxLongSide = readPositiveInteger(process.env.PROVIDER_REFERENCE_MAX_LONG_SIDE, 1024);
-  const quality = readPositiveInteger(process.env.PROVIDER_IMAGE_JPEG_QUALITY, 85);
-  const maxReferenceImages = readPositiveInteger(process.env.MAX_PROVIDER_REFERENCE_IMAGES, 6);
-  const maxPayloadBytes = readPositiveInteger(process.env.MAX_PROVIDER_PAYLOAD_BYTES, 8_000_000);
+  const settings = resolveProviderImageSettings(input.qualityMode);
   const prepared: Array<{ role: string; image: PreparedProviderImage }> = [];
 
   const inputImage = await prepareImageForProvider({
     dataUrl: input.inputImageDataUrl,
-    maxLongSide: imageMaxLongSide,
-    quality,
+    maxLongSide: settings.imageMaxLongSide,
+    quality: settings.quality,
     preferMime: 'image/jpeg',
   });
   prepared.push({ role: 'input', image: inputImage });
 
   const materialImage = input.materialImageDataUrl
-    ? await prepareReferenceImage(input.materialImageDataUrl, 'material', referenceMaxLongSide, quality, prepared)
+    ? await prepareReferenceImage(input.materialImageDataUrl, 'material', settings.referenceMaxLongSide, settings.quality, prepared)
     : undefined;
-  const materialReferences = await prepareReferenceImages(input.materialReferenceImageDataUrls, 'material-reference', 3, referenceMaxLongSide, quality, prepared);
-  const furnitureReferences = await prepareReferenceImages(input.furnitureReferenceImageDataUrls, 'furniture-reference', 3, referenceMaxLongSide, quality, prepared);
-  const remainingReferenceSlots = Math.max(0, maxReferenceImages - materialReferences.length - furnitureReferences.length - (materialImage ? 1 : 0));
-  const additionalReferences = await prepareReferenceImages(input.referenceImageDataUrls, 'reference', remainingReferenceSlots, referenceMaxLongSide, quality, prepared);
+  const remainingAfterMaterial = Math.max(0, settings.maxReferenceImages - (materialImage ? 1 : 0));
+  const materialReferences = await prepareReferenceImages(input.materialReferenceImageDataUrls, 'material-reference', Math.min(3, remainingAfterMaterial), settings.referenceMaxLongSide, settings.quality, prepared);
+  const remainingAfterMaterialRefs = Math.max(0, remainingAfterMaterial - materialReferences.length);
+  const furnitureReferences = await prepareReferenceImages(input.furnitureReferenceImageDataUrls, 'furniture-reference', Math.min(3, remainingAfterMaterialRefs), settings.referenceMaxLongSide, settings.quality, prepared);
+  const remainingReferenceSlots = Math.max(0, remainingAfterMaterialRefs - furnitureReferences.length);
+  const additionalReferences = await prepareReferenceImages(input.referenceImageDataUrls, 'reference', remainingReferenceSlots, settings.referenceMaxLongSide, settings.quality, prepared);
   let maskImage: PreparedProviderImage | undefined;
   if (input.maskImageDataUrl) {
     maskImage = await prepareMaskForProvider({
@@ -490,7 +496,7 @@ async function prepareGenerateInputForProvider(input: GenerateImageInput): Promi
 
   const images = prepared.map(item => item.image);
   const payloadBytesApprox = images.reduce((sum, image) => sum + image.outputBytes, 0);
-  if (payloadBytesApprox > maxPayloadBytes) {
+  if (payloadBytesApprox > settings.maxPayloadBytes) {
     throw new Error('参考图过多或图片过大，请减少参考图数量或压缩图片后重试。');
   }
 
@@ -503,8 +509,10 @@ async function prepareGenerateInputForProvider(input: GenerateImageInput): Promi
       furnitureReferenceImageDataUrls: furnitureReferences.map(image => image.dataUrl),
       referenceImageDataUrls: additionalReferences.map(image => image.dataUrl),
       maskImageDataUrl: maskImage?.dataUrl,
+      qualityMode: settings.qualityMode,
     },
     imageDiagnostics: {
+      qualityMode: settings.qualityMode,
       inputImages: 1,
       referenceImages: images.length - 1,
       inputBytesBefore: inputImage.originalBytes,
@@ -527,8 +535,7 @@ async function prepareGenerateInputForProvider(input: GenerateImageInput): Promi
 }
 
 async function maybeCreateLocalInpaintContext(input: GenerateImageInput): Promise<LocalInpaintContext | null> {
-  if (input.mode !== 'inpaint') return null;
-  if (input.editTarget !== 'furniture') return null;
+  if (input.mode !== 'inpaint' && input.mode !== 'material-replace') return null;
   if (input.maskMode !== 'asset-mask' || !input.maskImageDataUrl) return null;
 
   return createLocalInpaintContext({
@@ -536,6 +543,31 @@ async function maybeCreateLocalInpaintContext(input: GenerateImageInput): Promis
     maskImageDataUrl: input.maskImageDataUrl,
     paddingRatio: Number(process.env.LOCAL_INPAINT_PADDING_RATIO || 0.15),
   });
+}
+
+function resolveProviderImageSettings(qualityMode: QualityMode | undefined): {
+  qualityMode: QualityMode;
+  imageMaxLongSide: number;
+  referenceMaxLongSide: number;
+  quality: number;
+  maxReferenceImages: number;
+  maxPayloadBytes: number;
+} {
+  const mode = qualityMode || 'balanced';
+  const defaults = mode === 'fast'
+    ? { imageMaxLongSide: 1024, referenceMaxLongSide: 768, quality: 76, maxReferenceImages: 3, maxPayloadBytes: 4_000_000 }
+    : mode === 'high'
+      ? { imageMaxLongSide: 1536, referenceMaxLongSide: 1024, quality: 85, maxReferenceImages: 6, maxPayloadBytes: 8_000_000 }
+      : { imageMaxLongSide: 1280, referenceMaxLongSide: 768, quality: 80, maxReferenceImages: 3, maxPayloadBytes: 4_000_000 };
+
+  return {
+    qualityMode: mode,
+    imageMaxLongSide: readPositiveInteger(process.env.PROVIDER_IMAGE_MAX_LONG_SIDE, defaults.imageMaxLongSide),
+    referenceMaxLongSide: readPositiveInteger(process.env.PROVIDER_REFERENCE_MAX_LONG_SIDE, defaults.referenceMaxLongSide),
+    quality: readPositiveInteger(process.env.PROVIDER_IMAGE_JPEG_QUALITY, defaults.quality),
+    maxReferenceImages: readPositiveInteger(process.env.MAX_PROVIDER_REFERENCE_IMAGES, defaults.maxReferenceImages),
+    maxPayloadBytes: readPositiveInteger(process.env.MAX_PROVIDER_PAYLOAD_BYTES, defaults.maxPayloadBytes),
+  };
 }
 
 async function prepareReferenceImages(
@@ -1038,6 +1070,71 @@ function resolveVariantStyles(config: Record<string, unknown>, batchCount: 1 | 2
   return resolved.slice(0, batchCount);
 }
 
+function buildProviderInputForVariant(
+  job: GenerationJob,
+  input: GenerateImageInput,
+  index: number,
+  batchCount: 1 | 2 | 4 | 8,
+  variantStyle: string,
+): GenerateImageInput {
+  if (job.mode !== 'design-variants') return input;
+
+  return {
+    ...input,
+    prompt: buildDesignVariantPrompt(job, index, batchCount, variantStyle),
+    config: {
+      ...input.config,
+      variantIndex: index,
+      variantCode: readVariantCode(index),
+      variantLabel: readVariantLabel(index),
+      variantName: resolveVariantName(job.config, index),
+      variantStyle,
+      stylePackId: typeof job.config.stylePackId === 'string' ? job.config.stylePackId : 'interior-common',
+      batchCount,
+    },
+  };
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const limit = Math.max(1, Math.floor(concurrency));
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
+function mergeProviderDiagnostics(diagnostics: GenerationJobDiagnostics, outputs: GenerateImageOutput[]): void {
+  const firstOutput = outputs[0];
+  const lastOutput = outputs[outputs.length - 1] || firstOutput;
+  const retryCount = outputs.reduce((sum, output) => {
+    const value = output.metadata?.retryCount;
+    return sum + (typeof value === 'number' ? value : 0);
+  }, 0);
+
+  diagnostics.provider = {
+    ...diagnostics.provider,
+    name: firstOutput?.provider || diagnostics.provider?.name,
+    model: typeof lastOutput?.metadata?.model === 'string' ? lastOutput.metadata.model : diagnostics.provider?.model,
+    httpStatus: typeof lastOutput?.metadata?.httpStatus === 'number' ? lastOutput.metadata.httpStatus : diagnostics.provider?.httpStatus,
+    retryCount,
+    fallbackProvider: typeof lastOutput?.metadata?.fallbackProvider === 'string' ? lastOutput.metadata.fallbackProvider : diagnostics.provider?.fallbackProvider,
+    fallbackReason: typeof lastOutput?.metadata?.fallbackReason === 'string' ? lastOutput.metadata.fallbackReason : diagnostics.provider?.fallbackReason,
+  };
+}
+
 function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount: 1 | 2 | 4 | 8, style: string): string {
   const strategy = job.config.variantStrategy === 'same-style' ? 'same-style' : 'style-matrix';
   const strength = job.config.strength === 'subtle' || job.config.strength === 'strong' ? job.config.strength : 'balanced';
@@ -1280,8 +1377,13 @@ function logJobTiming(jobId: string, diagnostics: GenerationJobDiagnostics, erro
     total: diagnostics.timing?.totalDurationMs,
     providerName: diagnostics.provider?.name,
     model: diagnostics.provider?.model,
+    qualityMode: diagnostics.images?.qualityMode,
     inputImages: diagnostics.images?.inputImages,
     referenceImages: diagnostics.images?.referenceImages,
+    inputBytesBefore: diagnostics.images?.inputBytesBefore,
+    inputBytesAfter: diagnostics.images?.inputBytesAfter,
+    referenceBytesBefore: diagnostics.images?.referenceBytesBefore,
+    referenceBytesAfter: diagnostics.images?.referenceBytesAfter,
     payloadBytesApprox: diagnostics.images?.payloadBytesApprox,
     localInpaintEnabled: diagnostics.images?.localInpaintEnabled,
     maskBbox: diagnostics.images?.maskBbox,
@@ -1326,6 +1428,10 @@ function isGrsaiProvider(name: ProviderName): boolean {
 function readEditTarget(value: unknown): GenerateImageInput['editTarget'] {
   if (value === 'material' || value === 'furniture' || value === 'general') return value;
   return undefined;
+}
+
+function readQualityMode(value: unknown): QualityMode {
+  return value === 'fast' || value === 'high' ? value : 'balanced';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -285,12 +285,14 @@ export const MOCK_FURNITURE_STYLES: FurnitureStyle[] = [
 export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   [GenerationStep.FloorplanTo3D]: {
     prompt: "",
+    qualityMode: 'balanced',
     lighting: "黄金时刻 (室外)",
     materialStrength: 0.8,
     batchCount: 1,
   },
   [GenerationStep.StyleRender]: {
     prompt: "",
+    qualityMode: 'balanced',
     style: "现代建筑可视化",
     lighting: "自然均匀日光",
     materialStrength: 0.8,
@@ -298,6 +300,7 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   },
   [GenerationStep.LocalInpainting]: {
     prompt: "",
+    qualityMode: 'balanced',
     style: "匹配原图",
     lighting: "匹配原图",
     materialStrength: 0.8,
@@ -311,6 +314,7 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   },
   [GenerationStep.ModelSnapshotRender]: {
     prompt: "",
+    qualityMode: 'balanced',
     style: "写实建筑表现",
     lighting: "自然光",
     materialStrength: 0.8,
@@ -323,6 +327,7 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   },
   [GenerationStep.DesignVariants]: {
     prompt: "",
+    qualityMode: 'balanced',
     style: "方案变体",
     lighting: "匹配原图",
     materialStrength: 0.8,
@@ -338,6 +343,7 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   },
   [GenerationStep.PlanColorize]: {
     prompt: "",
+    qualityMode: 'balanced',
     style: "图纸智能表达",
     lighting: "匹配原图",
     materialStrength: 0.8,
@@ -356,6 +362,7 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   },
   [GenerationStep.MaterialReplace]: {
     prompt: "",
+    qualityMode: 'balanced',
     style: "材质软装替换",
     lighting: "匹配原图",
     materialStrength: 0.8,
@@ -372,6 +379,7 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   },
   [GenerationStep.PanoramaQuickRender]: {
     prompt: "",
+    qualityMode: 'balanced',
     style: "漫游全景快渲",
     lighting: "自然光",
     materialStrength: 0.8,

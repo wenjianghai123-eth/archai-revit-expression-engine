@@ -13,6 +13,7 @@ export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-r
 export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled';
+export type QualityMode = 'fast' | 'balanced' | 'high';
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
 export type DesignVariantBatchCount = 2 | 4 | 8;
 export type VariantStyleKey =
@@ -83,6 +84,13 @@ export interface GenerationJobDiagnostics {
     userMessage?: string;
   };
   images?: {
+    qualityMode?: QualityMode;
+    inputImages?: number;
+    referenceImages?: number;
+    inputBytesBefore?: number;
+    inputBytesAfter?: number;
+    referenceBytesBefore?: number;
+    referenceBytesAfter?: number;
     payloadBytesApprox?: number;
   };
 }
@@ -179,6 +187,7 @@ export interface GenerationConfig {
   lighting: string;
   materialStrength: number;
   editTarget?: 'general' | 'material' | 'furniture';
+  qualityMode?: QualityMode;
   sourceImageWidth?: number;
   sourceImageHeight?: number;
   targetWidth?: number;

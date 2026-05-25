@@ -1,6 +1,7 @@
 export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
 export type ProviderName = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type MaskMode = 'asset-mask' | 'full-image';
+export type QualityMode = 'fast' | 'balanced' | 'high';
 
 export interface GenerateImageInput {
   mode: GenerationMode;
@@ -17,6 +18,7 @@ export interface GenerateImageInput {
   targetHeight?: number;
   targetAspectRatio?: string;
   editTarget?: 'general' | 'material' | 'furniture';
+  qualityMode?: QualityMode;
 }
 
 export interface GenerateImageOutput {
@@ -25,6 +27,11 @@ export interface GenerateImageOutput {
   dataUrl: string;
   remoteUrl?: string;
   mimeType?: string;
+  // TODO: Let storage upload this binary payload directly to avoid remote URL -> data URL -> Buffer churn.
+  binary?: {
+    content: Uint8Array;
+    mimeType: string;
+  };
   metadata?: Record<string, unknown>;
   createdAt: string;
   warnings: string[];
