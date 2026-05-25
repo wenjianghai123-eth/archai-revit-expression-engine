@@ -11,6 +11,7 @@ import type { app as ExpressApp } from './index';
 import type * as GenerationService from './generationService';
 import type * as Storage from './storage';
 import { isUploadOverLimit } from './upload';
+import { DEFAULT_MAX_MODEL_MB } from '../shared/generation';
 
 type App = typeof ExpressApp;
 type StorageModule = typeof Storage;
@@ -39,7 +40,7 @@ beforeAll(async () => {
   process.env.ARCHAI_DISABLE_MODEL_OPTIMIZATION_WORKER = 'true';
   process.env.GENERATION_JOB_RATE_LIMIT_PER_MINUTE = '1000';
   process.env.MAX_IMAGE_MB = '0.0001';
-  process.env.MAX_MODEL_MB = '600';
+  process.env.MAX_MODEL_MB = String(DEFAULT_MAX_MODEL_MB);
   process.env.DATA_DIR = path.join(tempRoot, 'data');
   process.env.UPLOADS_DIR = path.join(tempRoot, 'uploads');
 
@@ -1288,6 +1289,43 @@ describe('generation job credits', () => {
     expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance);
     expect(transactions.filter(transaction => transaction.type === 'refund' && transaction.referenceId === jobId)).toHaveLength(1);
   });
+
+  it('marks interrupted running jobs failed on startup restore and refunds once', async () => {
+    const originalBalance = await storage.getCreditBalance(DEV_AUTH_USER_ID);
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Interrupted restore project' });
+    const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const createResponse = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'style-render',
+        prompt: 'render this',
+        config: {},
+        inputAssetIds: [ownAsset.id],
+      });
+
+    expect(createResponse.status).toBe(201);
+    const jobId = createResponse.body.data.job.id;
+    await storage.updateGenerationJob(jobId, {
+      status: 'running',
+      progress: 42,
+      startedAt: new Date().toISOString(),
+    });
+
+    await generationService.restorePendingGenerationJobs();
+    await generationService.restorePendingGenerationJobs();
+
+    const job = await storage.getGenerationJob(jobId, DEV_AUTH_USER_ID);
+    const transactions = await storage.listCreditTransactions(DEV_AUTH_USER_ID);
+    expect(job).toMatchObject({
+      status: 'failed',
+      progress: 100,
+      errorMessage: expect.stringContaining('Generation worker restarted'),
+    });
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance);
+    expect(transactions.filter(transaction => transaction.type === 'refund' && transaction.referenceId === jobId)).toHaveLength(1);
+  });
 });
 
 describe('generation worker image inputs', () => {
@@ -1589,7 +1627,7 @@ describe('asset uploads', () => {
     });
   });
 
-  it('allows a .glb model over 50MB when it is below the 600MB model limit', async () => {
+  it(`allows a .glb model over 50MB when it is below the ${DEFAULT_MAX_MODEL_MB}MB model limit`, async () => {
     const fiftyOneMbGlb = Buffer.concat([
       Buffer.from('glTF'),
       Buffer.alloc(51 * 1024 * 1024 - 4),
@@ -1674,10 +1712,10 @@ describe('asset uploads', () => {
     expect(optimizedAsset.previewUrl || optimizedAsset.optimizedUrl).toContain('/uploads/models/preview/');
   });
 
-  it('treats files over 600MB as over the model upload limit', () => {
-    expect(isUploadOverLimit(50 * 1024 * 1024 + 1, 600)).toBe(false);
-    expect(isUploadOverLimit(600 * 1024 * 1024, 600)).toBe(false);
-    expect(isUploadOverLimit(600 * 1024 * 1024 + 1, 600)).toBe(true);
+  it(`treats files over ${DEFAULT_MAX_MODEL_MB}MB as over the model upload limit`, () => {
+    expect(isUploadOverLimit(50 * 1024 * 1024 + 1, DEFAULT_MAX_MODEL_MB)).toBe(false);
+    expect(isUploadOverLimit(DEFAULT_MAX_MODEL_MB * 1024 * 1024, DEFAULT_MAX_MODEL_MB)).toBe(false);
+    expect(isUploadOverLimit(DEFAULT_MAX_MODEL_MB * 1024 * 1024 + 1, DEFAULT_MAX_MODEL_MB)).toBe(true);
   });
 
   it.each(['fbx', 'skp'])('rejects unsupported .%s model uploads', async (extension) => {

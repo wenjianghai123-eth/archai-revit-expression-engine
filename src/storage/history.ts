@@ -4,6 +4,8 @@ const historyKey = 'archai:generation-history:v1';
 const maxRecords = 30;
 const maxStoredDataUrlLength = 900_000;
 
+// Local history is only a same-browser convenience cache. Durable project history
+// lives in backend GenerationRecord/GenerationResult rows.
 export interface StoredGenerationRecord extends GenerationHistoryItem {
   outputImage: string;
 }

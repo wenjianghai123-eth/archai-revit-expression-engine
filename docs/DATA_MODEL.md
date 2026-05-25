@@ -62,7 +62,7 @@ Current server user shape:
 | `url` | string | Local `/uploads/models/...` or Supabase Storage public URL. |
 | `filename` | string | Stored filename/key. |
 | `originalFilename` | string | User-supplied file name after path stripping. |
-| `fileType` | `glb` \| `gltf` \| `obj` | Current accepted formats. |
+| `fileType` | `glb` \| `gltf` \| `obj` \| `dae` \| `stl` | Current accepted formats. |
 | `mimeType` | string | Validated against file type. |
 | `size` | number | Stored byte size. |
 | `createdAt` | ISO string | Creation time. |
@@ -75,7 +75,7 @@ Current server user shape:
 | `id` | string | Opaque job id. |
 | `userId` | string | Owner. |
 | `projectId` | string | Owned project id. |
-| `mode` | `floorplan` \| `style-render` \| `inpaint` | Workflow type. |
+| `mode` | `floorplan` \| `style-render` \| `inpaint` \| `model-render` \| `design-variants` \| `material-replace` \| `plan-colorize` \| `panorama-roam-render` | Workflow type. |
 | `prompt` | string | Provider prompt. |
 | `config` | object | Includes style settings, `batchCount`, and inpaint `maskMode`/`maskAssetId`. |
 | `inputAssetIds` | string[] | Owned image assets. |
@@ -108,7 +108,7 @@ Current server user shape:
 
 ## GenerationRecord
 
-Generation records power project history and public share payloads.
+Generation records power persisted project history and public share payloads. Browser `localStorage` history is only a local convenience cache for quickly reopening recent work on the same device; backend `GenerationRecord` and `GenerationResult` rows are the durable project history.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -116,7 +116,7 @@ Generation records power project history and public share payloads.
 | `userId` | string | Owner. |
 | `projectId` | string | Parent project. |
 | `jobId` | string \| null | Linked async job when available. |
-| `mode` | `floorplan` \| `style-render` \| `inpaint` | Workflow type. |
+| `mode` | `floorplan` \| `style-render` \| `inpaint` \| `model-render` \| `design-variants` \| `material-replace` \| `plan-colorize` \| `panorama-roam-render` | Workflow type. |
 | `prompt` | string | Prompt used. |
 | `inputImageUrl` | string \| null | Stored input image URL. |
 | `inputImageDataPreview` | string \| null | Legacy/local preview fallback. |

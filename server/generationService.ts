@@ -72,12 +72,40 @@ export async function refundGenerationJobCredits(jobId: string): Promise<void> {
 }
 
 export async function restorePendingGenerationJobs(): Promise<void> {
-  if (isGenerationWorkerDisabled()) return;
-
   const jobs = await listRunnableGenerationJobs();
   for (const job of jobs) {
-    enqueueGenerationJob(job.id);
+    if (job.status === 'running') {
+      await markInterruptedGenerationJobFailed(job);
+      continue;
+    }
+
+    if (!isGenerationWorkerDisabled()) {
+      enqueueGenerationJob(job.id);
+    }
   }
+}
+
+async function markInterruptedGenerationJobFailed(job: GenerationJob): Promise<void> {
+  const now = new Date().toISOString();
+  await updateGenerationJob(job.id, {
+    status: 'failed',
+    progress: Math.max(job.progress, 100),
+    errorMessage: 'Generation worker restarted before this job completed. Credits were refunded.',
+    finishedAt: now,
+    diagnostics: {
+      ...job.diagnostics,
+      phase: 'failed',
+      timing: {
+        ...job.diagnostics?.timing,
+        jobFinishedAt: now,
+      },
+      provider: {
+        ...job.diagnostics?.provider,
+        userMessage: 'Generation worker restarted before this job completed.',
+      },
+    },
+  });
+  await refundGenerationJobCredits(job.id);
 }
 
 export function enqueueGenerationJob(jobId: string): void {

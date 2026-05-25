@@ -125,11 +125,15 @@ create table if not exists public.model_assets (
   id text primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   url text not null,
+  preview_url text,
+  optimized_url text,
+  thumbnail_url text,
   filename text not null,
   original_filename text not null,
-  file_type text not null check (file_type in ('glb', 'gltf', 'obj')),
+  file_type text not null check (file_type in ('glb', 'gltf', 'obj', 'dae', 'stl')),
   mime_type text not null,
   size integer not null,
+  metadata jsonb,
   created_at timestamptz not null default now(),
   deleted_at timestamptz
 );
@@ -138,7 +142,7 @@ create table if not exists public.generation_jobs (
   id text primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   project_id text not null references public.projects(id) on delete cascade,
-  mode text not null check (mode in ('floorplan', 'style-render', 'inpaint')),
+  mode text not null check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render')),
   prompt text not null,
   config jsonb not null default '{}'::jsonb,
   input_asset_ids text[] not null default '{}'::text[],
@@ -159,7 +163,7 @@ create table if not exists public.generation_records (
   user_id uuid not null references auth.users(id) on delete cascade,
   project_id text not null references public.projects(id) on delete cascade,
   job_id text references public.generation_jobs(id) on delete set null,
-  mode text not null check (mode in ('floorplan', 'style-render', 'inpaint')),
+  mode text not null check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render')),
   prompt text not null,
   input_image_url text,
   input_image_data_preview text,
@@ -214,7 +218,32 @@ create table if not exists public.credit_transactions (
 );
 ```
 
-If you are updating an older database, verify the code-to-SQL checklist at the end of this document. In particular, newer code requires `generation_results`, `generation_records.job_id`, and `generation_jobs.output_asset_ids`. `credit_transactions` must contain a single `id text primary key` column; do not duplicate the `id` column when merging older SQL snippets.
+If you are updating an older database, verify the code-to-SQL checklist at the end of this document. In particular, newer code requires `generation_results`, `generation_records.job_id`, `generation_jobs.output_asset_ids`, model preview metadata columns, and the complete generation/model enum constraints. `credit_transactions` must contain a single `id text primary key` column; do not duplicate the `id` column when merging older SQL snippets.
+
+For older Supabase projects, update constraints with a migration similar to:
+
+```sql
+alter table public.model_assets
+  add column if not exists preview_url text,
+  add column if not exists optimized_url text,
+  add column if not exists thumbnail_url text,
+  add column if not exists metadata jsonb;
+
+alter table public.model_assets drop constraint if exists model_assets_file_type_check;
+alter table public.model_assets
+  add constraint model_assets_file_type_check
+  check (file_type in ('glb', 'gltf', 'obj', 'dae', 'stl'));
+
+alter table public.generation_jobs drop constraint if exists generation_jobs_mode_check;
+alter table public.generation_jobs
+  add constraint generation_jobs_mode_check
+  check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render'));
+
+alter table public.generation_records drop constraint if exists generation_records_mode_check;
+alter table public.generation_records
+  add constraint generation_records_mode_check
+  check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render'));
+```
 
 ## Indexes
 
@@ -603,7 +632,7 @@ Supabase's service role bypasses RLS for server-side operations. Do not put the 
 - `projects`: `id`, `user_id`, `name`, `description`, `status`, `cover_image_url`, `created_at`, `updated_at`, `deleted_at`
 - `profiles`: `id`, `email`, `name`, `role`, `status`, `created_at`, `updated_at`
 - `image_assets`: `id`, `user_id`, `url`, `filename`, `mime_type`, `size`, `created_at`
-- `model_assets`: `id`, `user_id`, `url`, `filename`, `original_filename`, `file_type`, `mime_type`, `size`, `created_at`, `deleted_at`
+- `model_assets`: `id`, `user_id`, `url`, `preview_url`, `optimized_url`, `thumbnail_url`, `filename`, `original_filename`, `file_type`, `mime_type`, `size`, `metadata`, `created_at`, `deleted_at`
 - `generation_jobs`: `id`, `user_id`, `project_id`, `mode`, `prompt`, `config`, `input_asset_ids`, `status`, `progress`, `provider`, `output_asset_id`, `output_asset_ids`, `error_message`, `created_at`, `updated_at`, `started_at`, `finished_at`
 - `generation_records`: `id`, `user_id`, `project_id`, `job_id`, `mode`, `prompt`, `input_image_url`, `input_image_data_preview`, `output_image_url`, `output_image_data_preview`, `provider`, `status`, `created_at`, `updated_at`
 - `generation_results`: `id`, `user_id`, `project_id`, `job_id`, `asset_id`, `image_url`, `is_selected`, `is_favorite`, `metadata`, `created_at`, `updated_at`
@@ -619,7 +648,7 @@ Current role values are `admin` and `member` only. Do not create or migrate prof
 
 This setup is enough for a developer to initialize Supabase and run the current app, but it is not a complete production operations plan.
 
-- The in-process generation worker should be replaced or backed by a durable queue before serious production traffic.
+- The in-process generation worker is MVP-only. On service startup, queued jobs are re-enqueued and jobs left `running` by a prior process are marked `failed` with an idempotent credit refund so they do not remain stuck forever. Replace this with a durable queue before serious production traffic.
 - Add database backups, monitoring, alerting, provider health checks, and operational dashboards.
 - Keep `ENABLE_LEGACY_GENERATION_ENDPOINTS=false` in production.
 - Keep `ENABLE_PROVIDER_FALLBACK=false` in production if mock output must never be shown for failed real-provider jobs.

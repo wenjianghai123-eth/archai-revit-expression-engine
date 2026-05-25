@@ -30,12 +30,13 @@ import { Box3, Vector3 } from 'three';
 import { AssetModel } from '../types';
 import { downloadUrl } from '../utils/download';
 import { deleteModelAsset, listModelAssets, ModelAssetRecord, uploadModelAsset } from '../lib/api';
+import { DEFAULT_MAX_MODEL_MB } from '../../shared/generation';
 
 type ModelCategory = NonNullable<AssetModel['category']>;
 type StatusFilter = '全部' | '可用' | '待优化' | '失败';
 
 const STORAGE_KEY = 'archai-model-assets-v1';
-const MAX_MODEL_SIZE_MB = 600;
+const MAX_MODEL_SIZE_MB = DEFAULT_MAX_MODEL_MB;
 const MAX_MODEL_SIZE_BYTES = MAX_MODEL_SIZE_MB * 1024 * 1024;
 const PREVIEWABLE_TYPES = new Set<AssetModel['fileType']>(['glb', 'gltf']);
 const ALLOWED_TYPES = new Set<AssetModel['fileType']>(['glb', 'gltf', 'obj', 'dae', 'stl']);
@@ -670,7 +671,7 @@ export function AssetBank() {
                 </div>
                 <div>
                   <h2 className="text-xl font-bold tracking-tight text-slate-950">三维模型资产库</h2>
-                  <p className="mt-1 text-sm text-slate-500">支持 GLB、GLTF、OBJ、DAE、STL 模型，单个模型最大 600MB。推荐使用 GLB 格式。</p>
+                  <p className="mt-1 text-sm text-slate-500">支持 GLB、GLTF、OBJ、DAE、STL 模型，单个模型最大 {MAX_MODEL_SIZE_MB}MB。推荐使用 GLB 格式。</p>
                 </div>
               </div>
               <button

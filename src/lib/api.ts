@@ -1,6 +1,7 @@
 import { buildApiUrl, isApiBaseUrlMissingInProduction, isRelativeApiPath } from './apiBaseUrl';
 import { parseApiResponse, readApiErrorMessage } from './apiResponse';
 import { getSupabaseAccessToken } from './supabase';
+import type { GenerationMode, ModelFileType } from '../../shared/generation';
 
 const MISSING_API_BASE_URL_MESSAGE = '后端 API 未配置或不可访问，请配置 VITE_API_BASE_URL。';
 
@@ -47,7 +48,7 @@ export interface GenerationRecord {
   userId: string;
   projectId: string;
   jobId?: string | null;
-  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
+  mode: GenerationMode;
   prompt: string;
   inputImageUrl?: string | null;
   inputImageDataPreview?: string | null;
@@ -110,8 +111,8 @@ export interface ModelAssetRecord {
   thumbnailUrl?: string;
   filename: string;
   originalFilename: string;
-  fileType: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
-  format?: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
+  fileType: ModelFileType;
+  format?: ModelFileType;
   mimeType: string;
   size: number;
   metadata?: {
@@ -119,7 +120,7 @@ export interface ModelAssetRecord {
     previewUrl?: string;
     optimizedUrl?: string;
     thumbnailUrl?: string;
-    format: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
+    format: ModelFileType;
     originalFileSize: number;
     optimizedFileSize?: number;
     optimizationStatus: 'pending' | 'processing' | 'succeeded' | 'failed' | 'skipped';
@@ -137,7 +138,7 @@ export interface GenerationJob {
   id: string;
   userId: string;
   projectId: string;
-  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
+  mode: GenerationMode;
   prompt: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];

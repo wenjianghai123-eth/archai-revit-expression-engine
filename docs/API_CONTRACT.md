@@ -181,12 +181,12 @@ Rules:
 - `projectId` must belong to the current user.
 - Every `inputAssetIds` item must be an existing image asset owned by the current user.
 - `inputAssetIds[0]` is the primary input image. Additional image assets are passed to providers as reference images, including style references and material texture references.
-- `mode` is one of `floorplan`, `style-render`, or `inpaint`.
-- `config.batchCount` can be `1`, `2`, or `4`; omitted means `1`.
-- For `inpaint`, `config.maskMode` is required:
+- `mode` is one of `floorplan`, `style-render`, `inpaint`, `model-render`, `design-variants`, `material-replace`, `plan-colorize`, or `panorama-roam-render`.
+- `config.batchCount` can be `1`, `2`, `4`, or `8` for `design-variants`; omitted means the backend default for that mode.
+- For `inpaint` and mask-based `material-replace`, `config.maskMode` is supported:
   - `full-image`: no `maskAssetId`; backend generates an explicit full-image mask for the provider.
   - `asset-mask`: `maskAssetId` is required and must be an owned image asset.
-- For non-inpaint jobs, `maskMode` and `maskAssetId` are ignored/removed.
+- For non-masked jobs, `maskMode` and `maskAssetId` are ignored/removed.
 - Insufficient credits returns `402` with `CREDITS_INSUFFICIENT`.
 
 Response:

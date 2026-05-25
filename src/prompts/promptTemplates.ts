@@ -1,4 +1,5 @@
 import { GenerationStep, PromptTemplate } from '../types';
+import { getGenerationModeForStep } from '../generationModes';
 
 export const PROMPT_TEMPLATE_CATEGORIES = ['全部', '平面彩平', '风格渲染', '局部修饰', '家具修改', '材质替换', '空间优化'] as const;
 
@@ -52,10 +53,5 @@ export function mergePromptTemplate(currentPrompt: string, templatePrompt: strin
 }
 
 function stepToFeature(step: GenerationStep): PromptTemplate['feature'] {
-  if (step === GenerationStep.ModelSnapshotRender) return 'model-render';
-  if (step === GenerationStep.DesignVariants) return 'design-variants';
-  if (step === GenerationStep.MaterialReplace) return 'material-replace';
-  if (step === GenerationStep.PlanColorize) return 'plan-colorize';
-  if (step === GenerationStep.PanoramaQuickRender) return 'panorama-roam-render';
-  return step === GenerationStep.FloorplanTo3D ? 'floorplan' : step === GenerationStep.StyleRender ? 'style-render' : 'inpaint';
+  return getGenerationModeForStep(step);
 }

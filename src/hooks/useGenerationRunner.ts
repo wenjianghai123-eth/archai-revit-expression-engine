@@ -2,6 +2,7 @@ import { useCallback, type Dispatch, type SetStateAction } from 'react';
 import { generateFloorplanTo3D, generateInpainting, generateStyleRender } from '../api/generation';
 import { buildFloorplanColorPrompt } from '../prompts/floorplanPrompts';
 import { buildInpaintPrompt } from '../prompts/inpaintPrompts';
+import { calculateGenerationCreditsCostForStep, getGenerationModeForStep } from '../generationModes';
 import { saveGenerationRecord } from '../storage/history';
 import {
   createGenerationJob,
@@ -617,22 +618,11 @@ export function useGenerationRunner({
 }
 
 function getGenerationRecordMode(step: GenerationStep): GenerationMode {
-  if (step === GenerationStep.FloorplanTo3D) return 'floorplan';
-  if (step === GenerationStep.StyleRender) return 'style-render';
-  if (step === GenerationStep.ModelSnapshotRender) return 'model-render';
-  if (step === GenerationStep.PanoramaQuickRender) return 'panorama-roam-render';
-  if (step === GenerationStep.DesignVariants) return 'design-variants';
-  if (step === GenerationStep.PlanColorize) return 'plan-colorize';
-  if (step === GenerationStep.MaterialReplace) return 'material-replace';
-  return 'inpaint';
+  return getGenerationModeForStep(step);
 }
 
 function calculateGenerationCreditsCost(step: GenerationStep, config: GenerationConfig): number {
-  const baseCost = step === GenerationStep.LocalInpainting || step === GenerationStep.MaterialReplace ? 8 : 10;
-  const batchCount = step === GenerationStep.DesignVariants && (config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8)
-    ? config.batchCount
-    : 1;
-  return baseCost * batchCount;
+  return calculateGenerationCreditsCostForStep(step, config.batchCount);
 }
 
 function buildPromptForGeneration(step: GenerationStep, prompt: string, state?: StepState): string {

@@ -3,6 +3,7 @@ import { AlertCircle, Box, Camera, CheckCircle2, RefreshCw, Upload } from 'lucid
 import { AssetModel, GenerationConfig, ModelSnapshotMetadata, StepState, UploadedImage } from '../types';
 import { getModelAsset, listModelAssets, ModelAssetRecord, optimizeModelAsset, uploadImageAsset, uploadModelAsset } from '../lib/api';
 import { ModelViewer, ModelViewerHandle } from './ModelViewer';
+import { DEFAULT_MAX_MODEL_MB } from '../../shared/generation';
 
 interface ModelSnapshotRenderPanelProps {
   state: StepState;
@@ -12,7 +13,7 @@ interface ModelSnapshotRenderPanelProps {
 }
 
 const modelAccept = '.glb,.gltf,.obj,.dae,.stl,model/gltf-binary,model/gltf+json,model/vnd.collada+xml,model/stl';
-const MAX_MODEL_SIZE_MB = 600;
+const MAX_MODEL_SIZE_MB = DEFAULT_MAX_MODEL_MB;
 const MAX_MODEL_SIZE_BYTES = MAX_MODEL_SIZE_MB * 1024 * 1024;
 const MODEL_OPTIMIZATION_THRESHOLD_BYTES = 30 * 1024 * 1024;
 const previewableTypes = new Set<AssetModel['fileType']>(['glb', 'gltf', 'obj', 'dae', 'stl']);

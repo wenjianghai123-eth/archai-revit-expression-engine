@@ -1,3 +1,5 @@
+import type { GenerationMode as SharedGenerationMode, ModelFileType } from '../shared/generation';
+
 export enum GenerationStep {
   FloorplanTo3D = 1,
   StyleRender = 2,
@@ -9,7 +11,7 @@ export enum GenerationStep {
   PanoramaQuickRender = 8,
 }
 
-export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
+export type GenerationMode = SharedGenerationMode;
 export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled';
@@ -162,7 +164,7 @@ export interface ModelOptimizationMetadata {
   previewUrl?: string;
   optimizedUrl?: string;
   thumbnailUrl?: string;
-  format: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
+  format: ModelFileType;
   originalFileSize: number;
   optimizedFileSize?: number;
   optimizationStatus: 'pending' | 'processing' | 'succeeded' | 'failed' | 'skipped';
@@ -316,7 +318,7 @@ export interface PromptTemplate {
   id: string;
   title: string;
   category: string;
-  feature: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
+  feature: GenerationMode;
   supportedModes?: GenerationStep[] | string[];
   description: string;
   previewImage: string;
@@ -368,8 +370,8 @@ export interface AssetModel {
   id: string;
   name: string;
   fileName: string;
-  fileType: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl' | 'unknown';
-  format?: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
+  fileType: ModelFileType | 'unknown';
+  format?: ModelFileType;
   modelUrl?: string;
   originalUrl?: string;
   previewUrl?: string;

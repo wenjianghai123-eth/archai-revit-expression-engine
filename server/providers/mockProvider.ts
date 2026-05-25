@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { GenerationMode } from '../../shared/generation';
 import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider } from './types';
 
 export const mockProvider: ImageGenerationProvider = {
@@ -71,7 +72,7 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
 }
 
 function createMockImageDataUrl(
-  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render',
+  mode: GenerationMode,
   prompt: string,
   createdAt: string,
   size: { width: number; height: number },

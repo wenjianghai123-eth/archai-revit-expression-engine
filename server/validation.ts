@@ -1,4 +1,5 @@
 import { GenerationRecord, Project } from './storage';
+import { isGenerationMode as isSharedGenerationMode } from '../shared/generation';
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -17,7 +18,7 @@ export function isNullableString(value: unknown): value is string | null {
 }
 
 export function isGenerationMode(value: unknown): value is GenerationRecord['mode'] {
-  return value === 'floorplan' || value === 'style-render' || value === 'inpaint' || value === 'model-render' || value === 'design-variants' || value === 'material-replace' || value === 'plan-colorize' || value === 'panorama-roam-render';
+  return isSharedGenerationMode(value);
 }
 
 export function isGenerationStatus(value: unknown): value is GenerationRecord['status'] {

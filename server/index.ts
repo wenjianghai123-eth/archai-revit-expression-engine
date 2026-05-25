@@ -5,20 +5,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { NextFunction, Request, Response } from 'express';
 import { attachAuthUser, getCurrentUser, getRequiredCurrentUser, readAuthMode, requireAuth } from './auth';
-import { createStoredFilename, fileStorageProvider, uploadsDir } from './fileStorage';
+import { fileStorageProvider, uploadsDir } from './fileStorage';
 import {
   cancelGenerationJob,
   adjustCredits,
   AdminDashboard,
   createGenerationRecord,
   createGenerationJob,
-  createImageAsset,
-  createModelAsset,
   createProject,
   createUserProfile,
-  createGenerationResult,
   createShareLink,
-  deleteModelAsset,
   ensureAppDatabase,
   CreditBalance,
   CreditTransaction,
@@ -29,16 +25,11 @@ import {
   getAdminDashboard,
   getShareLinkByToken,
   getCreditBalance,
-  getCreditTransactionByReference,
   getUserProfileByEmail,
-  ImageAsset,
   listGenerationResults,
   getModelAsset,
   getProject,
-  listModelAssets,
-  listRunnableGenerationJobs,
   listProjectGenerations,
-  ModelAsset,
   listProjects,
   listCreditTransactions,
   listUserProfiles,
@@ -61,17 +52,7 @@ import {
   createErrorHandler,
   createGenerationJobRateLimiter,
   requireAdmin,
-  sanitizeLogText,
 } from './http';
-import {
-  getDefaultModelMimeType,
-  getImageExtension,
-  getModelFileType,
-  isAllowedModelMimeType,
-  readMultipartFile,
-  readMultipartImage,
-  sniffModelFile,
-} from './upload';
 import {
   calculateGenerationCreditsCost,
   enqueueGenerationJob,
@@ -85,13 +66,14 @@ import {
 } from './generationService';
 import { createAssetsRouter } from './routes/assets';
 import { createSupabaseAuthUser, resetSupabaseAuthUserPassword, updateSupabaseAuthUserMetadata } from './supabaseAdmin';
+import { DEFAULT_MAX_MODEL_MB, isGenerationMode as isSharedGenerationMode } from '../shared/generation';
 
 export const app = express();
 const port = Number(process.env.PORT || 8787);
 const host = process.env.HOST || '0.0.0.0';
 const version = '0.1.0';
 const maxImageMb = Number(process.env.MAX_IMAGE_MB || 10);
-const maxModelMb = Number(process.env.MAX_MODEL_MB || 500);
+const maxModelMb = Number(process.env.MAX_MODEL_MB || DEFAULT_MAX_MODEL_MB);
 const jsonLimit = `${Math.max(maxImageMb * 3, 15)}mb`;
 const generationJobRateLimitPerMinute = Number(process.env.GENERATION_JOB_RATE_LIMIT_PER_MINUTE || 10);
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
@@ -141,8 +123,6 @@ interface PublicGenerationResult {
   createdAt: string;
 }
 
-const queuedGenerationJobIds: string[] = [];
-let isGenerationWorkerRunning = false;
 const rateLimitGenerationJobCreate = createGenerationJobRateLimiter(generationJobRateLimitPerMinute);
 
 app.use(configureCors);
@@ -1646,7 +1626,7 @@ function isNullableString(value: unknown): value is string | null {
 }
 
 function isGenerationMode(value: unknown): value is GenerationRecord['mode'] {
-  return value === 'floorplan' || value === 'style-render' || value === 'inpaint' || value === 'model-render' || value === 'design-variants' || value === 'material-replace' || value === 'plan-colorize' || value === 'panorama-roam-render';
+  return isSharedGenerationMode(value);
 }
 
 function isGenerationStatus(value: unknown): value is GenerationRecord['status'] {

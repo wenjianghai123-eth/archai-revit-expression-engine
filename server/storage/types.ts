@@ -1,3 +1,5 @@
+import type { GenerationMode, ModelFileType } from '../../shared/generation';
+
 export interface Project {
   id: string;
   userId: string;
@@ -10,7 +12,6 @@ export interface Project {
   deletedAt?: string | null;
 }
 
-export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
 export type VariantStyleKey =
   | 'modern-minimal'
@@ -197,8 +198,8 @@ export interface ModelAsset {
   thumbnailUrl?: string;
   filename: string;
   originalFilename: string;
-  fileType: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
-  format?: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
+  fileType: ModelFileType;
+  format?: ModelFileType;
   mimeType: string;
   size: number;
   metadata?: ModelOptimizationMetadata;
@@ -211,7 +212,7 @@ export interface ModelOptimizationMetadata {
   previewUrl?: string;
   optimizedUrl?: string;
   thumbnailUrl?: string;
-  format: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
+  format: ModelFileType;
   originalFileSize: number;
   optimizedFileSize?: number;
   optimizationStatus: 'pending' | 'processing' | 'succeeded' | 'failed' | 'skipped';
