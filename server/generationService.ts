@@ -43,6 +43,50 @@ const activeGenerationJobIds = new Set<string>();
 let isGenerationWorkerScheduling = false;
 const providerMaintenanceUserMessage = '当前生成模型正在维护，请稍后重试，或切换其他生成模型。';
 
+type ProviderImageSettings = {
+  qualityMode: QualityMode;
+  imageMaxLongSide: number;
+  referenceMaxLongSide: number;
+  quality: number;
+  maxReferenceImages: number;
+  maxPayloadBytes: number;
+};
+
+const providerImageDefaults: Record<QualityMode, ProviderImageSettings> = {
+  draft: {
+    qualityMode: 'draft',
+    imageMaxLongSide: 768,
+    referenceMaxLongSide: 512,
+    quality: 72,
+    maxReferenceImages: 1,
+    maxPayloadBytes: 2_500_000,
+  },
+  fast: {
+    qualityMode: 'fast',
+    imageMaxLongSide: 1024,
+    referenceMaxLongSide: 768,
+    quality: 78,
+    maxReferenceImages: 2,
+    maxPayloadBytes: 4_000_000,
+  },
+  balanced: {
+    qualityMode: 'balanced',
+    imageMaxLongSide: 1280,
+    referenceMaxLongSide: 768,
+    quality: 80,
+    maxReferenceImages: 3,
+    maxPayloadBytes: 6_000_000,
+  },
+  high: {
+    qualityMode: 'high',
+    imageMaxLongSide: 1536,
+    referenceMaxLongSide: 1024,
+    quality: 85,
+    maxReferenceImages: 6,
+    maxPayloadBytes: 10_000_000,
+  },
+};
+
 export function getGenerationProviderName(): ProviderName {
   return provider.name;
 }
@@ -389,8 +433,9 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   const maskImageDataUrl = maskMode === 'full-image'
     ? createFullImageMaskDataUrl()
     : maskAssetId ? await getImageAssetDataUrl(maskAssetId, job.userId) : undefined;
+  const qualityMode = resolveQualityModeForJob(job);
 
-  const targetDimensions = await resolveTargetDimensions(job.mode, job.config, inputImageDataUrl);
+  const targetDimensions = resolveQualityTargetDimensions(job.mode, qualityMode, await resolveTargetDimensions(job.mode, job.config, inputImageDataUrl));
   const rawInput: GenerateImageInput = {
     mode: job.mode,
     inputImageDataUrl,
@@ -400,13 +445,13 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     furnitureReferenceImageDataUrls,
     maskImageDataUrl,
     maskMode,
-    prompt: buildProviderPromptForJob(job),
+    prompt: buildProviderPromptForJob(job, qualityMode),
     config: removeInternalConfig(job.config),
     targetWidth: targetDimensions.targetWidth,
     targetHeight: targetDimensions.targetHeight,
     targetAspectRatio: targetDimensions.targetAspectRatio,
     editTarget: job.mode === 'material-replace' ? 'material' : readEditTarget(job.config.editTarget),
-    qualityMode: readQualityMode(job.config.qualityMode),
+    qualityMode,
   };
 
   const localInpaint = await maybeCreateLocalInpaintContext(rawInput);
@@ -463,7 +508,19 @@ async function resolveTargetDimensions(
   }
 }
 
-async function prepareGenerateInputForProvider(input: GenerateImageInput): Promise<{ input: GenerateImageInput; imageDiagnostics: NonNullable<GenerationJobDiagnostics['images']> }> {
+function resolveQualityTargetDimensions(
+  mode: GenerationRecord['mode'],
+  qualityMode: QualityMode,
+  dimensions: { targetWidth?: number; targetHeight?: number; targetAspectRatio?: string },
+): { targetWidth?: number; targetHeight?: number; targetAspectRatio?: string } {
+  if (mode === 'panorama-roam-render' && (qualityMode === 'draft' || qualityMode === 'fast')) {
+    return { targetWidth: 1024, targetHeight: 512, targetAspectRatio: '2:1' };
+  }
+
+  return dimensions;
+}
+
+export async function prepareGenerateInputForProvider(input: GenerateImageInput): Promise<{ input: GenerateImageInput; imageDiagnostics: NonNullable<GenerationJobDiagnostics['images']> }> {
   const settings = resolveProviderImageSettings(input.qualityMode);
   const prepared: Array<{ role: string; image: PreparedProviderImage }> = [];
 
@@ -495,6 +552,7 @@ async function prepareGenerateInputForProvider(input: GenerateImageInput): Promi
   }
 
   const images = prepared.map(item => item.image);
+  const referenceItems = prepared.filter(item => item.role !== 'input' && item.role !== 'mask');
   const payloadBytesApprox = images.reduce((sum, image) => sum + image.outputBytes, 0);
   if (payloadBytesApprox > settings.maxPayloadBytes) {
     throw new Error('参考图过多或图片过大，请减少参考图数量或压缩图片后重试。');
@@ -515,10 +573,15 @@ async function prepareGenerateInputForProvider(input: GenerateImageInput): Promi
       qualityMode: settings.qualityMode,
       inputImages: 1,
       referenceImages: images.length - 1,
+      referenceCount: referenceItems.length,
       inputBytesBefore: inputImage.originalBytes,
       inputBytesAfter: inputImage.outputBytes,
-      referenceBytesBefore: images.slice(1).reduce((sum, image) => sum + image.originalBytes, 0),
-      referenceBytesAfter: images.slice(1).reduce((sum, image) => sum + image.outputBytes, 0),
+      inputWidthBefore: inputImage.originalWidth,
+      inputHeightBefore: inputImage.originalHeight,
+      inputWidthAfter: inputImage.width,
+      inputHeightAfter: inputImage.height,
+      referenceBytesBefore: referenceItems.reduce((sum, item) => sum + item.image.originalBytes, 0),
+      referenceBytesAfter: referenceItems.reduce((sum, item) => sum + item.image.outputBytes, 0),
       payloadBytesApprox,
       prepared: prepared.map(item => ({
         role: item.role,
@@ -542,23 +605,13 @@ async function maybeCreateLocalInpaintContext(input: GenerateImageInput): Promis
     inputImageDataUrl: input.inputImageDataUrl,
     maskImageDataUrl: input.maskImageDataUrl,
     paddingRatio: Number(process.env.LOCAL_INPAINT_PADDING_RATIO || 0.15),
+    maxAreaRatio: Number(process.env.LOCAL_INPAINT_MAX_AREA_RATIO || 0.65),
   });
 }
 
-function resolveProviderImageSettings(qualityMode: QualityMode | undefined): {
-  qualityMode: QualityMode;
-  imageMaxLongSide: number;
-  referenceMaxLongSide: number;
-  quality: number;
-  maxReferenceImages: number;
-  maxPayloadBytes: number;
-} {
-  const mode = qualityMode || 'balanced';
-  const defaults = mode === 'fast'
-    ? { imageMaxLongSide: 1024, referenceMaxLongSide: 768, quality: 76, maxReferenceImages: 3, maxPayloadBytes: 4_000_000 }
-    : mode === 'high'
-      ? { imageMaxLongSide: 1536, referenceMaxLongSide: 1024, quality: 85, maxReferenceImages: 6, maxPayloadBytes: 8_000_000 }
-      : { imageMaxLongSide: 1280, referenceMaxLongSide: 768, quality: 80, maxReferenceImages: 3, maxPayloadBytes: 4_000_000 };
+export function resolveProviderImageSettings(qualityMode: QualityMode | undefined): ProviderImageSettings {
+  const mode = qualityMode || readDefaultQualityMode();
+  const defaults = providerImageDefaults[mode];
 
   return {
     qualityMode: mode,
@@ -798,11 +851,13 @@ function isRemoteImageUrl(url: string): boolean {
 
 async function generateWithFallback(input: GenerateImageInput): Promise<GenerateImageOutput> {
   if (provider.name === 'mock') {
-    return normalizeProviderOutput(await provider.generateImage(input));
+    const startedAt = Date.now();
+    return withProviderDuration(normalizeProviderOutput(await provider.generateImage(input)), startedAt);
   }
 
+  const startedAt = Date.now();
   try {
-    return normalizeProviderOutput(await provider.generateImage(input));
+    return withProviderDuration(normalizeProviderOutput(await provider.generateImage(input)), startedAt);
   } catch (error) {
     const fallbackProvider = createConfiguredFallbackProvider(error);
     if (fallbackProvider) {
@@ -813,14 +868,14 @@ async function generateWithFallback(input: GenerateImageInput): Promise<Generate
         reason: message,
       });
       const fallbackOutput = await fallbackProvider.generateImage(input);
-      return normalizeProviderOutput({
+      return withProviderDuration(normalizeProviderOutput({
         ...fallbackOutput,
         metadata: {
           ...fallbackOutput.metadata,
           fallbackProvider: fallbackProvider.name,
           fallbackReason: message,
         },
-      });
+      }), startedAt);
     }
 
     if (isMissingProviderSecretError(error) || isGrsaiProvider(provider.name)) {
@@ -832,11 +887,22 @@ async function generateWithFallback(input: GenerateImageInput): Promise<Generate
     }
 
     const message = error instanceof Error ? error.message : `${provider.name} provider failed.`;
-    return normalizeProviderOutput(createMockGeneration(input, [
+    return withProviderDuration(normalizeProviderOutput(createMockGeneration(input, [
       `${provider.name} provider failed to complete this generation: ${message}`,
       '已自动回退到 mock provider，避免请求中断。',
-    ]));
+    ])), startedAt);
   }
+}
+
+function withProviderDuration(output: GenerateImageOutput, startedAt: number): GenerateImageOutput {
+  const existing = output.metadata?.providerDurationMs;
+  return {
+    ...output,
+    metadata: {
+      ...output.metadata,
+      providerDurationMs: typeof existing === 'number' ? existing : Date.now() - startedAt,
+    },
+  };
 }
 
 function toGenerateResponseBody(output: GenerateImageOutput): GenerateResponseBody {
@@ -1081,7 +1147,7 @@ function buildProviderInputForVariant(
 
   return {
     ...input,
-    prompt: buildDesignVariantPrompt(job, index, batchCount, variantStyle),
+    prompt: buildDesignVariantPrompt(job, index, batchCount, variantStyle, input.qualityMode),
     config: {
       ...input.config,
       variantIndex: index,
@@ -1128,6 +1194,8 @@ function mergeProviderDiagnostics(diagnostics: GenerationJobDiagnostics, outputs
     ...diagnostics.provider,
     name: firstOutput?.provider || diagnostics.provider?.name,
     model: typeof lastOutput?.metadata?.model === 'string' ? lastOutput.metadata.model : diagnostics.provider?.model,
+    providerModel: typeof lastOutput?.metadata?.model === 'string' ? lastOutput.metadata.model : diagnostics.provider?.providerModel,
+    providerMs: readProviderMs(outputs),
     httpStatus: typeof lastOutput?.metadata?.httpStatus === 'number' ? lastOutput.metadata.httpStatus : diagnostics.provider?.httpStatus,
     retryCount,
     fallbackProvider: typeof lastOutput?.metadata?.fallbackProvider === 'string' ? lastOutput.metadata.fallbackProvider : diagnostics.provider?.fallbackProvider,
@@ -1135,12 +1203,29 @@ function mergeProviderDiagnostics(diagnostics: GenerationJobDiagnostics, outputs
   };
 }
 
-function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount: 1 | 2 | 4 | 8, style: string): string {
+function readProviderMs(outputs: GenerateImageOutput[]): number | undefined {
+  const values = outputs
+    .map(output => output.metadata?.providerDurationMs)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0);
+  if (values.length === 0) return undefined;
+  return values.reduce((sum, value) => sum + value, 0);
+}
+
+function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount: 1 | 2 | 4 | 8, style: string, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
   const strategy = job.config.variantStrategy === 'same-style' ? 'same-style' : 'style-matrix';
   const strength = job.config.strength === 'subtle' || job.config.strength === 'strong' ? job.config.strength : 'balanced';
   const customStyle = style === 'custom' && typeof job.config.customStyleLabel === 'string'
     ? `Direction: ${job.config.customStyleLabel.trim()}.`
     : variantStylePrompts[style] || variantStylePrompts['modern-minimal'];
+  if (isCompactQualityMode(qualityMode)) {
+    return [
+      'Create a quick design option from the input image. Keep layout, camera, walls, openings, and main furniture positions.',
+      customStyle,
+      strategy === 'same-style' ? sameStyleVariantPrompts[index] : undefined,
+      typeof job.config.customPrompt === 'string' && job.config.customPrompt.trim().length > 0 ? `Note: ${job.config.customPrompt.trim()}` : undefined,
+      `Option ${readVariantCode(index)} of ${batchCount}.`,
+    ].filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+  }
   const parts = [
     designVariantBasePrompt,
     customStyle,
@@ -1185,21 +1270,25 @@ function resolveVariantCompleteProgress(batchCount: 1 | 2 | 4 | 8, index: number
   return 80;
 }
 
-function buildProviderPromptForJob(job: GenerationJob): string {
+function buildProviderPromptForJob(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
   if (job.mode === 'design-variants') {
-    return buildDesignVariantPrompt(job, 0, resolveBatchCountForJob(job), resolveVariantStyles(job.config, resolveBatchCountForJob(job))[0] || 'modern-minimal');
+    return buildDesignVariantPrompt(job, 0, resolveBatchCountForJob(job), resolveVariantStyles(job.config, resolveBatchCountForJob(job))[0] || 'modern-minimal', qualityMode);
   }
 
   if (job.mode === 'material-replace') {
-    return buildMaterialReplacePrompt(job);
+    return buildMaterialReplacePrompt(job, qualityMode);
   }
 
   if (job.mode === 'plan-colorize') {
-    return buildPlanColorizePrompt(job);
+    return buildPlanColorizePrompt(job, qualityMode);
   }
 
   if (job.mode === 'panorama-roam-render') {
-    return buildPanoramaRoamRenderPrompt(job);
+    return buildPanoramaRoamRenderPrompt(job, qualityMode);
+  }
+
+  if (isCompactQualityMode(qualityMode) && (job.mode === 'style-render' || job.mode === 'inpaint' || job.mode === 'floorplan')) {
+    return buildCompactGenericPrompt(job);
   }
 
   if (job.mode !== 'model-render') return job.prompt;
@@ -1210,7 +1299,9 @@ function buildProviderPromptForJob(job: GenerationJob): string {
   const atmosphere = readMeaningfulConfigString(job.config.atmosphere) || readMeaningfulConfigString(job.config.lighting);
   const customPrompt = readMeaningfulConfigString(job.config.customPrompt) || readMeaningfulConfigString(job.config.userPrompt);
   const parts = [
-    'The input image is a 3D clay or white model viewport snapshot. Transform it into a realistic architectural or interior rendering. Preserve the original geometry, massing, layout, camera angle, perspective, composition, and spatial proportions. Add appropriate materials, lighting, shadows, environment, furniture, landscape details, and atmosphere. Do not change the fundamental structure unless explicitly requested.',
+    isCompactQualityMode(qualityMode)
+      ? 'Quick realistic render from this 3D model snapshot. Keep geometry, camera, layout, and proportions.'
+      : 'The input image is a 3D clay or white model viewport snapshot. Transform it into a realistic architectural or interior rendering. Preserve the original geometry, massing, layout, camera angle, perspective, composition, and spatial proportions. Add appropriate materials, lighting, shadows, environment, furniture, landscape details, and atmosphere. Do not change the fundamental structure unless explicitly requested.',
     buildingType ? `Building type: ${buildingType}.` : undefined,
     spaceType ? `Space type: ${spaceType}.` : undefined,
     renderStyle ? `Rendering style: ${renderStyle}.` : undefined,
@@ -1220,12 +1311,20 @@ function buildProviderPromptForJob(job: GenerationJob): string {
   return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
 }
 
-function buildPanoramaRoamRenderPrompt(job: GenerationJob): string {
+function buildPanoramaRoamRenderPrompt(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
   const buildingType = readMeaningfulConfigString(job.config.buildingType);
   const spaceType = readMeaningfulConfigString(job.config.spaceType);
   const renderStyle = readMeaningfulConfigString(job.config.renderStyle) || readMeaningfulConfigString(job.config.style);
   const atmosphere = readMeaningfulConfigString(job.config.atmosphere) || readMeaningfulConfigString(job.config.lighting);
   const customPrompt = readMeaningfulConfigString(job.config.customPrompt) || readMeaningfulConfigString(job.config.userPrompt);
+  if (isCompactQualityMode(qualityMode)) {
+    return [
+      'Quick 2:1 360 panorama render from this model panorama. Keep equirectangular canvas, horizon, layout, and geometry.',
+      renderStyle ? `Style: ${renderStyle}.` : undefined,
+      atmosphere ? `Light: ${atmosphere}.` : undefined,
+      customPrompt ? `Note: ${customPrompt}.` : undefined,
+    ].filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+  }
   const parts = [
     'The input image is a 2:1 equirectangular 360 panorama captured from a 3D clay or white model. Transform it into a cinematic, photorealistic architectural or interior 360 panorama rendering. Preserve the exact equirectangular 2:1 canvas, full 360 continuity, camera position, spatial layout, geometry, proportions, horizon, and room or building structure. Add realistic materials, lighting, shadows, environment, furniture, landscape details, and atmosphere. Do not convert it into a normal perspective view. Do not crop, pad, add borders, labels, or watermarks.',
     buildingType ? `Building type: ${buildingType}.` : undefined,
@@ -1237,7 +1336,7 @@ function buildPanoramaRoamRenderPrompt(job: GenerationJob): string {
   return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
 }
 
-function buildMaterialReplacePrompt(job: GenerationJob): string {
+function buildMaterialReplacePrompt(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
   const targetObjectKey = typeof job.config.targetObjectType === 'string' ? job.config.targetObjectType.trim() : 'other';
   const targetMaterialKey = typeof job.config.targetMaterial === 'string' ? job.config.targetMaterial.trim() : 'custom';
   const targetObjectTypeLabel = materialReplaceObjectLabels[targetObjectKey] || materialReplaceObjectLabels.other;
@@ -1247,6 +1346,13 @@ function buildMaterialReplacePrompt(job: GenerationJob): string {
   const hasMaterialReference = readStringArray(job.config.materialReferenceAssetIds).length > 0
     || readStringArray(job.config.materialTextureAssetIds).length > 0;
   const customMaterialPrompt = typeof job.config.customMaterialPrompt === 'string' ? job.config.customMaterialPrompt.trim() : '';
+  if (isCompactQualityMode(qualityMode)) {
+    return [
+      `Replace ${targetObjectTypeLabel} material with ${targetMaterialLabel}.`,
+      'Keep geometry, lighting direction, perspective, and unmasked areas unchanged.',
+      customMaterialPrompt ? `Note: ${customMaterialPrompt}` : undefined,
+    ].filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+  }
   const basePrompt = editMode === 'mask' ? materialReplaceMaskPrompt : materialReplaceSmartPrompt;
   const parts = [
     basePrompt
@@ -1284,10 +1390,18 @@ const planTemplatePrompts: Record<string, string> = {
   'circulation-analysis': 'Add clear circulation arrows and movement hierarchy.',
 };
 
-function buildPlanColorizePrompt(job: GenerationJob): string {
+function buildPlanColorizePrompt(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
   const drawingType = typeof job.config.drawingType === 'string' ? job.config.drawingType : 'residential';
   const template = typeof job.config.template === 'string' ? job.config.template : 'colored-plan';
   const labels = readStringArray(job.config.manualRoomLabels);
+  if (isCompactQualityMode(qualityMode)) {
+    return [
+      'Quick colored architectural plan. Preserve walls, openings, layout, linework, and canvas ratio.',
+      planDrawingPrompts[drawingType],
+      planTemplatePrompts[template],
+      typeof job.config.customPrompt === 'string' && job.config.customPrompt.trim().length > 0 ? `Note: ${job.config.customPrompt.trim()}` : undefined,
+    ].filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+  }
   const parts = [
     planColorizeBasePrompt,
     planDrawingPrompts[drawingType],
@@ -1303,6 +1417,32 @@ function buildPlanColorizePrompt(job: GenerationJob): string {
     typeof job.config.customPrompt === 'string' && job.config.customPrompt.trim().length > 0 ? `User note: ${job.config.customPrompt.trim()}` : undefined,
   ];
   return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+}
+
+function buildCompactGenericPrompt(job: GenerationJob): string {
+  const userPrompt = readMeaningfulConfigString(job.config.customPrompt) || readMeaningfulConfigString(job.config.userPrompt) || job.prompt.trim();
+  if (job.mode === 'floorplan') {
+    return [
+      'Quick colored floor plan. Preserve original layout, walls, openings, furniture positions, linework, and top-down plan view.',
+      userPrompt ? `Note: ${userPrompt}` : undefined,
+    ].filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+  }
+
+  if (job.mode === 'style-render') {
+    return [
+      'Quick architectural render from the input image. Keep composition, perspective, layout, and main outlines.',
+      userPrompt ? `Note: ${userPrompt}` : undefined,
+    ].filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+  }
+
+  return [
+    'Quick local edit. Follow the mask when provided and keep unmasked areas unchanged.',
+    userPrompt ? `Note: ${userPrompt}` : undefined,
+  ].filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+}
+
+function isCompactQualityMode(qualityMode: QualityMode): boolean {
+  return qualityMode === 'draft' || qualityMode === 'fast';
 }
 
 function readMeaningfulConfigString(value: unknown): string {
@@ -1360,6 +1500,7 @@ function finalizeDurations(diagnostics: GenerationJobDiagnostics): void {
     saveResultDurationMs: durationBetween(timing.saveResultStartedAt, timing.saveResultFinishedAt),
     totalDurationMs: durationBetween(timing.jobStartedAt || timing.jobCreatedAt, timing.jobFinishedAt),
   };
+  diagnostics.timing.providerMs = diagnostics.provider?.providerMs ?? diagnostics.timing.providerDurationMs;
 }
 
 function durationBetween(start: string | undefined, end: string | undefined): number | undefined {
@@ -1372,14 +1513,19 @@ function logJobTiming(jobId: string, diagnostics: GenerationJobDiagnostics, erro
   console.info(`[GenerationJob ${jobId}] timing`, {
     prepareInput: diagnostics.timing?.prepareInputDurationMs,
     provider: diagnostics.timing?.providerDurationMs,
+    providerMs: diagnostics.timing?.providerMs,
     postprocess: diagnostics.timing?.postprocessDurationMs,
     saveResult: diagnostics.timing?.saveResultDurationMs,
     total: diagnostics.timing?.totalDurationMs,
     providerName: diagnostics.provider?.name,
     model: diagnostics.provider?.model,
+    providerModel: diagnostics.provider?.providerModel,
     qualityMode: diagnostics.images?.qualityMode,
     inputImages: diagnostics.images?.inputImages,
     referenceImages: diagnostics.images?.referenceImages,
+    referenceCount: diagnostics.images?.referenceCount,
+    inputBefore: diagnostics.images?.inputWidthBefore && diagnostics.images?.inputHeightBefore ? `${diagnostics.images.inputWidthBefore}x${diagnostics.images.inputHeightBefore}` : undefined,
+    inputAfter: diagnostics.images?.inputWidthAfter && diagnostics.images?.inputHeightAfter ? `${diagnostics.images.inputWidthAfter}x${diagnostics.images.inputHeightAfter}` : undefined,
     inputBytesBefore: diagnostics.images?.inputBytesBefore,
     inputBytesAfter: diagnostics.images?.inputBytesAfter,
     referenceBytesBefore: diagnostics.images?.referenceBytesBefore,
@@ -1431,7 +1577,18 @@ function readEditTarget(value: unknown): GenerateImageInput['editTarget'] {
 }
 
 function readQualityMode(value: unknown): QualityMode {
-  return value === 'fast' || value === 'high' ? value : 'balanced';
+  return value === 'draft' || value === 'fast' || value === 'balanced' || value === 'high' ? value : readDefaultQualityMode();
+}
+
+function readDefaultQualityMode(): QualityMode {
+  const value = process.env.PROVIDER_DEFAULT_QUALITY_MODE || process.env.DEFAULT_QUALITY_MODE;
+  return value === 'draft' || value === 'fast' || value === 'balanced' || value === 'high' ? value : 'fast';
+}
+
+function resolveQualityModeForJob(job: GenerationJob): QualityMode {
+  if (job.config.qualityMode !== undefined) return readQualityMode(job.config.qualityMode);
+  if (job.mode === 'panorama-roam-render' || job.mode === 'design-variants') return 'draft';
+  return readDefaultQualityMode();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

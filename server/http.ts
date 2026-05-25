@@ -54,11 +54,16 @@ export function createErrorHandler(jsonLimit: string) {
   return (error: unknown, req: Request, res: Response<ApiResponse<never>>, _next: NextFunction): void => {
     const requestId = req.headers['x-request-id'];
     const safeRequestId = typeof requestId === 'string' ? sanitizeLogText(requestId) : undefined;
+    const safeError = sanitizeErrorForLog(error);
     console.error('API error', {
       requestId: safeRequestId,
       method: req.method,
       path: req.path,
-      error: sanitizeErrorForLog(error),
+      errorName: safeError.name,
+      errorMessage: safeError.message,
+      errorCode: safeError.code,
+      errorStack: safeError.stack,
+      error: safeError,
     });
 
     if (isPayloadTooLargeError(error)) {
@@ -71,7 +76,7 @@ export function createErrorHandler(jsonLimit: string) {
       return;
     }
 
-    res.status(500).json(apiError('Server failed to process the request. Please try again later.', 'INTERNAL_SERVER_ERROR'));
+    res.status(500).json(apiError(resolveErrorResponseMessage(error), safeError.code || 'INTERNAL_SERVER_ERROR'));
   };
 }
 
@@ -108,11 +113,11 @@ export function createGenerationJobRateLimiter(generationJobRateLimitPerMinute: 
   };
 }
 
-export function sanitizeErrorForLog(error: unknown): { name: string; message: string; code?: string } {
+export function sanitizeErrorForLog(error: unknown): { name: string; message: string; code?: string; stack?: string[] } {
   if (error instanceof Error) {
     const rawCode = (error as Error & { code?: unknown }).code;
     const code = typeof rawCode === 'string' ? rawCode : undefined;
-    return { name: error.name, message: sanitizeLogText(error.message), code };
+    return { name: error.name, message: sanitizeLogText(error.message), code, stack: sanitizeStackForLog(error.stack) };
   }
 
   return { name: typeof error, message: sanitizeLogText(String(error)) };
@@ -124,6 +129,19 @@ export function sanitizeLogText(value: string): string {
     .replace(/(password|passwd|pwd)(["'\s:=]+)([^"',\s}]+)/giu, '$1$2[REDACTED]')
     .replace(/[^\x20-\x7E]/g, '?')
     .slice(0, 500);
+}
+
+function resolveErrorResponseMessage(error: unknown): string {
+  if (process.env.NODE_ENV !== 'production' && error instanceof Error && error.message.trim().length > 0) {
+    return sanitizeLogText(error.message);
+  }
+
+  return 'Server failed to process the request. Please try again later.';
+}
+
+function sanitizeStackForLog(stack: string | undefined): string[] | undefined {
+  if (!stack) return undefined;
+  return stack.split(/\r?\n/u).slice(0, 6).map(line => sanitizeLogText(line));
 }
 
 export function isPayloadTooLargeError(error: unknown): boolean {

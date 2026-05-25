@@ -12,6 +12,7 @@ export interface LocalInpaintInput {
   inputImageDataUrl: string;
   maskImageDataUrl: string;
   paddingRatio?: number;
+  maxAreaRatio?: number;
 }
 
 export interface LocalInpaintContext {
@@ -40,6 +41,8 @@ export async function createLocalInpaintContext(input: LocalInpaintInput): Promi
     .toBuffer();
   const bbox = await getMaskBoundingBox(toImageDataUrl(normalizedMask, 'image/png'));
   if (!bbox || bbox.width < 4 || bbox.height < 4) return null;
+  const maxAreaRatio = input.maxAreaRatio ?? 0.65;
+  if ((bbox.width * bbox.height) / (imageMeta.width * imageMeta.height) >= maxAreaRatio) return null;
 
   const padded = padBoundingBox(bbox, imageMeta.width, imageMeta.height, input.paddingRatio ?? 0.15);
   const region = { left: padded.x, top: padded.y, width: padded.width, height: padded.height };

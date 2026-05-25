@@ -55,6 +55,42 @@ afterAll(async () => {
 });
 
 describe('POST /api/generation-jobs asset ownership', () => {
+  it.each([
+    'floorplan',
+    'style-render',
+    'inpaint',
+    'model-render',
+    'design-variants',
+    'material-replace',
+    'plan-colorize',
+    'panorama-roam-render',
+  ] as const)('creates a generation job for %s mode', async (mode) => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: `Mode ${mode}` });
+    const imageAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const maskAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const modelAsset = await createModelAssetForUser(DEV_AUTH_USER_ID);
+    const config = createConfigForMode(mode, imageAsset.id, maskAsset.id, modelAsset.id);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode,
+        prompt: mode === 'floorplan' || mode === 'style-render' ? 'render this' : '',
+        config,
+        inputAssetIds: [imageAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job).toMatchObject({
+      userId: DEV_AUTH_USER_ID,
+      projectId: project.id,
+      mode,
+      status: 'queued',
+      inputAssetIds: [imageAsset.id],
+    });
+  });
+
   it('rejects a project owned by another user', async () => {
     const otherProject = await storage.createProject({ userId: 'other-user', name: 'Other project' });
     const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
@@ -1335,6 +1371,12 @@ describe('generation worker image inputs', () => {
       expect(job.status).toBe('succeeded');
       expect(job.outputAssetId).toEqual(expect.any(String));
       expect(job.diagnostics?.images?.inputImages).toBe(1);
+      expect(job.diagnostics?.images?.qualityMode).toBe('fast');
+      expect(job.diagnostics?.images?.payloadBytesApprox).toEqual(expect.any(Number));
+      expect(job.diagnostics?.images?.referenceCount).toBe(0);
+      expect(job.diagnostics?.timing?.providerMs).toEqual(expect.any(Number));
+      expect(job.diagnostics?.provider?.providerMs).toEqual(expect.any(Number));
+      expect(job.diagnostics?.provider?.name).toBe('mock');
       expect(job.diagnostics?.images?.prepared?.[0]).toMatchObject({
         role: 'input',
         mime: expect.stringMatching(/^image\//u),
@@ -1804,6 +1846,43 @@ function createImageAssetForUser(userId: string) {
     mimeType: 'image/png',
     size: 16,
   });
+}
+
+function createConfigForMode(mode: string, imageAssetId: string, maskAssetId: string, modelAssetId: string): Record<string, unknown> {
+  if (mode === 'inpaint') {
+    return { maskMode: 'asset-mask', maskAssetId };
+  }
+
+  if (mode === 'model-render') {
+    return {
+      sourceImageAssetId: imageAssetId,
+      snapshotAssetId: imageAssetId,
+      sourceModelAssetId: modelAssetId,
+    };
+  }
+
+  if (mode === 'design-variants') {
+    return { batchCount: 2, variantStrategy: 'style-matrix' };
+  }
+
+  if (mode === 'material-replace') {
+    return {
+      editMode: 'smart-type',
+      sourceImageAssetId: imageAssetId,
+      targetObjectType: 'floor',
+      targetMaterial: 'light-wood',
+    };
+  }
+
+  if (mode === 'panorama-roam-render') {
+    return {
+      sourceImageAssetId: imageAssetId,
+      panoramaAssetId: imageAssetId,
+      sourceModelAssetId: modelAssetId,
+    };
+  }
+
+  return {};
 }
 
 function tinyPngBuffer() {

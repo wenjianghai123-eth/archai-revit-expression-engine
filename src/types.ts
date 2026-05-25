@@ -13,7 +13,7 @@ export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-r
 export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled';
-export type QualityMode = 'fast' | 'balanced' | 'high';
+export type QualityMode = 'draft' | 'fast' | 'balanced' | 'high';
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
 export type DesignVariantBatchCount = 2 | 4 | 8;
 export type VariantStyleKey =
@@ -69,6 +69,7 @@ export interface GenerationJobDiagnostics {
     jobCreatedAt?: string;
     jobStartedAt?: string;
     jobFinishedAt?: string;
+    providerMs?: number;
     providerDurationMs?: number;
     totalDurationMs?: number;
   };
@@ -82,6 +83,8 @@ export interface GenerationJobDiagnostics {
     providerError?: string;
     providerStatus?: string;
     userMessage?: string;
+    providerMs?: number;
+    providerModel?: string;
   };
   images?: {
     qualityMode?: QualityMode;
@@ -92,6 +95,11 @@ export interface GenerationJobDiagnostics {
     referenceBytesBefore?: number;
     referenceBytesAfter?: number;
     payloadBytesApprox?: number;
+    inputWidthBefore?: number;
+    inputHeightBefore?: number;
+    inputWidthAfter?: number;
+    inputHeightAfter?: number;
+    referenceCount?: number;
   };
 }
 

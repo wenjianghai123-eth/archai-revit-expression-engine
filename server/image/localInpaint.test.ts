@@ -32,6 +32,26 @@ describe('local inpaint image helpers', () => {
     expect(metadata.width).toBe(20);
     expect(metadata.height).toBe(12);
   });
+
+  it('uses local crop for small masks and skips large masks', async () => {
+    const original = await sharp({ create: { width: 100, height: 100, channels: 3, background: '#000000' } }).png().toBuffer();
+    const smallMask = await createMask(100, 100, { x: 10, y: 10, width: 20, height: 20 });
+    const largeMask = await createMask(100, 100, { x: 0, y: 0, width: 90, height: 80 });
+
+    await expect(createLocalInpaintContext({
+      inputImageDataUrl: toImageDataUrl(original, 'image/png'),
+      maskImageDataUrl: toImageDataUrl(smallMask, 'image/png'),
+      paddingRatio: 0,
+      maxAreaRatio: 0.65,
+    })).resolves.toMatchObject({ bbox: { x: 10, y: 10, width: 20, height: 20 } });
+
+    await expect(createLocalInpaintContext({
+      inputImageDataUrl: toImageDataUrl(original, 'image/png'),
+      maskImageDataUrl: toImageDataUrl(largeMask, 'image/png'),
+      paddingRatio: 0,
+      maxAreaRatio: 0.65,
+    })).resolves.toBeNull();
+  });
 });
 
 function createMask(width: number, height: number, rect: { x: number; y: number; width: number; height: number }): Promise<Buffer> {

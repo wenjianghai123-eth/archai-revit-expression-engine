@@ -124,10 +124,13 @@ export interface GenerationJobDiagnostics {
     postprocessDurationMs?: number;
     saveResultDurationMs?: number;
     totalDurationMs?: number;
+    providerMs?: number;
   };
   provider?: {
     name?: string;
     model?: string;
+    providerModel?: string;
+    providerMs?: number;
     httpStatus?: number;
     retryCount?: number;
     fallbackProvider?: string;
@@ -137,11 +140,16 @@ export interface GenerationJobDiagnostics {
     userMessage?: string;
   };
   images?: {
-    qualityMode?: 'fast' | 'balanced' | 'high';
+    qualityMode?: 'draft' | 'fast' | 'balanced' | 'high';
     inputImages?: number;
     referenceImages?: number;
+    referenceCount?: number;
     inputBytesBefore?: number;
     inputBytesAfter?: number;
+    inputWidthBefore?: number;
+    inputHeightBefore?: number;
+    inputWidthAfter?: number;
+    inputHeightAfter?: number;
     referenceBytesBefore?: number;
     referenceBytesAfter?: number;
     payloadBytesApprox?: number;

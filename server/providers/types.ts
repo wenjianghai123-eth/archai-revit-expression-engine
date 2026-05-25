@@ -1,7 +1,7 @@
 export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
 export type ProviderName = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type MaskMode = 'asset-mask' | 'full-image';
-export type QualityMode = 'fast' | 'balanced' | 'high';
+export type QualityMode = 'draft' | 'fast' | 'balanced' | 'high';
 
 export interface GenerateImageInput {
   mode: GenerationMode;

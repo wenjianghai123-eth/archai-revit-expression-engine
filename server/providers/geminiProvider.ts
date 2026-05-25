@@ -82,6 +82,13 @@ function buildRequestParts(input: GenerateImageInput, warnings: string[]): Part[
 }
 
 function buildPrompt(input: GenerateImageInput): string {
+  if (input.qualityMode === 'draft' || input.qualityMode === 'fast') {
+    return [
+      input.prompt,
+      'Keep the first image composition and canvas ratio. Return only the generated image.',
+    ].filter(Boolean).join('\n');
+  }
+
   if (input.mode === 'model-render' || input.mode === 'panorama-roam-render') {
     return [
       input.prompt,

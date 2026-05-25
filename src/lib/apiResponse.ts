@@ -40,6 +40,34 @@ export async function parseApiResponseEnvelope<T>(response: Response): Promise<P
 }
 
 export function readApiErrorMessage(value: unknown, fallbackStatus?: number): string | null {
+  const code = readApiErrorCode(value);
+  const message = readRawApiErrorMessage(value);
+  if (message) {
+    return code ? `${code}: ${message}` : message;
+  }
+
+  if (fallbackStatus) {
+    return `API request failed with status ${fallbackStatus}`;
+  }
+
+  return null;
+}
+
+export function readApiErrorCode(value: unknown): string | null {
+  if (isRecord(value)) {
+    if (typeof value.code === 'string' && value.code.trim().length > 0) {
+      return value.code;
+    }
+
+    if (isRecord(value.error) && typeof value.error.code === 'string' && value.error.code.trim().length > 0) {
+      return value.error.code;
+    }
+  }
+
+  return null;
+}
+
+function readRawApiErrorMessage(value: unknown): string | null {
   if (typeof value === 'string' && value.trim().length > 0) {
     return value;
   }
@@ -56,10 +84,6 @@ export function readApiErrorMessage(value: unknown, fallbackStatus?: number): st
     if (isRecord(value.error) && typeof value.error.message === 'string' && value.error.message.trim().length > 0) {
       return value.error.message;
     }
-  }
-
-  if (fallbackStatus) {
-    return `API request failed with status ${fallbackStatus}`;
   }
 
   return null;

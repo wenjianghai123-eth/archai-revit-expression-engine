@@ -169,6 +169,7 @@ export interface GenerationJobDiagnostics {
     saveResultStartedAt?: string;
     saveResultFinishedAt?: string;
     jobFinishedAt?: string;
+    providerMs?: number;
     prepareInputDurationMs?: number;
     providerDurationMs?: number;
     postprocessDurationMs?: number;
@@ -185,13 +186,20 @@ export interface GenerationJobDiagnostics {
     providerError?: string;
     providerStatus?: string;
     userMessage?: string;
+    providerMs?: number;
+    providerModel?: string;
   };
   images?: {
-    qualityMode?: 'fast' | 'balanced' | 'high';
+    qualityMode?: 'draft' | 'fast' | 'balanced' | 'high';
     inputImages?: number;
     referenceImages?: number;
+    referenceCount?: number;
     inputBytesBefore?: number;
     inputBytesAfter?: number;
+    inputWidthBefore?: number;
+    inputHeightBefore?: number;
+    inputWidthAfter?: number;
+    inputHeightAfter?: number;
     referenceBytesBefore?: number;
     referenceBytesAfter?: number;
     payloadBytesApprox?: number;
@@ -547,7 +555,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   if (body.ok === false) {
-    throw new Error(body.error.message);
+    throw new Error(formatApiError(body.error));
   }
 
   return body.data;
@@ -570,6 +578,10 @@ function readApiError(value: unknown): string | null {
   if (typeof value.error === 'string') return value.error;
   if (isRecord(value.error) && typeof value.error.message === 'string') return value.error.message;
   return null;
+}
+
+function formatApiError(error: { message: string; code?: string }): string {
+  return error.code ? `${error.code}: ${error.message}` : error.message;
 }
 
 function isMissingProductionApi(path: string): boolean {

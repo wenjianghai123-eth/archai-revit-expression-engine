@@ -125,11 +125,15 @@ create table if not exists public.model_assets (
   id text primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   url text not null,
+  preview_url text,
+  optimized_url text,
+  thumbnail_url text,
   filename text not null,
   original_filename text not null,
-  file_type text not null check (file_type in ('glb', 'gltf', 'obj')),
+  file_type text not null check (file_type in ('glb', 'gltf', 'obj', 'dae', 'stl')),
   mime_type text not null,
   size integer not null,
+  metadata jsonb,
   created_at timestamptz not null default now(),
   deleted_at timestamptz
 );
@@ -138,7 +142,7 @@ create table if not exists public.generation_jobs (
   id text primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   project_id text not null references public.projects(id) on delete cascade,
-  mode text not null check (mode in ('floorplan', 'style-render', 'inpaint')),
+  mode text not null check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render')),
   prompt text not null,
   config jsonb not null default '{}'::jsonb,
   input_asset_ids text[] not null default '{}'::text[],
@@ -159,7 +163,7 @@ create table if not exists public.generation_records (
   user_id uuid not null references auth.users(id) on delete cascade,
   project_id text not null references public.projects(id) on delete cascade,
   job_id text references public.generation_jobs(id) on delete set null,
-  mode text not null check (mode in ('floorplan', 'style-render', 'inpaint')),
+  mode text not null check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render')),
   prompt text not null,
   input_image_url text,
   input_image_data_preview text,
@@ -215,6 +219,119 @@ create table if not exists public.credit_transactions (
 ```
 
 If you are updating an older database, verify the code-to-SQL checklist at the end of this document. In particular, newer code requires `generation_results`, `generation_records.job_id`, and `generation_jobs.output_asset_ids`. `credit_transactions` must contain a single `id text primary key` column; do not duplicate the `id` column when merging older SQL snippets.
+
+### Upgrade SQL for Older Databases
+
+Run this migration if your Supabase project was created from an older copy of this document. It widens generation mode checks, adds model asset metadata/preview columns, adds async job/result fields, creates missing credit tables, and points you to rerun the credits RPC definition below.
+
+```sql
+alter table public.model_assets
+  add column if not exists preview_url text,
+  add column if not exists optimized_url text,
+  add column if not exists thumbnail_url text,
+  add column if not exists metadata jsonb;
+
+alter table public.generation_jobs
+  add column if not exists output_asset_ids text[] not null default '{}'::text[],
+  add column if not exists started_at timestamptz,
+  add column if not exists finished_at timestamptz;
+
+alter table public.generation_records
+  add column if not exists job_id text references public.generation_jobs(id) on delete set null;
+
+create table if not exists public.generation_results (
+  id text primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  project_id text not null references public.projects(id) on delete cascade,
+  job_id text not null references public.generation_jobs(id) on delete cascade,
+  asset_id text not null references public.image_assets(id) on delete cascade,
+  image_url text not null,
+  is_selected boolean not null default false,
+  is_favorite boolean not null default false,
+  metadata jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.credit_balances (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  balance integer not null default 0,
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.credit_transactions (
+  id text primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  type text not null check (type in ('grant', 'debit', 'refund')),
+  amount integer not null,
+  balance_after integer not null,
+  reason text not null,
+  reference_type text check (reference_type in ('generation_job', 'system')),
+  reference_id text,
+  created_at timestamptz not null default now()
+);
+
+do $$
+declare
+  constraint_name text;
+begin
+  for constraint_name in
+    select conname
+    from pg_constraint
+    where conrelid = 'public.generation_jobs'::regclass
+      and contype = 'c'
+      and pg_get_constraintdef(oid) like '%mode%'
+  loop
+    execute format('alter table public.generation_jobs drop constraint %I', constraint_name);
+  end loop;
+
+  alter table public.generation_jobs
+    add constraint generation_jobs_mode_check
+    check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render'));
+end $$;
+
+do $$
+declare
+  constraint_name text;
+begin
+  for constraint_name in
+    select conname
+    from pg_constraint
+    where conrelid = 'public.generation_records'::regclass
+      and contype = 'c'
+      and pg_get_constraintdef(oid) like '%mode%'
+  loop
+    execute format('alter table public.generation_records drop constraint %I', constraint_name);
+  end loop;
+
+  alter table public.generation_records
+    add constraint generation_records_mode_check
+    check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render'));
+end $$;
+
+do $$
+declare
+  constraint_name text;
+begin
+  for constraint_name in
+    select conname
+    from pg_constraint
+    where conrelid = 'public.model_assets'::regclass
+      and contype = 'c'
+      and pg_get_constraintdef(oid) like '%file_type%'
+  loop
+    execute format('alter table public.model_assets drop constraint %I', constraint_name);
+  end loop;
+
+  alter table public.model_assets
+    add constraint model_assets_file_type_check
+    check (file_type in ('glb', 'gltf', 'obj', 'dae', 'stl'));
+end $$;
+
+-- Re-run the "Credits RPC" SQL section below after this migration so
+-- public.adjust_credits_atomic(uuid, text, integer, text, text, text)
+-- is present and returns the fields expected by SupabaseStorageAdapter.
+```
 
 ## Indexes
 
@@ -603,7 +720,7 @@ Supabase's service role bypasses RLS for server-side operations. Do not put the 
 - `projects`: `id`, `user_id`, `name`, `description`, `status`, `cover_image_url`, `created_at`, `updated_at`, `deleted_at`
 - `profiles`: `id`, `email`, `name`, `role`, `status`, `created_at`, `updated_at`
 - `image_assets`: `id`, `user_id`, `url`, `filename`, `mime_type`, `size`, `created_at`
-- `model_assets`: `id`, `user_id`, `url`, `filename`, `original_filename`, `file_type`, `mime_type`, `size`, `created_at`, `deleted_at`
+- `model_assets`: `id`, `user_id`, `url`, `preview_url`, `optimized_url`, `thumbnail_url`, `filename`, `original_filename`, `file_type`, `mime_type`, `size`, `metadata`, `created_at`, `deleted_at`
 - `generation_jobs`: `id`, `user_id`, `project_id`, `mode`, `prompt`, `config`, `input_asset_ids`, `status`, `progress`, `provider`, `output_asset_id`, `output_asset_ids`, `error_message`, `created_at`, `updated_at`, `started_at`, `finished_at`
 - `generation_records`: `id`, `user_id`, `project_id`, `job_id`, `mode`, `prompt`, `input_image_url`, `input_image_data_preview`, `output_image_url`, `output_image_data_preview`, `provider`, `status`, `created_at`, `updated_at`
 - `generation_results`: `id`, `user_id`, `project_id`, `job_id`, `asset_id`, `image_url`, `is_selected`, `is_favorite`, `metadata`, `created_at`, `updated_at`

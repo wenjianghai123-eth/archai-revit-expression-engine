@@ -411,6 +411,14 @@ function buildReferenceUrls(input: GenerateImageInput): string[] {
 }
 
 function buildPrompt(input: GenerateImageInput): string {
+  if (input.qualityMode === 'draft' || input.qualityMode === 'fast') {
+    if (input.mode === 'inpaint' || input.mode === 'material-replace') return buildInpaintPrompt(input);
+    return [
+      input.prompt,
+      'Keep composition and canvas ratio. Return image only; no text, labels, watermarks, borders, or UI.',
+    ].filter(isNonEmptyString).join('\n');
+  }
+
   if (input.mode === 'inpaint') {
     return buildInpaintPrompt(input);
   }
@@ -470,6 +478,17 @@ function buildPrompt(input: GenerateImageInput): string {
 }
 
 function buildInpaintPrompt(input: GenerateImageInput): string {
+  if (input.qualityMode === 'draft' || input.qualityMode === 'fast') {
+    const hasMask = input.maskMode === 'asset-mask' && isNonEmptyString(input.maskImageDataUrl);
+    return [
+      hasMask ? 'Quick masked edit. Only change the white mask area; keep all unmasked areas unchanged.' : 'Quick image edit. Keep layout, perspective, and unchanged areas stable.',
+      input.editTarget === 'material' ? 'Change material/texture only.' : undefined,
+      input.editTarget === 'furniture' ? 'Edit furniture only inside the mask.' : undefined,
+      input.prompt,
+      'No text, labels, watermarks, borders, or UI.',
+    ].filter(isNonEmptyString).join('\n');
+  }
+
   const pieces: string[] = [];
   const hasMask = input.maskMode === 'asset-mask' && isNonEmptyString(input.maskImageDataUrl);
   pieces.push(

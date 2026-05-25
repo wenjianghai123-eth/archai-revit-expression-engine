@@ -386,43 +386,74 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
   res: Response<ApiResponse<{ job: GenerationJob }>>,
   next: NextFunction,
 ) => {
+  logGenerationJobCreateStage(req, 'validate body');
   const body = validateGenerationJobCreateBody(req.body);
   if (body.ok === false) {
+    logGenerationJobCreateStage(req, 'validate body failed', { errorCode: body.error.code });
     res.status(400).json(apiError(body.error.message, body.error.code));
     return;
   }
 
   try {
     const user = getRequiredCurrentUser(req);
+    logGenerationJobCreateStage(req, 'get project', { userId: user.id, projectId: body.value.projectId, mode: body.value.mode });
     const project = await getProject(body.value.projectId, user.id);
     if (!project) {
+      logGenerationJobCreateStage(req, 'get project failed', { userId: user.id, projectId: body.value.projectId });
       res.status(404).json(apiError('Project not found.', 'PROJECT_NOT_FOUND'));
       return;
     }
 
+    logGenerationJobCreateStage(req, 'validate assets', {
+      userId: user.id,
+      projectId: body.value.projectId,
+      mode: body.value.mode,
+      inputAssetCount: body.value.inputAssetIds.length,
+    });
     const assetValidation = await validateGenerationJobAssets(body.value.inputAssetIds, body.value.mode, body.value.config, user.id);
     if (assetValidation.ok === false) {
+      logGenerationJobCreateStage(req, 'validate assets failed', { errorCode: assetValidation.error.code });
       const status = assetValidation.error.code === 'GENERATION_JOB_SOURCE_MODEL_NOT_FOUND' ? 403 : 404;
       res.status(status).json(apiError(assetValidation.error.message, assetValidation.error.code));
       return;
     }
 
     const creditsCost = calculateGenerationCreditsCost(body.value.mode, body.value.config);
+    logGenerationJobCreateStage(req, 'create generation job', {
+      userId: user.id,
+      projectId: body.value.projectId,
+      mode: body.value.mode,
+      creditsCost,
+    });
     const job = await createGenerationJob({ ...body.value, userId: user.id, provider: getGenerationProviderName() });
     if (!job) {
+      logGenerationJobCreateStage(req, 'create generation job failed', { userId: user.id, projectId: body.value.projectId });
       res.status(404).json(apiError('Project not found.', 'PROJECT_NOT_FOUND'));
       return;
     }
 
-    const debit = await adjustCredits({
-      userId: user.id,
-      type: 'debit',
-      amount: -creditsCost,
-      reason: `Generation job ${job.mode} x${resolveChargedOutputCount(body.value.mode, body.value.config)}`,
-      referenceType: 'generation_job',
-      referenceId: job.id,
-    });
+    logGenerationJobCreateStage(req, 'debit credits', { userId: user.id, jobId: job.id, creditsCost });
+    let debit: Awaited<ReturnType<typeof adjustCredits>>;
+    try {
+      debit = await adjustCredits({
+        userId: user.id,
+        type: 'debit',
+        amount: -creditsCost,
+        reason: `Generation job ${job.mode} x${resolveChargedOutputCount(body.value.mode, body.value.config)}`,
+        referenceType: 'generation_job',
+        referenceId: job.id,
+      });
+    } catch (error) {
+      logGenerationJobCreateStage(req, 'debit credits failed', {
+        userId: user.id,
+        jobId: job.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await markGenerationJobCancelledAfterDebitFailure(job.id, error);
+      throw error;
+    }
     if (!debit) {
+      logGenerationJobCreateStage(req, 'debit credits insufficient', { userId: user.id, jobId: job.id, creditsCost });
       await updateGenerationJob(job.id, {
         status: 'cancelled',
         progress: 0,
@@ -433,6 +464,11 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
       return;
     }
 
+    logGenerationJobCreateStage(req, 'enqueue worker', {
+      userId: user.id,
+      jobId: job.id,
+      workerDisabled: isGenerationWorkerDisabled(),
+    });
     if (!isGenerationWorkerDisabled()) {
       enqueueGenerationJob(job.id);
     }
@@ -1793,6 +1829,42 @@ async function validateGenerationJobAssets(
   }
 
   return { ok: true };
+}
+
+async function markGenerationJobCancelledAfterDebitFailure(jobId: string, error: unknown): Promise<void> {
+  const message = error instanceof Error ? error.message : 'Credit debit failed.';
+  try {
+    await updateGenerationJob(jobId, {
+      status: 'cancelled',
+      progress: 0,
+      errorMessage: message,
+      finishedAt: new Date().toISOString(),
+    });
+  } catch (updateError) {
+    console.error('Failed to cancel generation job after credit debit error', {
+      jobId: sanitizeLogText(jobId),
+      error: updateError instanceof Error ? sanitizeLogText(updateError.message) : sanitizeLogText(String(updateError)),
+    });
+  }
+}
+
+function logGenerationJobCreateStage(req: Request, stage: string, fields: Record<string, unknown> = {}): void {
+  const requestId = req.headers['x-request-id'];
+  const safeRequestId = typeof requestId === 'string' ? sanitizeLogText(requestId) : undefined;
+  console.info('Generation job create stage', {
+    requestId: safeRequestId,
+    method: req.method,
+    path: req.path,
+    stage,
+    ...sanitizeLogFields(fields),
+  });
+}
+
+function sanitizeLogFields(fields: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(fields).map(([key, value]) => [
+    key,
+    typeof value === 'string' ? sanitizeLogText(value) : value,
+  ]));
 }
 
 function readOptionalNullableString(

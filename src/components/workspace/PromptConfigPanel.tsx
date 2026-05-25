@@ -62,8 +62,9 @@ interface QualityModeControlsProps {
 }
 
 function QualityModeControls({ config, onUpdateConfig }: QualityModeControlsProps) {
-  const value = config.qualityMode || 'balanced';
+  const value = config.qualityMode || 'fast';
   const options = [
+    { value: 'draft', label: '草稿' },
     { value: 'fast', label: '快速' },
     { value: 'balanced', label: '均衡' },
     { value: 'high', label: '高质' },
@@ -72,7 +73,7 @@ function QualityModeControls({ config, onUpdateConfig }: QualityModeControlsProp
   return (
     <div className="space-y-2">
       <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">质量模式</label>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         {options.map(option => (
           <button
             key={option.value}
@@ -88,6 +89,7 @@ function QualityModeControls({ config, onUpdateConfig }: QualityModeControlsProp
           </button>
         ))}
       </div>
+      <p className="text-[11px] leading-5 text-slate-400">参考图越多生成越慢。</p>
     </div>
   );
 }

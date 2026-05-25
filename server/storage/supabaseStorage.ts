@@ -173,6 +173,29 @@ type CreditAdjustmentRpcRow = {
   transaction_created_at: string;
 };
 
+type SupabaseErrorLike = {
+  message: string;
+  code?: string;
+  details?: string;
+  hint?: string;
+};
+
+export class SupabaseStorageError extends Error {
+  readonly code:
+    | 'SUPABASE_SCHEMA_MISMATCH'
+    | 'CREDIT_RPC_MISSING'
+    | 'GENERATION_JOB_CREATE_FAILED'
+    | 'SUPABASE_STORAGE_ERROR';
+  readonly supabaseCode?: string;
+
+  constructor(code: SupabaseStorageError['code'], message: string, supabaseCode?: string) {
+    super(message);
+    this.name = 'SupabaseStorageError';
+    this.code = code;
+    this.supabaseCode = supabaseCode;
+  }
+}
+
 export class SupabaseStorageAdapter implements StorageAdapter {
   private readonly client: SupabaseClient;
 
@@ -999,10 +1022,79 @@ function mapCreditAdjustmentRpcRow(row: CreditAdjustmentRpcRow): { balance: Cred
   };
 }
 
-function assertNoSupabaseError(error: { message: string } | null, action: string): void {
+function assertNoSupabaseError(error: SupabaseErrorLike | null, action: string): void {
   if (error) {
-    throw new Error(`Supabase storage error while ${action}: ${error.message}`);
+    throw createSupabaseStorageError(error, action);
   }
+}
+
+export function createSupabaseStorageError(error: SupabaseErrorLike, action: string): SupabaseStorageError {
+  const message = formatSupabaseErrorMessage(error, action);
+  if (action === 'adjusting credits atomically' && isMissingSupabaseFunction(error)) {
+    return new SupabaseStorageError(
+      'CREDIT_RPC_MISSING',
+      `${message} Create public.adjust_credits_atomic and grant execute to service_role using docs/SUPABASE_SETUP.md.`,
+      error.code,
+    );
+  }
+
+  if (isSupabaseSchemaMismatch(error)) {
+    return new SupabaseStorageError(
+      'SUPABASE_SCHEMA_MISMATCH',
+      `${message} This usually means the Supabase schema is behind the app. Apply the upgrade SQL in docs/SUPABASE_SETUP.md.`,
+      error.code,
+    );
+  }
+
+  if (action === 'adjusting credits atomically') {
+    return new SupabaseStorageError(
+      'SUPABASE_STORAGE_ERROR',
+      `${message} Verify credit_balances, credit_transactions, and adjust_credits_atomic match docs/SUPABASE_SETUP.md.`,
+      error.code,
+    );
+  }
+
+  if (action === 'creating generation job') {
+    return new SupabaseStorageError(
+      'GENERATION_JOB_CREATE_FAILED',
+      `${message} Generation job persistence failed before credits were debited. Check generation_jobs columns and constraints in docs/SUPABASE_SETUP.md.`,
+      error.code,
+    );
+  }
+
+  return new SupabaseStorageError('SUPABASE_STORAGE_ERROR', message, error.code);
+}
+
+function formatSupabaseErrorMessage(error: SupabaseErrorLike, action: string): string {
+  const parts = [`Supabase storage error while ${action}: ${error.message}`];
+  if (error.code) parts.push(`code=${error.code}`);
+  if (error.details) parts.push(`details=${error.details}`);
+  if (error.hint) parts.push(`hint=${error.hint}`);
+  return parts.join(' ');
+}
+
+function isSupabaseSchemaMismatch(error: SupabaseErrorLike): boolean {
+  if (error.code && ['23514', '42703', '42P01', 'PGRST204'].includes(error.code)) {
+    return true;
+  }
+
+  const text = `${error.message} ${error.details ?? ''} ${error.hint ?? ''}`.toLowerCase();
+  return (
+    text.includes('check constraint') ||
+    text.includes('violates check constraint') ||
+    text.includes('column') && (text.includes('does not exist') || text.includes('schema cache')) ||
+    text.includes('relation') && text.includes('does not exist') ||
+    isMissingSupabaseFunction(error)
+  );
+}
+
+function isMissingSupabaseFunction(error: SupabaseErrorLike): boolean {
+  if (error.code && ['42883', 'PGRST202'].includes(error.code)) return true;
+  const text = `${error.message} ${error.details ?? ''} ${error.hint ?? ''}`.toLowerCase();
+  return (
+    text.includes('function') && text.includes('does not exist') ||
+    text.includes('could not find the function')
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
