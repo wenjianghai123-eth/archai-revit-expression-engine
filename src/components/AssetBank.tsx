@@ -19,6 +19,7 @@ import {
   HardDrive,
   Image,
   Info,
+  Loader2,
   Plus,
   Search,
   Tag,
@@ -29,7 +30,7 @@ import {
 import { Box3, Vector3 } from 'three';
 import { AssetModel } from '../types';
 import { downloadUrl } from '../utils/download';
-import { deleteModelAsset, listModelAssets, ModelAssetRecord, uploadModelAsset } from '../lib/api';
+import { convertModelAsset, deleteModelAsset, listModelAssets, ModelAssetRecord, uploadModelAsset } from '../lib/api';
 
 type ModelCategory = NonNullable<AssetModel['category']>;
 type StatusFilter = '全部' | '可用' | '待优化' | '失败';
@@ -154,7 +155,9 @@ function createModelThumbnail(fileType: AssetModel['fileType']): string {
 }
 
 function mapModelAssetRecord(asset: ModelAssetRecord): AssetModel {
-  const previewable = PREVIEWABLE_TYPES.has(asset.fileType);
+  const convertedUrl = asset.convertedUrl || asset.metadata?.convertedUrl;
+  const conversionStatus = asset.conversionStatus || asset.metadata?.conversionStatus || (asset.fileType === 'obj' || asset.fileType === 'dae' ? 'idle' : undefined);
+  const previewable = Boolean(convertedUrl) || PREVIEWABLE_TYPES.has(asset.fileType);
 
   return {
     id: asset.id,
@@ -163,6 +166,16 @@ function mapModelAssetRecord(asset: ModelAssetRecord): AssetModel {
     fileType: asset.fileType,
     format: asset.format || asset.fileType,
     modelUrl: asset.url,
+    originalUrl: asset.originalUrl || asset.metadata?.originalUrl || asset.url,
+    convertedUrl,
+    convertedFormat: asset.convertedFormat || asset.metadata?.convertedFormat,
+    conversionStatus,
+    conversionError: asset.conversionError ?? asset.metadata?.conversionError,
+    convertedAt: asset.convertedAt || asset.metadata?.convertedAt,
+    previewUrl: asset.previewUrl || asset.metadata?.previewUrl,
+    optimizedUrl: asset.optimizedUrl || asset.metadata?.optimizedUrl,
+    thumbnailUrl: asset.thumbnailUrl || asset.metadata?.thumbnailUrl,
+    metadata: asset.metadata,
     thumbnail: createModelThumbnail(asset.fileType),
     size: formatFileSize(asset.size),
     date: asset.createdAt.slice(0, 10),
@@ -174,7 +187,7 @@ function mapModelAssetRecord(asset: ModelAssetRecord): AssetModel {
     triangles: '待分析',
     materials: '待分析',
     textures: '待分析',
-    tags: previewable ? ['后端上传', '可预览'] : ['后端上传', 'OBJ 元数据'],
+    tags: previewable ? ['后端上传', '可预览'] : ['后端上传', asset.fileType === 'obj' ? 'OBJ 元数据' : '待转换'],
     category: '未分类',
     previewable,
     storageWarning: undefined,
@@ -204,7 +217,7 @@ function toPersistableAsset(asset: AssetModel): AssetModel {
   return {
     ...asset,
     modelUrl,
-    previewable: Boolean(modelUrl && PREVIEWABLE_TYPES.has(asset.fileType)),
+    previewable: Boolean(asset.convertedUrl || (modelUrl && PREVIEWABLE_TYPES.has(asset.fileType))),
     storageWarning:
       asset.source === 'uploaded'
         ? '模型文件未写入 localStorage。刷新页面后会保留元数据，但预览和下载需要重新上传文件。'
@@ -278,14 +291,15 @@ function DemoModelPreview() {
 }
 
 function Scene({ asset }: { asset: AssetModel }) {
-  const canPreviewModel = Boolean(asset.previewable && asset.modelUrl);
+  const previewUrl = resolveAssetPreviewUrl(asset);
+  const canPreviewModel = Boolean(asset.previewable && previewUrl);
 
   return (
     <>
       <color attach="background" args={['#f8fafc']} />
       <PerspectiveCamera makeDefault position={[3.8, 2.6, 4.8]} fov={42} near={0.01} far={1000} />
       <OrbitControls makeDefault target={[0, 0, 0]} minDistance={0.4} maxDistance={20} minPolarAngle={0} maxPolarAngle={Math.PI / 1.75} enableDamping />
-      {canPreviewModel && asset.modelUrl ? <LocalModelPreview url={asset.modelUrl} /> : <DemoModelPreview />}
+      {canPreviewModel && previewUrl ? <LocalModelPreview url={previewUrl} /> : <DemoModelPreview />}
       <ambientLight intensity={0.85} />
       <hemisphereLight args={['#ffffff', '#cbd5e1', 1.1]} />
       <directionalLight position={[5, 8, 6]} intensity={1.6} castShadow />
@@ -316,7 +330,7 @@ class PreviewErrorBoundary extends React.Component<
 }
 
 function UnsupportedPreview({ asset }: { asset: AssetModel }) {
-  const message = asset.fileType === 'obj' ? '该格式暂不支持在线预览' : '模型文件未持久化，请重新上传文件后预览';
+  const message = asset.fileType === 'obj' || asset.fileType === 'dae' ? '该格式需转换为 GLB 后预览' : '模型文件未持久化，请重新上传文件后预览';
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center bg-slate-50 px-8 text-center">
@@ -325,14 +339,15 @@ function UnsupportedPreview({ asset }: { asset: AssetModel }) {
       </div>
       <h3 className="text-sm font-bold text-slate-800">{message}</h3>
       <p className="mt-2 max-w-md text-xs leading-6 text-slate-500">
-        GLB / GLTF 会在当前会话保留 3D 预览；OBJ 暂时作为模型元数据资产管理。
+        DAE / OBJ 可在后端转换为 GLB；转换失败不会影响原始模型继续下载和管理。
       </p>
     </div>
   );
 }
 
 function ModelPreview({ asset }: { asset: AssetModel }) {
-  const canPreview = Boolean(asset.previewable && asset.modelUrl && PREVIEWABLE_TYPES.has(asset.fileType));
+  const previewUrl = resolveAssetPreviewUrl(asset);
+  const canPreview = Boolean(asset.previewable && previewUrl && (PREVIEWABLE_TYPES.has(asset.fileType) || asset.convertedUrl));
   const { ref, size } = useElementSize<HTMLDivElement>();
   const hasUsableSize = size.width > 100 && size.height > 100;
 
@@ -345,7 +360,7 @@ function ModelPreview({ asset }: { asset: AssetModel }) {
       {!hasUsableSize ? (
         <ModelPreviewLoading label="正在准备三维预览容器..." />
       ) : (
-        <PreviewErrorBoundary resetKey={asset.id} fallback={<UnsupportedPreview asset={asset} />}>
+        <PreviewErrorBoundary resetKey={`${asset.id}:${previewUrl}`} fallback={<UnsupportedPreview asset={asset} />}>
           <Suspense fallback={<ModelPreviewLoading label="正在加载三维预览..." />}>
             <Canvas
               className="h-full w-full"
@@ -362,6 +377,10 @@ function ModelPreview({ asset }: { asset: AssetModel }) {
       )}
     </div>
   );
+}
+
+function resolveAssetPreviewUrl(asset: AssetModel): string | undefined {
+  return asset.convertedUrl || asset.optimizedUrl || asset.previewUrl || asset.metadata?.convertedUrl || asset.metadata?.optimizedUrl || asset.metadata?.previewUrl || asset.modelUrl;
 }
 
 function ModelPreviewLoading({ label }: { label: string }) {
@@ -392,6 +411,17 @@ function sourceLabel(source: AssetModel['source']): string {
   if (source === 'generated') return '生成';
   if (source === 'uploaded') return '上传';
   return '示例';
+}
+
+function canConvertAsset(asset: AssetModel): boolean {
+  return asset.source === 'uploaded' && (asset.fileType === 'obj' || asset.fileType === 'dae');
+}
+
+function conversionStatusLabel(asset: AssetModel): string {
+  if (asset.convertedUrl || asset.conversionStatus === 'succeeded') return '已转换为 GLB';
+  if (asset.conversionStatus === 'converting') return '转换中';
+  if (asset.conversionStatus === 'failed') return '转换失败';
+  return '未转换';
 }
 
 function matchesStatusFilter(asset: AssetModel, filter: StatusFilter): boolean {
@@ -503,6 +533,27 @@ export function AssetBank() {
       ...asset,
       tags: (asset.tags || []).filter((tagValue) => tagValue !== tagToRemove),
     });
+  };
+
+  const handleConvertAsset = async (asset: AssetModel) => {
+    if (!canConvertAsset(asset) || asset.conversionStatus === 'converting') return;
+
+    updateAsset({
+      ...asset,
+      conversionStatus: 'converting',
+      conversionError: null,
+    });
+
+    try {
+      const converted = mapModelAssetRecord(await convertModelAsset(asset.id));
+      updateAsset(converted);
+    } catch (error) {
+      updateAsset({
+        ...asset,
+        conversionStatus: 'failed',
+        conversionError: error instanceof Error ? error.message : '模型转换失败。',
+      });
+    }
   };
 
   const handleFileUpload = () => {
@@ -746,7 +797,7 @@ export function AssetBank() {
         <main className="relative min-h-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
           <div className="mx-auto max-w-7xl">
             {filteredAssets.length > 0 ? (
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+              <div className="grid items-stretch gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {filteredAssets.map((item) => {
                   const isSelected = previewAsset?.id === item.id;
                   const qualityTone = item.qualityStatus === 'usable' ? 'green' : item.qualityStatus === 'error' ? 'red' : item.qualityStatus === 'warning' ? 'amber' : 'slate';
@@ -755,7 +806,7 @@ export function AssetBank() {
                     <motion.article
                       key={item.id}
                       whileHover={{ y: -4 }}
-                      className={`overflow-hidden rounded-[20px] border bg-white p-2 shadow-sm transition-all hover:border-blue-200 hover:shadow-xl hover:shadow-slate-200/70 ${
+                      className={`flex h-auto min-h-fit flex-col rounded-[20px] border bg-white p-2 shadow-sm transition-all hover:border-blue-200 hover:shadow-xl hover:shadow-slate-200/70 ${
                         isSelected ? 'border-blue-400 ring-2 ring-blue-100' : 'border-slate-200'
                       }`}
                     >
@@ -773,33 +824,33 @@ export function AssetBank() {
                           <AssetBadge tone={qualityTone}>{qualityLabel(item.qualityStatus)}</AssetBadge>
                         </div>
                         <div className="absolute bottom-3 left-3 right-3 rounded-2xl bg-white/90 p-3 backdrop-blur">
-                          <h3 className="truncate text-sm font-bold text-slate-950">{item.name}</h3>
-                          <p className="mt-1 truncate text-[11px] font-medium text-slate-500">{item.fileName}</p>
+                          <h3 className="line-clamp-2 break-words text-sm font-bold leading-5 text-slate-950">{item.name}</h3>
+                          <p className="mt-1 line-clamp-1 break-all text-[11px] font-medium text-slate-500">{item.fileName}</p>
                         </div>
                       </button>
 
-                      <div className="flex h-44 flex-col p-3">
+                      <div className="flex flex-1 flex-col gap-2 p-3">
                         <div className="flex flex-wrap gap-1.5">
                           <AssetBadge>{item.category || '未分类'}</AssetBadge>
                           <AssetBadge>{sourceLabel(item.source)}</AssetBadge>
                           <AssetBadge>{statusLabel(item.status)}</AssetBadge>
                         </div>
 
-                        <div className="mt-3 grid grid-cols-2 gap-2 rounded-2xl bg-slate-50 p-2 text-[11px] text-slate-500">
-                          <span className="flex items-center gap-1.5">
+                        <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-50 p-2 text-[11px] text-slate-500">
+                          <span className="flex min-w-0 items-center gap-1.5">
                             <HardDrive className="h-3.5 w-3.5" />
-                            {item.size}
+                            <span className="truncate">{item.size}</span>
                           </span>
-                          <span className="flex items-center gap-1.5">
+                          <span className="flex min-w-0 items-center gap-1.5">
                             <Clock className="h-3.5 w-3.5" />
-                            {item.date}
+                            <span className="truncate">{item.date}</span>
                           </span>
-                          <span className="col-span-2 truncate">
+                          <span className="col-span-2 break-words">
                             来源图：{item.sourceImageName || '暂无'}
                           </span>
                         </div>
 
-                        <div className="mt-2 flex flex-wrap gap-1.5">
+                        <div className="flex flex-wrap gap-1.5">
                           {(item.tags || []).slice(0, 4).map((tagValue) => (
                             <span key={tagValue} className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-500">
                               #{tagValue}
@@ -807,26 +858,49 @@ export function AssetBank() {
                           ))}
                         </div>
 
-                        <div className="mt-auto grid grid-cols-4 gap-1.5 border-t border-slate-100 pt-2">
+                        {canConvertAsset(item) ? (
+                          <div className="rounded-xl border border-slate-100 bg-slate-50 px-2 py-1.5">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="min-w-0 break-words text-[11px] font-bold text-slate-600">{conversionStatusLabel(item)}</span>
+                              <button
+                                type="button"
+                                onClick={() => void handleConvertAsset(item)}
+                                disabled={item.conversionStatus === 'converting'}
+                                className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[10px] font-bold text-white disabled:cursor-wait disabled:opacity-60"
+                              >
+                                {item.conversionStatus === 'converting' ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                                转换为 GLB
+                              </button>
+                            </div>
+                            {item.fileType === 'obj' ? (
+                              <p className="mt-1 whitespace-normal break-words text-[10px] leading-4 text-slate-400">OBJ 如需保留材质，请同时提供 MTL 和贴图文件；当前版本优先保证几何转换。</p>
+                            ) : null}
+                            {item.conversionStatus === 'failed' && item.conversionError ? (
+                              <p className="mt-1 whitespace-normal break-words text-[10px] leading-4 text-red-500">{item.conversionError}</p>
+                            ) : null}
+                          </div>
+                        ) : null}
+
+                        <div className="mt-auto flex flex-wrap gap-1.5 border-t border-slate-100 pt-2">
                           <button
                             onClick={() => {
                               setSelectedAsset(item);
                               setDetailAsset(item);
                             }}
-                            className="flex items-center justify-center gap-1 rounded-xl bg-slate-50 py-2 text-[11px] font-bold text-slate-600 hover:bg-slate-100"
+                            className="flex min-w-[64px] flex-1 items-center justify-center gap-1 rounded-xl bg-slate-50 px-2 py-2 text-[11px] font-bold text-slate-600 hover:bg-slate-100"
                           >
                             <Eye className="h-3.5 w-3.5" />
                             预览
                           </button>
-                          <button onClick={() => setDetailAsset(item)} className="flex items-center justify-center gap-1 rounded-xl bg-blue-50 py-2 text-[11px] font-bold text-blue-700 hover:bg-blue-100">
+                          <button onClick={() => setDetailAsset(item)} className="flex min-w-[64px] flex-1 items-center justify-center gap-1 rounded-xl bg-blue-50 px-2 py-2 text-[11px] font-bold text-blue-700 hover:bg-blue-100">
                             <Info className="h-3.5 w-3.5" />
                             详情
                           </button>
-                          <button onClick={() => handleDownloadAsset(item)} className="flex items-center justify-center gap-1 rounded-xl bg-slate-50 py-2 text-[11px] font-bold text-slate-600 hover:bg-slate-100">
+                          <button onClick={() => handleDownloadAsset(item)} className="flex min-w-[64px] flex-1 items-center justify-center gap-1 rounded-xl bg-slate-50 px-2 py-2 text-[11px] font-bold text-slate-600 hover:bg-slate-100">
                             <Download className="h-3.5 w-3.5" />
                             下载
                           </button>
-                          <button onClick={() => handleDeleteAsset(item.id)} className="flex items-center justify-center gap-1 rounded-xl bg-red-50 py-2 text-[11px] font-bold text-red-600 hover:bg-red-100">
+                          <button onClick={() => handleDeleteAsset(item.id)} className="flex min-w-[64px] flex-1 items-center justify-center gap-1 rounded-xl bg-red-50 px-2 py-2 text-[11px] font-bold text-red-600 hover:bg-red-100">
                             <Trash2 className="h-3.5 w-3.5" />
                             删除
                           </button>
@@ -895,10 +969,37 @@ export function AssetBank() {
                   </div>
                 )}
 
+                {canConvertAsset(detailAsset) ? (
+                  <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">格式转换</p>
+                        <p className="mt-2 text-sm font-bold text-slate-800">{conversionStatusLabel(detailAsset)}</p>
+                        {detailAsset.fileType === 'obj' ? (
+                          <p className="mt-2 text-xs leading-5 text-slate-500">OBJ 如需保留材质，请同时提供 MTL 和贴图文件；当前版本优先保证几何转换。</p>
+                        ) : null}
+                        {detailAsset.conversionStatus === 'failed' && detailAsset.conversionError ? (
+                          <p className="mt-2 text-xs leading-5 text-red-600">{detailAsset.conversionError}</p>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleConvertAsset(detailAsset)}
+                        disabled={detailAsset.conversionStatus === 'converting'}
+                        className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {detailAsset.conversionStatus === 'converting' ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                        转换为 GLB
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="mt-5 grid grid-cols-2 gap-4">
                   <DetailRow label="模型来源" value={detailAsset.provider || '未知'} />
                   <DetailRow label="来源" value={sourceLabel(detailAsset.source)} />
                   <DetailRow label="文件格式" value={detailAsset.fileType.toUpperCase()} />
+                  <DetailRow label="转换状态" value={conversionStatusLabel(detailAsset)} />
                   <DetailRow label="文件大小" value={detailAsset.size} />
                   <DetailRow label="顶点数" value={detailAsset.vertices || '待分析'} />
                   <DetailRow label="面数" value={detailAsset.triangles || '待分析'} />

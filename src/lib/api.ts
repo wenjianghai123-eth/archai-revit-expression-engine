@@ -105,6 +105,12 @@ export interface ModelAssetRecord {
   id: string;
   userId: string;
   url: string;
+  originalUrl?: string;
+  convertedUrl?: string;
+  convertedFormat?: 'glb' | 'gltf';
+  conversionStatus?: 'idle' | 'converting' | 'succeeded' | 'failed';
+  conversionError?: string | null;
+  convertedAt?: string;
   previewUrl?: string;
   optimizedUrl?: string;
   thumbnailUrl?: string;
@@ -116,6 +122,11 @@ export interface ModelAssetRecord {
   size: number;
   metadata?: {
     originalUrl: string;
+    convertedUrl?: string;
+    convertedFormat?: 'glb' | 'gltf';
+    conversionStatus?: 'idle' | 'converting' | 'succeeded' | 'failed';
+    conversionError?: string | null;
+    convertedAt?: string;
     previewUrl?: string;
     optimizedUrl?: string;
     thumbnailUrl?: string;
@@ -578,6 +589,13 @@ function readApiError(value: unknown): string | null {
   if (typeof value.error === 'string') return value.error;
   if (isRecord(value.error) && typeof value.error.message === 'string') return value.error.message;
   return null;
+}
+
+export async function convertModelAsset(id: string): Promise<ModelAssetRecord> {
+  const response = await request<{ asset: ModelAssetRecord }>(`/api/assets/models/${encodeURIComponent(id)}/convert`, {
+    method: 'POST',
+  });
+  return response.asset;
 }
 
 function formatApiError(error: { message: string; code?: string }): string {

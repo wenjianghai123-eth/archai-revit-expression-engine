@@ -650,6 +650,8 @@ async function createModelAsset(input: {
     id: `model_${randomUUID()}`,
     userId: input.userId,
     url: input.url,
+    originalUrl: input.url,
+    conversionStatus: input.fileType === 'obj' || input.fileType === 'dae' ? 'idle' : undefined,
     previewUrl: input.previewUrl,
     optimizedUrl: input.optimizedUrl,
     thumbnailUrl: input.thumbnailUrl,
@@ -676,6 +678,12 @@ async function updateModelAsset(id: string, input: UpdateModelAssetInput): Promi
   if (!asset) return null;
 
   if (input.previewUrl !== undefined) asset.previewUrl = input.previewUrl;
+  if (input.originalUrl !== undefined) asset.originalUrl = input.originalUrl;
+  if (input.convertedUrl !== undefined) asset.convertedUrl = input.convertedUrl;
+  if (input.convertedFormat !== undefined) asset.convertedFormat = input.convertedFormat;
+  if (input.conversionStatus !== undefined) asset.conversionStatus = input.conversionStatus;
+  if (input.conversionError !== undefined) asset.conversionError = input.conversionError;
+  if (input.convertedAt !== undefined) asset.convertedAt = input.convertedAt;
   if (input.optimizedUrl !== undefined) asset.optimizedUrl = input.optimizedUrl;
   if (input.thumbnailUrl !== undefined) asset.thumbnailUrl = input.thumbnailUrl;
   if (input.metadata !== undefined) asset.metadata = input.metadata;

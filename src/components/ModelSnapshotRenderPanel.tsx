@@ -58,7 +58,7 @@ export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputI
 
   const snapshotUrl = state.inputImage?.dataUrl || state.inputImage?.url || null;
   const isSelectedModelBlocked = selectedModel ? isModelPreviewBlocked(selectedModel) && !originalLoadApprovals[selectedModel.id] : false;
-  const canCapture = Boolean(selectedModel && selectedModel.previewable && selectedModel.modelUrl && !isSelectedModelBlocked);
+  const canCapture = Boolean(selectedModel && selectedModel.previewable && (selectedModel.convertedUrl || selectedModel.modelUrl) && !isSelectedModelBlocked);
 
   async function refreshModelAsset(modelId: string) {
     const record = await getModelAsset(modelId);
@@ -160,7 +160,7 @@ export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputI
         inputSource: 'model-capture',
         sourceModelAssetId: selectedModel.id,
         snapshotAssetId: asset.id,
-        modelPreviewUrl: selectedModel.usesOptimizedPreview ? selectedModel.modelUrl : selectedModel.previewUrl || selectedModel.optimizedUrl,
+        modelPreviewUrl: selectedModel.convertedUrl || (selectedModel.usesOptimizedPreview ? selectedModel.modelUrl : selectedModel.previewUrl || selectedModel.optimizedUrl),
         usedOptimizedModel: Boolean(selectedModel.usesOptimizedPreview),
         optimizationStatus: selectedModel.optimizationStatus,
         width: capture.width,
@@ -337,6 +337,11 @@ export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputI
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">模型文件信息</p>
               <p className="mt-2 truncate text-sm font-bold text-slate-800">{selectedModel?.fileName || '尚未选择模型'}</p>
               <p className="mt-1 text-xs text-slate-500">{selectedModel ? `${selectedModel.fileType.toUpperCase()} / ${selectedModel.size}` : '请上传或选择模型资产'}</p>
+              {selectedModel?.optimizationStatus === 'failed' && isModelServiceUnavailable(selectedModel.optimizationError) ? (
+                <p className="mt-2 rounded-lg border border-amber-100 bg-amber-50 px-2 py-1.5 text-[11px] leading-5 text-amber-700">
+                  当前服务器未启用模型轻量化/转换服务，已继续使用原始模型。
+                </p>
+              ) : null}
               {selectedModel ? <ModelOptimizationSummary model={selectedModel} /> : null}
             </div>
 
@@ -417,6 +422,7 @@ export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputI
                         <span className="rounded bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{model.fileType.toUpperCase()}</span>
                       </div>
                       <p className="mt-1 truncate text-xs text-slate-500">{model.fileName}</p>
+                      {model.convertedUrl ? <p className="mt-1 text-[11px] font-semibold text-emerald-600">已转换为 GLB，预览优先使用转换文件</p> : null}
                       <p className="mt-1 text-[11px] font-semibold text-slate-500">{readOptimizationStatusLabel(model.optimizationStatus)}</p>
                       {!model.previewable ? <p className="mt-2 text-[11px] font-semibold text-amber-700">该格式暂不支持截图预览</p> : null}
                     </button>
@@ -493,8 +499,9 @@ function ModelOptimizationGate({ model, onRefresh, onRetry, onLoadOriginal }: { 
 function ModelOptimizationSummary({ model }: { model: AssetModel }) {
   return (
     <div className="mt-3 space-y-1 rounded-lg bg-white px-3 py-2 text-[11px] leading-5 text-slate-500">
+      <p><span className="font-bold text-slate-700">转换状态：</span>{readConversionStatusLabel(model)}</p>
       <p><span className="font-bold text-slate-700">轻量化状态：</span>{readOptimizationStatusLabel(model.optimizationStatus)}</p>
-      <p><span className="font-bold text-slate-700">当前加载：</span>{model.usesOptimizedPreview ? '轻量化预览' : '原始模型'}</p>
+      <p><span className="font-bold text-slate-700">当前加载：</span>{model.convertedUrl ? '转换后 GLB' : model.usesOptimizedPreview ? '轻量化预览' : '原始模型'}</p>
       <p><span className="font-bold text-slate-700">原始大小：</span>{formatFileSize(model.originalFileSize || 0)}</p>
       {model.optimizedFileSize ? <p><span className="font-bold text-slate-700">预览大小：</span>{formatFileSize(model.optimizedFileSize)}</p> : null}
     </div>
@@ -517,7 +524,8 @@ function SelectField({ label, value, options, onChange }: { label: string; value
 }
 
 function mapModelAssetRecord(asset: ModelAssetRecord, forceOriginal = false): AssetModel {
-  const previewUrl = asset.optimizedUrl || asset.previewUrl || asset.metadata?.optimizedUrl || asset.metadata?.previewUrl;
+  const convertedUrl = asset.convertedUrl || asset.metadata?.convertedUrl;
+  const previewUrl = convertedUrl || asset.optimizedUrl || asset.previewUrl || asset.metadata?.optimizedUrl || asset.metadata?.previewUrl;
   const modelUrl = forceOriginal ? asset.url : previewUrl || asset.url;
   const fileType = !forceOriginal && previewUrl ? 'glb' : asset.fileType;
   const previewable = previewableTypes.has(fileType);
@@ -529,7 +537,12 @@ function mapModelAssetRecord(asset: ModelAssetRecord, forceOriginal = false): As
     fileType,
     format: asset.format || asset.fileType,
     modelUrl,
-    originalUrl: asset.url,
+    originalUrl: asset.originalUrl || asset.metadata?.originalUrl || asset.url,
+    convertedUrl,
+    convertedFormat: asset.convertedFormat || asset.metadata?.convertedFormat,
+    conversionStatus: asset.conversionStatus || asset.metadata?.conversionStatus || (asset.fileType === 'obj' || asset.fileType === 'dae' ? 'idle' : undefined),
+    conversionError: asset.conversionError ?? asset.metadata?.conversionError,
+    convertedAt: asset.convertedAt || asset.metadata?.convertedAt,
     previewUrl: asset.previewUrl || asset.metadata?.previewUrl,
     optimizedUrl: asset.optimizedUrl || asset.metadata?.optimizedUrl,
     thumbnailUrl: asset.thumbnailUrl || asset.metadata?.thumbnailUrl,
@@ -558,6 +571,7 @@ function mapModelFromApprovedOriginal(model: AssetModel): AssetModel {
     fileType: model.format || model.fileType,
     modelUrl: model.originalUrl || model.modelUrl,
     usesOptimizedPreview: false,
+    convertedUrl: undefined,
     allowOriginalModelLoad: true,
   };
 }
@@ -568,10 +582,16 @@ function isOptimizationInProgress(status: AssetModel['optimizationStatus']) {
 
 function isModelPreviewBlocked(model: AssetModel): boolean {
   if (model.usesOptimizedPreview) return false;
+  if (model.conversionStatus === 'failed' || model.convertedUrl) return false;
+  if (model.optimizationStatus === 'failed' && isModelServiceUnavailable(model.optimizationError)) return false;
   const originalSize = model.originalFileSize || 0;
   if (isOptimizationInProgress(model.optimizationStatus)) return originalSize >= MODEL_OPTIMIZATION_THRESHOLD_BYTES;
   if (model.optimizationStatus === 'failed') return originalSize >= MODEL_OPTIMIZATION_THRESHOLD_BYTES;
   return originalSize >= MODEL_OPTIMIZATION_THRESHOLD_BYTES && !model.previewUrl && !model.optimizedUrl;
+}
+
+function isModelServiceUnavailable(message?: string | null): boolean {
+  return Boolean(message && /Blender|未启用模型轻量化\/转换服务|requires Blender/i.test(message));
 }
 
 function readOptimizationStatusLabel(status: AssetModel['optimizationStatus']) {
@@ -580,6 +600,14 @@ function readOptimizationStatusLabel(status: AssetModel['optimizationStatus']) {
   if (status === 'failed') return '轻量化失败';
   if (status === 'skipped') return '未处理';
   return '未处理';
+}
+
+function readConversionStatusLabel(model: AssetModel) {
+  if (model.convertedUrl || model.conversionStatus === 'succeeded') return '已转换为 GLB';
+  if (model.conversionStatus === 'converting') return '转换中';
+  if (model.conversionStatus === 'failed') return '转换失败';
+  if (model.fileType === 'obj' || model.fileType === 'dae') return '未转换';
+  return '无需转换';
 }
 
 function formatFileSize(size: number): string {

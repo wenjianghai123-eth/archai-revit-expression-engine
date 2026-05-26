@@ -175,6 +175,11 @@ export interface ModelSnapshotMetadata {
 
 export interface ModelOptimizationMetadata {
   originalUrl: string;
+  convertedUrl?: string;
+  convertedFormat?: 'glb' | 'gltf';
+  conversionStatus?: 'idle' | 'converting' | 'succeeded' | 'failed';
+  conversionError?: string | null;
+  convertedAt?: string;
   previewUrl?: string;
   optimizedUrl?: string;
   thumbnailUrl?: string;
@@ -389,6 +394,11 @@ export interface AssetModel {
   format?: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
   modelUrl?: string;
   originalUrl?: string;
+  convertedUrl?: string;
+  convertedFormat?: 'glb' | 'gltf';
+  conversionStatus?: 'idle' | 'converting' | 'succeeded' | 'failed';
+  conversionError?: string | null;
+  convertedAt?: string;
   previewUrl?: string;
   optimizedUrl?: string;
   thumbnailUrl?: string;

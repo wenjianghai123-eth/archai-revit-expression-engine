@@ -12,14 +12,17 @@ export interface ModelOptimizationConfig {
   thresholdBytes: number;
   targetFaces: number;
   blenderBin: string;
+  timeoutMs: number;
 }
 
 export function getModelOptimizationConfig(): ModelOptimizationConfig {
+  const enabledValue = process.env.MODEL_OPTIMIZATION_ENABLED ?? process.env.ENABLE_MODEL_OPTIMIZATION;
   return {
-    enabled: process.env.ENABLE_MODEL_OPTIMIZATION !== 'false',
+    enabled: enabledValue === undefined ? true : enabledValue.trim() === 'true',
     thresholdBytes: Math.max(0, Number(process.env.MODEL_OPTIMIZATION_THRESHOLD_MB || 30)) * 1024 * 1024,
     targetFaces: Math.max(1_000, Number(process.env.MODEL_PREVIEW_TARGET_FACES || 200_000)),
     blenderBin: process.env.BLENDER_BIN || 'blender',
+    timeoutMs: Math.max(1_000, Number(process.env.MODEL_OPTIMIZATION_TIMEOUT_MS || 15 * 60 * 1000)),
   };
 }
 
@@ -50,11 +53,15 @@ export function shouldOptimizeModelAsset(asset: ModelAsset): boolean {
 
 export function startModelOptimization(assetId: string, options: { force?: boolean } = {}): void {
   if (!options.force && process.env.ARCHAI_DISABLE_MODEL_OPTIMIZATION_WORKER === 'true') return;
-  setTimeout(() => {
-    void optimizeModelAsset(assetId).catch(error => {
-      console.error('Model optimization failed unexpectedly', { assetId, error });
-    });
-  }, 0);
+  try {
+    setTimeout(() => {
+      void optimizeModelAsset(assetId).catch(error => {
+        console.error('Model optimization failed unexpectedly', { assetId, error });
+      });
+    }, 0);
+  } catch (error) {
+    console.error('Model optimization worker failed to start', { assetId, error });
+  }
 }
 
 export async function optimizeModelAsset(assetId: string): Promise<ModelAsset | null> {
@@ -133,7 +140,7 @@ async function runBlenderConversion(asset: ModelAsset, outputPath: string): Prom
     '--target-faces',
     String(config.targetFaces),
   ], {
-    timeout: 15 * 60 * 1000,
+    timeout: config.timeoutMs,
     windowsHide: true,
   });
 }
@@ -149,7 +156,7 @@ function resolveLocalUploadPath(filename: string): string {
 function normalizeOptimizationError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/ENOENT|not found|spawn/i.test(message)) {
-    return 'Model optimization requires Blender on the server.';
+    return `Blender 可执行文件不可用，请检查 BLENDER_BIN 配置：${getModelOptimizationConfig().blenderBin}`;
   }
   return message || 'Model optimization failed.';
 }

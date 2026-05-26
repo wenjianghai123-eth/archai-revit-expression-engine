@@ -201,6 +201,12 @@ export interface ModelAsset {
   id: string;
   userId: string;
   url: string;
+  originalUrl?: string;
+  convertedUrl?: string;
+  convertedFormat?: 'glb' | 'gltf';
+  conversionStatus?: 'idle' | 'converting' | 'succeeded' | 'failed';
+  conversionError?: string | null;
+  convertedAt?: string;
   previewUrl?: string;
   optimizedUrl?: string;
   thumbnailUrl?: string;
@@ -217,6 +223,11 @@ export interface ModelAsset {
 
 export interface ModelOptimizationMetadata {
   originalUrl: string;
+  convertedUrl?: string;
+  convertedFormat?: 'glb' | 'gltf';
+  conversionStatus?: 'idle' | 'converting' | 'succeeded' | 'failed';
+  conversionError?: string | null;
+  convertedAt?: string;
   previewUrl?: string;
   optimizedUrl?: string;
   thumbnailUrl?: string;
@@ -383,7 +394,19 @@ export type CreateModelAssetInput = {
   metadata?: ModelOptimizationMetadata;
 };
 
-export type UpdateModelAssetInput = Partial<Pick<ModelAsset, 'previewUrl' | 'optimizedUrl' | 'thumbnailUrl' | 'metadata'>>;
+export type UpdateModelAssetInput = Partial<Pick<
+  ModelAsset,
+  | 'originalUrl'
+  | 'convertedUrl'
+  | 'convertedFormat'
+  | 'conversionStatus'
+  | 'conversionError'
+  | 'convertedAt'
+  | 'previewUrl'
+  | 'optimizedUrl'
+  | 'thumbnailUrl'
+  | 'metadata'
+>>;
 
 export type CreateShareLinkInput = {
   userId: string;

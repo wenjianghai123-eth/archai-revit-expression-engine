@@ -150,7 +150,7 @@ export function PanoramaQuickRenderPanel({
       const payload: PanoramaCapturePayload = {
         captureType: 'panorama-viewpoint',
         sourceModelAssetId: model.id,
-        sourceModelUrl: model.modelUrl,
+        sourceModelUrl: model.convertedUrl || model.modelUrl,
         modelFileType: model.fileType === 'glb' || model.fileType === 'gltf' ? model.fileType : undefined,
         camera: {
           position: capture.camera?.position,
@@ -165,7 +165,7 @@ export function PanoramaQuickRenderPanel({
       const record: PanoramaRecord = {
         id: `panorama-${Date.now()}`,
         projectId,
-        modelUrl: model.modelUrl || model.originalUrl || '',
+        modelUrl: model.convertedUrl || model.modelUrl || model.originalUrl || '',
         cameraState: payload.camera,
         panoramaUrl: imageAsset.url || capture.dataUrl,
         thumbnailUrl: imageAsset.url || capture.dataUrl,
@@ -434,7 +434,8 @@ function SelectField({
 }
 
 function mapModelAssetRecord(asset: ModelAssetRecord): AssetModel {
-  const previewUrl = asset.optimizedUrl || asset.previewUrl || asset.metadata?.optimizedUrl || asset.metadata?.previewUrl;
+  const convertedUrl = asset.convertedUrl || asset.metadata?.convertedUrl;
+  const previewUrl = convertedUrl || asset.optimizedUrl || asset.previewUrl || asset.metadata?.optimizedUrl || asset.metadata?.previewUrl;
   const fileType = previewUrl ? 'glb' : asset.fileType;
   return {
     id: asset.id,
@@ -443,7 +444,12 @@ function mapModelAssetRecord(asset: ModelAssetRecord): AssetModel {
     fileType,
     format: asset.format || asset.fileType,
     modelUrl: previewUrl || asset.url,
-    originalUrl: asset.url,
+    originalUrl: asset.originalUrl || asset.metadata?.originalUrl || asset.url,
+    convertedUrl,
+    convertedFormat: asset.convertedFormat || asset.metadata?.convertedFormat,
+    conversionStatus: asset.conversionStatus || asset.metadata?.conversionStatus || (asset.fileType === 'obj' || asset.fileType === 'dae' ? 'idle' : undefined),
+    conversionError: asset.conversionError ?? asset.metadata?.conversionError,
+    convertedAt: asset.convertedAt || asset.metadata?.convertedAt,
     previewUrl: asset.previewUrl || asset.metadata?.previewUrl,
     optimizedUrl: asset.optimizedUrl || asset.metadata?.optimizedUrl,
     thumbnailUrl: asset.thumbnailUrl || asset.metadata?.thumbnailUrl,

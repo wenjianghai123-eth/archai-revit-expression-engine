@@ -3,6 +3,13 @@ import { getRequiredCurrentUser, requireAuth } from '../auth';
 import { createStoredFilename, fileStorageProvider } from '../fileStorage';
 import { ApiResponse, apiError, apiOk } from '../http';
 import {
+  assertModelConversionAvailable,
+  convertModelToGlb,
+  getModelConversionConfig,
+  materializeModelInput,
+  ModelConversionDisabledError,
+} from '../modelConversionService';
+import {
   buildInitialModelOptimizationMetadata,
   shouldOptimizeModelAsset,
   startModelOptimization,
@@ -159,8 +166,15 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
         }),
       });
 
-      if (shouldOptimizeModelAsset(asset)) {
-        startModelOptimization(asset.id);
+      try {
+        if (shouldOptimizeModelAsset(asset)) {
+          startModelOptimization(asset.id);
+        }
+      } catch (optimizationError) {
+        console.error('Model optimization scheduling failed; upload will continue.', {
+          assetId: asset.id,
+          error: optimizationError,
+        });
       }
 
       res.status(201).json(apiOk({ asset }));
@@ -207,6 +221,99 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
     }
   });
 
+  router.post('/models/:id/convert', requireAuth, async (
+    req: Request,
+    res: Response<ApiResponse<{ asset: ModelAsset; message?: string }>>,
+    next: NextFunction,
+  ) => {
+    try {
+      const user = getRequiredCurrentUser(req);
+      const asset = await getModelAsset(req.params.id, user.id);
+      if (!asset) {
+        res.status(404).json(apiError('Model asset not found.', 'MODEL_ASSET_NOT_FOUND'));
+        return;
+      }
+
+      if (asset.fileType === 'glb' || asset.fileType === 'gltf') {
+        res.json(apiOk({ asset, message: '该格式无需转换' }));
+        return;
+      }
+
+      if (asset.fileType !== 'dae' && asset.fileType !== 'obj') {
+        res.status(400).json(apiError('仅支持 DAE / OBJ 转换为 GLB。', 'MODEL_CONVERSION_TYPE_UNSUPPORTED'));
+        return;
+      }
+
+      if (getConversionStatus(asset) === 'converting') {
+        res.json(apiOk({ asset, message: '模型正在转换中' }));
+        return;
+      }
+
+      await assertModelConversionAvailable();
+
+      const convertingAsset = await updateModelConversionState(asset, {
+        conversionStatus: 'converting',
+        conversionError: null,
+      });
+
+      const materializedInput = await materializeModelInput(asset);
+      try {
+        const converted = await convertModelToGlb({
+          inputPath: materializedInput.inputPath,
+          fileType: asset.fileType,
+        });
+        const storedFile = await fileStorageProvider.uploadModel({
+          content: converted.content,
+          filename: createStoredFilename('glb', `converted-${asset.id}`),
+          mimeType: getDefaultModelMimeType('glb'),
+          userId: user.id,
+        });
+        const convertedAt = new Date().toISOString();
+        const updated = await updateModelConversionState(convertingAsset, {
+          convertedUrl: storedFile.url,
+          convertedFormat: 'glb',
+          conversionStatus: 'succeeded',
+          conversionError: null,
+          convertedAt,
+        });
+
+        res.json(apiOk({ asset: updated }));
+      } catch (conversionError) {
+        const message = conversionError instanceof Error ? conversionError.message : '模型转换失败。';
+        await updateModelConversionState(convertingAsset, {
+          conversionStatus: 'failed',
+          conversionError: message,
+        });
+        if (/Blender|BLENDER_BIN|可执行文件不可用/.test(message)) {
+          res.status(503).json(apiError(message, 'MODEL_CONVERSION_UNAVAILABLE'));
+          return;
+        }
+        res.status(500).json(apiError(message, 'MODEL_CONVERSION_FAILED'));
+      } finally {
+        await materializedInput.cleanup();
+      }
+    } catch (error) {
+      if (error instanceof ModelConversionDisabledError) {
+        console.warn('Model conversion request rejected because service is disabled.', {
+          modelConversionEnabledRaw: process.env.MODEL_CONVERSION_ENABLED,
+          modelConversionEnabled: getModelConversionConfig().enabled,
+          blenderBin: getModelConversionConfig().blenderBin,
+          modelConversionTimeoutMs: getModelConversionConfig().timeoutMs,
+        });
+        res.status(503).json(apiError(error.message, 'MODEL_CONVERSION_DISABLED'));
+        return;
+      }
+
+      const message = error instanceof Error ? error.message : '';
+      if (/Blender|BLENDER_BIN|模型转换需要|可执行文件不可用/.test(message)) {
+        res.status(503).json(apiError(message, 'MODEL_CONVERSION_UNAVAILABLE'));
+        return;
+      }
+
+      next(error);
+    }
+  });
+
   router.delete('/models/:id', requireAuth, async (
     req: Request,
     res: Response<ApiResponse<{ asset: ModelAsset }>>,
@@ -227,6 +334,42 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
   });
 
   return router;
+}
+
+function getConversionStatus(asset: ModelAsset): ModelAsset['conversionStatus'] {
+  return asset.conversionStatus || asset.metadata?.conversionStatus || 'idle';
+}
+
+async function updateModelConversionState(
+  asset: ModelAsset,
+  patch: Pick<Partial<ModelAsset>, 'convertedUrl' | 'convertedFormat' | 'conversionStatus' | 'conversionError' | 'convertedAt'>,
+): Promise<ModelAsset> {
+  const metadata = {
+    ...(asset.metadata || buildInitialModelOptimizationMetadata({
+      url: asset.url,
+      fileType: asset.fileType,
+      size: asset.size,
+    })),
+    originalUrl: asset.originalUrl || asset.metadata?.originalUrl || asset.url,
+    convertedUrl: patch.convertedUrl ?? asset.convertedUrl ?? asset.metadata?.convertedUrl,
+    convertedFormat: patch.convertedFormat ?? asset.convertedFormat ?? asset.metadata?.convertedFormat,
+    conversionStatus: patch.conversionStatus ?? getConversionStatus(asset),
+    conversionError: patch.conversionError === undefined
+      ? asset.conversionError ?? asset.metadata?.conversionError
+      : patch.conversionError,
+    convertedAt: patch.convertedAt ?? asset.convertedAt ?? asset.metadata?.convertedAt,
+  };
+
+  const updated = await updateModelAsset(asset.id, {
+    originalUrl: metadata.originalUrl,
+    convertedUrl: metadata.convertedUrl,
+    convertedFormat: metadata.convertedFormat,
+    conversionStatus: metadata.conversionStatus,
+    conversionError: metadata.conversionError,
+    convertedAt: metadata.convertedAt,
+    metadata,
+  });
+  return updated || { ...asset, ...patch, metadata };
 }
 
 async function updateOptimizationProcessing(asset: ModelAsset): Promise<ModelAsset> {

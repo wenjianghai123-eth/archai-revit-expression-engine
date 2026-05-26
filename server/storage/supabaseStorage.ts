@@ -948,10 +948,17 @@ function mapImageAssetRow(row: ImageAssetRow): ImageAsset {
 }
 
 function mapModelAssetRow(row: ModelAssetRow): ModelAsset {
+  const metadata = row.metadata ?? undefined;
   return {
     id: row.id,
     userId: row.user_id,
     url: row.url,
+    originalUrl: metadata?.originalUrl ?? row.url,
+    convertedUrl: metadata?.convertedUrl,
+    convertedFormat: metadata?.convertedFormat,
+    conversionStatus: metadata?.conversionStatus,
+    conversionError: metadata?.conversionError,
+    convertedAt: metadata?.convertedAt,
     previewUrl: row.preview_url ?? undefined,
     optimizedUrl: row.optimized_url ?? undefined,
     thumbnailUrl: row.thumbnail_url ?? undefined,
@@ -961,7 +968,7 @@ function mapModelAssetRow(row: ModelAssetRow): ModelAsset {
     format: row.file_type,
     mimeType: row.mime_type,
     size: row.size,
-    metadata: row.metadata ?? undefined,
+    metadata,
     createdAt: row.created_at,
     deletedAt: row.deleted_at,
   };

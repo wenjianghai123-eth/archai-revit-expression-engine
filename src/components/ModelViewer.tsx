@@ -146,7 +146,9 @@ export function getStableModelLoadIdentity(asset: AssetModel): StableModelLoadId
 }
 
 export function resolveModelPreviewUrl(asset: AssetModel): string {
-  return asset.optimizedUrl
+  return asset.convertedUrl
+    || asset.metadata?.convertedUrl
+    || asset.optimizedUrl
     || asset.previewUrl
     || asset.metadata?.optimizedUrl
     || asset.metadata?.previewUrl

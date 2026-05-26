@@ -85,6 +85,8 @@ import {
 } from './generationService';
 import { createAssetsRouter } from './routes/assets';
 import { createSupabaseAuthUser, resetSupabaseAuthUserPassword, updateSupabaseAuthUserMetadata } from './supabaseAdmin';
+import { getModelConversionConfig } from './modelConversionService';
+import { getModelOptimizationConfig } from './modelOptimizationService';
 
 export const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -97,6 +99,17 @@ const generationJobRateLimitPerMinute = Number(process.env.GENERATION_JOB_RATE_L
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(serverDir, '..', 'dist');
 const distIndexPath = path.join(distDir, 'index.html');
+
+const modelConversionConfig = getModelConversionConfig();
+const modelOptimizationConfig = getModelOptimizationConfig();
+console.info('Model processing configuration', {
+  MODEL_CONVERSION_ENABLED: process.env.MODEL_CONVERSION_ENABLED,
+  MODEL_CONVERSION_ENABLED_RESOLVED: modelConversionConfig.enabled,
+  MODEL_OPTIMIZATION_ENABLED: process.env.MODEL_OPTIMIZATION_ENABLED ?? process.env.ENABLE_MODEL_OPTIMIZATION,
+  MODEL_OPTIMIZATION_ENABLED_RESOLVED: modelOptimizationConfig.enabled,
+  BLENDER_BIN: modelConversionConfig.blenderBin,
+  MODEL_CONVERSION_TIMEOUT_MS: modelConversionConfig.timeoutMs,
+});
 
 interface GenerateRequestBody {
   inputImageDataUrl: string;
