@@ -1,4 +1,4 @@
-import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Box as BoxIcon } from 'lucide-react';
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
@@ -26,6 +26,7 @@ import { ColladaLoader } from 'three/examples/jsm/loaders/ColladaLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { AssetModel, ModelSnapshotCapture, PanoramaImageCapture } from '../types';
+import { resolvePreferredModelUrl } from './modelAssetUtils';
 
 export interface ModelViewerHandle {
   captureSnapshot: () => Promise<ModelSnapshotCapture>;
@@ -41,6 +42,8 @@ type SupportedModelFormat = Exclude<AssetModel['fileType'], 'unknown'>;
 type LoaderKind = 'GLTFLoader' | 'OBJLoader' | 'ColladaLoader' | 'STLLoader';
 type ViewMode = 'orbit' | 'walkthrough';
 type ViewPreset = 'fit' | 'top' | 'front' | 'side';
+type WalkSpeedPreset = 'slow' | 'standard' | 'fast';
+type LensPreset = 'wide' | 'standard' | 'telephoto' | 'custom';
 
 export interface ModelLoaderDefinition {
   kind: LoaderKind;
@@ -53,6 +56,8 @@ interface ModelBoundsInfo {
   minY: number;
   maxY: number;
   maxDimension: number;
+  diagonal: number;
+  walkBaseSpeed: number;
   vertexCount: number;
   triangleCount: number;
   defaultClippingHeight: number;
@@ -73,6 +78,12 @@ export interface StableModelLoadIdentity {
 
 const EDGE_TRIANGLE_LIMIT = 160_000;
 const EDGE_VERTEX_LIMIT = 260_000;
+const LENS_FOVS: Record<Exclude<LensPreset, 'custom'>, number> = {
+  wide: 75,
+  standard: 50,
+  telephoto: 30,
+};
+const DEFAULT_CUSTOM_FOV = LENS_FOVS.standard;
 
 const clayMaterial = new MeshStandardMaterial({
   color: '#f1f5f9',
@@ -146,15 +157,7 @@ export function getStableModelLoadIdentity(asset: AssetModel): StableModelLoadId
 }
 
 export function resolveModelPreviewUrl(asset: AssetModel): string {
-  return asset.convertedUrl
-    || asset.metadata?.convertedUrl
-    || asset.optimizedUrl
-    || asset.previewUrl
-    || asset.metadata?.optimizedUrl
-    || asset.metadata?.previewUrl
-    || asset.modelUrl
-    || asset.originalUrl
-    || '';
+  return resolvePreferredModelUrl(asset);
 }
 
 export function shouldReloadModel(previous: StableModelLoadIdentity, next: StableModelLoadIdentity): boolean {
@@ -177,16 +180,27 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
   const panoramaRef = useRef<(options?: { width?: number; height?: number }) => PanoramaImageCapture | null>(() => null);
   const commandRef = useRef<ViewerCommandApi | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('orbit');
+  const [performanceMode, setPerformanceMode] = useState(true);
+  const [walkSpeedPreset, setWalkSpeedPreset] = useState<WalkSpeedPreset>('slow');
+  const [lensPreset, setLensPreset] = useState<LensPreset>('standard');
+  const [customFov, setCustomFov] = useState(DEFAULT_CUSTOM_FOV);
   const [clippingEnabled, setClippingEnabled] = useState(false);
   const [clippingHeight, setClippingHeight] = useState(0);
   const [xrayEnabled, setXrayEnabled] = useState(false);
-  const [edgesEnabled, setEdgesEnabled] = useState(true);
+  const [edgesEnabled, setEdgesEnabled] = useState(false);
   const [modelInfo, setModelInfo] = useState<ModelBoundsInfo | null>(null);
   const [viewerMessage, setViewerMessage] = useState<string | null>(null);
   const loadIdentity = getStableModelLoadIdentity(asset);
   const previewError = getModelPreviewError(asset);
   const canPreview = !previewError;
   const hasUsableSize = size.width > 100 && size.height > 100;
+  const cameraFov = lensPreset === 'custom' ? customFov : LENS_FOVS[lensPreset];
+  const isLargeModel = useMemo(() => {
+    const originalFileSize = asset.originalFileSize || asset.metadata?.originalFileSize || 0;
+    return originalFileSize >= 30 * 1024 * 1024
+      || (modelInfo?.vertexCount ?? 0) > EDGE_VERTEX_LIMIT
+      || (modelInfo?.triangleCount ?? 0) > EDGE_TRIANGLE_LIMIT;
+  }, [asset.metadata?.originalFileSize, asset.originalFileSize, modelInfo?.triangleCount, modelInfo?.vertexCount]);
 
   useImperativeHandle(ref, () => ({
     async captureSnapshot() {
@@ -209,18 +223,36 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
     setViewMode('orbit');
     setClippingEnabled(false);
     setXrayEnabled(false);
-    setEdgesEnabled(true);
+    setEdgesEnabled(false);
+    setPerformanceMode(true);
+    setWalkSpeedPreset('slow');
+    setLensPreset('standard');
+    setCustomFov(DEFAULT_CUSTOM_FOV);
     setModelInfo(null);
     setViewerMessage(null);
   }, [asset.id]);
+
+  const handleLensPresetChange = useCallback((preset: LensPreset) => {
+    if (preset === 'custom') {
+      setCustomFov(cameraFov);
+    }
+    setLensPreset(preset);
+  }, [cameraFov]);
 
   const handleModelInfoChange = useCallback((info: ModelBoundsInfo | null) => {
     setModelInfo(info);
     if (!info) return;
     setClippingHeight(info.defaultClippingHeight);
-    setEdgesEnabled(info.edgesAvailableByDefault);
-    setViewerMessage(info.edgesAvailableByDefault ? null : '模型较大，已关闭边线以提升预览性能。');
+    setEdgesEnabled(false);
+    const largeByGeometry = info.vertexCount > EDGE_VERTEX_LIMIT || info.triangleCount > EDGE_TRIANGLE_LIMIT;
+    setViewerMessage(largeByGeometry ? '模型较大，建议使用转换后的 GLB 或开启性能模式。' : null);
   }, []);
+
+  useEffect(() => {
+    if (isLargeModel && !viewerMessage) {
+      setViewerMessage('模型较大，建议使用转换后的 GLB 或开启性能模式。');
+    }
+  }, [isLargeModel, viewerMessage]);
 
   const handleCaptureReady = useCallback((capture: () => ModelSnapshotCapture | null) => {
     captureRef.current = capture;
@@ -252,6 +284,11 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
     <div ref={sizeRef} className="relative h-full w-full bg-slate-100" style={{ minHeight }}>
       <PreviewToolbar
         viewMode={viewMode}
+        performanceMode={performanceMode}
+        walkSpeedPreset={walkSpeedPreset}
+        lensPreset={lensPreset}
+        cameraFov={cameraFov}
+        customFov={customFov}
         clippingEnabled={clippingEnabled}
         clippingHeight={clippingHeight}
         xrayEnabled={xrayEnabled}
@@ -264,6 +301,10 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
         onSideView={() => commandRef.current?.fitView('side')}
         onEnterInterior={handleEnterInterior}
         onViewModeChange={setViewMode}
+        onPerformanceModeChange={setPerformanceMode}
+        onWalkSpeedPresetChange={setWalkSpeedPreset}
+        onLensPresetChange={handleLensPresetChange}
+        onCustomFovChange={setCustomFov}
         onClippingEnabledChange={setClippingEnabled}
         onClippingHeightChange={setClippingHeight}
         onXrayEnabledChange={setXrayEnabled}
@@ -273,16 +314,19 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
         <Canvas
           className="h-full w-full"
           style={{ width: '100%', height: '100%' }}
-          frameloop="always"
-          shadows
-          dpr={[1, 2]}
-          gl={{ alpha: false, antialias: true, preserveDrawingBuffer: true, localClippingEnabled: true }}
+          frameloop="demand"
+          shadows={!performanceMode}
+          dpr={performanceMode ? [1, 1.25] : [1, 1.5]}
+          gl={{ alpha: false, antialias: !performanceMode, preserveDrawingBuffer: true, localClippingEnabled: true }}
         >
           <Scene
             assetId={loadIdentity.assetId}
             fileType={loadIdentity.fileType}
             modelUrl={loadIdentity.modelUrl}
             viewMode={viewMode}
+            performanceMode={performanceMode}
+            walkSpeedPreset={walkSpeedPreset}
+            cameraFov={cameraFov}
             clippingEnabled={clippingEnabled}
             clippingHeight={clippingHeight}
             xrayEnabled={xrayEnabled}
@@ -305,6 +349,11 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
 
 function PreviewToolbar({
   viewMode,
+  performanceMode,
+  walkSpeedPreset,
+  lensPreset,
+  cameraFov,
+  customFov,
   clippingEnabled,
   clippingHeight,
   xrayEnabled,
@@ -317,12 +366,21 @@ function PreviewToolbar({
   onSideView,
   onEnterInterior,
   onViewModeChange,
+  onPerformanceModeChange,
+  onWalkSpeedPresetChange,
+  onLensPresetChange,
+  onCustomFovChange,
   onClippingEnabledChange,
   onClippingHeightChange,
   onXrayEnabledChange,
   onEdgesEnabledChange,
 }: {
   viewMode: ViewMode;
+  performanceMode: boolean;
+  walkSpeedPreset: WalkSpeedPreset;
+  lensPreset: LensPreset;
+  cameraFov: number;
+  customFov: number;
   clippingEnabled: boolean;
   clippingHeight: number;
   xrayEnabled: boolean;
@@ -335,6 +393,10 @@ function PreviewToolbar({
   onSideView: () => void;
   onEnterInterior: () => void;
   onViewModeChange: (mode: ViewMode) => void;
+  onPerformanceModeChange: (enabled: boolean) => void;
+  onWalkSpeedPresetChange: (preset: WalkSpeedPreset) => void;
+  onLensPresetChange: (preset: LensPreset) => void;
+  onCustomFovChange: (fov: number) => void;
   onClippingEnabledChange: (enabled: boolean) => void;
   onClippingHeightChange: (height: number) => void;
   onXrayEnabledChange: (enabled: boolean) => void;
@@ -355,11 +417,55 @@ function PreviewToolbar({
         <div className="mx-1 h-6 w-px bg-slate-200" />
         <ToolButton label="外部环绕" active={viewMode === 'orbit'} onClick={() => onViewModeChange('orbit')} />
         <ToolButton label="室内漫游" active={viewMode === 'walkthrough'} onClick={() => onViewModeChange('walkthrough')} />
+        <div className="mx-1 h-6 w-px bg-slate-200" />
+        <ToolButton label="性能模式" active={performanceMode} onClick={() => onPerformanceModeChange(true)} />
+        <ToolButton label="高质量" active={!performanceMode} onClick={() => onPerformanceModeChange(false)} />
         <ToolButton label="开屋顶" active={clippingEnabled} disabled={disabled} onClick={() => onClippingEnabledChange(!clippingEnabled)} />
         <ToolButton label="X 光显示" active={xrayEnabled} disabled={disabled} onClick={() => onXrayEnabledChange(!xrayEnabled)} />
         <ToolButton label="显示边线" active={edgesEnabled} disabled={disabled} onClick={() => onEdgesEnabledChange(!edgesEnabled)} />
       </div>
       <div className="pointer-events-auto flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white/95 px-3 py-2 text-xs text-slate-600 shadow-sm backdrop-blur">
+        <label className="flex items-center gap-2 font-bold text-slate-700">
+          漫游速度
+          <select
+            value={walkSpeedPreset}
+            onChange={event => onWalkSpeedPresetChange(event.currentTarget.value as WalkSpeedPreset)}
+            className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-700 outline-none focus:border-blue-300"
+          >
+            <option value="slow">慢</option>
+            <option value="standard">标准</option>
+            <option value="fast">快</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2 font-bold text-slate-700">
+          镜头
+          <select
+            value={lensPreset}
+            onChange={event => onLensPresetChange(event.currentTarget.value as LensPreset)}
+            className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-700 outline-none focus:border-blue-300"
+          >
+            <option value="wide">广角</option>
+            <option value="standard">标准</option>
+            <option value="telephoto">长焦</option>
+            <option value="custom">自定义</option>
+          </select>
+        </label>
+        {lensPreset === 'custom' ? (
+          <label className="flex min-w-[180px] flex-1 items-center gap-2 font-bold text-slate-700">
+            FOV
+            <input
+              type="range"
+              min={20}
+              max={90}
+              step={1}
+              value={customFov}
+              onChange={event => onCustomFovChange(Number(event.currentTarget.value))}
+              className="h-2 min-w-0 flex-1 accent-slate-900"
+            />
+          </label>
+        ) : null}
+        <span className="font-bold text-slate-700">当前视角：{Math.round(cameraFov)}°</span>
+        <span className="max-w-[360px] leading-5 text-slate-500">FOV 越大越广角，空间透视越强；FOV 越小越接近长焦，透视更平。</span>
         <label className="flex min-w-[240px] flex-1 items-center gap-3">
           <span className="shrink-0 font-bold text-slate-700">剖切高度</span>
           <input
@@ -373,6 +479,7 @@ function PreviewToolbar({
             className="h-2 min-w-0 flex-1 accent-slate-900 disabled:opacity-40"
           />
         </label>
+        <span className="font-semibold text-slate-500">WASD 移动 · Q/E 上下 · Shift 加速 · 鼠标旋转视角</span>
         {viewerMessage ? <span className="font-semibold text-amber-700">{viewerMessage}</span> : null}
       </div>
     </div>
@@ -397,6 +504,9 @@ function Scene({
   fileType,
   modelUrl,
   viewMode,
+  performanceMode,
+  walkSpeedPreset,
+  cameraFov,
   clippingEnabled,
   clippingHeight,
   xrayEnabled,
@@ -410,6 +520,9 @@ function Scene({
   fileType: AssetModel['fileType'];
   modelUrl: string;
   viewMode: ViewMode;
+  performanceMode: boolean;
+  walkSpeedPreset: WalkSpeedPreset;
+  cameraFov: number;
   clippingEnabled: boolean;
   clippingHeight: number;
   xrayEnabled: boolean;
@@ -422,11 +535,22 @@ function Scene({
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
   const modelRef = useRef<Object3D | null>(null);
   const modelInfoRef = useRef<ModelBoundsInfo | null>(null);
-  const { gl, camera, scene } = useThree();
+  const [walkBaseSpeed, setWalkBaseSpeed] = useState(0.6);
+  const { gl, camera, scene, invalidate } = useThree();
 
   useLayoutEffect(() => {
     gl.localClippingEnabled = true;
-  }, [gl]);
+    gl.shadowMap.enabled = !performanceMode;
+    invalidate();
+  }, [gl, invalidate, performanceMode]);
+
+  useEffect(() => {
+    if (!(camera instanceof ThreePerspectiveCamera)) return;
+    if (Math.abs(camera.fov - cameraFov) < 0.001) return;
+    camera.fov = cameraFov;
+    camera.updateProjectionMatrix();
+    invalidate();
+  }, [camera, cameraFov, invalidate]);
 
   useLayoutEffect(() => {
     onCaptureReady(() => {
@@ -441,6 +565,7 @@ function Scene({
         camera: {
           position: camera.position.toArray(),
           rotation: [camera.rotation.x, camera.rotation.y, camera.rotation.z],
+          quaternion: camera.quaternion.toArray(),
           target: controlsRef.current?.target.toArray(),
           fov: perspectiveCamera?.fov,
         },
@@ -456,8 +581,8 @@ function Scene({
   useLayoutEffect(() => {
     onPanoramaReady((options) => {
       const perspectiveCamera = camera instanceof ThreePerspectiveCamera ? camera : null;
-      const width = options?.width || 2048;
-      const height = options?.height || 1024;
+      const { width, height } = normalizePanoramaOutputSize(options);
+      camera.updateMatrixWorld(true);
       const dataUrl = renderEquirectangularPanorama({
         renderer: gl,
         scene,
@@ -472,6 +597,7 @@ function Scene({
         camera: {
           position: camera.position.toArray(),
           rotation: [camera.rotation.x, camera.rotation.y, camera.rotation.z],
+          quaternion: camera.quaternion.toArray(),
           target: controlsRef.current?.target.toArray(),
           fov: perspectiveCamera?.fov,
         },
@@ -484,29 +610,54 @@ function Scene({
   useEffect(() => {
     onCommandsReady({
       fitView: (preset = 'fit') => {
-        if (modelRef.current) fitCameraToObject(camera as ThreePerspectiveCamera, controlsRef.current, modelRef.current, preset);
+        if (modelRef.current) {
+          fitCameraToObject(camera as ThreePerspectiveCamera, controlsRef.current, modelRef.current, preset);
+          invalidate();
+        }
       },
-      enterInterior: () => enterModelInterior(camera as ThreePerspectiveCamera, controlsRef.current, modelInfoRef.current),
+      enterInterior: () => {
+        const entered = enterModelInterior(camera as ThreePerspectiveCamera, controlsRef.current, modelInfoRef.current);
+        if (entered) invalidate();
+        return entered;
+      },
     });
     return () => onCommandsReady(null);
-  }, [camera, onCommandsReady]);
+  }, [camera, invalidate, onCommandsReady]);
 
   useEffect(() => {
     if (controlsRef.current) controlsRef.current.enabled = viewMode === 'orbit';
-  }, [viewMode]);
+    invalidate();
+  }, [invalidate, viewMode]);
 
   const handleModelReady = useCallback((object: Object3D, info: ModelBoundsInfo) => {
     modelRef.current = object;
     modelInfoRef.current = info;
+    setWalkBaseSpeed(info.walkBaseSpeed);
     onModelInfoChange(info);
-  }, [onModelInfoChange]);
+    invalidate();
+  }, [invalidate, onModelInfoChange]);
 
   return (
     <>
       <color attach="background" args={['#f8fafc']} />
-      <PerspectiveCamera makeDefault position={[3.8, 2.6, 4.8]} fov={42} near={0.01} far={1000} />
-      <OrbitControls ref={controlsRef} makeDefault target={[0, 0, 0]} minDistance={0.05} maxDistance={80} minPolarAngle={0} maxPolarAngle={Math.PI} enableDamping />
-      <WalkthroughControls enabled={viewMode === 'walkthrough'} />
+      <PerspectiveCamera makeDefault position={[3.8, 2.6, 4.8]} fov={cameraFov} near={0.01} far={1000} />
+      <OrbitControls
+        ref={controlsRef}
+        makeDefault
+        target={[0, 0, 0]}
+        minDistance={0.05}
+        maxDistance={120}
+        minPolarAngle={0}
+        maxPolarAngle={Math.PI}
+        enableDamping={!performanceMode}
+        enabled={viewMode === 'orbit'}
+        onChange={() => invalidate()}
+      />
+      <WalkthroughControls
+        enabled={viewMode === 'walkthrough'}
+        baseSpeed={walkBaseSpeed}
+        speedPreset={walkSpeedPreset}
+      />
       {modelUrl ? (
         <LoadedModel
           assetId={assetId}
@@ -517,19 +668,28 @@ function Scene({
           clippingHeight={clippingHeight}
           xrayEnabled={xrayEnabled}
           edgesEnabled={edgesEnabled}
+          performanceMode={performanceMode}
           onModelReady={handleModelReady}
         />
       ) : null}
-      <ambientLight intensity={0.9} />
-      <hemisphereLight args={['#ffffff', '#cbd5e1', 1.15]} />
-      <directionalLight position={[5, 8, 6]} intensity={1.55} castShadow />
-      <directionalLight position={[-5, 3, -4]} intensity={0.45} />
+      <ambientLight intensity={performanceMode ? 1.05 : 0.9} />
+      <hemisphereLight args={['#ffffff', '#cbd5e1', performanceMode ? 0.95 : 1.15]} />
+      <directionalLight position={[5, 8, 6]} intensity={performanceMode ? 1.1 : 1.55} castShadow={!performanceMode} />
+      {!performanceMode ? <directionalLight position={[-5, 3, -4]} intensity={0.45} /> : null}
     </>
   );
 }
 
-function WalkthroughControls({ enabled }: { enabled: boolean }) {
-  const { camera, gl } = useThree();
+function WalkthroughControls({
+  enabled,
+  baseSpeed,
+  speedPreset,
+}: {
+  enabled: boolean;
+  baseSpeed: number;
+  speedPreset: WalkSpeedPreset;
+}) {
+  const { camera, gl, invalidate } = useThree();
   const keysRef = useRef(new Set<string>());
   const draggingRef = useRef(false);
   const yawRef = useRef(0);
@@ -552,37 +712,49 @@ function WalkthroughControls({ enabled }: { enabled: boolean }) {
   useEffect(() => {
     const canvas = gl.domElement;
     canvas.tabIndex = 0;
+    if (!enabled) return undefined;
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!enabled || document.activeElement !== canvas) return;
+      if (document.activeElement !== canvas) return;
       keysRef.current.add(event.code);
-      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ShiftLeft', 'ShiftRight'].includes(event.code)) {
+      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight'].includes(event.code)) {
         event.preventDefault();
+        invalidate();
       }
     };
     const handleKeyUp = (event: KeyboardEvent) => {
       keysRef.current.delete(event.code);
+      invalidate();
     };
     const handlePointerDown = (event: PointerEvent) => {
-      if (!enabled || event.button !== 0) return;
+      if (event.button !== 0) return;
       canvas.focus();
       draggingRef.current = true;
       canvas.setPointerCapture(event.pointerId);
+      invalidate();
     };
     const handlePointerMove = (event: PointerEvent) => {
-      if (!enabled || !draggingRef.current) return;
+      if (!draggingRef.current) return;
       yawRef.current -= event.movementX * 0.003;
       pitchRef.current -= event.movementY * 0.003;
       pitchRef.current = Math.max(-Math.PI / 2 + 0.04, Math.min(Math.PI / 2 - 0.04, pitchRef.current));
       camera.rotation.set(pitchRef.current, yawRef.current, 0);
+      invalidate();
     };
     const handlePointerUp = (event: PointerEvent) => {
       draggingRef.current = false;
       if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+      invalidate();
+    };
+    const handleBlur = () => {
+      keysRef.current.clear();
+      draggingRef.current = false;
+      invalidate();
     };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
     canvas.addEventListener('pointerdown', handlePointerDown);
     canvas.addEventListener('pointermove', handlePointerMove);
     canvas.addEventListener('pointerup', handlePointerUp);
@@ -591,27 +763,39 @@ function WalkthroughControls({ enabled }: { enabled: boolean }) {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
       canvas.removeEventListener('pointerdown', handlePointerDown);
       canvas.removeEventListener('pointermove', handlePointerMove);
       canvas.removeEventListener('pointerup', handlePointerUp);
       canvas.removeEventListener('pointercancel', handlePointerUp);
     };
-  }, [camera, enabled, gl]);
+  }, [camera, enabled, gl, invalidate]);
 
   useFrame((_, delta) => {
     if (!enabled) return;
     const keys = keysRef.current;
-    const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 3.2 : 1.25;
-    const step = speed * delta;
+    const hasMovementKey = keys.has('KeyW') || keys.has('KeyS') || keys.has('KeyA') || keys.has('KeyD') || keys.has('KeyQ') || keys.has('KeyE');
+    if (!hasMovementKey) return;
+
+    const presetMultiplier = speedPreset === 'slow' ? 0.5 : speedPreset === 'fast' ? 1.8 : 1;
+    const boostMultiplier = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 4 : 1;
+    const fineMultiplier = keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('AltLeft') || keys.has('AltRight') ? 0.25 : 1;
+    const step = baseSpeed * presetMultiplier * boostMultiplier * fineMultiplier * Math.min(delta, 0.05);
     camera.getWorldDirection(forward.current);
+    forward.current.y = 0;
+    if (forward.current.lengthSq() < 0.0001) {
+      forward.current.set(0, 0, -1).applyAxisAngle(up.current, yawRef.current);
+    }
+    forward.current.normalize();
     right.current.crossVectors(forward.current, up.current).normalize();
 
     if (keys.has('KeyW')) camera.position.addScaledVector(forward.current, step);
     if (keys.has('KeyS')) camera.position.addScaledVector(forward.current, -step);
     if (keys.has('KeyD')) camera.position.addScaledVector(right.current, step);
     if (keys.has('KeyA')) camera.position.addScaledVector(right.current, -step);
-    if (keys.has('KeyE')) camera.position.y += step;
-    if (keys.has('KeyQ')) camera.position.y -= step;
+    if (keys.has('KeyQ')) camera.position.y += step;
+    if (keys.has('KeyE')) camera.position.y -= step;
+    invalidate();
   });
 
   return null;
@@ -626,6 +810,7 @@ function LoadedModel({
   clippingHeight,
   xrayEnabled,
   edgesEnabled,
+  performanceMode,
   onModelReady,
 }: {
   assetId: string;
@@ -636,6 +821,7 @@ function LoadedModel({
   clippingHeight: number;
   xrayEnabled: boolean;
   edgesEnabled: boolean;
+  performanceMode: boolean;
   onModelReady: (object: Object3D, info: ModelBoundsInfo) => void;
 }) {
   const [model, setModel] = useState<Object3D | null>(null);
@@ -644,7 +830,7 @@ function LoadedModel({
   const clippingPlaneRef = useRef(new Plane(new Vector3(0, -1, 0), clippingHeight));
   const loadRequestRef = useRef(0);
   const assetIdRef = useRef(assetId);
-  const { camera } = useThree();
+  const { camera, invalidate } = useThree();
 
   useEffect(() => {
     assetIdRef.current = assetId;
@@ -679,6 +865,7 @@ function LoadedModel({
         fitCameraToObject(camera as ThreePerspectiveCamera, controlsRef.current, normalized, 'fit');
         setModel(normalized);
         onModelReady(normalized, info);
+        invalidate();
       })
       .catch(error => {
         if (cancelled || requestId !== loadRequestRef.current) return;
@@ -696,7 +883,7 @@ function LoadedModel({
     return () => {
       cancelled = true;
     };
-  }, [camera, controlsRef, fileType, modelUrl, onModelReady]);
+  }, [camera, controlsRef, fileType, invalidate, modelUrl, onModelReady]);
 
   useEffect(() => () => {
     if (modelRef.current) {
@@ -713,7 +900,14 @@ function LoadedModel({
       xrayEnabled,
       edgesEnabled,
     });
-  }, [clippingEnabled, clippingHeight, edgesEnabled, model, xrayEnabled]);
+    invalidate();
+  }, [clippingEnabled, clippingHeight, edgesEnabled, invalidate, model, xrayEnabled]);
+
+  useEffect(() => {
+    if (!model) return;
+    applyModelPerformanceState(model, { shadowsEnabled: !performanceMode });
+    invalidate();
+  }, [invalidate, model, performanceMode]);
 
   if (error) {
     throw new Error(error);
@@ -747,7 +941,6 @@ function normalizeModelObject(object: Object3D, fileType: AssetModel['fileType']
   root.updateMatrixWorld(true);
 
   const info = calculateModelInfo(root);
-  addModelEdges(root, info.edgesAvailableByDefault);
   return { object: root, info };
 }
 
@@ -762,8 +955,8 @@ function preparePreviewMaterials(object: Object3D, forceClay: boolean): void {
         child.material = clonePreviewMaterial(child.material);
       }
       setMaterialMetadata(child.material, child.material);
-      child.castShadow = true;
-      child.receiveShadow = true;
+      child.castShadow = false;
+      child.receiveShadow = false;
     }
   });
 }
@@ -802,12 +995,15 @@ function calculateModelInfo(object: Object3D): ModelBoundsInfo {
   });
 
   const maxDimension = Math.max(size.x, size.y, size.z);
+  const diagonal = size.length();
   return {
     center,
     size,
     minY: box.min.y,
     maxY: box.max.y,
     maxDimension,
+    diagonal,
+    walkBaseSpeed: clamp(diagonal * 0.12, 0.35, 8),
     vertexCount,
     triangleCount,
     defaultClippingHeight: box.min.y + size.y * 0.7,
@@ -815,7 +1011,10 @@ function calculateModelInfo(object: Object3D): ModelBoundsInfo {
   };
 }
 
-function addModelEdges(object: Object3D, visible: boolean): void {
+function ensureModelEdges(object: Object3D): void {
+  if (object.userData.previewEdgesGenerated) return;
+  object.userData.previewEdgesGenerated = true;
+
   const edgeMaterial = new LineBasicMaterial({
     color: '#334155',
     transparent: true,
@@ -829,17 +1028,22 @@ function addModelEdges(object: Object3D, visible: boolean): void {
   meshes.forEach(mesh => {
     const edges = new LineSegments(new EdgesGeometry(mesh.geometry, 35), edgeMaterial.clone());
     edges.name = 'preview-edges';
-    edges.visible = visible;
+    edges.visible = true;
     edges.renderOrder = 2;
     edges.userData.isPreviewEdges = true;
     mesh.add(edges);
   });
+  edgeMaterial.dispose();
 }
 
 function applyModelDisplayState(
   object: Object3D,
   { clippingPlanes, xrayEnabled, edgesEnabled }: { clippingPlanes: Plane[]; xrayEnabled: boolean; edgesEnabled: boolean },
 ): void {
+  if (edgesEnabled) {
+    ensureModelEdges(object);
+  }
+
   object.traverse(child => {
     if (child.userData.isPreviewEdges && child instanceof LineSegments) {
       child.visible = edgesEnabled;
@@ -858,6 +1062,15 @@ function applyModelDisplayState(
         : child.material.userData.previewMaterial as Material || clayMaterial.clone();
     }
     applyMaterialClipping(child.material, clippingPlanes);
+  });
+}
+
+function applyModelPerformanceState(object: Object3D, { shadowsEnabled }: { shadowsEnabled: boolean }): void {
+  object.traverse(child => {
+    if (child instanceof Mesh) {
+      child.castShadow = shadowsEnabled;
+      child.receiveShadow = shadowsEnabled;
+    }
   });
 }
 
@@ -949,6 +1162,42 @@ function enterModelInterior(
   return true;
 }
 
+type PanoramaFaceKey = 'px' | 'nx' | 'py' | 'ny' | 'pz' | 'nz';
+
+interface PanoramaCubeFace {
+  key: PanoramaFaceKey;
+  direction: Vector3;
+  up: Vector3;
+  right: Vector3;
+}
+
+const PANORAMA_CUBE_FACES: PanoramaCubeFace[] = [
+  createPanoramaCubeFace('px', new Vector3(1, 0, 0), new Vector3(0, 1, 0)),
+  createPanoramaCubeFace('nx', new Vector3(-1, 0, 0), new Vector3(0, 1, 0)),
+  createPanoramaCubeFace('py', new Vector3(0, 1, 0), new Vector3(0, 0, -1)),
+  createPanoramaCubeFace('ny', new Vector3(0, -1, 0), new Vector3(0, 0, 1)),
+  createPanoramaCubeFace('pz', new Vector3(0, 0, 1), new Vector3(0, 1, 0)),
+  createPanoramaCubeFace('nz', new Vector3(0, 0, -1), new Vector3(0, 1, 0)),
+];
+
+function createPanoramaCubeFace(key: PanoramaFaceKey, direction: Vector3, up: Vector3): PanoramaCubeFace {
+  return {
+    key,
+    direction,
+    up,
+    right: new Vector3().crossVectors(direction, up).normalize(),
+  };
+}
+
+function normalizePanoramaOutputSize(options?: { width?: number; height?: number }): { width: number; height: number } {
+  const requestedWidth = options?.width || (options?.height ? options.height * 2 : 2048);
+  const width = Math.round(clamp(requestedWidth, 1024, 4096) / 2) * 2;
+  return {
+    width,
+    height: Math.round(width / 2),
+  };
+}
+
 function renderEquirectangularPanorama({
   renderer,
   scene,
@@ -962,27 +1211,31 @@ function renderEquirectangularPanorama({
   width: number;
   height: number;
 }): string {
-  const faceSize = Math.max(256, Math.min(1024, Math.round(width / 4)));
-  const directions = [
-    { key: 'px', direction: new Vector3(1, 0, 0), up: new Vector3(0, -1, 0) },
-    { key: 'nx', direction: new Vector3(-1, 0, 0), up: new Vector3(0, -1, 0) },
-    { key: 'py', direction: new Vector3(0, 1, 0), up: new Vector3(0, 0, 1) },
-    { key: 'ny', direction: new Vector3(0, -1, 0), up: new Vector3(0, 0, -1) },
-    { key: 'pz', direction: new Vector3(0, 0, 1), up: new Vector3(0, -1, 0) },
-    { key: 'nz', direction: new Vector3(0, 0, -1), up: new Vector3(0, -1, 0) },
-  ] as const;
-  type FaceKey = typeof directions[number]['key'];
-  const faces = {} as Record<FaceKey, Uint8Array>;
+  const panoramaWidth = Math.round(width / 2) * 2;
+  const panoramaHeight = Math.round(panoramaWidth / 2);
+  const maxTextureSize = renderer.capabilities.maxTextureSize || 2048;
+  const faceSize = Math.max(256, Math.min(2048, maxTextureSize, Math.round(panoramaWidth / 2)));
+  const faces = {} as Record<PanoramaFaceKey, Uint8Array>;
   const renderTarget = new WebGLRenderTarget(faceSize, faceSize, { depthBuffer: true, stencilBuffer: false });
   const captureCamera = new ThreePerspectiveCamera(90, 1, sourceCamera.near, sourceCamera.far);
   captureCamera.position.copy(sourceCamera.position);
+  captureCamera.updateProjectionMatrix();
   const previousTarget = renderer.getRenderTarget();
+  const heading = new Vector3();
+  sourceCamera.updateMatrixWorld(true);
+  sourceCamera.getWorldDirection(heading);
+  heading.y = 0;
+  if (heading.lengthSq() < 0.0001) heading.set(0, 0, 1);
+  heading.normalize();
+  const headingYaw = Math.atan2(heading.x, heading.z);
+  const yAxis = new Vector3(0, 1, 0);
 
   try {
-    for (const face of directions) {
+    for (const face of PANORAMA_CUBE_FACES) {
       captureCamera.up.copy(face.up);
       captureCamera.lookAt(sourceCamera.position.clone().add(face.direction));
       captureCamera.updateProjectionMatrix();
+      captureCamera.updateMatrixWorld(true);
       renderer.setRenderTarget(renderTarget);
       renderer.render(scene, captureCamera);
       const pixels = new Uint8Array(faceSize * faceSize * 4);
@@ -995,26 +1248,26 @@ function renderEquirectangularPanorama({
   }
 
   const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = panoramaWidth;
+  canvas.height = panoramaHeight;
   const context = canvas.getContext('2d');
   if (!context) throw new Error('无法创建全景图画布。');
-  const output = context.createImageData(width, height);
+  const output = context.createImageData(panoramaWidth, panoramaHeight);
   const direction = new Vector3();
 
-  for (let y = 0; y < height; y += 1) {
-    const v = 0.5 - y / height;
+  for (let y = 0; y < panoramaHeight; y += 1) {
+    const v = 0.5 - (y + 0.5) / panoramaHeight;
     const pitch = v * Math.PI;
     const cosPitch = Math.cos(pitch);
-    for (let x = 0; x < width; x += 1) {
-      const yaw = (x / width - 0.5) * Math.PI * 2;
+    for (let x = 0; x < panoramaWidth; x += 1) {
+      const yaw = (0.5 - (x + 0.5) / panoramaWidth) * Math.PI * 2;
       direction.set(
         Math.sin(yaw) * cosPitch,
         Math.sin(pitch),
         Math.cos(yaw) * cosPitch,
-      ).normalize();
+      ).applyAxisAngle(yAxis, headingYaw).normalize();
       const sample = sampleCubeFaces(faces, direction, faceSize);
-      const index = (y * width + x) * 4;
+      const index = (y * panoramaWidth + x) * 4;
       output.data[index] = sample[0];
       output.data[index + 1] = sample[1];
       output.data[index + 2] = sample[2];
@@ -1027,32 +1280,24 @@ function renderEquirectangularPanorama({
   return canvas.toDataURL('image/png');
 }
 
-function sampleCubeFaces(faces: Record<'px' | 'nx' | 'py' | 'ny' | 'pz' | 'nz', Uint8Array>, direction: Vector3, faceSize: number): [number, number, number] {
-  const absX = Math.abs(direction.x);
-  const absY = Math.abs(direction.y);
-  const absZ = Math.abs(direction.z);
-  let face: 'px' | 'nx' | 'py' | 'ny' | 'pz' | 'nz';
-  let u = 0;
-  let v = 0;
+function sampleCubeFaces(faces: Record<PanoramaFaceKey, Uint8Array>, direction: Vector3, faceSize: number): [number, number, number] {
+  let selectedFace = PANORAMA_CUBE_FACES[0];
+  let selectedDot = -Infinity;
 
-  if (absX >= absY && absX >= absZ) {
-    face = direction.x > 0 ? 'px' : 'nx';
-    u = direction.x > 0 ? -direction.z / absX : direction.z / absX;
-    v = -direction.y / absX;
-  } else if (absY >= absX && absY >= absZ) {
-    face = direction.y > 0 ? 'py' : 'ny';
-    u = direction.x / absY;
-    v = direction.y > 0 ? direction.z / absY : -direction.z / absY;
-  } else {
-    face = direction.z > 0 ? 'pz' : 'nz';
-    u = direction.z > 0 ? direction.x / absZ : -direction.x / absZ;
-    v = -direction.y / absZ;
+  for (const face of PANORAMA_CUBE_FACES) {
+    const dot = direction.dot(face.direction);
+    if (dot > selectedDot) {
+      selectedDot = dot;
+      selectedFace = face;
+    }
   }
 
-  const px = clamp(Math.round(((u + 1) / 2) * (faceSize - 1)), 0, faceSize - 1);
-  const py = clamp(faceSize - 1 - Math.round(((v + 1) / 2) * (faceSize - 1)), 0, faceSize - 1);
+  const localX = direction.dot(selectedFace.right) / selectedDot;
+  const localY = direction.dot(selectedFace.up) / selectedDot;
+  const px = clamp(Math.round(((localX + 1) / 2) * (faceSize - 1)), 0, faceSize - 1);
+  const py = clamp(Math.round(((localY + 1) / 2) * (faceSize - 1)), 0, faceSize - 1);
   const index = (py * faceSize + px) * 4;
-  const data = faces[face];
+  const data = faces[selectedFace.key];
   return [data[index], data[index + 1], data[index + 2]];
 }
 

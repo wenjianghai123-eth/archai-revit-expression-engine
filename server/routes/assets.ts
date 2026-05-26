@@ -8,6 +8,8 @@ import {
   getModelConversionConfig,
   materializeModelInput,
   ModelConversionDisabledError,
+  ModelConversionExecutionError,
+  ModelConversionUnavailableError,
 } from '../modelConversionService';
 import {
   buildInitialModelOptimizationMetadata,
@@ -227,6 +229,11 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
     next: NextFunction,
   ) => {
     try {
+      console.info('Model conversion request received', {
+        assetId: req.params.id,
+        userId: getRequiredCurrentUser(req).id,
+        modelConversionEnabledRaw: process.env.MODEL_CONVERSION_ENABLED,
+      });
       const user = getRequiredCurrentUser(req);
       const asset = await getModelAsset(req.params.id, user.id);
       if (!asset) {
@@ -280,11 +287,16 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
         res.json(apiOk({ asset: updated }));
       } catch (conversionError) {
         const message = conversionError instanceof Error ? conversionError.message : '模型转换失败。';
+        console.error('Model conversion failed after Blender execution started.', {
+          assetId: asset.id,
+          fileType: asset.fileType,
+          message,
+        });
         await updateModelConversionState(convertingAsset, {
           conversionStatus: 'failed',
           conversionError: message,
         });
-        if (/Blender|BLENDER_BIN|可执行文件不可用/.test(message)) {
+        if (conversionError instanceof ModelConversionUnavailableError) {
           res.status(503).json(apiError(message, 'MODEL_CONVERSION_UNAVAILABLE'));
           return;
         }
@@ -304,9 +316,13 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
         return;
       }
 
-      const message = error instanceof Error ? error.message : '';
-      if (/Blender|BLENDER_BIN|模型转换需要|可执行文件不可用/.test(message)) {
-        res.status(503).json(apiError(message, 'MODEL_CONVERSION_UNAVAILABLE'));
+      if (error instanceof ModelConversionUnavailableError) {
+        res.status(503).json(apiError(error.message, 'MODEL_CONVERSION_UNAVAILABLE'));
+        return;
+      }
+
+      if (error instanceof ModelConversionExecutionError) {
+        res.status(500).json(apiError(error.message, 'MODEL_CONVERSION_FAILED'));
         return;
       }
 

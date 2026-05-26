@@ -106,6 +106,7 @@ export interface GenerationJobDiagnostics {
 export interface ModelSnapshotCamera {
   position?: number[];
   rotation?: number[];
+  quaternion?: number[];
   target?: number[];
   fov?: number;
 }
@@ -139,6 +140,7 @@ export interface PanoramaCapturePayload {
   camera: ModelSnapshotCamera;
   fov?: number;
   viewMode?: 'orbit' | 'walkthrough';
+  panoramaQuality?: 'standard' | 'high';
   capturedAt: string;
 }
 
@@ -233,6 +235,8 @@ export interface GenerationConfig {
   spaceType?: string;
   renderStyle?: string;
   atmosphere?: string;
+  panoramaChangeStrength?: 'weak' | 'medium' | 'strong';
+  panoramaQuality?: 'standard' | 'high';
   customPrompt?: string;
   targetObjectType?: MaterialReplaceTargetObject;
   targetMaterial?: MaterialReplaceTargetMaterial;

@@ -1,11 +1,8 @@
-import { execFile } from 'node:child_process';
 import { cp, mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
+import { BlenderCliError, isBlenderStartupUnavailable, normalizeBlenderBin, runBlender, summarizeOutput } from './blenderCli';
 import { fileStorageProvider, uploadsDir } from './fileStorage';
 import { getModelAsset, updateModelAsset, ModelAsset, ModelOptimizationMetadata } from './storage';
-
-const execFileAsync = promisify(execFile);
 
 export interface ModelOptimizationConfig {
   enabled: boolean;
@@ -21,7 +18,7 @@ export function getModelOptimizationConfig(): ModelOptimizationConfig {
     enabled: enabledValue === undefined ? true : enabledValue.trim() === 'true',
     thresholdBytes: Math.max(0, Number(process.env.MODEL_OPTIMIZATION_THRESHOLD_MB || 30)) * 1024 * 1024,
     targetFaces: Math.max(1_000, Number(process.env.MODEL_PREVIEW_TARGET_FACES || 200_000)),
-    blenderBin: process.env.BLENDER_BIN || 'blender',
+    blenderBin: normalizeBlenderBin(process.env.BLENDER_BIN),
     timeoutMs: Math.max(1_000, Number(process.env.MODEL_OPTIMIZATION_TIMEOUT_MS || 15 * 60 * 1000)),
   };
 }
@@ -128,7 +125,7 @@ async function runBlenderConversion(asset: ModelAsset, outputPath: string): Prom
   const scriptPath = path.resolve(process.cwd(), 'scripts', 'convert_model_to_glb.py');
   const inputPath = resolveLocalUploadPath(asset.filename);
 
-  await execFileAsync(config.blenderBin, [
+  await runBlender(process.env.BLENDER_BIN, [
     '-b',
     '--python',
     scriptPath,
@@ -140,8 +137,8 @@ async function runBlenderConversion(asset: ModelAsset, outputPath: string): Prom
     '--target-faces',
     String(config.targetFaces),
   ], {
-    timeout: config.timeoutMs,
-    windowsHide: true,
+    timeoutMs: config.timeoutMs,
+    logLabel: 'model-optimization',
   });
 }
 
@@ -154,9 +151,22 @@ function resolveLocalUploadPath(filename: string): string {
 }
 
 function normalizeOptimizationError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (/ENOENT|not found|spawn/i.test(message)) {
-    return `Blender 可执行文件不可用，请检查 BLENDER_BIN 配置：${getModelOptimizationConfig().blenderBin}`;
+  const config = getModelOptimizationConfig();
+  if (error instanceof BlenderCliError) {
+    if (isBlenderStartupUnavailable(error)) {
+      const stderrSummary = summarizeOutput(error.stderr, 1000);
+      return `Blender 可执行文件不可用，请检查 BLENDER_BIN 配置：${error.diagnostics.normalizedBlenderBin || config.blenderBin}.${stderrSummary ? ` stderr: ${stderrSummary}` : ''}`;
+    }
+
+    const stderrPreview = summarizeOutput(error.stderr, 2000);
+    const stdoutPreview = summarizeOutput(error.stdout, 1000);
+    if (error.failureKind === 'startup') {
+      return `Blender 轻量化启动失败：code=${error.code ?? 'unknown'} ${stderrPreview || stdoutPreview || error.message}`;
+    }
+
+    return `Blender 轻量化失败：exitCode=${error.code ?? 'unknown'}${error.signal ? ` signal=${error.signal}` : ''} ${stderrPreview || stdoutPreview || error.message}`;
   }
+
+  const message = error instanceof Error ? error.message : String(error);
   return message || 'Model optimization failed.';
 }

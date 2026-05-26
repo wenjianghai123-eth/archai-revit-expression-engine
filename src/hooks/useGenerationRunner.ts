@@ -234,6 +234,8 @@ export function useGenerationRunner({
             spaceType: stateAtStart.config.spaceType,
             renderStyle: stateAtStart.config.renderStyle,
             atmosphere: stateAtStart.config.atmosphere,
+            panoramaChangeStrength: stateAtStart.config.panoramaChangeStrength,
+            panoramaQuality: stateAtStart.config.panoramaQuality,
             customPrompt: stateAtStart.config.customPrompt,
             targetObjectType: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.targetObjectType : undefined,
             targetMaterial: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.targetMaterial : undefined,
@@ -711,14 +713,20 @@ function getAspectRatioString(width: number, height: number): string {
 
 function buildConfigForGeneration(step: GenerationStep, config: GenerationConfig): GenerationConfig {
   if (step !== GenerationStep.FloorplanTo3D) {
-    return step === GenerationStep.PanoramaQuickRender
-      ? {
-          ...config,
-          targetWidth: config.targetWidth || 2048,
-          targetHeight: config.targetHeight || 1024,
-          targetAspectRatio: config.targetAspectRatio || '2:1',
-        }
-      : config;
+    if (step === GenerationStep.PanoramaQuickRender) {
+      const panoramaSize = config.panoramaQuality === 'standard'
+        ? { width: 2048, height: 1024 }
+        : { width: 4096, height: 2048 };
+      return {
+        ...config,
+        qualityMode: 'high',
+        panoramaQuality: config.panoramaQuality || 'high',
+        targetWidth: config.targetWidth || panoramaSize.width,
+        targetHeight: config.targetHeight || panoramaSize.height,
+        targetAspectRatio: config.targetAspectRatio || '2:1',
+      };
+    }
+    return config;
   }
 
   const { style: _style, ...floorplanConfig } = config;
@@ -813,13 +821,32 @@ function buildModelRenderPrompt(config: GenerationConfig): string {
 function buildPanoramaRoamRenderPrompt(config: GenerationConfig): string {
   const customPrompt = readMeaningfulPrompt(config.customPrompt || config.prompt);
   return [
-    'The input image is a 2:1 equirectangular 360 panorama captured from a 3D clay or white model. Transform it into a cinematic, photorealistic architectural or interior 360 panorama rendering. Preserve the exact equirectangular 2:1 canvas, full 360 continuity, camera position, spatial layout, geometry, proportions, horizon, and room or building structure. Add realistic materials, lighting, shadows, environment, furniture, landscape details, and atmosphere. Do not convert it into a normal perspective view. Do not crop, pad, add borders, labels, or watermarks.',
+    'The input image is a 2:1 equirectangular 360 panorama captured from a 3D clay or white model. Transform it into an ultra-detailed, high-resolution, photorealistic architectural or interior 360 panorama rendering with crisp lighting, sharp architectural visualization, realistic materials, rich texture detail, clear edges, refined shadows, and high-end visual quality. Preserve the exact equirectangular 2:1 canvas, full 360 continuity, camera position, spatial layout, geometry, proportions, horizon, and room or building structure. Do not convert it into a normal perspective view. Do not crop, pad, add borders, labels, or watermarks.',
+    readPanoramaQualityInstruction(config.panoramaQuality),
+    readPanoramaChangeStrengthInstruction(config.panoramaChangeStrength),
     readMeaningfulPrompt(config.buildingType) ? `Building type: ${config.buildingType}.` : undefined,
     readMeaningfulPrompt(config.spaceType) ? `Space type: ${config.spaceType}.` : undefined,
     readMeaningfulPrompt(config.renderStyle || config.style) ? `Rendering style: ${config.renderStyle || config.style}.` : undefined,
     readMeaningfulPrompt(config.atmosphere || config.lighting) ? `Atmosphere: ${config.atmosphere || config.lighting}.` : undefined,
     customPrompt ? `User note: ${customPrompt}.` : undefined,
   ].filter((item): item is string => Boolean(item)).join(' ');
+}
+
+function readPanoramaQualityInstruction(quality: GenerationConfig['panoramaQuality']): string {
+  if (quality === 'standard') {
+    return 'Panorama quality: standard 2048x1024 minimum; maintain clean, sharp, photorealistic details without blur or low-resolution artifacts.';
+  }
+  return 'Panorama quality: high definition 4096x2048 target when available; produce crisp, ultra-detailed, high-resolution photorealistic output suitable for final architectural presentation.';
+}
+
+function readPanoramaChangeStrengthInstruction(strength: GenerationConfig['panoramaChangeStrength']): string {
+  if (strength === 'weak') {
+    return 'Change strength: weak. Preserve original elements, layout, structure, furniture positions, main composition, and spatial organization; avoid adding extra elements; focus on faithful rendering and subtle refinement.';
+  }
+  if (strength === 'strong') {
+    return 'Change strength: strong. Preserve the core spatial structure, proportions, camera position, and 360 continuity, but allow stronger creative enhancement, richer scene details, more expressive atmosphere, stronger material variation, decoration, and furnishing enrichment.';
+  }
+  return 'Change strength: medium. Maintain the original space while moderately enhancing materials, lighting, atmosphere, soft furnishing, and details; keep the current balanced default level of transformation.';
 }
 
 function readMeaningfulPrompt(value: unknown): string {

@@ -379,12 +379,14 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   },
   [GenerationStep.PanoramaQuickRender]: {
     prompt: "",
-    qualityMode: 'balanced',
+    qualityMode: 'high',
     style: "漫游全景快渲",
     lighting: "自然光",
     materialStrength: 0.8,
     batchCount: 1,
     preserveGeometry: true,
+    panoramaChangeStrength: 'medium',
+    panoramaQuality: 'high',
   },
 };
 

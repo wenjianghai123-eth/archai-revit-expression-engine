@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Camera, CheckCircle2, ImageIcon, QrCode, Sparkles, Upload } from 'lucide-react';
+import { AlertCircle, Box, Camera, CheckCircle2, ImageIcon, QrCode, Sparkles, Upload } from 'lucide-react';
 import {
   AssetModel,
   GenerationConfig,
@@ -11,10 +11,18 @@ import {
   StepState,
   UploadedImage,
 } from '../types';
-import { ModelAssetRecord, uploadImageAsset, uploadModelAsset } from '../lib/api';
+import { listModelAssets, uploadImageAsset, uploadModelAsset } from '../lib/api';
 import { saveGenerationRecord } from '../storage/history';
 import { savePanoramaRecord } from '../storage/panoramas';
 import { ModelViewer, ModelViewerHandle } from './ModelViewer';
+import {
+  isLargeOriginalModel,
+  mapModelAssetRecordToAssetModel,
+  readConversionStatusLabel,
+  readOptimizationStatusLabel,
+  readPreferredModelVersionLabel,
+  resolvePreferredModelSource,
+} from './modelAssetUtils';
 import { PanoramaViewer } from './PanoramaViewer';
 
 interface PanoramaQuickRenderPanelProps {
@@ -28,13 +36,22 @@ interface PanoramaQuickRenderPanelProps {
   onHistoryRecord?: (record: GenerationHistoryItem) => void;
 }
 
-const modelAccept = '.glb,.gltf,model/gltf-binary,model/gltf+json';
+const modelAccept = '.glb,.gltf,.obj,.dae,.stl,model/gltf-binary,model/gltf+json,model/vnd.collada+xml,model/stl';
 const MAX_MODEL_SIZE_MB = 600;
 const MAX_MODEL_SIZE_BYTES = MAX_MODEL_SIZE_MB * 1024 * 1024;
 const buildingTypeOptions = ['住宅', '商业', '办公', '酒店', '展厅', '景观', '建筑外立面'];
 const spaceTypeOptions = ['客厅', '卧室', '大堂', '办公区', '展厅', '庭院', '外立面'];
 const renderStyleOptions = ['电影级写实', '现代极简', '自然木质', '轻奢', '侘寂', '工业风'];
 const atmosphereOptions = ['自然日光', '暖光', '高级灯光', '黄昏', '夜景', '清爽明亮'];
+const changeStrengthOptions = [
+  { value: 'weak', label: '弱', desc: '忠实渲染 / 小幅优化' },
+  { value: 'medium', label: '中等', desc: '材质、灯光、氛围适度增强' },
+  { value: 'strong', label: '强', desc: '更自由、更丰富的创意表达' },
+] as const;
+const panoramaQualityOptions = [
+  { value: 'standard', label: '标准', desc: '2048 x 1024，速度更快' },
+  { value: 'high', label: '高清', desc: '4096 x 2048，更清晰，适合最终出图' },
+] as const;
 
 export function PanoramaQuickRenderPanel({
   state,
@@ -49,11 +66,14 @@ export function PanoramaQuickRenderPanel({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const viewerRef = useRef<ModelViewerHandle>(null);
   const [model, setModel] = useState<AssetModel | null>(null);
+  const [models, setModels] = useState<AssetModel[]>([]);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
   const [panoramaRecord, setPanoramaRecord] = useState<PanoramaRecord | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [previewMode, setPreviewMode] = useState<'image' | '360'>('360');
+  const [primaryPreviewTab, setPrimaryPreviewTab] = useState<'model' | 'panorama'>('model');
 
   const panoramaUrl = state.outputImage || panoramaRecord?.renderedPanoramaUrl || panoramaRecord?.panoramaUrl || state.inputImage?.url || state.inputImage?.dataUrl || '';
   const shareUrl = useMemo(() => {
@@ -69,6 +89,24 @@ export function PanoramaQuickRenderPanel({
   const qrCodeUrl = shareUrl
     ? `https://api.qrserver.com/v1/create-qr-code/?size=168x168&data=${encodeURIComponent(shareUrl)}`
     : '';
+  const preferredModelSource = model ? resolvePreferredModelSource(model) : null;
+  const modelVersionLabel = model ? readPreferredModelVersionLabel(model) : '尚未选择模型';
+  const shouldShowOriginalModelWarning = model ? isLargeOriginalModel(model) : false;
+  const canCapturePanorama = Boolean(model?.previewable && preferredModelSource?.url);
+  const panoramaChangeStrength = config.panoramaChangeStrength || 'medium';
+  const panoramaQuality = config.panoramaQuality || 'high';
+
+  useEffect(() => {
+    setIsLoadingModels(true);
+    void listModelAssets()
+      .then(records => {
+        const nextModels = records.map(record => mapModelAssetRecord(record));
+        setModels(nextModels);
+        setModel(current => current || nextModels.find(item => item.previewable) || nextModels[0] || null);
+      })
+      .catch(error => setMessage(error instanceof Error ? error.message : '模型资产加载失败。'))
+      .finally(() => setIsLoadingModels(false));
+  }, []);
 
   useEffect(() => {
     if (!panoramaRecord || !state.outputImage) return;
@@ -81,13 +119,19 @@ export function PanoramaQuickRenderPanel({
     savePanoramaRecord(nextRecord);
   }, [panoramaRecord?.id, state.outputImage]);
 
+  useEffect(() => {
+    if (state.outputImage) {
+      setPrimaryPreviewTab('panorama');
+    }
+  }, [state.outputImage]);
+
   const handleModelUpload = async (fileList: FileList | null) => {
     const file = fileList?.[0];
     if (!file) return;
 
     const extension = file.name.split('.').pop()?.toLowerCase();
-    if (extension !== 'glb' && extension !== 'gltf') {
-      setMessage('第一阶段仅支持上传 GLB / GLTF 模型。');
+    if (!extension || !['glb', 'gltf', 'obj', 'dae', 'stl'].includes(extension)) {
+      setMessage('请上传 GLB、GLTF、OBJ、DAE 或 STL 模型。推荐使用转换后的 GLB。');
       return;
     }
 
@@ -101,16 +145,21 @@ export function PanoramaQuickRenderPanel({
     try {
       const asset = await uploadModelAsset(file);
       const nextModel = mapModelAssetRecord(asset);
+      setModels(previous => [nextModel, ...previous.filter(item => item.id !== nextModel.id)]);
       setModel(nextModel);
       setPanoramaRecord(null);
+      setPrimaryPreviewTab('model');
       onUpdateInputImage(null);
+      const captureSize = getPanoramaCaptureSize(panoramaQuality);
       onUpdateConfig({
         panoramaCapture: undefined,
         panoramaAssetId: undefined,
         sourceImageAssetId: undefined,
         sourceModelAssetId: nextModel.id,
-        targetWidth: 2048,
-        targetHeight: 1024,
+        qualityMode: 'high',
+        panoramaQuality,
+        targetWidth: captureSize.width,
+        targetHeight: captureSize.height,
         targetAspectRatio: '2:1',
       });
     } catch (error) {
@@ -122,9 +171,10 @@ export function PanoramaQuickRenderPanel({
 
   const handleCaptureViewpoint = async () => {
     if (!model) {
-      setMessage('请先上传 GLB / GLTF 模型。');
+      setMessage('请先选择或上传一个 3D 模型。');
       return;
     }
+    const source = resolvePreferredModelSource(model);
     if (!viewerRef.current) {
       setMessage('当前模型预览尚未准备好，请稍后再试。');
       return;
@@ -133,7 +183,16 @@ export function PanoramaQuickRenderPanel({
     setIsCapturing(true);
     setMessage(null);
     try {
-      const capture = await viewerRef.current.capturePanorama({ width: 2048, height: 1024 });
+      let actualPanoramaQuality = panoramaQuality;
+      let capture = await viewerRef.current.capturePanorama(getPanoramaCaptureSize(panoramaQuality)).catch(async error => {
+        if (panoramaQuality !== 'high') throw error;
+        actualPanoramaQuality = 'standard';
+        setMessage('当前设备生成高清全景底图失败，已自动降级为标准质量。');
+        return viewerRef.current?.capturePanorama(getPanoramaCaptureSize('standard'));
+      });
+      if (!capture) {
+        throw new Error('当前模型预览无法生成全景图，请稍后再试。');
+      }
       const imageFile = dataUrlToFile(capture.dataUrl, `panorama-${Date.now()}.png`);
       const imageAsset = await uploadImageAsset(imageFile, imageFile.name);
       const uploadedPanorama: UploadedImage = {
@@ -150,22 +209,24 @@ export function PanoramaQuickRenderPanel({
       const payload: PanoramaCapturePayload = {
         captureType: 'panorama-viewpoint',
         sourceModelAssetId: model.id,
-        sourceModelUrl: model.convertedUrl || model.modelUrl,
-        modelFileType: model.fileType === 'glb' || model.fileType === 'gltf' ? model.fileType : undefined,
+        sourceModelUrl: source.url,
+        modelFileType: source.fileType === 'glb' || source.fileType === 'gltf' ? source.fileType : undefined,
         camera: {
           position: capture.camera?.position,
           rotation: capture.camera?.rotation,
+          quaternion: capture.camera?.quaternion,
           target: capture.camera?.target,
           fov: capture.camera?.fov,
         },
         fov: capture.camera?.fov,
         viewMode: capture.viewMode,
+        panoramaQuality: actualPanoramaQuality,
         capturedAt: new Date().toISOString(),
       };
       const record: PanoramaRecord = {
         id: `panorama-${Date.now()}`,
         projectId,
-        modelUrl: model.convertedUrl || model.modelUrl || model.originalUrl || '',
+        modelUrl: source.url || model.modelUrl || model.originalUrl || '',
         cameraState: payload.camera,
         panoramaUrl: imageAsset.url || capture.dataUrl,
         thumbnailUrl: imageAsset.url || capture.dataUrl,
@@ -192,6 +253,9 @@ export function PanoramaQuickRenderPanel({
           targetWidth: capture.width,
           targetHeight: capture.height,
           targetAspectRatio: '2:1',
+          qualityMode: 'high',
+          panoramaQuality: actualPanoramaQuality,
+          panoramaChangeStrength,
           panoramaCapture: payload,
         },
         sourceModelAssetId: model.id,
@@ -200,6 +264,7 @@ export function PanoramaQuickRenderPanel({
       });
       setPanoramaRecord(record);
       setPreviewMode('360');
+      setPrimaryPreviewTab('panorama');
       onHistoryRecord?.(historyRecord);
       onUpdateInputImage(uploadedPanorama);
       onUpdateConfig({
@@ -209,6 +274,9 @@ export function PanoramaQuickRenderPanel({
         targetWidth: capture.width,
         targetHeight: capture.height,
         targetAspectRatio: '2:1',
+        qualityMode: 'high',
+        panoramaQuality: actualPanoramaQuality,
+        panoramaChangeStrength,
         panoramaCapture: payload,
       });
     } catch (error) {
@@ -237,28 +305,58 @@ export function PanoramaQuickRenderPanel({
             <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
               <div>
                 <p className="text-sm font-bold text-slate-950">漫游预览</p>
-                <p className="mt-1 text-xs text-slate-500">{model ? `${model.fileName} / ${model.size}` : '上传 GLB / GLTF 后可进行基础漫游查看'}</p>
+                <p className="mt-1 text-xs text-slate-500">{model ? `${model.fileName} / ${model.size} / ${modelVersionLabel}` : '选择或上传模型后可进行漫游查看'}</p>
               </div>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isUploading}
-                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
-              >
-                <Upload className="h-4 w-4" />
-                {model ? '重新上传模型' : '上传模型'}
-              </button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <div className="inline-flex rounded-lg bg-slate-100 p-1 text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setPrimaryPreviewTab('model')}
+                    className={`rounded-md px-3 py-1.5 ${primaryPreviewTab === 'model' ? 'bg-slate-950 text-white' : 'text-slate-600 hover:text-slate-900'}`}
+                  >
+                    模型预览
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPrimaryPreviewTab('panorama')}
+                    className={`rounded-md px-3 py-1.5 ${primaryPreviewTab === 'panorama' ? 'bg-slate-950 text-white' : 'text-slate-600 hover:text-slate-900'}`}
+                  >
+                    全景图预览
+                  </button>
+                </div>
+                {primaryPreviewTab === 'panorama' && panoramaUrl ? (
+                  <div className="inline-flex rounded-lg bg-slate-100 p-1 text-xs font-bold">
+                    <button type="button" onClick={() => setPreviewMode('360')} className={`rounded-md px-2 py-1 ${previewMode === '360' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500'}`}>
+                      360
+                    </button>
+                    <button type="button" onClick={() => setPreviewMode('image')} className={`rounded-md px-2 py-1 ${previewMode === 'image' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500'}`}>
+                      图片
+                    </button>
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploading}
+                  className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
+                >
+                  <Upload className="h-4 w-4" />
+                  {model ? '重新上传模型' : '上传模型'}
+                </button>
+              </div>
             </div>
 
             <div className="h-[calc(100vh-168px)] min-h-[420px] xl:min-h-[560px]">
-              {model ? (
+              {primaryPreviewTab === 'panorama' ? (
+                <MainPanoramaPreview imageUrl={panoramaUrl} previewMode={previewMode} />
+              ) : model ? (
                 <ModelViewer ref={viewerRef} asset={model} minHeight={560} />
               ) : (
                 <div className="flex h-full items-center justify-center bg-slate-50 p-8 text-center">
                   <div className="max-w-sm">
                     <Box className="mx-auto h-10 w-10 text-slate-300" />
-                    <p className="mt-4 text-sm font-bold text-slate-900">上传 GLB / GLTF 模型</p>
-                    <p className="mt-2 text-xs leading-5 text-slate-500">当前阶段用于漫游取点、生成 2:1 全景图，并接入 AI 全景渲染与分享预览。</p>
+                    <p className="mt-4 text-sm font-bold text-slate-900">选择或上传模型</p>
+                    <p className="mt-2 text-xs leading-5 text-slate-500">优先使用转换后的 GLB 或轻量化模型，从当前位置生成 360 全景截图。</p>
                   </div>
                 </div>
               )}
@@ -272,7 +370,7 @@ export function PanoramaQuickRenderPanel({
               </div>
               <div>
                 <p className="text-lg font-bold text-slate-950">漫游全景快渲</p>
-                <p className="mt-1 text-xs text-slate-500">捕捉 2:1 全景，AI 渲染后可 360 预览和分享。</p>
+                <p className="mt-1 text-xs text-slate-500">当前位置生成 360 全景截图，全景图为 2:1 标准比例。</p>
               </div>
             </div>
 
@@ -281,11 +379,11 @@ export function PanoramaQuickRenderPanel({
             <button
               type="button"
               onClick={handleCaptureViewpoint}
-              disabled={!model || isCapturing}
+              disabled={!canCapturePanorama || isCapturing}
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-50"
             >
               <Camera className="h-4 w-4" />
-              {isCapturing ? '正在生成全景...' : '以当前视点生成全景'}
+              {isCapturing ? '正在生成全景...' : '当前位置生成 360 全景截图'}
             </button>
 
             <button
@@ -309,11 +407,108 @@ export function PanoramaQuickRenderPanel({
             <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">模型文件</p>
               <p className="mt-2 truncate text-sm font-bold text-slate-800">{model?.fileName || '尚未上传模型'}</p>
-              <p className="mt-1 text-xs text-slate-500">{model ? `${model.fileType.toUpperCase()} / ${model.size}` : '支持 GLB / GLTF'}</p>
+              <p className="mt-1 text-xs text-slate-500">{model ? `${model.fileType.toUpperCase()} / ${model.size}` : '支持 GLB / GLTF / OBJ / DAE / STL'}</p>
+              {model ? (
+                <div className="mt-3 space-y-1 rounded-lg bg-white px-3 py-2 text-[11px] leading-5 text-slate-500">
+                  <p><span className="font-bold text-slate-700">当前加载：</span>{modelVersionLabel}</p>
+                  <p><span className="font-bold text-slate-700">转换状态：</span>{readConversionStatusLabel(model)}</p>
+                  <p><span className="font-bold text-slate-700">轻量化状态：</span>{readOptimizationStatusLabel(model.optimizationStatus)}</p>
+                  <p><span className="font-bold text-slate-700">预览地址：</span>{preferredModelSource?.fileType.toUpperCase() || model.fileType.toUpperCase()}</p>
+                </div>
+              ) : null}
+              {shouldShowOriginalModelWarning ? (
+                <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-700">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>建议先转换为 GLB 或使用轻量化模型，以获得更流畅的全景预览体验。</span>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">模型资产</p>
+              {isLoadingModels ? (
+                <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">正在加载模型资产...</div>
+              ) : models.length > 0 ? (
+                <div className="max-h-56 space-y-2 overflow-y-auto pr-1 custom-scrollbar">
+                  {models.map(item => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        setModel(item);
+                        setPanoramaRecord(null);
+                        setPrimaryPreviewTab('model');
+                        setMessage(null);
+                        onUpdateInputImage(null);
+                        onUpdateConfig({
+                          panoramaCapture: undefined,
+                          panoramaAssetId: undefined,
+                          sourceImageAssetId: undefined,
+                          sourceModelAssetId: item.id,
+                        });
+                      }}
+                      className={`w-full rounded-xl border p-3 text-left transition-colors ${model?.id === item.id ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate text-sm font-bold text-slate-800">{item.name}</span>
+                        <span className="rounded bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{resolvePreferredModelSource(item).fileType.toUpperCase()}</span>
+                      </div>
+                      <p className="mt-1 truncate text-xs text-slate-500">{item.fileName}</p>
+                      <p className="mt-1 text-[11px] font-semibold text-emerald-700">{readPreferredModelVersionLabel(item)}</p>
+                      {!item.previewable ? <p className="mt-1 text-[11px] font-semibold text-amber-700">该格式暂不支持全景预览</p> : null}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-xs leading-5 text-slate-500">
+                  还没有模型资产，请上传 GLB、GLTF、OBJ、DAE 或 STL 模型。推荐先转换为 GLB。
+                </div>
+              )}
             </div>
 
             <div className="space-y-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
               <p className="text-sm font-bold text-slate-900">AI 全景渲染参数</p>
+              <div>
+                <p className="text-xs font-bold text-slate-600">改动强度</p>
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  {changeStrengthOptions.map(option => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => onUpdateConfig({ panoramaChangeStrength: option.value })}
+                      className={`rounded-lg border px-2 py-2 text-left transition-colors ${panoramaChangeStrength === option.value ? 'border-blue-500 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
+                    >
+                      <span className="block text-sm font-bold">{option.label}</span>
+                      <span className="mt-1 block text-[10px] leading-4">{option.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-600">全景质量</p>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {panoramaQualityOptions.map(option => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => {
+                        const size = getPanoramaCaptureSize(option.value);
+                        onUpdateConfig({
+                          panoramaQuality: option.value,
+                          qualityMode: 'high',
+                          targetWidth: size.width,
+                          targetHeight: size.height,
+                          targetAspectRatio: '2:1',
+                        });
+                      }}
+                      className={`rounded-lg border px-3 py-2 text-left transition-colors ${panoramaQuality === option.value ? 'border-blue-500 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
+                    >
+                      <span className="block text-sm font-bold">{option.label}</span>
+                      <span className="mt-1 block text-[10px] leading-4">{option.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
               <SelectField label="建筑类型" value={config.buildingType || ''} options={buildingTypeOptions} emptyLabel="自动判断" onChange={value => onUpdateConfig({ buildingType: value })} />
               <SelectField label="空间类型" value={config.spaceType || ''} options={spaceTypeOptions} emptyLabel="自动判断" onChange={value => onUpdateConfig({ spaceType: value })} />
               <SelectField label="风格" value={config.renderStyle || ''} options={renderStyleOptions} emptyLabel="电影级写实" onChange={value => onUpdateConfig({ renderStyle: value })} />
@@ -335,7 +530,7 @@ export function PanoramaQuickRenderPanel({
                 <CheckCircle2 className={`h-4 w-4 ${config.panoramaCapture ? 'text-emerald-500' : 'text-slate-300'}`} />
                 <p className="text-sm font-bold text-slate-800">{config.panoramaCapture ? '已捕捉当前视点' : '尚未捕捉视点'}</p>
               </div>
-              <p className="mt-2 text-xs leading-5 text-slate-500">捕捉内容包含相机位置、朝向、目标点、FOV 和模型资产 ID。</p>
+              <p className="mt-2 text-xs leading-5 text-slate-500">捕捉内容包含相机位置、朝向、目标点、FOV 和模型资产 ID，输出为 2:1 标准全景图。</p>
               {config.panoramaCapture ? (
                 <pre className="mt-3 max-h-56 overflow-auto rounded-lg bg-slate-950 p-3 text-[10px] leading-4 text-slate-100">
                   {JSON.stringify(config.panoramaCapture, null, 2)}
@@ -346,6 +541,30 @@ export function PanoramaQuickRenderPanel({
         </div>
       </section>
     </>
+  );
+}
+
+function MainPanoramaPreview({ imageUrl, previewMode }: { imageUrl: string; previewMode: 'image' | '360' }) {
+  if (!imageUrl) {
+    return (
+      <div className="flex h-full items-center justify-center bg-slate-50 p-8 text-center">
+        <div className="max-w-sm">
+          <Camera className="mx-auto h-10 w-10 text-slate-300" />
+          <p className="mt-4 text-sm font-bold text-slate-900">请先在模型中定位视角并生成全景快渲。</p>
+          <p className="mt-2 text-xs leading-5 text-slate-500">生成后将在这里以大图方式预览 2:1 标准全景图，可切换普通图片或 360 预览。</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (previewMode === '360') {
+    return <PanoramaViewer imageUrl={imageUrl} className="h-full w-full bg-slate-950" minHeight={560} />;
+  }
+
+  return (
+    <div className="flex h-full items-center justify-center bg-slate-950 p-4">
+      <img src={imageUrl} alt="全景图大图预览" className="max-h-full w-full max-w-full object-contain" />
+    </div>
   );
 }
 
@@ -361,7 +580,7 @@ function ResultPreview({
   if (!imageUrl) {
     return (
       <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-xs font-bold text-slate-400">
-        生成全景后将在这里显示普通图片和 360 预览。
+        生成全景后将在这里显示 2:1 标准全景图和 360 预览。
       </div>
     );
   }
@@ -433,48 +652,14 @@ function SelectField({
   );
 }
 
-function mapModelAssetRecord(asset: ModelAssetRecord): AssetModel {
-  const convertedUrl = asset.convertedUrl || asset.metadata?.convertedUrl;
-  const previewUrl = convertedUrl || asset.optimizedUrl || asset.previewUrl || asset.metadata?.optimizedUrl || asset.metadata?.previewUrl;
-  const fileType = previewUrl ? 'glb' : asset.fileType;
-  return {
-    id: asset.id,
-    name: asset.originalFilename.replace(/\.[^.]+$/u, ''),
-    fileName: asset.originalFilename,
-    fileType,
-    format: asset.format || asset.fileType,
-    modelUrl: previewUrl || asset.url,
-    originalUrl: asset.originalUrl || asset.metadata?.originalUrl || asset.url,
-    convertedUrl,
-    convertedFormat: asset.convertedFormat || asset.metadata?.convertedFormat,
-    conversionStatus: asset.conversionStatus || asset.metadata?.conversionStatus || (asset.fileType === 'obj' || asset.fileType === 'dae' ? 'idle' : undefined),
-    conversionError: asset.conversionError ?? asset.metadata?.conversionError,
-    convertedAt: asset.convertedAt || asset.metadata?.convertedAt,
-    previewUrl: asset.previewUrl || asset.metadata?.previewUrl,
-    optimizedUrl: asset.optimizedUrl || asset.metadata?.optimizedUrl,
-    thumbnailUrl: asset.thumbnailUrl || asset.metadata?.thumbnailUrl,
-    metadata: asset.metadata,
-    optimizationStatus: asset.metadata?.optimizationStatus || 'skipped',
-    optimizationError: asset.metadata?.optimizationError,
-    originalFileSize: asset.metadata?.originalFileSize || asset.size,
-    optimizedFileSize: asset.metadata?.optimizedFileSize,
-    usesOptimizedPreview: Boolean(previewUrl),
-    thumbnail: '',
-    size: formatFileSize(asset.size),
-    date: asset.createdAt.slice(0, 10),
-    source: 'uploaded',
-    provider: '本地后端',
-    status: 'ready',
-    qualityStatus: 'usable',
-    category: '漫游全景',
-    previewable: fileType === 'glb' || fileType === 'gltf',
-  };
+function mapModelAssetRecord(asset: Parameters<typeof mapModelAssetRecordToAssetModel>[0]): AssetModel {
+  return mapModelAssetRecordToAssetModel(asset, { category: '漫游全景' });
 }
 
-function formatFileSize(size: number): string {
-  if (!Number.isFinite(size) || size <= 0) return '未知';
-  if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-  return `${Math.max(1, Math.round(size / 1024))} KB`;
+function getPanoramaCaptureSize(quality: GenerationConfig['panoramaQuality']): { width: number; height: number } {
+  return quality === 'standard'
+    ? { width: 2048, height: 1024 }
+    : { width: 4096, height: 2048 };
 }
 
 function dataUrlToFile(dataUrl: string, filename: string): File {

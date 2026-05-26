@@ -3,6 +3,7 @@ import { AlertCircle, Box, Camera, CheckCircle2, RefreshCw, Upload } from 'lucid
 import { AssetModel, GenerationConfig, ModelSnapshotMetadata, StepState, UploadedImage } from '../types';
 import { getModelAsset, listModelAssets, ModelAssetRecord, optimizeModelAsset, uploadImageAsset, uploadModelAsset } from '../lib/api';
 import { ModelViewer, ModelViewerHandle } from './ModelViewer';
+import { mapModelAssetRecordToAssetModel, mapModelToOriginalSource } from './modelAssetUtils';
 
 interface ModelSnapshotRenderPanelProps {
   state: StepState;
@@ -15,7 +16,6 @@ const modelAccept = '.glb,.gltf,.obj,.dae,.stl,model/gltf-binary,model/gltf+json
 const MAX_MODEL_SIZE_MB = 600;
 const MAX_MODEL_SIZE_BYTES = MAX_MODEL_SIZE_MB * 1024 * 1024;
 const MODEL_OPTIMIZATION_THRESHOLD_BYTES = 30 * 1024 * 1024;
-const previewableTypes = new Set<AssetModel['fileType']>(['glb', 'gltf', 'obj', 'dae', 'stl']);
 const buildingTypes = ['住宅', '商业', '办公', '展厅', '酒店', '景观', '自定义'];
 const spaceTypes = ['外立面', '客厅', '餐厅', '卧室', '大堂', '办公区', '庭院', '自定义'];
 const renderStyles = ['现代极简', '自然木质', '轻奢', '侘寂', '工业风', '参数化', '写实建筑表现'];
@@ -524,56 +524,11 @@ function SelectField({ label, value, options, onChange }: { label: string; value
 }
 
 function mapModelAssetRecord(asset: ModelAssetRecord, forceOriginal = false): AssetModel {
-  const convertedUrl = asset.convertedUrl || asset.metadata?.convertedUrl;
-  const previewUrl = convertedUrl || asset.optimizedUrl || asset.previewUrl || asset.metadata?.optimizedUrl || asset.metadata?.previewUrl;
-  const modelUrl = forceOriginal ? asset.url : previewUrl || asset.url;
-  const fileType = !forceOriginal && previewUrl ? 'glb' : asset.fileType;
-  const previewable = previewableTypes.has(fileType);
-  const optimizationStatus = asset.metadata?.optimizationStatus || 'skipped';
-  return {
-    id: asset.id,
-    name: asset.originalFilename.replace(/\.[^.]+$/u, ''),
-    fileName: asset.originalFilename,
-    fileType,
-    format: asset.format || asset.fileType,
-    modelUrl,
-    originalUrl: asset.originalUrl || asset.metadata?.originalUrl || asset.url,
-    convertedUrl,
-    convertedFormat: asset.convertedFormat || asset.metadata?.convertedFormat,
-    conversionStatus: asset.conversionStatus || asset.metadata?.conversionStatus || (asset.fileType === 'obj' || asset.fileType === 'dae' ? 'idle' : undefined),
-    conversionError: asset.conversionError ?? asset.metadata?.conversionError,
-    convertedAt: asset.convertedAt || asset.metadata?.convertedAt,
-    previewUrl: asset.previewUrl || asset.metadata?.previewUrl,
-    optimizedUrl: asset.optimizedUrl || asset.metadata?.optimizedUrl,
-    thumbnailUrl: asset.thumbnailUrl || asset.metadata?.thumbnailUrl,
-    metadata: asset.metadata,
-    optimizationStatus,
-    optimizationError: asset.metadata?.optimizationError,
-    originalFileSize: asset.metadata?.originalFileSize || asset.size,
-    optimizedFileSize: asset.metadata?.optimizedFileSize,
-    usesOptimizedPreview: Boolean(!forceOriginal && previewUrl),
-    allowOriginalModelLoad: forceOriginal,
-    thumbnail: '',
-    size: formatFileSize(asset.size),
-    date: asset.createdAt.slice(0, 10),
-    source: 'uploaded',
-    provider: '本地后端',
-    status: isOptimizationInProgress(optimizationStatus) ? 'optimizing' : 'ready',
-    qualityStatus: asset.fileType === 'obj' || asset.fileType === 'stl' ? 'unknown' : 'usable',
-    category: '未分类',
-    previewable,
-  };
+  return mapModelAssetRecordToAssetModel(asset, { forceOriginal, category: '未分类' });
 }
 
 function mapModelFromApprovedOriginal(model: AssetModel): AssetModel {
-  return {
-    ...model,
-    fileType: model.format || model.fileType,
-    modelUrl: model.originalUrl || model.modelUrl,
-    usesOptimizedPreview: false,
-    convertedUrl: undefined,
-    allowOriginalModelLoad: true,
-  };
+  return mapModelToOriginalSource(model);
 }
 
 function isOptimizationInProgress(status: AssetModel['optimizationStatus']) {
