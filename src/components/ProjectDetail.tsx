@@ -495,7 +495,7 @@ function ProjectReportPrintView({ project, reportOptions }: { project: Project; 
   return (
     <section className="pdf-report-print">
       <header className="pdf-report-header">
-        <p className="pdf-report-kicker">ArchAI Project Report</p>
+        <p className="pdf-report-kicker">深圳广田股份有限公司 · 烛照AI 项目表达报告</p>
         <h1>{project.name}</h1>
         <p>{project.description || '暂无项目描述。'}</p>
         <div className="pdf-report-meta">

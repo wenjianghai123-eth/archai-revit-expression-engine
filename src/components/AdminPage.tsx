@@ -158,17 +158,17 @@ export function AdminPage({ currentUser, onBackToApp, onSignOut }: AdminPageProp
   const handleGrantCredits = async (user: UserProfile) => {
     const amount = creditAmounts[user.id] || 0;
     if (!Number.isInteger(amount) || amount <= 0) {
-      setError('请输入正整数 credits。');
+      setError('请输入正整数生成额度。');
       return;
     }
     setError(null);
     setMessage(null);
     try {
       await grantAdminUserCredits(user.id, { amount, reason: 'Admin manual credit grant' });
-      setMessage(`已为 ${user.email} 增加 ${amount} credits。`);
+      setMessage(`已为 ${user.email} 增加 ${amount} 算力点。`);
       await load();
     } catch (grantError) {
-      setError(grantError instanceof Error ? grantError.message : '增加 credits 失败。');
+      setError(grantError instanceof Error ? grantError.message : '增加算力点失败。');
     }
   };
 
@@ -195,7 +195,7 @@ export function AdminPage({ currentUser, onBackToApp, onSignOut }: AdminPageProp
             </div>
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.28em] text-blue-600">Admin</p>
-              <h1 className="text-2xl font-bold text-slate-950">ArchAI 后台</h1>
+              <h1 className="text-2xl font-bold text-slate-950">烛照AI 管理后台</h1>
             </div>
           </div>
           <div className="flex gap-2">
@@ -223,7 +223,7 @@ export function AdminPage({ currentUser, onBackToApp, onSignOut }: AdminPageProp
             <StatCard label="生成任务" value={dashboard.stats.generationJobCount} />
             <StatCard label="成功任务" value={dashboard.stats.succeededJobCount} />
             <StatCard label="失败任务" value={dashboard.stats.failedJobCount} />
-            <StatCard label="消耗 credits" value={dashboard.stats.totalCreditsConsumed} />
+            <StatCard label="消耗算力点" value={dashboard.stats.totalCreditsConsumed} />
           </section>
         ) : null}
 
@@ -244,7 +244,7 @@ export function AdminPage({ currentUser, onBackToApp, onSignOut }: AdminPageProp
               </select>
             </label>
             <label className="mt-3 block text-xs font-bold text-slate-500">
-              初始积分
+              初始生成额度
               <input type="number" min="0" step="1" value={form.initialCredits} onChange={event => setForm(prev => ({ ...prev, initialCredits: Number(event.target.value) }))} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
             </label>
             <button disabled={isCreating} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">
@@ -265,7 +265,7 @@ export function AdminPage({ currentUser, onBackToApp, onSignOut }: AdminPageProp
                     <th className="px-3 py-2">角色</th>
                     <th className="px-3 py-2">状态</th>
                     <th className="px-3 py-2">重置密码</th>
-                    <th className="px-3 py-2">Credits</th>
+                    <th className="px-3 py-2">生成额度</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -361,7 +361,7 @@ function TextInput({ label, value, onChange, type = 'text', required = false }: 
 }
 
 export function formatAdminCreateSuccessMessage(email: string, credits: number): string {
-  return `用户 ${email} 创建成功，初始积分 ${credits} credits。请通过安全渠道单独发送初始密码。`;
+  return `用户 ${email} 创建成功，初始生成额度 ${credits} 算力点。请通过安全渠道单独发送初始密码。`;
 }
 
 export function isValidAdminEmail(email: string): boolean {

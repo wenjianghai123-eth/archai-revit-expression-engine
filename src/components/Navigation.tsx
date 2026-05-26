@@ -71,11 +71,11 @@ export function Sidebar({
       <div className="border-b border-white/10 p-6">
         <div className="flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl bg-white shadow-lg shadow-blue-950/40">
-            <img src="/gtlogo.png" alt="ArchAI Logo" className="h-full w-full object-cover" />
+            <img src="/gtlogo.png" alt="烛照AI Logo" className="h-full w-full object-cover" />
           </div>
           <div className="min-w-0">
-            <p className="text-xl font-black tracking-tight">ArchAI</p>
-            <p className="mt-0.5 text-[10px] font-bold uppercase tracking-[0.28em] text-slate-500">Expression Engine</p>
+            <p className="text-xl font-black tracking-tight">烛照AI</p>
+            <p className="mt-0.5 text-[10px] font-bold tracking-[0.18em] text-slate-500">建筑空间智能表达平台</p>
           </div>
         </div>
         <div className="mt-4 flex gap-2">
@@ -84,8 +84,8 @@ export function Sidebar({
         </div>
         <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
           <p className="text-[10px] font-bold uppercase tracking-widest text-blue-300">当前项目</p>
-          <h2 className="mt-2 text-lg font-bold leading-tight">建筑 AI 创作工作台</h2>
-          <p className="mt-2 text-xs leading-5 text-slate-400">从平面、风格到局部修饰，统一管理生成资产与方案记录。</p>
+          <h2 className="mt-2 text-lg font-bold leading-tight">烛照AI 生成工作台</h2>
+          <p className="mt-2 text-xs leading-5 text-slate-400">面向广田设计流程的 AI 方案表达工具。</p>
         </div>
       </div>
 
@@ -199,7 +199,7 @@ function AccountPanel({
         ) : (
           <>
             <WalletCards className="h-4 w-4 shrink-0 text-emerald-300" />
-            <span className="text-slate-200">剩余 credits：{creditBalance?.balance ?? '读取中'}</span>
+            <span className="text-slate-200">剩余算力点：{creditBalance?.balance ?? '读取中'}</span>
           </>
         )}
       </div>
@@ -312,18 +312,19 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
         <div>
           <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.28em] text-blue-600">
             <Sparkles className="h-3.5 w-3.5" />
-            AI Creative Platform
+            烛照AI 创作平台
           </div>
-          <h1 className="mt-1 text-lg font-bold tracking-tight text-slate-950 md:text-xl">建筑设计 AI 生成工作台</h1>
+          <h1 className="mt-1 text-lg font-bold tracking-tight text-slate-950 md:text-xl">烛照AI 生成工作台</h1>
+          <p className="mt-0.5 text-xs text-slate-500">面向广田设计流程的 AI 方案表达工具</p>
         </div>
         <div className="hidden rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-bold text-slate-500 md:block">
-          <span>MVP 0.1 / Express Backend</span>
+          <span>广田内部版 / Express Backend</span>
           <span className="mx-2 text-slate-300">/</span>
-          <span>本次消耗：{estimatedCreditCost === null ? '-' : estimatedCreditCost} Credits</span>
+          <span>本次消耗：{estimatedCreditCost === null ? '-' : estimatedCreditCost} 算力点</span>
           {creditBalance !== null ? (
             <>
               <span className="mx-2 text-slate-300">/</span>
-              <span>余额：{creditBalance} Credits</span>
+              <span>余额：{creditBalance} 算力点</span>
             </>
           ) : null}
         </div>

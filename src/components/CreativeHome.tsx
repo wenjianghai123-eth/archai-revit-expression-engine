@@ -109,11 +109,11 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
             <div className="flex min-h-[168px] flex-col justify-center">
               <div className="mb-3 flex w-fit items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-[11px] font-bold text-blue-100">
                 <Sparkles className="h-4 w-4" />
-                Architectural AI Creative Platform
+                烛照AI 建筑空间智能表达工作台
               </div>
-              <h1 className="max-w-3xl text-2xl font-bold leading-tight tracking-tight md:text-3xl">ArchAI 建筑 AI 创作工作台</h1>
+              <h1 className="max-w-3xl text-2xl font-bold leading-tight tracking-tight md:text-3xl">烛照AI 建筑空间智能表达工作台</h1>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">
-                上传平面、参考图或效果图，快速生成彩平、风格渲染和局部修饰结果
+                面向深圳广田股份有限公司设计业务，支持彩平、白模快渲、风格渲染、局部修饰、材质替换、方案变体与全景表达。
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
                 <button

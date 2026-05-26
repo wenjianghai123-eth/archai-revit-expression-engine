@@ -26,9 +26,9 @@ export function LoginPage({ isSigningIn, error, message, isSupabaseConfigured, o
           <div className="mb-4 flex h-11 w-11 items-center justify-center rounded bg-blue-600 text-white">
             <LogIn className="h-5 w-5" />
           </div>
-          <h1 className="text-xl font-bold text-slate-950">登录 ArchAI</h1>
+          <h1 className="text-xl font-bold text-slate-950">登录烛照AI</h1>
           <p className="mt-2 text-sm leading-6 text-slate-500">
-            账号由管理员创建，请使用分配的邮箱和初始密码登录。
+            深圳广田股份有限公司内部设计智能助手。账号由管理员创建，请使用分配的邮箱和初始密码登录。
           </p>
         </div>
 

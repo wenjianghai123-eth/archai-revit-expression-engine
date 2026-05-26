@@ -1,6 +1,6 @@
 {
-  "name": "ArchAI Expression Engine MVP 0.1",
-  "description": "面向建筑表达的智能可视化工具，支持从平面图到三维效果图与局部修饰的多步骤流程。",
+  "name": "广田烛照AI 建筑空间智能表达平台",
+  "description": "面向深圳广田股份有限公司设计业务的建筑空间智能表达平台，支持彩平、白模快渲、风格渲染、局部修饰、材质替换、方案变体与全景表达。",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

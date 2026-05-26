@@ -31,8 +31,8 @@ export function PanoramaSharePage({ shareId }: PanoramaSharePageProps) {
     <div className="min-h-screen bg-slate-950 text-white">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.24em] text-blue-200">ArchAI Panorama</p>
-          <h1 className="mt-1 text-xl font-bold">漫游全景分享</h1>
+          <p className="text-xs font-bold tracking-[0.18em] text-blue-200">烛照AI 全景预览</p>
+          <h1 className="mt-1 text-xl font-bold">烛照AI 全景预览</h1>
           <p className="mt-1 text-xs text-slate-400">创建时间：{formatDate(record.createdAt)}</p>
         </div>
         <div className="inline-flex rounded-xl bg-white/10 p-1 text-sm font-bold">

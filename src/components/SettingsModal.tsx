@@ -34,7 +34,7 @@ export function SettingsModal({
       <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-100 p-5">
           <div>
-            <h2 className="text-lg font-bold text-slate-900">MVP 设置</h2>
+            <h2 className="text-lg font-bold text-slate-900">烛照AI 设置</h2>
             <p className="text-xs text-slate-500">运行状态与模型提供方信息</p>
           </div>
           <button onClick={onClose} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700" title="关闭">
@@ -45,7 +45,7 @@ export function SettingsModal({
         <div className="space-y-3 p-5">
           <StatusRow
             icon={UserCircle}
-            label="Current user"
+            label="当前用户"
             value={currentUser ? `${currentUser.name} · ${currentUser.email}` : currentUserStatus}
           />
           {currentUser && (
@@ -57,9 +57,9 @@ export function SettingsModal({
               退出登录
             </button>
           )}
-          <StatusRow icon={Server} label="Provider mode" value={providerMode} />
-          <StatusRow icon={Activity} label="Backend health" value={backendHealth} />
-          <StatusRow icon={ShieldCheck} label="Provider source" value={providerSource} />
+          <StatusRow icon={Server} label="生成模式" value={providerMode} />
+          <StatusRow icon={Activity} label="服务状态" value={backendHealth} />
+          <StatusRow icon={ShieldCheck} label="模型来源" value={providerSource} />
           <button
             onClick={onRefresh}
             disabled={isChecking}

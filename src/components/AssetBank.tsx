@@ -896,7 +896,7 @@ export function AssetBank() {
                 )}
 
                 <div className="mt-5 grid grid-cols-2 gap-4">
-                  <DetailRow label="Provider" value={detailAsset.provider || '未知'} />
+                  <DetailRow label="模型来源" value={detailAsset.provider || '未知'} />
                   <DetailRow label="来源" value={sourceLabel(detailAsset.source)} />
                   <DetailRow label="文件格式" value={detailAsset.fileType.toUpperCase()} />
                   <DetailRow label="文件大小" value={detailAsset.size} />
