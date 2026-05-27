@@ -117,12 +117,15 @@ def export_glb(output_path):
 
 def main():
     args = parse_args()
+    input_path = os.path.abspath(args.input)
+    output_path = os.path.abspath(args.output)
+    os.chdir(os.path.dirname(input_path))
     clear_scene()
-    import_model(args.input)
+    import_model(input_path)
     apply_default_material(ensure_clay_material())
     normalize_scene(args.max_size)
     decimate_if_needed(args.target_faces)
-    export_glb(args.output)
+    export_glb(output_path)
 
 
 if __name__ == "__main__":

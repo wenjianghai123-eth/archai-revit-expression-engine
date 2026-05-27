@@ -6,7 +6,9 @@ import {
   assertModelConversionAvailable,
   convertModelToGlb,
   getModelConversionConfig,
+  inspectModelArchive,
   materializeModelInput,
+  ModelArchiveError,
   ModelConversionDisabledError,
   ModelConversionExecutionError,
   ModelConversionUnavailableError,
@@ -126,7 +128,7 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
 
       const fileType = getModelFileType(uploadedFile.value.originalFilename);
       if (!fileType) {
-        res.status(400).json(apiError('Only GLB, GLTF, OBJ, DAE, and STL model files are supported. FBX and native SKP files are not supported.', 'MODEL_ASSET_TYPE_INVALID'));
+        res.status(400).json(apiError('Only GLB, GLTF, OBJ, DAE, STL, and ZIP model resource packages are supported. FBX and native SKP files are not supported.', 'MODEL_ASSET_TYPE_INVALID'));
         return;
       }
 
@@ -145,6 +147,25 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
         return;
       }
 
+      const archiveInspection = fileType === 'zip'
+        ? await inspectModelArchive(uploadedFile.value.content).catch(error => {
+          if (error instanceof ModelArchiveError) return error;
+          throw error;
+        })
+        : null;
+      if (archiveInspection instanceof ModelArchiveError) {
+        res.status(400).json(apiError(archiveInspection.message, 'MODEL_ARCHIVE_INVALID'));
+        return;
+      }
+      if (archiveInspection?.selectionWarning) {
+        console.info('Model archive contains multiple model files; selected primary model.', {
+          originalFilename: uploadedFile.value.originalFilename,
+          mainModelPath: archiveInspection.mainModelRelativePath,
+          mainModelFileType: archiveInspection.mainModelFileType,
+          modelFileCount: archiveInspection.modelFileCount,
+        });
+      }
+
       const user = getRequiredCurrentUser(req);
       const storedFile = await fileStorageProvider.uploadModel({
         content: uploadedFile.value.content,
@@ -152,6 +173,19 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
         mimeType: uploadedFile.value.mimeType || getDefaultModelMimeType(fileType),
         userId: user.id,
       });
+
+      const metadata = buildInitialModelOptimizationMetadata({
+        url: storedFile.url,
+        fileType,
+        size: storedFile.size,
+      });
+      if (archiveInspection) {
+        metadata.conversionStatus = 'idle';
+        metadata.archiveMainModelPath = archiveInspection.mainModelRelativePath;
+        metadata.archiveMainModelFileType = archiveInspection.mainModelFileType;
+        metadata.archiveModelFileCount = archiveInspection.modelFileCount;
+        metadata.archiveSelectionWarning = archiveInspection.selectionWarning;
+      }
 
       const asset = await createModelAsset({
         userId: user.id,
@@ -161,11 +195,7 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
         fileType,
         mimeType: storedFile.mimeType,
         size: storedFile.size,
-        metadata: buildInitialModelOptimizationMetadata({
-          url: storedFile.url,
-          fileType,
-          size: storedFile.size,
-        }),
+        metadata,
       });
 
       try {
@@ -246,8 +276,8 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
         return;
       }
 
-      if (asset.fileType !== 'dae' && asset.fileType !== 'obj') {
-        res.status(400).json(apiError('仅支持 DAE / OBJ 转换为 GLB。', 'MODEL_CONVERSION_TYPE_UNSUPPORTED'));
+      if (asset.fileType !== 'dae' && asset.fileType !== 'obj' && asset.fileType !== 'zip') {
+        res.status(400).json(apiError('仅支持 DAE / OBJ / ZIP 资源包转换为 GLB。', 'MODEL_CONVERSION_TYPE_UNSUPPORTED'));
         return;
       }
 
@@ -263,11 +293,13 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
         conversionError: null,
       });
 
-      const materializedInput = await materializeModelInput(asset);
+      let materializedInput: Awaited<ReturnType<typeof materializeModelInput>> | null = null;
       try {
+        materializedInput = await materializeModelInput(asset);
         const converted = await convertModelToGlb({
           inputPath: materializedInput.inputPath,
-          fileType: asset.fileType,
+          fileType: materializedInput.fileType,
+          workingDirectory: materializedInput.workingDirectory,
         });
         const storedFile = await fileStorageProvider.uploadModel({
           content: converted.content,
@@ -282,6 +314,8 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
           conversionStatus: 'succeeded',
           conversionError: null,
           convertedAt,
+          conversionWarning: converted.conversionWarning || materializedInput.archive?.selectionWarning,
+          missingImageCount: converted.missingImageCount,
         });
 
         res.json(apiOk({ asset: updated }));
@@ -302,7 +336,7 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
         }
         res.status(500).json(apiError(message, 'MODEL_CONVERSION_FAILED'));
       } finally {
-        await materializedInput.cleanup();
+        await materializedInput?.cleanup();
       }
     } catch (error) {
       if (error instanceof ModelConversionDisabledError) {
@@ -358,7 +392,10 @@ function getConversionStatus(asset: ModelAsset): ModelAsset['conversionStatus'] 
 
 async function updateModelConversionState(
   asset: ModelAsset,
-  patch: Pick<Partial<ModelAsset>, 'convertedUrl' | 'convertedFormat' | 'conversionStatus' | 'conversionError' | 'convertedAt'>,
+  patch: Pick<Partial<ModelAsset>, 'convertedUrl' | 'convertedFormat' | 'conversionStatus' | 'conversionError' | 'convertedAt'> & {
+    conversionWarning?: string | null;
+    missingImageCount?: number;
+  },
 ): Promise<ModelAsset> {
   const metadata = {
     ...(asset.metadata || buildInitialModelOptimizationMetadata({
@@ -374,6 +411,10 @@ async function updateModelConversionState(
       ? asset.conversionError ?? asset.metadata?.conversionError
       : patch.conversionError,
     convertedAt: patch.convertedAt ?? asset.convertedAt ?? asset.metadata?.convertedAt,
+    conversionWarning: patch.conversionWarning === undefined
+      ? asset.metadata?.conversionWarning
+      : patch.conversionWarning,
+    missingImageCount: patch.missingImageCount ?? asset.metadata?.missingImageCount,
   };
 
   const updated = await updateModelAsset(asset.id, {

@@ -13,9 +13,11 @@ import {
   Material,
   Mesh,
   MeshStandardMaterial,
+  NeutralToneMapping,
   Object3D,
   PerspectiveCamera as ThreePerspectiveCamera,
   Plane,
+  SRGBColorSpace,
   Vector3,
   WebGLRenderer,
   WebGLRenderTarget,
@@ -36,9 +38,10 @@ export interface ModelViewerHandle {
 interface ModelViewerProps {
   asset: AssetModel;
   minHeight?: number;
+  initialView?: 'fit' | 'interior';
 }
 
-type SupportedModelFormat = Exclude<AssetModel['fileType'], 'unknown'>;
+type SupportedModelFormat = Exclude<AssetModel['fileType'], 'unknown' | 'zip'>;
 type LoaderKind = 'GLTFLoader' | 'OBJLoader' | 'ColladaLoader' | 'STLLoader';
 type ViewMode = 'orbit' | 'walkthrough';
 type ViewPreset = 'fit' | 'top' | 'front' | 'side';
@@ -84,6 +87,8 @@ const LENS_FOVS: Record<Exclude<LensPreset, 'custom'>, number> = {
   telephoto: 30,
 };
 const DEFAULT_CUSTOM_FOV = LENS_FOVS.standard;
+const PREVIEW_BACKGROUND_COLOR = '#f1f5f9';
+const PREVIEW_RENDERER_EXPOSURE = 1.25;
 
 const clayMaterial = new MeshStandardMaterial({
   color: '#f1f5f9',
@@ -172,14 +177,14 @@ export function getModelPreviewError(asset: AssetModel): string | null {
 }
 
 export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(function ModelViewer(
-  { asset, minHeight = 420 },
+  { asset, minHeight = 420, initialView = 'fit' },
   ref,
 ) {
   const { ref: sizeRef, size } = useElementSize<HTMLDivElement>();
   const captureRef = useRef<() => ModelSnapshotCapture | null>(() => null);
   const panoramaRef = useRef<(options?: { width?: number; height?: number }) => PanoramaImageCapture | null>(() => null);
   const commandRef = useRef<ViewerCommandApi | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>('orbit');
+  const [viewMode, setViewMode] = useState<ViewMode>(() => initialView === 'interior' ? 'walkthrough' : 'orbit');
   const [performanceMode, setPerformanceMode] = useState(true);
   const [walkSpeedPreset, setWalkSpeedPreset] = useState<WalkSpeedPreset>('slow');
   const [lensPreset, setLensPreset] = useState<LensPreset>('standard');
@@ -220,7 +225,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
   }), []);
 
   useEffect(() => {
-    setViewMode('orbit');
+    setViewMode(initialView === 'interior' ? 'walkthrough' : 'orbit');
     setClippingEnabled(false);
     setXrayEnabled(false);
     setEdgesEnabled(false);
@@ -230,7 +235,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
     setCustomFov(DEFAULT_CUSTOM_FOV);
     setModelInfo(null);
     setViewerMessage(null);
-  }, [asset.id]);
+  }, [asset.id, initialView]);
 
   const handleLensPresetChange = useCallback((preset: LensPreset) => {
     if (preset === 'custom') {
@@ -318,11 +323,13 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
           shadows={!performanceMode}
           dpr={performanceMode ? [1, 1.25] : [1, 1.5]}
           gl={{ alpha: false, antialias: !performanceMode, preserveDrawingBuffer: true, localClippingEnabled: true }}
+          onCreated={({ gl }) => configurePreviewRenderer(gl)}
         >
           <Scene
             assetId={loadIdentity.assetId}
             fileType={loadIdentity.fileType}
             modelUrl={loadIdentity.modelUrl}
+            initialView={initialView}
             viewMode={viewMode}
             performanceMode={performanceMode}
             walkSpeedPreset={walkSpeedPreset}
@@ -503,6 +510,7 @@ function Scene({
   assetId,
   fileType,
   modelUrl,
+  initialView,
   viewMode,
   performanceMode,
   walkSpeedPreset,
@@ -519,6 +527,7 @@ function Scene({
   assetId: string;
   fileType: AssetModel['fileType'];
   modelUrl: string;
+  initialView: ModelViewerProps['initialView'];
   viewMode: ViewMode;
   performanceMode: boolean;
   walkSpeedPreset: WalkSpeedPreset;
@@ -539,6 +548,7 @@ function Scene({
   const { gl, camera, scene, invalidate } = useThree();
 
   useLayoutEffect(() => {
+    configurePreviewRenderer(gl);
     gl.localClippingEnabled = true;
     gl.shadowMap.enabled = !performanceMode;
     invalidate();
@@ -639,7 +649,7 @@ function Scene({
 
   return (
     <>
-      <color attach="background" args={['#f8fafc']} />
+      <color attach="background" args={[PREVIEW_BACKGROUND_COLOR]} />
       <PerspectiveCamera makeDefault position={[3.8, 2.6, 4.8]} fov={cameraFov} near={0.01} far={1000} />
       <OrbitControls
         ref={controlsRef}
@@ -669,15 +679,22 @@ function Scene({
           xrayEnabled={xrayEnabled}
           edgesEnabled={edgesEnabled}
           performanceMode={performanceMode}
+          initialView={initialView}
           onModelReady={handleModelReady}
         />
       ) : null}
-      <ambientLight intensity={performanceMode ? 1.05 : 0.9} />
-      <hemisphereLight args={['#ffffff', '#cbd5e1', performanceMode ? 0.95 : 1.15]} />
-      <directionalLight position={[5, 8, 6]} intensity={performanceMode ? 1.1 : 1.55} castShadow={!performanceMode} />
-      {!performanceMode ? <directionalLight position={[-5, 3, -4]} intensity={0.45} /> : null}
+      <ambientLight intensity={performanceMode ? 1.18 : 1.05} />
+      <hemisphereLight args={['#ffffff', '#cbd5e1', performanceMode ? 1.35 : 1.55]} />
+      <directionalLight position={[5, 8, 5]} intensity={performanceMode ? 2.25 : 2.85} castShadow={!performanceMode} />
+      <directionalLight position={[-5, 4, -4]} intensity={performanceMode ? 0.65 : 0.95} />
     </>
   );
+}
+
+function configurePreviewRenderer(renderer: WebGLRenderer): void {
+  renderer.outputColorSpace = SRGBColorSpace;
+  renderer.toneMapping = NeutralToneMapping;
+  renderer.toneMappingExposure = PREVIEW_RENDERER_EXPOSURE;
 }
 
 function WalkthroughControls({
@@ -729,6 +746,8 @@ function WalkthroughControls({
     const handlePointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
       canvas.focus();
+      yawRef.current = camera.rotation.y;
+      pitchRef.current = camera.rotation.x;
       draggingRef.current = true;
       canvas.setPointerCapture(event.pointerId);
       invalidate();
@@ -811,6 +830,7 @@ function LoadedModel({
   xrayEnabled,
   edgesEnabled,
   performanceMode,
+  initialView,
   onModelReady,
 }: {
   assetId: string;
@@ -822,6 +842,7 @@ function LoadedModel({
   xrayEnabled: boolean;
   edgesEnabled: boolean;
   performanceMode: boolean;
+  initialView: ModelViewerProps['initialView'];
   onModelReady: (object: Object3D, info: ModelBoundsInfo) => void;
 }) {
   const [model, setModel] = useState<Object3D | null>(null);
@@ -862,7 +883,11 @@ function LoadedModel({
           disposeModelObject(modelRef.current);
         }
         modelRef.current = normalized;
-        fitCameraToObject(camera as ThreePerspectiveCamera, controlsRef.current, normalized, 'fit');
+        if (initialView === 'interior') {
+          fitCameraToPanoramaStart(camera as ThreePerspectiveCamera, controlsRef.current, info);
+        } else {
+          fitCameraToObject(camera as ThreePerspectiveCamera, controlsRef.current, normalized, 'fit');
+        }
         setModel(normalized);
         onModelReady(normalized, info);
         invalidate();
@@ -883,7 +908,7 @@ function LoadedModel({
     return () => {
       cancelled = true;
     };
-  }, [camera, controlsRef, fileType, invalidate, modelUrl, onModelReady]);
+  }, [camera, controlsRef, fileType, initialView, invalidate, modelUrl, onModelReady]);
 
   useEffect(() => () => {
     if (modelRef.current) {
@@ -1003,7 +1028,7 @@ function calculateModelInfo(object: Object3D): ModelBoundsInfo {
     maxY: box.max.y,
     maxDimension,
     diagonal,
-    walkBaseSpeed: clamp(diagonal * 0.12, 0.35, 8),
+    walkBaseSpeed: clamp(diagonal * 0.09, 0.25, 5),
     vertexCount,
     triangleCount,
     defaultClippingHeight: box.min.y + size.y * 0.7,
@@ -1162,6 +1187,32 @@ function enterModelInterior(
   return true;
 }
 
+function fitCameraToPanoramaStart(
+  camera: ThreePerspectiveCamera,
+  controls: OrbitControlsImpl | null,
+  info: ModelBoundsInfo | null,
+): boolean {
+  if (!info || !Number.isFinite(info.maxDimension) || info.maxDimension <= 0.001 || info.size.y <= 0.001) return false;
+
+  const eyeHeight = info.minY + info.size.y * 0.45;
+  const zOffset = Math.max(info.size.z * 0.18, info.maxDimension * 0.1, 0.16);
+  const lookAhead = Math.max(info.size.z * 0.45, info.maxDimension * 0.35, 0.45);
+  const position = new Vector3(info.center.x, eyeHeight, info.center.z + zOffset);
+  const target = new Vector3(info.center.x, eyeHeight, info.center.z - lookAhead);
+
+  camera.position.copy(position);
+  camera.near = Math.max(0.003, info.maxDimension / 700);
+  camera.far = Math.max(1000, info.maxDimension * 180);
+  camera.lookAt(target);
+  camera.updateProjectionMatrix();
+
+  if (controls) {
+    controls.target.copy(target);
+    controls.update();
+  }
+  return true;
+}
+
 type PanoramaFaceKey = 'px' | 'nx' | 'py' | 'ny' | 'pz' | 'nz';
 
 interface PanoramaCubeFace {
@@ -1237,6 +1288,7 @@ function renderEquirectangularPanorama({
       captureCamera.updateProjectionMatrix();
       captureCamera.updateMatrixWorld(true);
       renderer.setRenderTarget(renderTarget);
+      renderer.clear(true, true, true);
       renderer.render(scene, captureCamera);
       const pixels = new Uint8Array(faceSize * faceSize * 4);
       renderer.readRenderTargetPixels(renderTarget, 0, 0, faceSize, faceSize, pixels);
@@ -1294,11 +1346,40 @@ function sampleCubeFaces(faces: Record<PanoramaFaceKey, Uint8Array>, direction: 
 
   const localX = direction.dot(selectedFace.right) / selectedDot;
   const localY = direction.dot(selectedFace.up) / selectedDot;
-  const px = clamp(Math.round(((localX + 1) / 2) * (faceSize - 1)), 0, faceSize - 1);
-  const py = clamp(Math.round(((localY + 1) / 2) * (faceSize - 1)), 0, faceSize - 1);
-  const index = (py * faceSize + px) * 4;
   const data = faces[selectedFace.key];
+  const px = clamp(((localX + 1) / 2) * (faceSize - 1), 0, faceSize - 1);
+  const py = clamp(((localY + 1) / 2) * (faceSize - 1), 0, faceSize - 1);
+  return sampleFaceBilinear(data, faceSize, px, py);
+}
+
+function sampleFaceBilinear(data: Uint8Array, faceSize: number, x: number, y: number): [number, number, number] {
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const x1 = Math.min(faceSize - 1, x0 + 1);
+  const y1 = Math.min(faceSize - 1, y0 + 1);
+  const tx = x - x0;
+  const ty = y - y0;
+  const c00 = readFacePixel(data, faceSize, x0, y0);
+  const c10 = readFacePixel(data, faceSize, x1, y0);
+  const c01 = readFacePixel(data, faceSize, x0, y1);
+  const c11 = readFacePixel(data, faceSize, x1, y1);
+
+  return [
+    bilinear(c00[0], c10[0], c01[0], c11[0], tx, ty),
+    bilinear(c00[1], c10[1], c01[1], c11[1], tx, ty),
+    bilinear(c00[2], c10[2], c01[2], c11[2], tx, ty),
+  ];
+}
+
+function readFacePixel(data: Uint8Array, faceSize: number, x: number, y: number): [number, number, number] {
+  const index = (y * faceSize + x) * 4;
   return [data[index], data[index + 1], data[index + 2]];
+}
+
+function bilinear(c00: number, c10: number, c01: number, c11: number, tx: number, ty: number): number {
+  const top = c00 * (1 - tx) + c10 * tx;
+  const bottom = c01 * (1 - tx) + c11 * tx;
+  return Math.round(top * (1 - ty) + bottom * ty);
 }
 
 function clamp(value: number, min: number, max: number): number {

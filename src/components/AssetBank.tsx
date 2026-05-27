@@ -39,7 +39,7 @@ const STORAGE_KEY = 'archai-model-assets-v1';
 const MAX_MODEL_SIZE_MB = 600;
 const MAX_MODEL_SIZE_BYTES = MAX_MODEL_SIZE_MB * 1024 * 1024;
 const PREVIEWABLE_TYPES = new Set<AssetModel['fileType']>(['glb', 'gltf']);
-const ALLOWED_TYPES = new Set<AssetModel['fileType']>(['glb', 'gltf', 'obj', 'dae', 'stl']);
+const ALLOWED_TYPES = new Set<AssetModel['fileType']>(['glb', 'gltf', 'obj', 'dae', 'stl', 'zip']);
 const CATEGORIES: Array<'全部' | ModelCategory> = ['全部', '家具', '建筑构件', '景观构件', '灯具', '植物', '装饰品', '未分类'];
 const STATUS_FILTERS: StatusFilter[] = ['全部', '可用', '待优化', '失败'];
 
@@ -113,7 +113,7 @@ const SAMPLE_ASSETS: AssetModel[] = [
 
 function getFileExtension(fileName: string): AssetModel['fileType'] {
   const extension = fileName.split('.').pop()?.toLowerCase();
-  if (extension === 'glb' || extension === 'gltf' || extension === 'obj' || extension === 'dae' || extension === 'stl') {
+  if (extension === 'glb' || extension === 'gltf' || extension === 'obj' || extension === 'dae' || extension === 'stl' || extension === 'zip') {
     return extension;
   }
   return 'unknown';
@@ -156,7 +156,7 @@ function createModelThumbnail(fileType: AssetModel['fileType']): string {
 
 function mapModelAssetRecord(asset: ModelAssetRecord): AssetModel {
   const convertedUrl = asset.convertedUrl || asset.metadata?.convertedUrl;
-  const conversionStatus = asset.conversionStatus || asset.metadata?.conversionStatus || (asset.fileType === 'obj' || asset.fileType === 'dae' ? 'idle' : undefined);
+  const conversionStatus = asset.conversionStatus || asset.metadata?.conversionStatus || (asset.fileType === 'obj' || asset.fileType === 'dae' || asset.fileType === 'zip' ? 'idle' : undefined);
   const previewable = Boolean(convertedUrl) || PREVIEWABLE_TYPES.has(asset.fileType);
 
   return {
@@ -182,7 +182,7 @@ function mapModelAssetRecord(asset: ModelAssetRecord): AssetModel {
     source: 'uploaded',
     provider: '本地后端',
     status: 'ready',
-    qualityStatus: asset.fileType === 'obj' ? 'unknown' : 'usable',
+    qualityStatus: asset.fileType === 'obj' || asset.fileType === 'zip' ? 'unknown' : 'usable',
     vertices: '待分析',
     triangles: '待分析',
     materials: '待分析',
@@ -330,7 +330,7 @@ class PreviewErrorBoundary extends React.Component<
 }
 
 function UnsupportedPreview({ asset }: { asset: AssetModel }) {
-  const message = asset.fileType === 'obj' || asset.fileType === 'dae' ? '该格式需转换为 GLB 后预览' : '模型文件未持久化，请重新上传文件后预览';
+  const message = asset.fileType === 'obj' || asset.fileType === 'dae' || asset.fileType === 'zip' ? '该格式需转换为 GLB 后预览' : '模型文件未持久化，请重新上传文件后预览';
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center bg-slate-50 px-8 text-center">
@@ -414,7 +414,7 @@ function sourceLabel(source: AssetModel['source']): string {
 }
 
 function canConvertAsset(asset: AssetModel): boolean {
-  return asset.source === 'uploaded' && (asset.fileType === 'obj' || asset.fileType === 'dae');
+  return asset.source === 'uploaded' && (asset.fileType === 'obj' || asset.fileType === 'dae' || asset.fileType === 'zip');
 }
 
 function conversionStatusLabel(asset: AssetModel): string {
@@ -712,42 +712,46 @@ export function AssetBank() {
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[#f5f7fb] animate-in fade-in duration-500">
       <div className="flex h-full min-h-0 flex-col">
-        <header className="shrink-0 border-b border-slate-200 bg-white px-4 py-4">
-          <div className="mx-auto max-w-7xl space-y-3">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-lg shadow-slate-200">
+        <header className="shrink-0 border-b border-slate-200 bg-white px-3 py-2.5">
+          <div className="mx-auto max-w-7xl space-y-2">
+            <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-950 text-white shadow-lg shadow-slate-200">
                   <Box className="h-5 w-5" />
                 </div>
                 <div>
                   <h2 className="text-xl font-bold tracking-tight text-slate-950">三维模型资产库</h2>
-                  <p className="mt-1 text-sm text-slate-500">支持 GLB、GLTF、OBJ、DAE、STL 模型，单个模型最大 600MB。推荐使用 GLB 格式。</p>
+                  <p className="mt-1 text-sm text-slate-500">支持 GLB、GLTF、OBJ、DAE、STL、ZIP，单个模型最大 600MB。推荐使用 GLB 格式。</p>
                 </div>
               </div>
               <button
                 onClick={handleFileUpload}
                 disabled={isUploadingModel}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-100 transition-colors hover:bg-blue-700"
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-3.5 py-2 text-sm font-bold text-white shadow-lg shadow-blue-100 transition-colors hover:bg-blue-700"
               >
                 <Upload className="h-4 w-4" />
                 {isUploadingModel ? '上传中...' : '上传模型'}
               </button>
             </div>
 
+            <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-1.5 text-xs leading-5 text-blue-700">
+              DAE/OBJ 如包含贴图，请上传 ZIP 资源包，包含模型文件、MTL 和贴图目录。
+            </div>
+
             {uploadError && (
-              <div className="flex items-start gap-2 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-700">
+              <div className="flex items-start gap-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{uploadError}</span>
               </div>
             )}
 
             {isLoadingAssets && (
-              <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-bold text-blue-700">
+              <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
                 正在从后端资产库加载模型列表...
               </div>
             )}
 
-            <div className="grid gap-3 xl:grid-cols-[minmax(280px,420px)_1fr]">
+            <div className="grid gap-2 xl:grid-cols-[minmax(260px,380px)_1fr]">
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <input
@@ -755,15 +759,15 @@ export function AssetBank() {
                   placeholder="搜索模型名称、来源图或标签..."
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-2.5 pl-11 pr-4 text-sm outline-none transition-all placeholder:text-slate-400 focus:border-blue-300 focus:bg-white"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-3 text-sm outline-none transition-all placeholder:text-slate-400 focus:border-blue-300 focus:bg-white"
                 />
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-1.5">
                 {CATEGORIES.map((category) => (
                   <button
                     key={category}
                     onClick={() => setCategoryFilter(category)}
-                    className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold transition-all ${
+                    className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-bold transition-all ${
                       categoryFilter === category
                         ? 'border-slate-950 bg-slate-950 text-white'
                         : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
@@ -775,13 +779,13 @@ export function AssetBank() {
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">质量筛选</span>
               {STATUS_FILTERS.map((status) => (
                 <button
                   key={status}
                   onClick={() => setStatusFilter(status)}
-                  className={`rounded-full border px-3 py-1.5 text-[10px] font-bold transition-all ${
+                  className={`rounded-full border px-2.5 py-1 text-[10px] font-bold transition-all ${
                     statusFilter === status
                       ? 'border-blue-600 bg-blue-600 text-white'
                       : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
@@ -794,10 +798,10 @@ export function AssetBank() {
           </div>
         </header>
 
-        <main className="relative min-h-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
+        <main className="relative min-h-0 flex-1 overflow-y-auto p-2.5 custom-scrollbar">
           <div className="mx-auto max-w-7xl">
             {filteredAssets.length > 0 ? (
-              <div className="grid items-stretch gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+              <div className="grid items-stretch gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {filteredAssets.map((item) => {
                   const isSelected = previewAsset?.id === item.id;
                   const qualityTone = item.qualityStatus === 'usable' ? 'green' : item.qualityStatus === 'error' ? 'red' : item.qualityStatus === 'warning' ? 'amber' : 'slate';
@@ -806,7 +810,7 @@ export function AssetBank() {
                     <motion.article
                       key={item.id}
                       whileHover={{ y: -4 }}
-                      className={`flex h-auto min-h-fit flex-col rounded-[20px] border bg-white p-2 shadow-sm transition-all hover:border-blue-200 hover:shadow-xl hover:shadow-slate-200/70 ${
+                      className={`flex h-auto min-h-fit flex-col rounded-2xl border bg-white p-2 shadow-sm transition-all hover:border-blue-200 hover:shadow-xl hover:shadow-slate-200/70 ${
                         isSelected ? 'border-blue-400 ring-2 ring-blue-100' : 'border-slate-200'
                       }`}
                     >
@@ -815,28 +819,28 @@ export function AssetBank() {
                           setSelectedAsset(item);
                           setDetailAsset(item);
                         }}
-                        className="relative block h-36 w-full overflow-hidden rounded-2xl bg-slate-100 text-left"
+                        className="relative block h-28 w-full overflow-hidden rounded-xl bg-slate-100 text-left"
                         title="预览模型"
                       >
                         <img src={item.thumbnail} className="h-full w-full object-cover transition-transform duration-500 hover:scale-105" alt={item.name} referrerPolicy="no-referrer" />
-                        <div className="absolute left-3 top-3 flex flex-wrap gap-2">
+                        <div className="absolute left-2 top-2 flex flex-wrap gap-1.5">
                           <AssetBadge tone="blue">{item.fileType.toUpperCase()}</AssetBadge>
                           <AssetBadge tone={qualityTone}>{qualityLabel(item.qualityStatus)}</AssetBadge>
                         </div>
-                        <div className="absolute bottom-3 left-3 right-3 rounded-2xl bg-white/90 p-3 backdrop-blur">
+                        <div className="absolute bottom-2 left-2 right-2 rounded-xl bg-white/90 p-2 backdrop-blur">
                           <h3 className="line-clamp-2 break-words text-sm font-bold leading-5 text-slate-950">{item.name}</h3>
                           <p className="mt-1 line-clamp-1 break-all text-[11px] font-medium text-slate-500">{item.fileName}</p>
                         </div>
                       </button>
 
-                      <div className="flex flex-1 flex-col gap-2 p-3">
+                      <div className="flex flex-1 flex-col gap-2 p-2">
                         <div className="flex flex-wrap gap-1.5">
                           <AssetBadge>{item.category || '未分类'}</AssetBadge>
                           <AssetBadge>{sourceLabel(item.source)}</AssetBadge>
                           <AssetBadge>{statusLabel(item.status)}</AssetBadge>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-50 p-2 text-[11px] text-slate-500">
+                        <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-slate-50 p-2 text-[11px] text-slate-500">
                           <span className="flex min-w-0 items-center gap-1.5">
                             <HardDrive className="h-3.5 w-3.5" />
                             <span className="truncate">{item.size}</span>
@@ -872,35 +876,38 @@ export function AssetBank() {
                                 转换为 GLB
                               </button>
                             </div>
-                            {item.fileType === 'obj' ? (
-                              <p className="mt-1 whitespace-normal break-words text-[10px] leading-4 text-slate-400">OBJ 如需保留材质，请同时提供 MTL 和贴图文件；当前版本优先保证几何转换。</p>
+                            {item.fileType === 'obj' || item.fileType === 'zip' ? (
+                              <p className="mt-1 whitespace-normal break-words text-[10px] leading-4 text-slate-400">DAE/OBJ 如需保留材质，请上传包含模型、MTL 和贴图目录的 ZIP；当前版本优先保证几何转换。</p>
                             ) : null}
                             {item.conversionStatus === 'failed' && item.conversionError ? (
                               <p className="mt-1 whitespace-normal break-words text-[10px] leading-4 text-red-500">{item.conversionError}</p>
                             ) : null}
+                            {item.metadata?.conversionWarning ? (
+                              <p className="mt-1 whitespace-normal break-words text-[10px] leading-4 text-amber-600">{item.metadata.conversionWarning}</p>
+                            ) : null}
                           </div>
                         ) : null}
 
-                        <div className="mt-auto flex flex-wrap gap-1.5 border-t border-slate-100 pt-2">
+                        <div className="mt-auto flex flex-wrap gap-2 border-t border-slate-100 pt-2">
                           <button
                             onClick={() => {
                               setSelectedAsset(item);
                               setDetailAsset(item);
                             }}
-                            className="flex min-w-[64px] flex-1 items-center justify-center gap-1 rounded-xl bg-slate-50 px-2 py-2 text-[11px] font-bold text-slate-600 hover:bg-slate-100"
+                            className="flex min-w-[64px] flex-1 items-center justify-center gap-1 rounded-lg bg-slate-50 px-2 py-1.5 text-[11px] font-bold text-slate-600 hover:bg-slate-100"
                           >
                             <Eye className="h-3.5 w-3.5" />
                             预览
                           </button>
-                          <button onClick={() => setDetailAsset(item)} className="flex min-w-[64px] flex-1 items-center justify-center gap-1 rounded-xl bg-blue-50 px-2 py-2 text-[11px] font-bold text-blue-700 hover:bg-blue-100">
+                          <button onClick={() => setDetailAsset(item)} className="flex min-w-[64px] flex-1 items-center justify-center gap-1 rounded-lg bg-blue-50 px-2 py-1.5 text-[11px] font-bold text-blue-700 hover:bg-blue-100">
                             <Info className="h-3.5 w-3.5" />
                             详情
                           </button>
-                          <button onClick={() => handleDownloadAsset(item)} className="flex min-w-[64px] flex-1 items-center justify-center gap-1 rounded-xl bg-slate-50 px-2 py-2 text-[11px] font-bold text-slate-600 hover:bg-slate-100">
+                          <button onClick={() => handleDownloadAsset(item)} className="flex min-w-[64px] flex-1 items-center justify-center gap-1 rounded-lg bg-slate-50 px-2 py-1.5 text-[11px] font-bold text-slate-600 hover:bg-slate-100">
                             <Download className="h-3.5 w-3.5" />
                             下载
                           </button>
-                          <button onClick={() => handleDeleteAsset(item.id)} className="flex min-w-[64px] flex-1 items-center justify-center gap-1 rounded-xl bg-red-50 px-2 py-2 text-[11px] font-bold text-red-600 hover:bg-red-100">
+                          <button onClick={() => handleDeleteAsset(item.id)} className="flex min-w-[64px] flex-1 items-center justify-center gap-1 rounded-lg bg-red-50 px-2 py-1.5 text-[11px] font-bold text-red-600 hover:bg-red-100">
                             <Trash2 className="h-3.5 w-3.5" />
                             删除
                           </button>
@@ -911,19 +918,19 @@ export function AssetBank() {
                 })}
               </div>
             ) : (
-              <div className="flex min-h-[320px] flex-col items-center justify-center rounded-[24px] border border-dashed border-slate-200 bg-white p-6 text-center shadow-sm">
-                <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-3xl bg-blue-50">
-                  <FileBox className="h-8 w-8 text-blue-500" />
+              <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-white p-5 text-center shadow-sm">
+                <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50">
+                  <FileBox className="h-6 w-6 text-blue-500" />
                 </div>
                 <h3 className="text-lg font-bold text-slate-950">
                   {hasAnyAsset ? '没有符合筛选条件的三维模型资产' : '还没有三维模型资产'}
                 </h3>
-                <p className="mt-3 max-w-xl text-sm leading-6 text-slate-500">
+                <p className="mt-2 max-w-xl text-sm leading-5 text-slate-500">
                   {hasAnyAsset
                     ? '请尝试更换关键词、分类或质量筛选条件。'
                     : '还没有三维模型资产。上传 GLB、GLTF、OBJ、DAE 或 STL 模型，推荐使用 GLB；SketchUp 用户建议导出为 GLB、DAE、OBJ 或 STL 后上传。'}
                 </p>
-                <button onClick={handleFileUpload} className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-blue-100 hover:bg-blue-700">
+                <button onClick={handleFileUpload} className="mt-4 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-100 hover:bg-blue-700">
                   <Upload className="h-4 w-4" />
                   上传模型
                 </button>
@@ -933,7 +940,7 @@ export function AssetBank() {
 
           {detailAsset && (
             <div className="fixed inset-y-0 right-0 z-40 flex w-full max-w-xl flex-col border-l border-slate-200 bg-white shadow-2xl">
-              <div className="flex items-center justify-between border-b border-slate-100 p-4">
+              <div className="flex items-center justify-between border-b border-slate-100 p-3">
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">模型详情</p>
                   <h3 className="mt-1 text-lg font-bold text-slate-900">{detailAsset.name}</h3>
@@ -943,17 +950,17 @@ export function AssetBank() {
                 </button>
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
-                <div className="h-[560px] min-h-[480px] w-full overflow-hidden rounded-xl border border-slate-100 bg-slate-100">
+              <div className="min-h-0 flex-1 overflow-y-auto p-3 custom-scrollbar">
+                <div className="h-[420px] min-h-[320px] w-full overflow-hidden rounded-xl border border-slate-100 bg-slate-100">
                   <ModelPreview asset={detailAsset} />
                 </div>
 
                 {detailAsset.sourceImageDataUrl ? (
-                  <div className="mt-5 overflow-hidden rounded-xl border border-slate-100">
+                  <div className="mt-4 overflow-hidden rounded-xl border border-slate-100">
                     <img src={detailAsset.sourceImageDataUrl} alt={detailAsset.sourceImageName || '来源参考图'} className="h-40 w-full object-cover" />
                   </div>
                 ) : (
-                  <div className="mt-5 flex items-center gap-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4">
+                  <div className="mt-4 flex items-center gap-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3">
                     <Image className="h-5 w-5 text-slate-300" />
                     <div>
                       <p className="text-xs font-bold text-slate-700">{detailAsset.sourceImageName || '暂无来源参考图预览'}</p>
@@ -963,23 +970,26 @@ export function AssetBank() {
                 )}
 
                 {detailAsset.prompt && (
-                  <div className="mt-5 rounded-xl bg-slate-50 p-4">
+                  <div className="mt-4 rounded-xl bg-slate-50 p-3">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">生成提示词</p>
                     <p className="mt-2 text-sm leading-6 text-slate-700">{detailAsset.prompt}</p>
                   </div>
                 )}
 
                 {canConvertAsset(detailAsset) ? (
-                  <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">格式转换</p>
                         <p className="mt-2 text-sm font-bold text-slate-800">{conversionStatusLabel(detailAsset)}</p>
-                        {detailAsset.fileType === 'obj' ? (
-                          <p className="mt-2 text-xs leading-5 text-slate-500">OBJ 如需保留材质，请同时提供 MTL 和贴图文件；当前版本优先保证几何转换。</p>
+                        {detailAsset.fileType === 'obj' || detailAsset.fileType === 'zip' ? (
+                          <p className="mt-2 text-xs leading-5 text-slate-500">DAE/OBJ 如需保留材质，请上传包含模型、MTL 和贴图目录的 ZIP；当前版本优先保证几何转换。</p>
                         ) : null}
                         {detailAsset.conversionStatus === 'failed' && detailAsset.conversionError ? (
                           <p className="mt-2 text-xs leading-5 text-red-600">{detailAsset.conversionError}</p>
+                        ) : null}
+                        {detailAsset.metadata?.conversionWarning ? (
+                          <p className="mt-2 text-xs leading-5 text-amber-600">{detailAsset.metadata.conversionWarning}</p>
                         ) : null}
                       </div>
                       <button
@@ -995,7 +1005,7 @@ export function AssetBank() {
                   </div>
                 ) : null}
 
-                <div className="mt-5 grid grid-cols-2 gap-4">
+                <div className="mt-4 grid grid-cols-2 gap-3">
                   <DetailRow label="模型来源" value={detailAsset.provider || '未知'} />
                   <DetailRow label="来源" value={sourceLabel(detailAsset.source)} />
                   <DetailRow label="文件格式" value={detailAsset.fileType.toUpperCase()} />
@@ -1009,7 +1019,7 @@ export function AssetBank() {
                   <DetailRow label="分类" value={detailAsset.category || '未分类'} />
                 </div>
 
-                <div className="mt-5">
+                <div className="mt-4">
                   <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">标签</p>
                   <div className="flex flex-wrap gap-1.5">
                     {(detailAsset.tags || []).map((tagValue) => (
@@ -1033,14 +1043,14 @@ export function AssetBank() {
                 </div>
 
                 {detailAsset.storageWarning && (
-                  <div className="mt-5 flex gap-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-700">
+                  <div className="mt-4 flex gap-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-700">
                     <HardDrive className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     <span>{detailAsset.storageWarning}</span>
                   </div>
                 )}
               </div>
 
-              <div className="grid shrink-0 grid-cols-2 gap-3 border-t border-slate-100 p-4">
+              <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-slate-100 p-3">
                 <button onClick={() => handleDownloadAsset(detailAsset)} className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 py-2.5 text-sm font-bold text-white hover:bg-blue-700">
                   <Download className="h-4 w-4" />
                   下载

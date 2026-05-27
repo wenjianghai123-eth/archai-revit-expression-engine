@@ -86,7 +86,7 @@ export function mapModelAssetRecordToAssetModel(
     originalUrl: asset.originalUrl || asset.metadata?.originalUrl || asset.url,
     convertedUrl,
     convertedFormat: asset.convertedFormat || asset.metadata?.convertedFormat,
-    conversionStatus: asset.conversionStatus || asset.metadata?.conversionStatus || (asset.fileType === 'obj' || asset.fileType === 'dae' ? 'idle' : undefined),
+    conversionStatus: asset.conversionStatus || asset.metadata?.conversionStatus || (asset.fileType === 'obj' || asset.fileType === 'dae' || asset.fileType === 'zip' ? 'idle' : undefined),
     conversionError: asset.conversionError ?? asset.metadata?.conversionError,
     convertedAt: asset.convertedAt || asset.metadata?.convertedAt,
     previewUrl,
@@ -105,7 +105,7 @@ export function mapModelAssetRecordToAssetModel(
     source: 'uploaded',
     provider: '本地后端',
     status: isOptimizationInProgress(optimizationStatus) ? 'optimizing' : 'ready',
-    qualityStatus: asset.fileType === 'obj' || asset.fileType === 'stl' ? 'unknown' : 'usable',
+    qualityStatus: asset.fileType === 'obj' || asset.fileType === 'stl' || asset.fileType === 'zip' ? 'unknown' : 'usable',
     category: options.category || '未分类',
     previewable: PREVIEWABLE_MODEL_TYPES.has(fileType),
   };
@@ -138,7 +138,7 @@ export function readConversionStatusLabel(model: AssetModel): string {
   if (model.convertedUrl || model.conversionStatus === 'succeeded') return '已转换为 GLB';
   if (model.conversionStatus === 'converting') return '转换中';
   if (model.conversionStatus === 'failed') return '转换失败';
-  if (model.fileType === 'obj' || model.fileType === 'dae') return '未转换';
+  if (model.fileType === 'obj' || model.fileType === 'dae' || model.fileType === 'zip') return '未转换';
   return '无需转换';
 }
 

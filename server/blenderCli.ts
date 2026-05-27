@@ -89,7 +89,7 @@ export async function assertBlenderAvailable(rawBlenderBin: string | undefined, 
 export function runBlender(
   rawBlenderBin: string | undefined,
   args: string[],
-  options: { timeoutMs: number; logLabel: string },
+  options: { timeoutMs: number; logLabel: string; cwd?: string },
 ): Promise<BlenderRunResult> {
   const diagnostics = getBlenderDiagnostics(rawBlenderBin);
   if (!diagnostics.normalizedBlenderBin) {
@@ -108,6 +108,7 @@ export function runBlender(
 
   return new Promise((resolve, reject) => {
     const child = spawn(diagnostics.normalizedBlenderBin, args, {
+      cwd: options.cwd,
       shell: false,
       windowsHide: true,
     });

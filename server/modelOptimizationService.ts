@@ -45,6 +45,7 @@ export function buildInitialModelOptimizationMetadata(input: {
 export function shouldOptimizeModelAsset(asset: ModelAsset): boolean {
   const config = getModelOptimizationConfig();
   if (!config.enabled) return false;
+  if (asset.fileType === 'zip') return false;
   return asset.size >= config.thresholdBytes;
 }
 

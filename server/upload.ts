@@ -216,7 +216,7 @@ export function isUploadOverLimit(sizeBytes: number, maxMb: number): boolean {
 
 export function getModelFileType(filename: string): ModelAsset['fileType'] | null {
   const extension = filename.split('.').pop()?.toLowerCase();
-  if (extension === 'glb' || extension === 'gltf' || extension === 'obj' || extension === 'dae' || extension === 'stl') {
+  if (extension === 'glb' || extension === 'gltf' || extension === 'obj' || extension === 'dae' || extension === 'stl' || extension === 'zip') {
     return extension;
   }
 
@@ -228,6 +228,7 @@ export function getDefaultModelMimeType(fileType: ModelAsset['fileType']): strin
   if (fileType === 'gltf') return 'model/gltf+json';
   if (fileType === 'dae') return 'model/vnd.collada+xml';
   if (fileType === 'stl') return 'model/stl';
+  if (fileType === 'zip') return 'application/zip';
   return 'model/obj';
 }
 
@@ -254,6 +255,11 @@ export function isAllowedModelMimeType(fileType: ModelAsset['fileType'], mimeTyp
       || commonBinaryMimeTypes.has(normalizedMimeType);
   }
 
+  if (fileType === 'zip') {
+    return ['application/zip', 'application/x-zip-compressed', 'multipart/x-zip'].includes(normalizedMimeType)
+      || commonBinaryMimeTypes.has(normalizedMimeType);
+  }
+
   return ['model/obj', 'text/plain', 'application/wavefront-obj'].includes(normalizedMimeType)
     || commonBinaryMimeTypes.has(normalizedMimeType);
 }
@@ -263,6 +269,10 @@ export function sniffModelFile(fileType: ModelAsset['fileType'], content: Buffer
 
   if (fileType === 'glb') {
     return content.length >= 4 && content.slice(0, 4).toString('ascii') === 'glTF';
+  }
+
+  if (fileType === 'zip') {
+    return content.length >= 4 && content[0] === 0x50 && content[1] === 0x4b;
   }
 
   if (fileType === 'stl') {

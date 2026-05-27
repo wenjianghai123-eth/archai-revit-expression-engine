@@ -1317,9 +1317,11 @@ function buildPanoramaRoamRenderPrompt(job: GenerationJob, qualityMode: QualityM
   const renderStyle = readMeaningfulConfigString(job.config.renderStyle) || readMeaningfulConfigString(job.config.style);
   const atmosphere = readMeaningfulConfigString(job.config.atmosphere) || readMeaningfulConfigString(job.config.lighting);
   const customPrompt = readMeaningfulConfigString(job.config.customPrompt) || readMeaningfulConfigString(job.config.userPrompt);
+  const changeStrength = readPanoramaChangeStrengthInstruction(job.config.panoramaChangeStrength);
   if (isCompactQualityMode(qualityMode)) {
     return [
       'Quick 2:1 360 panorama render from this model panorama. Keep equirectangular canvas, horizon, layout, and geometry.',
+      changeStrength,
       renderStyle ? `Style: ${renderStyle}.` : undefined,
       atmosphere ? `Light: ${atmosphere}.` : undefined,
       customPrompt ? `Note: ${customPrompt}.` : undefined,
@@ -1327,6 +1329,7 @@ function buildPanoramaRoamRenderPrompt(job: GenerationJob, qualityMode: QualityM
   }
   const parts = [
     'The input image is a 2:1 equirectangular 360 panorama captured from a 3D clay or white model. Transform it into a cinematic, photorealistic architectural or interior 360 panorama rendering. Preserve the exact equirectangular 2:1 canvas, full 360 continuity, camera position, spatial layout, geometry, proportions, horizon, and room or building structure. Add realistic materials, lighting, shadows, environment, furniture, landscape details, and atmosphere. Do not convert it into a normal perspective view. Do not crop, pad, add borders, labels, or watermarks.',
+    changeStrength,
     buildingType ? `Building type: ${buildingType}.` : undefined,
     spaceType ? `Space type: ${spaceType}.` : undefined,
     renderStyle ? `Rendering style: ${renderStyle}.` : undefined,
@@ -1334,6 +1337,16 @@ function buildPanoramaRoamRenderPrompt(job: GenerationJob, qualityMode: QualityM
     customPrompt ? `User note: ${customPrompt}.` : undefined,
   ];
   return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+}
+
+function readPanoramaChangeStrengthInstruction(strength: GenerationJob['config']['panoramaChangeStrength']): string {
+  if (strength === 'weak') {
+    return 'Change strength: weak. Preserve original elements, layout, structure, furniture positions, main composition, and spatial organization; avoid adding extra elements; focus on faithful rendering and subtle refinement.';
+  }
+  if (strength === 'strong') {
+    return 'Change strength: strong. Preserve the core spatial structure, proportions, camera position, and 360 continuity, but allow stronger creative enhancement, richer scene details, more expressive atmosphere, stronger material variation, decoration, and furnishing enrichment.';
+  }
+  return 'Change strength: medium. Preserve the original spatial layout, composition, core elements, furniture positions, and major design features largely intact. Moderately enhance materials, lighting, atmosphere, texture quality, and a small amount of detail, while avoiding excessive new objects or drastic scene changes.';
 }
 
 function buildMaterialReplacePrompt(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {

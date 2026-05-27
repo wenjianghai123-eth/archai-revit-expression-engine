@@ -651,7 +651,7 @@ async function createModelAsset(input: {
     userId: input.userId,
     url: input.url,
     originalUrl: input.url,
-    conversionStatus: input.fileType === 'obj' || input.fileType === 'dae' ? 'idle' : undefined,
+    conversionStatus: input.fileType === 'obj' || input.fileType === 'dae' || input.fileType === 'zip' ? 'idle' : undefined,
     previewUrl: input.previewUrl,
     optimizedUrl: input.optimizedUrl,
     thumbnailUrl: input.thumbnailUrl,

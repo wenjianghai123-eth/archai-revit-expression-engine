@@ -95,8 +95,8 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
   const modelAssets = assets.slice(0, 4);
 
   return (
-    <div className="arch-page">
-      <div className="arch-page-inner">
+    <div className="arch-page custom-scrollbar" style={{ overflowY: 'auto', padding: 12 }}>
+      <div className="mx-auto flex max-w-7xl flex-col gap-3">
         <section className="relative shrink-0 overflow-hidden rounded-2xl bg-slate-950 text-white shadow-xl">
           <img
             src="https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&q=80&w=1600"
@@ -105,17 +105,17 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
             referrerPolicy="no-referrer"
           />
           <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/90 to-slate-950/35" />
-          <div className="relative grid gap-4 p-4 lg:grid-cols-[1fr_280px] lg:p-5">
-            <div className="flex min-h-[168px] flex-col justify-center">
-              <div className="mb-3 flex w-fit items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-[11px] font-bold text-blue-100">
-                <Sparkles className="h-4 w-4" />
+          <div className="relative grid gap-3 p-3 lg:grid-cols-[1fr_240px]">
+            <div className="flex min-h-[112px] flex-col justify-center">
+              <div className="mb-2 flex w-fit items-center gap-2 rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-[11px] font-bold text-blue-100">
+                <Sparkles className="h-3.5 w-3.5" />
                 烛照AI 建筑空间智能表达工作台
               </div>
               <h1 className="max-w-3xl text-2xl font-bold leading-tight tracking-tight md:text-3xl">烛照AI 建筑空间智能表达工作台</h1>
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">
+              <p className="mt-2 max-w-2xl text-sm leading-5 text-slate-300">
                 面向深圳广田股份有限公司设计业务，支持彩平、白模快渲、风格渲染、局部修饰、材质替换、方案变体与全景表达。
               </p>
-              <div className="mt-4 flex flex-wrap gap-2">
+              <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   onClick={() => onStartCreate(GenerationStep.FloorplanTo3D)}
                   className="arch-button-primary"
@@ -132,7 +132,7 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
               </div>
             </div>
 
-            <div className="hidden rounded-2xl border border-white/10 bg-white/10 p-3 backdrop-blur-md lg:block">
+            <div className="hidden rounded-xl border border-white/10 bg-white/10 p-2 backdrop-blur-md lg:block">
               <div className="grid gap-2">
                 <PreviewCard label="Before" image="https://images.unsplash.com/photo-1600607687644-c7171b42498f?auto=format&fit=crop&q=80&w=800" />
                 <PreviewCard label="After" image="https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?auto=format&fit=crop&q=80&w=800" featured />
@@ -141,28 +141,28 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
           </div>
         </section>
 
-        <section className="grid shrink-0 gap-4 lg:grid-cols-3">
+        <section className="grid shrink-0 gap-3 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
           {toolCards.map((tool) => {
             const Icon = tool.icon;
             return (
               <article key={tool.step} className="arch-card">
-                <div className="relative h-28">
+                <div className="relative h-20">
                   <img src={tool.image} alt={tool.title} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
                   <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 to-transparent" />
-                  <div className="absolute bottom-3 left-3 flex h-9 w-9 items-center justify-center rounded-xl bg-white text-blue-600 shadow-lg">
+                  <div className="absolute bottom-2 left-2 flex h-8 w-8 items-center justify-center rounded-lg bg-white text-blue-600 shadow-lg">
                     <Icon className="h-4 w-4" />
                   </div>
                 </div>
-                <div className="p-4">
+                <div className="p-3">
                   <h2 className="text-base font-bold text-slate-900">{tool.title}</h2>
                   <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{tool.desc}</p>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] font-bold text-slate-500">
-                    <span className="rounded-full bg-slate-50 px-2.5 py-1.5">{tool.input}</span>
-                    <span className="rounded-full bg-slate-50 px-2.5 py-1.5">{tool.output}</span>
+                  <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px] font-bold text-slate-500">
+                    <span className="rounded-full bg-slate-50 px-2 py-1">{tool.input}</span>
+                    <span className="rounded-full bg-slate-50 px-2 py-1">{tool.output}</span>
                   </div>
                   <button
                     onClick={() => onStartCreate(tool.step)}
-                    className="arch-button-primary mt-3 w-full py-2 text-xs"
+                    className="arch-button-primary mt-2 w-full py-2 text-xs"
                   >
                     立即使用
                     <ArrowRight className="h-4 w-4" />
@@ -173,7 +173,7 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
           })}
         </section>
 
-        <section className="grid min-h-0 flex-1 gap-4 xl:grid-cols-3">
+        <section className="grid shrink-0 gap-3 xl:grid-cols-3">
           <HomeModule title="推荐提示词模板" icon={Layers} action="查看全部" onAction={onOpenTemplates}>
             {recommendedTemplates.length > 0 ? (
               recommendedTemplates.slice(0, 3).map((template) => (
@@ -211,12 +211,12 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
 
 function PreviewCard({ label, image, featured = false }: { label: string; image: string; featured?: boolean }) {
   return (
-    <div className={`overflow-hidden rounded-2xl border ${featured ? 'border-blue-300/40' : 'border-white/10'} bg-white/10`}>
-      <div className="flex items-center justify-between px-4 py-3">
+    <div className={`overflow-hidden rounded-xl border ${featured ? 'border-blue-300/40' : 'border-white/10'} bg-white/10`}>
+      <div className="flex items-center justify-between px-3 py-2">
         <span className="text-xs font-bold uppercase tracking-widest text-slate-300">{label}</span>
         {featured && <span className="rounded-full bg-blue-500 px-2 py-1 text-[10px] font-bold text-white">AI Result</span>}
       </div>
-      <img src={image} alt={label} className="h-16 w-full object-cover" referrerPolicy="no-referrer" />
+      <img src={image} alt={label} className="h-12 w-full object-cover" referrerPolicy="no-referrer" />
     </div>
   );
 }
@@ -235,8 +235,8 @@ function HomeModule({
   children: React.ReactNode;
 }) {
   return (
-    <div className="arch-card flex min-h-0 flex-col p-4">
-      <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
+    <div className="arch-card flex min-h-0 flex-col p-3">
+      <div className="mb-2 flex shrink-0 items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
             <Icon className="h-4 w-4" />
@@ -247,7 +247,7 @@ function HomeModule({
           {action}
         </button>
       </div>
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto custom-scrollbar">{children}</div>
+      <div className="min-h-0 space-y-2">{children}</div>
     </div>
   );
 }
@@ -264,8 +264,8 @@ function MiniImageCard({
   fallbackIcon?: React.ComponentType<{ className?: string }>;
 }) {
   return (
-    <div className="flex gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-2">
-      <div className="flex h-16 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white">
+    <div className="flex gap-2 rounded-xl border border-slate-100 bg-slate-50 p-2">
+      <div className="flex h-12 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white">
         {image ? (
           <img src={image} alt={title} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
         ) : FallbackIcon ? (
@@ -274,7 +274,7 @@ function MiniImageCard({
       </div>
       <div className="min-w-0 py-1">
         <p className="truncate text-sm font-bold text-slate-800">{title}</p>
-        <p className="mt-1 truncate text-xs text-slate-500">{meta}</p>
+        <p className="mt-0.5 truncate text-xs text-slate-500">{meta}</p>
       </div>
     </div>
   );

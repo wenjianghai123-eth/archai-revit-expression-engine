@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Box, Camera, CheckCircle2, ImageIcon, QrCode, Sparkles, Upload } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, Box, Camera, CheckCircle2, ImageIcon, QrCode, Sparkles, Trash2, Upload } from 'lucide-react';
 import {
   AssetModel,
   GenerationConfig,
@@ -36,9 +36,29 @@ interface PanoramaQuickRenderPanelProps {
   onHistoryRecord?: (record: GenerationHistoryItem) => void;
 }
 
-const modelAccept = '.glb,.gltf,.obj,.dae,.stl,model/gltf-binary,model/gltf+json,model/vnd.collada+xml,model/stl';
+interface PanoramaRenderResult {
+  imageUrl: string;
+  renderedAt: string;
+}
+
+interface PanoramaCaptureSlot {
+  slotIndex: number;
+  title: string;
+  rawImage: UploadedImage;
+  capture: PanoramaCapturePayload;
+  panoramaRecord: PanoramaRecord;
+  modelId: string;
+  projectId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  renderResult?: PanoramaRenderResult;
+}
+
+const modelAccept = '.glb,.gltf,.obj,.dae,.stl,.zip,model/gltf-binary,model/gltf+json,model/vnd.collada+xml,model/stl,application/zip,application/x-zip-compressed';
 const MAX_MODEL_SIZE_MB = 600;
 const MAX_MODEL_SIZE_BYTES = MAX_MODEL_SIZE_MB * 1024 * 1024;
+const PANORAMA_SLOT_INDICES = [1, 2, 3, 4] as const;
+const PANORAMA_SLOT_STORAGE_PREFIX = 'archai:panorama-quick-render-slots:v1';
 const buildingTypeOptions = ['住宅', '商业', '办公', '酒店', '展厅', '景观', '建筑外立面'];
 const spaceTypeOptions = ['客厅', '卧室', '大堂', '办公区', '展厅', '庭院', '外立面'];
 const renderStyleOptions = ['电影级写实', '现代极简', '自然木质', '轻奢', '侘寂', '工业风'];
@@ -74,18 +94,33 @@ export function PanoramaQuickRenderPanel({
   const [message, setMessage] = useState<string | null>(null);
   const [previewMode, setPreviewMode] = useState<'image' | '360'>('360');
   const [primaryPreviewTab, setPrimaryPreviewTab] = useState<'model' | 'panorama'>('model');
+  const [panoramaPreviewKind, setPanoramaPreviewKind] = useState<'raw' | 'rendered'>('raw');
+  const [slots, setSlots] = useState<PanoramaCaptureSlot[]>([]);
+  const [activeSlotIndex, setActiveSlotIndex] = useState<number>(1);
+  const [captureSlotIndex, setCaptureSlotIndex] = useState<number>(1);
+  const [selectedSlotIndices, setSelectedSlotIndices] = useState<number[]>([]);
+  const [batchQueue, setBatchQueue] = useState<number[]>([]);
+  const [batchActiveSlotIndex, setBatchActiveSlotIndex] = useState<number | null>(null);
+  const [isBatchRendering, setIsBatchRendering] = useState(false);
+  const [slotsStorageKey, setSlotsStorageKey] = useState('');
+  const lastHandledOutputRef = useRef<string>('');
 
-  const panoramaUrl = state.outputImage || panoramaRecord?.renderedPanoramaUrl || panoramaRecord?.panoramaUrl || state.inputImage?.url || state.inputImage?.dataUrl || '';
+  const activeSlot = slots.find(slot => slot.slotIndex === activeSlotIndex) || null;
+  const currentRawPanoramaUrl = activeSlot?.rawImage.url || activeSlot?.rawImage.dataUrl || panoramaRecord?.panoramaUrl || state.inputImage?.url || state.inputImage?.dataUrl || '';
+  const currentRenderedPanoramaUrl = activeSlot?.renderResult?.imageUrl || panoramaRecord?.renderedPanoramaUrl || '';
+  const panoramaUrl = panoramaPreviewKind === 'rendered' ? currentRenderedPanoramaUrl : currentRawPanoramaUrl;
+  const canShowRenderedPanorama = Boolean(currentRenderedPanoramaUrl);
+  const renderableSelectedSlots = slots.filter(slot => selectedSlotIndices.includes(slot.slotIndex));
   const shareUrl = useMemo(() => {
     if (!panoramaRecord?.shareId || typeof window === 'undefined') return '';
     const url = new URL(`/share/panorama/${encodeURIComponent(panoramaRecord.shareId)}`, window.location.origin);
-    const sharedImageUrl = state.outputImage || panoramaRecord.renderedPanoramaUrl || panoramaRecord.panoramaUrl;
+    const sharedImageUrl = currentRenderedPanoramaUrl || currentRawPanoramaUrl || panoramaRecord.renderedPanoramaUrl || panoramaRecord.panoramaUrl;
     if (sharedImageUrl && !sharedImageUrl.startsWith('data:')) {
       url.searchParams.set('image', new URL(sharedImageUrl, window.location.origin).toString());
     }
     url.searchParams.set('createdAt', panoramaRecord.createdAt);
     return url.toString();
-  }, [panoramaRecord?.shareId, panoramaRecord?.renderedPanoramaUrl, panoramaRecord?.panoramaUrl, panoramaRecord?.createdAt, state.outputImage]);
+  }, [currentRawPanoramaUrl, currentRenderedPanoramaUrl, panoramaRecord?.shareId, panoramaRecord?.renderedPanoramaUrl, panoramaRecord?.panoramaUrl, panoramaRecord?.createdAt]);
   const qrCodeUrl = shareUrl
     ? `https://api.qrserver.com/v1/create-qr-code/?size=168x168&data=${encodeURIComponent(shareUrl)}`
     : '';
@@ -95,6 +130,39 @@ export function PanoramaQuickRenderPanel({
   const canCapturePanorama = Boolean(model?.previewable && preferredModelSource?.url);
   const panoramaChangeStrength = config.panoramaChangeStrength || 'medium';
   const panoramaQuality = config.panoramaQuality || 'high';
+
+  const applySlotAsCurrent = useCallback((slot: PanoramaCaptureSlot, nextPreviewKind: 'raw' | 'rendered' = 'raw') => {
+    setActiveSlotIndex(slot.slotIndex);
+    setCaptureSlotIndex(slot.slotIndex);
+    setPanoramaRecord(slot.panoramaRecord);
+    setPrimaryPreviewTab('panorama');
+    setPanoramaPreviewKind(nextPreviewKind === 'rendered' && slot.renderResult ? 'rendered' : 'raw');
+    onUpdateInputImage(slot.rawImage);
+    onUpdateConfig({
+      sourceModelAssetId: slot.modelId,
+      sourceImageAssetId: slot.rawImage.assetId || slot.rawImage.id,
+      panoramaAssetId: slot.rawImage.assetId || slot.rawImage.id,
+      targetWidth: slot.rawImage.width,
+      targetHeight: slot.rawImage.height,
+      targetAspectRatio: '2:1',
+      qualityMode: 'high',
+      panoramaQuality: slot.capture.panoramaQuality || panoramaQuality,
+      panoramaChangeStrength,
+      panoramaCapture: slot.capture,
+    });
+  }, [onUpdateConfig, onUpdateInputImage, panoramaChangeStrength, panoramaQuality]);
+
+  const submitSlotForGeneration = useCallback((slotIndex: number): boolean => {
+    const slot = slots.find(item => item.slotIndex === slotIndex);
+    if (!slot) {
+      setMessage('请先保存该位置的渲染前全景图。');
+      return false;
+    }
+
+    applySlotAsCurrent(slot, 'raw');
+    window.setTimeout(() => onGenerate(), 0);
+    return true;
+  }, [applySlotAsCurrent, onGenerate, slots]);
 
   useEffect(() => {
     setIsLoadingModels(true);
@@ -109,28 +177,89 @@ export function PanoramaQuickRenderPanel({
   }, []);
 
   useEffect(() => {
-    if (!panoramaRecord || !state.outputImage) return;
-    const nextRecord: PanoramaRecord = {
-      ...panoramaRecord,
-      renderedPanoramaUrl: state.outputImage,
-      thumbnailUrl: state.outputImage,
-    };
-    setPanoramaRecord(nextRecord);
-    savePanoramaRecord(nextRecord);
-  }, [panoramaRecord?.id, state.outputImage]);
+    if (!model?.id) {
+      setSlots([]);
+      setSlotsStorageKey('');
+      setActiveSlotIndex(1);
+      setCaptureSlotIndex(1);
+      setSelectedSlotIndices([]);
+      return;
+    }
+
+    const key = getPanoramaSlotStorageKey(projectId, model.id);
+    const storedSlots = readStoredPanoramaSlots(key);
+    setSlots(storedSlots);
+    setSlotsStorageKey(key);
+    const nextActiveIndex = storedSlots[0]?.slotIndex || 1;
+    setActiveSlotIndex(nextActiveIndex);
+    setCaptureSlotIndex(nextActiveIndex);
+    setSelectedSlotIndices(storedSlots[0] ? [storedSlots[0].slotIndex] : []);
+    setPanoramaRecord(storedSlots[0]?.panoramaRecord || null);
+    setPanoramaPreviewKind('raw');
+  }, [model?.id, projectId]);
 
   useEffect(() => {
-    if (state.outputImage) {
-      setPrimaryPreviewTab('panorama');
+    if (!model?.id || !slotsStorageKey) return;
+    if (slotsStorageKey !== getPanoramaSlotStorageKey(projectId, model.id)) return;
+    writeStoredPanoramaSlots(slotsStorageKey, slots);
+  }, [model?.id, projectId, slots, slotsStorageKey]);
+
+  useEffect(() => {
+    if (!state.outputImage || state.outputImage === lastHandledOutputRef.current) return;
+    lastHandledOutputRef.current = state.outputImage;
+    const targetSlotIndex = batchActiveSlotIndex || activeSlotIndex;
+    const renderedAt = new Date().toISOString();
+    const matchedSlot = slots.find(slot => slot.slotIndex === targetSlotIndex) || null;
+    const updatedRecord: PanoramaRecord | null = matchedSlot
+      ? {
+          ...matchedSlot.panoramaRecord,
+          renderedPanoramaUrl: state.outputImage || undefined,
+          thumbnailUrl: state.outputImage || matchedSlot.panoramaRecord.thumbnailUrl,
+        }
+      : null;
+
+    setSlots(previous => previous.map(slot => {
+      if (slot.slotIndex !== targetSlotIndex) return slot;
+      return {
+        ...slot,
+        updatedAt: renderedAt,
+        panoramaRecord: updatedRecord || slot.panoramaRecord,
+        renderResult: {
+          imageUrl: state.outputImage || '',
+          renderedAt,
+        },
+      };
+    }));
+
+    if (updatedRecord) {
+      setPanoramaRecord(updatedRecord);
+      savePanoramaRecord(updatedRecord);
     }
-  }, [state.outputImage]);
+    setPrimaryPreviewTab('panorama');
+    setPanoramaPreviewKind('rendered');
+
+    if (batchActiveSlotIndex !== null) {
+      setBatchQueue(previous => {
+        const [nextSlotIndex, ...remaining] = previous;
+        if (nextSlotIndex) {
+          window.setTimeout(() => submitSlotForGeneration(nextSlotIndex), 250);
+        } else {
+          window.setTimeout(() => {
+            setIsBatchRendering(false);
+            setBatchActiveSlotIndex(null);
+          }, 0);
+        }
+        return remaining;
+      });
+    }
+  }, [activeSlotIndex, batchActiveSlotIndex, slots, state.outputImage, submitSlotForGeneration]);
 
   const handleModelUpload = async (fileList: FileList | null) => {
     const file = fileList?.[0];
     if (!file) return;
 
     const extension = file.name.split('.').pop()?.toLowerCase();
-    if (!extension || !['glb', 'gltf', 'obj', 'dae', 'stl'].includes(extension)) {
+    if (!extension || !['glb', 'gltf', 'obj', 'dae', 'stl', 'zip'].includes(extension)) {
       setMessage('请上传 GLB、GLTF、OBJ、DAE 或 STL 模型。推荐使用转换后的 GLB。');
       return;
     }
@@ -233,6 +362,7 @@ export function PanoramaQuickRenderPanel({
         shareId: createShareId(),
         createdAt: payload.capturedAt,
       };
+      const targetSlotIndex = captureSlotIndex;
       savePanoramaRecord(record);
       const historyRecord = saveGenerationRecord({
         id: record.id,
@@ -262,7 +392,25 @@ export function PanoramaQuickRenderPanel({
         snapshotAssetId: imageAsset.id,
         panoramaRecord: record,
       });
+      setSlots(previous => {
+        const existingSlot = previous.find(slot => slot.slotIndex === targetSlotIndex);
+        const nextSlot: PanoramaCaptureSlot = {
+          slotIndex: targetSlotIndex,
+          title: existingSlot?.title || `位置 ${targetSlotIndex}`,
+          rawImage: uploadedPanorama,
+          capture: payload,
+          panoramaRecord: record,
+          modelId: model.id,
+          projectId,
+          createdAt: existingSlot?.createdAt || payload.capturedAt,
+          updatedAt: payload.capturedAt,
+        };
+        return upsertPanoramaSlot(previous, nextSlot);
+      });
+      setActiveSlotIndex(targetSlotIndex);
+      setSelectedSlotIndices(previous => previous.includes(targetSlotIndex) ? previous : [...previous, targetSlotIndex]);
       setPanoramaRecord(record);
+      setPanoramaPreviewKind('raw');
       setPreviewMode('360');
       setPrimaryPreviewTab('panorama');
       onHistoryRecord?.(historyRecord);
@@ -284,6 +432,72 @@ export function PanoramaQuickRenderPanel({
     } finally {
       setIsCapturing(false);
     }
+  };
+
+  const handleActivateSlot = (slotIndex: number) => {
+    setCaptureSlotIndex(slotIndex);
+    const slot = slots.find(item => item.slotIndex === slotIndex);
+    if (!slot) {
+      setActiveSlotIndex(slotIndex);
+      setPanoramaRecord(null);
+      setPanoramaPreviewKind('raw');
+      return;
+    }
+    applySlotAsCurrent(slot, panoramaPreviewKind);
+  };
+
+  const handleToggleSlotSelection = (slotIndex: number) => {
+    setSelectedSlotIndices(previous => (
+      previous.includes(slotIndex)
+        ? previous.filter(index => index !== slotIndex)
+        : [...previous, slotIndex].sort((a, b) => a - b)
+    ));
+  };
+
+  const handleDeleteSlot = (slotIndex: number) => {
+    const remainingSlots = slots.filter(slot => slot.slotIndex !== slotIndex);
+    setSlots(remainingSlots);
+    setSelectedSlotIndices(previous => previous.filter(index => index !== slotIndex));
+    if (activeSlotIndex === slotIndex) {
+      const nextSlot = remainingSlots[0] || null;
+      const nextIndex = nextSlot?.slotIndex || slotIndex;
+      setActiveSlotIndex(nextIndex);
+      setCaptureSlotIndex(nextIndex);
+      setPanoramaRecord(nextSlot?.panoramaRecord || null);
+      setPanoramaPreviewKind('raw');
+      if (nextSlot) {
+        onUpdateInputImage(nextSlot.rawImage);
+      } else {
+        onUpdateInputImage(null);
+      }
+    }
+  };
+
+  const handleGenerateActiveSlot = () => {
+    if (state.isGenerating || isBatchRendering) return;
+    const slot = activeSlot || slots.find(item => item.slotIndex === captureSlotIndex);
+    if (!slot) {
+      setMessage('请先在模型中截图并保存一个渲染前全景图。');
+      return;
+    }
+    setBatchQueue([]);
+    setIsBatchRendering(false);
+    setBatchActiveSlotIndex(slot.slotIndex);
+    submitSlotForGeneration(slot.slotIndex);
+  };
+
+  const handleGenerateSelectedSlots = () => {
+    if (state.isGenerating || isBatchRendering) return;
+    const targetSlots = renderableSelectedSlots.length > 0 ? renderableSelectedSlots : (activeSlot ? [activeSlot] : []);
+    if (targetSlots.length === 0) {
+      setMessage('请先选择至少一个已保存的全景槽位。');
+      return;
+    }
+    const [firstSlot, ...remainingSlots] = targetSlots.sort((a, b) => a.slotIndex - b.slotIndex);
+    setBatchQueue(remainingSlots.map(slot => slot.slotIndex));
+    setIsBatchRendering(targetSlots.length > 1);
+    setBatchActiveSlotIndex(firstSlot.slotIndex);
+    submitSlotForGeneration(firstSlot.slotIndex);
   };
 
   return (
@@ -324,6 +538,25 @@ export function PanoramaQuickRenderPanel({
                     全景图预览
                   </button>
                 </div>
+                {primaryPreviewTab === 'panorama' && (currentRawPanoramaUrl || currentRenderedPanoramaUrl) ? (
+                  <div className="inline-flex rounded-lg bg-slate-100 p-1 text-xs font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setPanoramaPreviewKind('raw')}
+                      className={`rounded-md px-2 py-1 ${panoramaPreviewKind === 'raw' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500'}`}
+                    >
+                      原始全景图
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => canShowRenderedPanorama && setPanoramaPreviewKind('rendered')}
+                      disabled={!canShowRenderedPanorama}
+                      className={`rounded-md px-2 py-1 disabled:opacity-40 ${panoramaPreviewKind === 'rendered' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500'}`}
+                    >
+                      AI 渲染图
+                    </button>
+                  </div>
+                ) : null}
                 {primaryPreviewTab === 'panorama' && panoramaUrl ? (
                   <div className="inline-flex rounded-lg bg-slate-100 p-1 text-xs font-bold">
                     <button type="button" onClick={() => setPreviewMode('360')} className={`rounded-md px-2 py-1 ${previewMode === '360' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500'}`}>
@@ -350,7 +583,7 @@ export function PanoramaQuickRenderPanel({
               {primaryPreviewTab === 'panorama' ? (
                 <MainPanoramaPreview imageUrl={panoramaUrl} previewMode={previewMode} />
               ) : model ? (
-                <ModelViewer ref={viewerRef} asset={model} minHeight={560} />
+                <ModelViewer ref={viewerRef} asset={model} minHeight={560} initialView="interior" />
               ) : (
                 <div className="flex h-full items-center justify-center bg-slate-50 p-8 text-center">
                   <div className="max-w-sm">
@@ -376,10 +609,93 @@ export function PanoramaQuickRenderPanel({
 
             {message ? <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">{message}</div> : null}
 
+            <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-bold text-slate-900">渲染前全景槽位</p>
+                  <p className="mt-1 text-[11px] leading-4 text-slate-500">最多保存 4 个位置，可选择多个槽位批量 AI 渲染。</p>
+                </div>
+                <span className="rounded bg-white px-2 py-1 text-[10px] font-bold text-slate-500">{slots.length}/4</span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {PANORAMA_SLOT_INDICES.map(slotIndex => {
+                  const slot = slots.find(item => item.slotIndex === slotIndex);
+                  const isActive = activeSlotIndex === slotIndex;
+                  const isSelected = selectedSlotIndices.includes(slotIndex);
+                  return (
+                    <div
+                      key={slotIndex}
+                      className={`rounded-lg border bg-white p-2 transition-colors ${isActive ? 'border-blue-500 ring-1 ring-blue-200' : 'border-slate-200'}`}
+                    >
+                      <button type="button" onClick={() => handleActivateSlot(slotIndex)} className="block w-full text-left">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-slate-800">位置 {slotIndex}</span>
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${slot?.renderResult ? 'bg-emerald-50 text-emerald-700' : slot ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-400'}`}>
+                            {slot?.renderResult ? '已渲染' : slot ? '已截图' : '空'}
+                          </span>
+                        </div>
+                        {slot ? (
+                          <img
+                            src={slot.rawImage.url || slot.rawImage.dataUrl}
+                            alt={`位置 ${slotIndex} 原始全景图`}
+                            className="mt-2 aspect-[2/1] w-full rounded-md bg-slate-100 object-cover"
+                          />
+                        ) : (
+                          <div className="mt-2 flex aspect-[2/1] items-center justify-center rounded-md border border-dashed border-slate-200 text-[10px] font-bold text-slate-300">
+                            未保存
+                          </div>
+                        )}
+                        <p className="mt-1 truncate text-[10px] text-slate-400">{slot ? new Date(slot.updatedAt).toLocaleString() : '点击选择槽位'}</p>
+                      </button>
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <label className={`inline-flex items-center gap-1 text-[10px] font-bold ${slot ? 'text-slate-600' : 'text-slate-300'}`}>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            disabled={!slot}
+                            onChange={() => handleToggleSlotSelection(slotIndex)}
+                            className="h-3 w-3 rounded border-slate-300"
+                          />
+                          批量
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSlot(slotIndex)}
+                          disabled={!slot}
+                          className="inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-red-500 disabled:opacity-30"
+                          title="删除槽位"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-bold text-slate-500">截图保存到</span>
+                <div className="inline-flex rounded-lg bg-white p-1 text-xs font-bold shadow-sm">
+                  {PANORAMA_SLOT_INDICES.map(slotIndex => (
+                    <button
+                      key={slotIndex}
+                      type="button"
+                      onClick={() => {
+                        setCaptureSlotIndex(slotIndex);
+                        handleActivateSlot(slotIndex);
+                      }}
+                      className={`rounded-md px-2 py-1 ${captureSlotIndex === slotIndex ? 'bg-slate-950 text-white' : 'text-slate-500'}`}
+                    >
+                      {slotIndex}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
             <button
               type="button"
               onClick={handleCaptureViewpoint}
-              disabled={!canCapturePanorama || isCapturing}
+              disabled={!canCapturePanorama || isCapturing || state.isGenerating || isBatchRendering}
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-50"
             >
               <Camera className="h-4 w-4" />
@@ -388,16 +704,29 @@ export function PanoramaQuickRenderPanel({
 
             <button
               type="button"
-              onClick={onGenerate}
-              disabled={!state.inputImage?.assetId || state.isGenerating}
+              onClick={handleGenerateActiveSlot}
+              disabled={!activeSlot?.rawImage.assetId || state.isGenerating || isBatchRendering}
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-sm font-bold text-white disabled:opacity-50"
             >
               <Sparkles className="h-4 w-4" />
-              {state.isGenerating ? '正在 AI 渲染全景...' : 'AI 渲染全景图'}
+              {state.isGenerating || isBatchRendering ? '正在 AI 渲染全景...' : 'AI 渲染当前槽位'}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleGenerateSelectedSlots}
+              disabled={renderableSelectedSlots.length === 0 || state.isGenerating || isBatchRendering}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-800 disabled:opacity-50"
+            >
+              <Sparkles className="h-4 w-4" />
+              {isBatchRendering ? `批量渲染中 ${batchActiveSlotIndex || ''}` : `批量渲染已选槽位（${renderableSelectedSlots.length}）`}
             </button>
 
             <ResultPreview
               imageUrl={panoramaUrl}
+              previewKind={panoramaPreviewKind}
+              canShowRendered={canShowRenderedPanorama}
+              onPreviewKindChange={setPanoramaPreviewKind}
               previewMode={previewMode}
               onPreviewModeChange={setPreviewMode}
             />
@@ -407,7 +736,7 @@ export function PanoramaQuickRenderPanel({
             <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">模型文件</p>
               <p className="mt-2 truncate text-sm font-bold text-slate-800">{model?.fileName || '尚未上传模型'}</p>
-              <p className="mt-1 text-xs text-slate-500">{model ? `${model.fileType.toUpperCase()} / ${model.size}` : '支持 GLB / GLTF / OBJ / DAE / STL'}</p>
+              <p className="mt-1 text-xs text-slate-500">{model ? `${model.fileType.toUpperCase()} / ${model.size}` : '支持 GLB / GLTF / OBJ / DAE / STL / ZIP'}</p>
               {model ? (
                 <div className="mt-3 space-y-1 rounded-lg bg-white px-3 py-2 text-[11px] leading-5 text-slate-500">
                   <p><span className="font-bold text-slate-700">当前加载：</span>{modelVersionLabel}</p>
@@ -570,10 +899,16 @@ function MainPanoramaPreview({ imageUrl, previewMode }: { imageUrl: string; prev
 
 function ResultPreview({
   imageUrl,
+  previewKind,
+  canShowRendered,
+  onPreviewKindChange,
   previewMode,
   onPreviewModeChange,
 }: {
   imageUrl: string;
+  previewKind: 'raw' | 'rendered';
+  canShowRendered: boolean;
+  onPreviewKindChange: (kind: 'raw' | 'rendered') => void;
   previewMode: 'image' | '360';
   onPreviewModeChange: (mode: 'image' | '360') => void;
 }) {
@@ -588,14 +923,24 @@ function ResultPreview({
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
       <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
-        <p className="text-sm font-bold text-slate-900">全景结果</p>
-        <div className="inline-flex rounded-lg bg-white p-1 text-xs font-bold shadow-sm">
-          <button type="button" onClick={() => onPreviewModeChange('image')} className={`rounded-md px-2 py-1 ${previewMode === 'image' ? 'bg-slate-950 text-white' : 'text-slate-500'}`}>
-            普通图
-          </button>
-          <button type="button" onClick={() => onPreviewModeChange('360')} className={`rounded-md px-2 py-1 ${previewMode === '360' ? 'bg-slate-950 text-white' : 'text-slate-500'}`}>
-            360预览
-          </button>
+        <p className="text-sm font-bold text-slate-900">{previewKind === 'rendered' ? 'AI 渲染后全景图' : '渲染前原始全景图'}</p>
+        <div className="flex flex-wrap justify-end gap-2">
+          <div className="inline-flex rounded-lg bg-white p-1 text-xs font-bold shadow-sm">
+            <button type="button" onClick={() => onPreviewKindChange('raw')} className={`rounded-md px-2 py-1 ${previewKind === 'raw' ? 'bg-slate-950 text-white' : 'text-slate-500'}`}>
+              原图
+            </button>
+            <button type="button" onClick={() => canShowRendered && onPreviewKindChange('rendered')} disabled={!canShowRendered} className={`rounded-md px-2 py-1 disabled:opacity-40 ${previewKind === 'rendered' ? 'bg-slate-950 text-white' : 'text-slate-500'}`}>
+              AI 图
+            </button>
+          </div>
+          <div className="inline-flex rounded-lg bg-white p-1 text-xs font-bold shadow-sm">
+            <button type="button" onClick={() => onPreviewModeChange('image')} className={`rounded-md px-2 py-1 ${previewMode === 'image' ? 'bg-slate-950 text-white' : 'text-slate-500'}`}>
+              图片
+            </button>
+            <button type="button" onClick={() => onPreviewModeChange('360')} className={`rounded-md px-2 py-1 ${previewMode === '360' ? 'bg-slate-950 text-white' : 'text-slate-500'}`}>
+              360
+            </button>
+          </div>
         </div>
       </div>
       {previewMode === '360' ? (
@@ -675,4 +1020,59 @@ function dataUrlToFile(dataUrl: string, filename: string): File {
 
 function createShareId(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `share-${Date.now()}`;
+}
+
+function upsertPanoramaSlot(slots: PanoramaCaptureSlot[], nextSlot: PanoramaCaptureSlot): PanoramaCaptureSlot[] {
+  return [
+    ...slots.filter(slot => slot.slotIndex !== nextSlot.slotIndex),
+    nextSlot,
+  ].sort((a, b) => a.slotIndex - b.slotIndex);
+}
+
+function getPanoramaSlotStorageKey(projectId: string | null | undefined, modelId: string): string {
+  return `${PANORAMA_SLOT_STORAGE_PREFIX}:${projectId || 'default'}:${modelId}`;
+}
+
+function readStoredPanoramaSlots(storageKey: string): PanoramaCaptureSlot[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is PanoramaCaptureSlot => isValidStoredPanoramaSlot(item))
+      .sort((a, b) => a.slotIndex - b.slotIndex)
+      .slice(0, PANORAMA_SLOT_INDICES.length);
+  } catch (error) {
+    console.warn('Failed to read panorama slots from localStorage', error);
+    return [];
+  }
+}
+
+function writeStoredPanoramaSlots(storageKey: string, slots: PanoramaCaptureSlot[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const serializableSlots = slots.map(slot => ({
+      ...slot,
+      rawImage: {
+        ...slot.rawImage,
+        dataUrl: slot.rawImage.url || slot.rawImage.dataUrl,
+      },
+    }));
+    window.localStorage.setItem(storageKey, JSON.stringify(serializableSlots));
+  } catch (error) {
+    console.warn('Failed to persist panorama slots to localStorage', error);
+  }
+}
+
+function isValidStoredPanoramaSlot(value: unknown): value is PanoramaCaptureSlot {
+  if (!value || typeof value !== 'object') return false;
+  const slot = value as Partial<PanoramaCaptureSlot>;
+  return typeof slot.slotIndex === 'number'
+    && PANORAMA_SLOT_INDICES.includes(slot.slotIndex as typeof PANORAMA_SLOT_INDICES[number])
+    && Boolean(slot.rawImage?.dataUrl || slot.rawImage?.url)
+    && Boolean(slot.capture?.captureType === 'panorama-viewpoint')
+    && Boolean(slot.panoramaRecord?.panoramaUrl)
+    && typeof slot.modelId === 'string';
 }

@@ -116,8 +116,8 @@ export interface ModelAssetRecord {
   thumbnailUrl?: string;
   filename: string;
   originalFilename: string;
-  fileType: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
-  format?: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
+  fileType: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl' | 'zip';
+  format?: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl' | 'zip';
   mimeType: string;
   size: number;
   metadata?: {
@@ -130,7 +130,13 @@ export interface ModelAssetRecord {
     previewUrl?: string;
     optimizedUrl?: string;
     thumbnailUrl?: string;
-    format: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl';
+    format: 'glb' | 'gltf' | 'obj' | 'dae' | 'stl' | 'zip';
+    archiveMainModelPath?: string;
+    archiveMainModelFileType?: 'glb' | 'gltf' | 'dae' | 'obj';
+    archiveModelFileCount?: number;
+    archiveSelectionWarning?: string;
+    conversionWarning?: string | null;
+    missingImageCount?: number;
     originalFileSize: number;
     optimizedFileSize?: number;
     optimizationStatus: 'pending' | 'processing' | 'succeeded' | 'failed' | 'skipped';

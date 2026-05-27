@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, statSync } from 'node:fs';
+import { createWriteStream, existsSync, statSync } from 'node:fs';
 import { access, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import * as yauzl from 'yauzl';
 import {
   assertBlenderAvailable,
   BlenderCliError,
@@ -14,6 +16,8 @@ import {
 import { uploadsDir } from './fileStorage';
 import { ModelAsset } from './storage';
 
+type ConvertibleInputFileType = 'glb' | 'gltf' | 'dae' | 'obj';
+
 export interface ModelConversionConfig {
   enabled: boolean;
   blenderBin: string;
@@ -22,6 +26,9 @@ export interface ModelConversionConfig {
 
 export interface MaterializedModelInput {
   inputPath: string;
+  fileType: ConvertibleInputFileType;
+  workingDirectory: string;
+  archive?: ModelArchiveInspection;
   cleanup: () => Promise<void>;
 }
 
@@ -30,6 +37,16 @@ export interface ModelConversionResult {
   size: number;
   stdout: string;
   stderr: string;
+  conversionWarning?: string;
+  missingImageCount: number;
+}
+
+export interface ModelArchiveInspection {
+  mainModelPath: string;
+  mainModelRelativePath: string;
+  mainModelFileType: ConvertibleInputFileType;
+  modelFileCount: number;
+  selectionWarning?: string;
 }
 
 export class ModelConversionDisabledError extends Error {
@@ -55,6 +72,13 @@ export class ModelConversionExecutionError extends Error {
   }
 }
 
+export class ModelArchiveError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ModelArchiveError';
+  }
+}
+
 export function getModelConversionConfig(): ModelConversionConfig {
   const enabledValue = process.env.MODEL_CONVERSION_ENABLED;
   return {
@@ -76,15 +100,26 @@ export async function assertModelConversionAvailable(): Promise<void> {
       blenderBin: config.blenderBin,
     });
   } catch (error) {
-    throw classifyBlenderError(error, config.blenderBin);
+    throw classifyBlenderError(error, { blenderBin: config.blenderBin });
   }
 }
 
 export async function materializeModelInput(asset: ModelAsset): Promise<MaterializedModelInput> {
   const localPath = await resolveLocalUploadPath(asset.filename);
   if (localPath) {
+    if (asset.fileType === 'zip') {
+      return materializeModelArchive(await readFile(localPath));
+    }
+
+    const fileType = getConvertibleFileType(asset.fileType);
+    if (!fileType) {
+      throw new ModelConversionExecutionError(`不支持转换的模型格式：${asset.fileType}`);
+    }
+
     return {
       inputPath: localPath,
+      fileType,
+      workingDirectory: path.dirname(localPath),
       cleanup: async () => undefined,
     };
   }
@@ -95,22 +130,76 @@ export async function materializeModelInput(asset: ModelAsset): Promise<Material
   }
 
   const content = Buffer.from(await response.arrayBuffer());
+  if (asset.fileType === 'zip') {
+    return materializeModelArchive(content);
+  }
+
+  const fileType = getConvertibleFileType(asset.fileType);
+  if (!fileType) {
+    throw new ModelConversionExecutionError(`不支持转换的模型格式：${asset.fileType}`);
+  }
+
   const tempDir = await createTempDir();
-  const inputPath = path.join(tempDir, `input.${asset.fileType}`);
+  const inputPath = path.join(tempDir, `input.${fileType}`);
   await writeFile(inputPath, content);
 
   return {
     inputPath,
+    fileType,
+    workingDirectory: tempDir,
     cleanup: async () => {
       await rm(tempDir, { recursive: true, force: true });
     },
   };
 }
 
-export async function convertModelToGlb(input: { inputPath: string; fileType: 'dae' | 'obj' }): Promise<ModelConversionResult> {
+export async function inspectModelArchive(content: Buffer): Promise<ModelArchiveInspection> {
+  const materialized = await materializeModelArchive(content);
+  try {
+    if (!materialized.archive) {
+      throw new ModelArchiveError('ZIP 资源包解析失败。');
+    }
+    return materialized.archive;
+  } finally {
+    await materialized.cleanup();
+  }
+}
+
+async function materializeModelArchive(content: Buffer): Promise<MaterializedModelInput> {
+  const tempDir = await createTempDir();
+  try {
+    const extractedFiles = await extractZipBuffer(content, tempDir);
+    const archive = selectPrimaryModelFile(tempDir, extractedFiles);
+    return {
+      inputPath: archive.mainModelPath,
+      fileType: archive.mainModelFileType,
+      workingDirectory: path.dirname(archive.mainModelPath),
+      archive,
+      cleanup: async () => {
+        await rm(tempDir, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    await rm(tempDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+export async function convertModelToGlb(input: { inputPath: string; fileType: ConvertibleInputFileType; workingDirectory?: string }): Promise<ModelConversionResult> {
   const config = getModelConversionConfig();
   if (!config.enabled) {
     throw new ModelConversionDisabledError();
+  }
+
+  if (input.fileType === 'glb') {
+    const content = await readFile(input.inputPath);
+    return {
+      content,
+      size: content.length,
+      stdout: '',
+      stderr: '',
+      missingImageCount: 0,
+    };
   }
 
   const tempDir = await createTempDir();
@@ -124,6 +213,7 @@ export async function convertModelToGlb(input: { inputPath: string; fileType: 'd
     console.info('Model conversion Blender execution starting', {
       blenderBin: config.blenderBin,
       inputFileType: input.fileType,
+      workingDirectory: input.workingDirectory || path.dirname(input.inputPath),
       timeoutMs: config.timeoutMs,
     });
     const { stdout, stderr } = await runBlender(process.env.BLENDER_BIN, [
@@ -133,6 +223,7 @@ export async function convertModelToGlb(input: { inputPath: string; fileType: 'd
     ], {
       timeoutMs: config.timeoutMs,
       logLabel: 'model-conversion',
+      cwd: input.workingDirectory || path.dirname(input.inputPath),
     });
 
     const outputStats = await stat(outputPath).catch(error => {
@@ -147,7 +238,7 @@ export async function convertModelToGlb(input: { inputPath: string; fileType: 'd
         stderr,
         pythonScript,
       });
-      throw new ModelConversionExecutionError(formatOutputValidationError(
+      throw new ModelConversionExecutionError(formatOutputValidationErrorV2(
         'Blender 已退出但未生成 GLB 输出文件',
         stdout,
         stderr,
@@ -166,7 +257,7 @@ export async function convertModelToGlb(input: { inputPath: string; fileType: 'd
         stderr,
         pythonScript,
       });
-      throw new ModelConversionExecutionError(formatOutputValidationError(
+      throw new ModelConversionExecutionError(formatOutputValidationErrorV2(
         'Blender 已退出但生成的 GLB 文件为空',
         stdout,
         stderr,
@@ -174,11 +265,14 @@ export async function convertModelToGlb(input: { inputPath: string; fileType: 'd
       ));
     }
 
+    const outputDiagnostics = analyzeBlenderOutput(stdout, stderr);
     return {
       content: await readFile(outputPath),
       size: outputStats.size,
       stdout,
       stderr,
+      conversionWarning: outputDiagnostics.conversionWarning,
+      missingImageCount: outputDiagnostics.missingImageCount,
     };
   } catch (error) {
     if (error instanceof ModelConversionUnavailableError || error instanceof ModelConversionExecutionError) {
@@ -197,13 +291,17 @@ export async function convertModelToGlb(input: { inputPath: string; fileType: 'd
         pythonScript,
       });
     }
-    throw classifyBlenderError(error, config.blenderBin);
+    throw classifyBlenderError(error, {
+      blenderBin: config.blenderBin,
+      inputFileType: input.fileType,
+      timeoutMs: config.timeoutMs,
+    });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 }
 
-function buildBlenderPythonScript(inputPath: string, outputPath: string, fileType: 'dae' | 'obj'): string {
+function buildBlenderPythonScript(inputPath: string, outputPath: string, fileType: ConvertibleInputFileType): string {
   const inputLiteral = JSON.stringify(inputPath);
   const outputLiteral = JSON.stringify(outputPath);
   const fileTypeLiteral = JSON.stringify(fileType);
@@ -219,6 +317,8 @@ file_type = ${fileTypeLiteral}
 print("INPUT_PATH=", input_path, flush=True)
 print("OUTPUT_PATH=", output_path, flush=True)
 print("INPUT_EXISTS=", os.path.exists(input_path), flush=True)
+print("WORKING_DIRECTORY=", os.path.dirname(input_path), flush=True)
+os.chdir(os.path.dirname(input_path))
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
 print("OUTPUT_DIR_EXISTS=", os.path.isdir(os.path.dirname(output_path)), flush=True)
 
@@ -233,6 +333,10 @@ elif file_type == 'obj':
         bpy.ops.wm.obj_import(filepath=input_path)
     else:
         bpy.ops.import_scene.obj(filepath=input_path)
+elif file_type == 'gltf':
+    bpy.ops.import_scene.gltf(filepath=input_path)
+elif file_type == 'glb':
+    bpy.ops.import_scene.gltf(filepath=input_path)
 else:
     raise RuntimeError('Unsupported model format for conversion: ' + file_type)
 
@@ -265,6 +369,186 @@ if (not output_exists) or output_size <= 0:
 `;
 }
 
+function getConvertibleFileType(fileType: ModelAsset['fileType']): ConvertibleInputFileType | null {
+  if (fileType === 'glb' || fileType === 'gltf' || fileType === 'dae' || fileType === 'obj') {
+    return fileType;
+  }
+  return null;
+}
+
+async function extractZipBuffer(content: Buffer, outputDir: string): Promise<string[]> {
+  const extractedFiles: string[] = [];
+
+  await new Promise<void>((resolve, reject) => {
+    yauzl.fromBuffer(content, { lazyEntries: true, decodeStrings: true }, (openError, zipFile) => {
+      if (openError || !zipFile) {
+        reject(new ModelArchiveError(`ZIP 资源包无法读取：${openError instanceof Error ? openError.message : '未知错误'}`));
+        return;
+      }
+
+      let settled = false;
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        zipFile.close();
+        reject(error instanceof Error ? error : new ModelArchiveError(String(error)));
+      };
+
+      zipFile.on('error', fail);
+      zipFile.on('end', () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      });
+
+      zipFile.on('entry', (entry: yauzl.Entry) => {
+        const normalizedEntryPath = normalizeZipEntryPath(entry.fileName);
+        if (!normalizedEntryPath) {
+          fail(new ModelArchiveError(`ZIP 资源包包含不安全路径：${entry.fileName}`));
+          return;
+        }
+
+        if (shouldIgnoreArchiveEntry(normalizedEntryPath)) {
+          zipFile.readEntry();
+          return;
+        }
+
+        const destination = path.resolve(outputDir, normalizedEntryPath);
+        if (!isWithinDirectory(destination, outputDir)) {
+          fail(new ModelArchiveError(`ZIP 资源包包含越界路径：${entry.fileName}`));
+          return;
+        }
+
+        if (/\/$/u.test(entry.fileName)) {
+          void mkdir(destination, { recursive: true }).then(() => zipFile.readEntry(), fail);
+          return;
+        }
+
+        void mkdir(path.dirname(destination), { recursive: true })
+          .then(() => writeZipEntry(zipFile, entry, destination))
+          .then(() => {
+            extractedFiles.push(normalizedEntryPath);
+            zipFile.readEntry();
+          }, fail);
+      });
+
+      zipFile.readEntry();
+    });
+  });
+
+  return extractedFiles;
+}
+
+function writeZipEntry(zipFile: yauzl.ZipFile, entry: yauzl.Entry, destination: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    zipFile.openReadStream(entry, (streamError, stream) => {
+      if (streamError || !stream) {
+        reject(new ModelArchiveError(`ZIP 条目无法解压：${entry.fileName}`));
+        return;
+      }
+
+      pipeline(stream, createWriteStream(destination)).then(resolve, reject);
+    });
+  });
+}
+
+function selectPrimaryModelFile(rootDir: string, extractedFiles: string[]): ModelArchiveInspection {
+  const candidates = extractedFiles
+    .map(relativePath => {
+      const fileType = getArchiveModelFileType(relativePath);
+      return fileType ? { relativePath, fileType } : null;
+    })
+    .filter((candidate): candidate is { relativePath: string; fileType: ConvertibleInputFileType } => Boolean(candidate))
+    .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+
+  if (candidates.length === 0) {
+    throw new ModelArchiveError('ZIP 资源包内未找到可转换模型文件。请包含 .glb / .gltf / .dae / .obj 主模型文件。');
+  }
+
+  const priority: ConvertibleInputFileType[] = ['glb', 'gltf', 'dae', 'obj'];
+  const selected = priority
+    .map(fileType => candidates.find(candidate => candidate.fileType === fileType))
+    .find(Boolean);
+
+  if (!selected) {
+    throw new ModelArchiveError('ZIP 资源包内未找到可转换模型文件。');
+  }
+
+  const selectionWarning = candidates.length > 1
+    ? `ZIP 资源包内发现 ${candidates.length} 个模型文件，已按 glb/gltf > dae > obj 优先级选择：${selected.relativePath}`
+    : undefined;
+
+  return {
+    mainModelPath: path.resolve(rootDir, selected.relativePath),
+    mainModelRelativePath: selected.relativePath,
+    mainModelFileType: selected.fileType,
+    modelFileCount: candidates.length,
+    selectionWarning,
+  };
+}
+
+function getArchiveModelFileType(relativePath: string): ConvertibleInputFileType | null {
+  const extension = path.extname(relativePath).toLowerCase();
+  if (extension === '.glb') return 'glb';
+  if (extension === '.gltf') return 'gltf';
+  if (extension === '.dae') return 'dae';
+  if (extension === '.obj') return 'obj';
+  return null;
+}
+
+function normalizeZipEntryPath(entryName: string): string | null {
+  const normalized = entryName.replace(/\\/g, '/');
+  if (!normalized || normalized.includes('\0') || normalized.startsWith('/') || /^[a-z]:/iu.test(normalized)) {
+    return null;
+  }
+
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.some(part => part === '..')) {
+    return null;
+  }
+
+  return normalized.endsWith('/') ? `${parts.join('/')}/` : parts.join('/');
+}
+
+function shouldIgnoreArchiveEntry(relativePath: string): boolean {
+  return relativePath.startsWith('__MACOSX/') || relativePath.endsWith('/.DS_Store') || relativePath === '.DS_Store';
+}
+
+function isWithinDirectory(candidate: string, directory: string): boolean {
+  const relative = path.relative(directory, candidate);
+  return Boolean(relative) && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+function analyzeBlenderOutput(stdout: string, stderr: string): { missingImageCount: number; conversionWarning?: string } {
+  const combinedOutput = `${stdout}\n${stderr}`;
+  const missingImageCount = (combinedOutput.match(/Image not found/giu) || []).length;
+  return {
+    missingImageCount,
+    conversionWarning: missingImageCount > 0
+      ? '模型引用了外部贴图文件，但当前未上传，转换可能变慢或丢失材质。'
+      : undefined,
+  };
+}
+
+function formatBlenderExecutionMessageV2(error: BlenderCliError): string {
+  const stderrPreview = summarizeOutput(error.stderr, 4000);
+  const stdoutPreview = summarizeOutput(error.stdout, 2000);
+  const outputDiagnostics = analyzeBlenderOutput(error.stdout, error.stderr);
+  const preview = stderrPreview
+    ? `stderrPreview=${stderrPreview}`
+    : `stdoutPreview=${stdoutPreview || error.message}`;
+  const warning = outputDiagnostics.conversionWarning ? ` warning=${outputDiagnostics.conversionWarning}` : '';
+  return `Blender 转换失败：exitCode=${error.code ?? 'unknown'}${error.signal ? ` signal=${error.signal}` : ''} missingImageCount=${outputDiagnostics.missingImageCount}${warning} ${preview}`;
+}
+
+function formatBlenderTimeoutMessageV2(error: BlenderCliError, context: { inputFileType?: string; timeoutMs?: number }): string {
+  const stderrPreview = summarizeOutput(error.stderr, 2000);
+  const stdoutPreview = summarizeOutput(error.stdout, 2000);
+  const outputDiagnostics = analyzeBlenderOutput(error.stdout, error.stderr);
+  const warning = outputDiagnostics.conversionWarning ? ` ${outputDiagnostics.conversionWarning}` : '';
+  return `模型较大或外部贴图缺失，Blender 转换超时。可尝试上传包含贴图的 ZIP 资源包，或延长 MODEL_CONVERSION_TIMEOUT_MS。inputFileType=${context.inputFileType || 'unknown'} timeoutMs=${context.timeoutMs ?? 'unknown'} exitCode=${error.code ?? 'TIMEOUT'} missingImageCount=${outputDiagnostics.missingImageCount}${warning} stderrPreview=${stderrPreview || 'empty'} stdoutPreview=${stdoutPreview || 'empty'}`;
+}
+
 async function createTempDir(): Promise<string> {
   const tempRoot = path.join(os.tmpdir(), 'archai-model-conversion');
   await mkdir(tempRoot, { recursive: true });
@@ -288,7 +572,7 @@ function logBlenderConversionFailure(input: {
   blenderBin: string;
   inputPath: string;
   outputPath: string;
-  fileType: 'dae' | 'obj';
+  fileType: ConvertibleInputFileType;
   exitCode: string | number | null | undefined;
   signal: NodeJS.Signals | null | undefined;
   stdout: string;
@@ -296,6 +580,7 @@ function logBlenderConversionFailure(input: {
   pythonScript: string;
 }): void {
   const diagnostics = getOutputDiagnostics(input.outputPath);
+  const outputDiagnostics = analyzeBlenderOutput(input.stdout, input.stderr);
   console.error('Blender conversion process failed', {
     blenderBin: input.blenderBin,
     inputPath: input.inputPath,
@@ -305,6 +590,8 @@ function logBlenderConversionFailure(input: {
     signal: input.signal,
     stdoutPreview: summarizeOutput(input.stdout, 2000),
     stderrPreview: summarizeOutput(input.stderr, 4000),
+    missingImageCount: outputDiagnostics.missingImageCount,
+    conversionWarning: outputDiagnostics.conversionWarning,
     outputExists: diagnostics.outputExists,
     outputDirExists: diagnostics.outputDirExists,
     outputSize: diagnostics.outputSize,
@@ -320,6 +607,18 @@ function formatOutputValidationError(reason: string, stdout: string, stderr: str
     ? `stderrPreview=${stderrPreview}`
     : `stdoutPreview=${stdoutPreview || 'empty'}`;
   return `Blender 转换失败：${reason}。exitCode=0 outputExists=${diagnostics.outputExists} outputDirExists=${diagnostics.outputDirExists} outputSize=${diagnostics.outputSize ?? 'unknown'} ${preview}`;
+}
+
+function formatOutputValidationErrorV2(reason: string, stdout: string, stderr: string, outputPath: string): string {
+  const diagnostics = getOutputDiagnostics(outputPath);
+  const stderrPreview = summarizeOutput(stderr, 4000);
+  const stdoutPreview = summarizeOutput(stdout, 2000);
+  const outputDiagnostics = analyzeBlenderOutput(stdout, stderr);
+  const preview = stderrPreview
+    ? `stderrPreview=${stderrPreview}`
+    : `stdoutPreview=${stdoutPreview || 'empty'}`;
+  const warning = outputDiagnostics.conversionWarning ? ` warning=${outputDiagnostics.conversionWarning}` : '';
+  return `Blender 转换失败：${reason}。exitCode=0 outputExists=${diagnostics.outputExists} outputDirExists=${diagnostics.outputDirExists} outputSize=${diagnostics.outputSize ?? 'unknown'} missingImageCount=${outputDiagnostics.missingImageCount}${warning} ${preview}`;
 }
 
 function getOutputDiagnostics(outputPath: string): {
@@ -352,21 +651,21 @@ function getOutputDiagnostics(outputPath: string): {
   };
 }
 
-function classifyBlenderError(error: unknown, blenderBin: string): Error {
+function classifyBlenderError(error: unknown, context: { blenderBin: string; inputFileType?: string; timeoutMs?: number }): Error {
   if (error instanceof BlenderCliError) {
     if (isBlenderStartupUnavailable(error)) {
-      return new ModelConversionUnavailableError(formatBlenderUnavailableMessage(error, blenderBin), { cause: error });
+      return new ModelConversionUnavailableError(formatBlenderUnavailableMessage(error, context.blenderBin), { cause: error });
     }
 
     if (error.failureKind === 'timeout') {
-      return new ModelConversionExecutionError(formatBlenderTimeoutMessage(error), { cause: error });
+      return new ModelConversionExecutionError(formatBlenderTimeoutMessageV2(error, context), { cause: error });
     }
 
     if (error.failureKind === 'startup') {
       return new ModelConversionExecutionError(formatBlenderStartupFailureMessage(error), { cause: error });
     }
 
-    return new ModelConversionExecutionError(formatBlenderExecutionMessage(error), { cause: error });
+    return new ModelConversionExecutionError(formatBlenderExecutionMessageV2(error), { cause: error });
   }
 
   const message = error instanceof Error ? error.message : String(error);
@@ -404,3 +703,4 @@ function formatBlenderTimeoutMessage(error: BlenderCliError): string {
   const outputPreview = stderrPreview || stdoutPreview;
   return `Blender 执行超时：exitCode=${error.code ?? 'TIMEOUT'}${outputPreview ? ` ${outputPreview}` : ''}`;
 }
+ 

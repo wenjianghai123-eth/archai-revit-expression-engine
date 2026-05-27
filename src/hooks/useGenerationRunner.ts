@@ -846,7 +846,7 @@ function readPanoramaChangeStrengthInstruction(strength: GenerationConfig['panor
   if (strength === 'strong') {
     return 'Change strength: strong. Preserve the core spatial structure, proportions, camera position, and 360 continuity, but allow stronger creative enhancement, richer scene details, more expressive atmosphere, stronger material variation, decoration, and furnishing enrichment.';
   }
-  return 'Change strength: medium. Maintain the original space while moderately enhancing materials, lighting, atmosphere, soft furnishing, and details; keep the current balanced default level of transformation.';
+  return 'Change strength: medium. Preserve the original spatial layout, composition, core elements, furniture positions, and major design features largely intact. Moderately enhance materials, lighting, atmosphere, texture quality, and a small amount of detail, while avoiding excessive new objects or drastic scene changes.';
 }
 
 function readMeaningfulPrompt(value: unknown): string {

@@ -12,7 +12,7 @@ interface ModelSnapshotRenderPanelProps {
   onGenerate: () => void;
 }
 
-const modelAccept = '.glb,.gltf,.obj,.dae,.stl,model/gltf-binary,model/gltf+json,model/vnd.collada+xml,model/stl';
+const modelAccept = '.glb,.gltf,.obj,.dae,.stl,.zip,model/gltf-binary,model/gltf+json,model/vnd.collada+xml,model/stl,application/zip,application/x-zip-compressed';
 const MAX_MODEL_SIZE_MB = 600;
 const MAX_MODEL_SIZE_BYTES = MAX_MODEL_SIZE_MB * 1024 * 1024;
 const MODEL_OPTIMIZATION_THRESHOLD_BYTES = 30 * 1024 * 1024;
@@ -395,7 +395,7 @@ export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputI
               {isUploadingModel ? '上传中...' : '上传模型'}
             </button>
             <div className="rounded-xl border border-slate-100 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
-              <p className="font-bold text-slate-800">支持 GLB、GLTF、OBJ、DAE、STL 模型，单个模型最大 {MAX_MODEL_SIZE_MB}MB。推荐使用 GLB 格式。</p>
+              <p className="font-bold text-slate-800">支持 GLB、GLTF、OBJ、DAE、STL、ZIP，单个模型最大 {MAX_MODEL_SIZE_MB}MB。DAE/OBJ 如包含贴图，请上传 ZIP 资源包。</p>
               <p>超过 30MB 的模型会优先等待后端轻量化预览，避免浏览器直接加载大模型。</p>
               <p className="font-semibold text-amber-700">暂不支持 FBX 和 SKP 原生文件。</p>
             </div>
@@ -561,7 +561,7 @@ function readConversionStatusLabel(model: AssetModel) {
   if (model.convertedUrl || model.conversionStatus === 'succeeded') return '已转换为 GLB';
   if (model.conversionStatus === 'converting') return '转换中';
   if (model.conversionStatus === 'failed') return '转换失败';
-  if (model.fileType === 'obj' || model.fileType === 'dae') return '未转换';
+  if (model.fileType === 'obj' || model.fileType === 'dae' || model.fileType === 'zip') return '未转换';
   return '无需转换';
 }
 
