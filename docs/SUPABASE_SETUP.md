@@ -146,7 +146,7 @@ create table if not exists public.generation_jobs (
   prompt text not null,
   config jsonb not null default '{}'::jsonb,
   input_asset_ids text[] not null default '{}'::text[],
-  status text not null default 'queued' check (status in ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+  status text not null default 'queued' check (status in ('queued', 'running', 'succeeded', 'failed', 'cancelled', 'timeout')),
   progress integer not null default 0,
   provider text not null,
   output_asset_id text references public.image_assets(id) on delete set null,
@@ -155,7 +155,10 @@ create table if not exists public.generation_jobs (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   started_at timestamptz,
-  finished_at timestamptz
+  finished_at timestamptz,
+  credit_cost integer not null default 0,
+  credit_refunded boolean not null default false,
+  failure_reason text
 );
 
 create table if not exists public.generation_records (
@@ -208,7 +211,7 @@ create table if not exists public.credit_balances (
 create table if not exists public.credit_transactions (
   id text primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
-  type text not null check (type in ('grant', 'debit', 'refund')),
+  type text not null check (type in ('admin_grant', 'generate_charge', 'generate_refund', 'grant', 'debit', 'refund')),
   amount integer not null,
   balance_after integer not null,
   reason text not null,
@@ -234,7 +237,10 @@ alter table public.model_assets
 alter table public.generation_jobs
   add column if not exists output_asset_ids text[] not null default '{}'::text[],
   add column if not exists started_at timestamptz,
-  add column if not exists finished_at timestamptz;
+  add column if not exists finished_at timestamptz,
+  add column if not exists credit_cost integer not null default 0,
+  add column if not exists credit_refunded boolean not null default false,
+  add column if not exists failure_reason text;
 
 alter table public.generation_records
   add column if not exists job_id text references public.generation_jobs(id) on delete set null;
@@ -262,7 +268,7 @@ create table if not exists public.credit_balances (
 create table if not exists public.credit_transactions (
   id text primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
-  type text not null check (type in ('grant', 'debit', 'refund')),
+  type text not null check (type in ('admin_grant', 'generate_charge', 'generate_refund', 'grant', 'debit', 'refund')),
   amount integer not null,
   balance_after integer not null,
   reason text not null,
@@ -288,6 +294,25 @@ begin
   alter table public.generation_jobs
     add constraint generation_jobs_mode_check
     check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render'));
+end $$;
+
+do $$
+declare
+  constraint_name text;
+begin
+  for constraint_name in
+    select conname
+    from pg_constraint
+    where conrelid = 'public.generation_jobs'::regclass
+      and contype = 'c'
+      and pg_get_constraintdef(oid) like '%status%'
+  loop
+    execute format('alter table public.generation_jobs drop constraint %I', constraint_name);
+  end loop;
+
+  alter table public.generation_jobs
+    add constraint generation_jobs_status_check
+    check (status in ('queued', 'running', 'succeeded', 'failed', 'cancelled', 'timeout'));
 end $$;
 
 do $$
@@ -428,7 +453,7 @@ declare
   v_next_balance integer;
   v_now timestamptz := now();
 begin
-  if p_type not in ('grant', 'debit', 'refund') then
+  if p_type not in ('admin_grant', 'generate_charge', 'generate_refund', 'grant', 'debit', 'refund') then
     raise exception 'Invalid credit transaction type: %', p_type;
   end if;
 
@@ -721,7 +746,7 @@ Supabase's service role bypasses RLS for server-side operations. Do not put the 
 - `profiles`: `id`, `email`, `name`, `role`, `status`, `created_at`, `updated_at`
 - `image_assets`: `id`, `user_id`, `url`, `filename`, `mime_type`, `size`, `created_at`
 - `model_assets`: `id`, `user_id`, `url`, `preview_url`, `optimized_url`, `thumbnail_url`, `filename`, `original_filename`, `file_type`, `mime_type`, `size`, `metadata`, `created_at`, `deleted_at`
-- `generation_jobs`: `id`, `user_id`, `project_id`, `mode`, `prompt`, `config`, `input_asset_ids`, `status`, `progress`, `provider`, `output_asset_id`, `output_asset_ids`, `error_message`, `created_at`, `updated_at`, `started_at`, `finished_at`
+- `generation_jobs`: `id`, `user_id`, `project_id`, `mode`, `prompt`, `config`, `input_asset_ids`, `status`, `progress`, `provider`, `output_asset_id`, `output_asset_ids`, `error_message`, `created_at`, `updated_at`, `started_at`, `finished_at`, `credit_cost`, `credit_refunded`, `failure_reason`
 - `generation_records`: `id`, `user_id`, `project_id`, `job_id`, `mode`, `prompt`, `input_image_url`, `input_image_data_preview`, `output_image_url`, `output_image_data_preview`, `provider`, `status`, `created_at`, `updated_at`
 - `generation_results`: `id`, `user_id`, `project_id`, `job_id`, `asset_id`, `image_url`, `is_selected`, `is_favorite`, `metadata`, `created_at`, `updated_at`
 - `share_links`: `id`, `project_id`, `token`, `permission`, `expires_at`, `created_at`, `revoked_at`

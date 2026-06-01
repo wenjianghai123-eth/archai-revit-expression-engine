@@ -158,7 +158,7 @@ export interface GenerationJob {
   prompt: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];
-  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
   progress: number;
   provider: string;
   outputAssetId: string | null;
@@ -170,10 +170,13 @@ export interface GenerationJob {
   finishedAt: string | null;
   diagnostics?: GenerationJobDiagnostics;
   results?: GenerationResult[];
+  creditCost: number;
+  creditRefunded: boolean;
+  failureReason: string | null;
 }
 
 export interface GenerationJobDiagnostics {
-  phase?: 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled';
+  phase?: 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
   timing?: {
     jobCreatedAt?: string;
     jobStartedAt?: string;
@@ -197,12 +200,14 @@ export interface GenerationJobDiagnostics {
     name?: string;
     model?: string;
     httpStatus?: number;
+    statusCode?: number;
     retryCount?: number;
     fallbackProvider?: string;
     fallbackReason?: string;
     providerError?: string;
     providerStatus?: string;
     userMessage?: string;
+    rawSnippet?: string;
     providerMs?: number;
     providerModel?: string;
   };
@@ -283,7 +288,7 @@ export interface CreditBalance {
 export interface CreditTransaction {
   id: string;
   userId: string;
-  type: 'grant' | 'debit' | 'refund';
+  type: 'admin_grant' | 'generate_charge' | 'generate_refund' | 'grant' | 'debit' | 'refund';
   amount: number;
   balanceAfter: number;
   reason: string;
@@ -316,7 +321,15 @@ export async function updateGenerationResult(
   return response.result;
 }
 
-type ApiResponse<T> = { ok: true; data: T } | { ok: false; error: { message: string; code: string } };
+type ApiResponse<T> = { ok: true; data: T } | { ok: false; error: ApiErrorResponse };
+
+interface ApiErrorResponse {
+  message: string;
+  code?: string;
+  provider?: string;
+  statusCode?: number;
+  rawSnippet?: string;
+}
 
 export async function getCurrentUser(): Promise<AuthUser> {
   const response = await request<{ user: AuthUser }>('/api/auth/me');
@@ -604,8 +617,12 @@ export async function convertModelAsset(id: string): Promise<ModelAssetRecord> {
   return response.asset;
 }
 
-function formatApiError(error: { message: string; code?: string }): string {
-  return error.code ? `${error.code}: ${error.message}` : error.message;
+function formatApiError(error: ApiErrorResponse): string {
+  const parts = [error.code ? `${error.code}: ${error.message}` : error.message];
+  if (error.provider) parts.push(`provider=${error.provider}`);
+  if (typeof error.statusCode === 'number') parts.push(`statusCode=${error.statusCode}`);
+  if (error.rawSnippet) parts.push(`raw=${error.rawSnippet}`);
+  return parts.join(' | ');
 }
 
 function isMissingProductionApi(path: string): boolean {

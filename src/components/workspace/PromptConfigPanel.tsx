@@ -1,5 +1,7 @@
 import { BookOpen } from 'lucide-react';
 import { GenerationConfig, GenerationStep } from '../../types';
+import { type SmartPromptMode } from '../../promptTemplates/intelligentPromptTemplates';
+import { SmartPromptAssistant } from './SmartPromptAssistant';
 import { isLocalInpaintingStep } from './workspaceUtils';
 
 interface PromptConfigPanelProps {
@@ -23,11 +25,9 @@ export function PromptConfigPanel({
     <>
       <div className="space-y-2">
         <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-          {isFloorplanStep ? '额外补充说明' : isLocalInpaintingStep(step) ? '修改说明' : '提示词'}
+          额外补充要求
         </label>
-        {isFloorplanStep ? (
-          <p className="text-[11px] leading-5 text-slate-400">系统已内置专业彩平生成提示词，你只需要补充特殊要求。</p>
-        ) : null}
+        <SmartPromptAssistant mode={stepToPromptMode(step)} config={config} compact onUpdateConfig={onUpdateConfig} />
         <button type="button" onClick={onOpenPromptTemplatePanel} className="inline-flex w-fit items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-600 hover:border-blue-200 hover:text-blue-700">
           <BookOpen className="h-3.5 w-3.5" />
           提示词模板
@@ -39,8 +39,8 @@ export function PromptConfigPanel({
           placeholder={isFloorplanStep
             ? '可选：补充色彩、材质、表达风格、重点区域等要求。例如：强化景观铺装层次，住宅区域使用暖色系。'
             : isLocalInpaintingStep(step)
-              ? '描述希望修改的内容，例如：将地板替换为上传的材质贴图、优化灯光、替换墙面材质……'
-              : '描述希望生成或局部重绘的效果...'}
+              ? '可选：补充希望修改的内容，例如：将地板替换为上传的材质贴图、优化灯光、替换墙面材质……'
+              : '可选：补充特殊效果、重点区域或限制要求。不填写也会根据上方参数生成。'}
         />
         {isLocalInpaintingStep(step) ? (
           <p className="text-[11px] leading-5 text-slate-400">不涂抹也可以直接根据提示词进行全局或智能局部修改；涂抹后可更精确地限制修改区域。</p>
@@ -54,6 +54,13 @@ export function PromptConfigPanel({
       ) : null}
     </>
   );
+}
+
+function stepToPromptMode(step: GenerationStep): SmartPromptMode {
+  if (step === GenerationStep.FloorplanTo3D) return 'floorplan';
+  if (step === GenerationStep.StyleRender) return 'style-render';
+  if (step === GenerationStep.MaterialReplace) return 'material-replace';
+  return 'inpaint';
 }
 
 interface QualityModeControlsProps {

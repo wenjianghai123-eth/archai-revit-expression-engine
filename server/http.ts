@@ -6,14 +6,17 @@ export type ApiResponse<T> = { ok: true; data: T } | { ok: false; error: ApiErro
 export interface ApiError {
   message: string;
   code: string;
+  provider?: string;
+  statusCode?: number;
+  rawSnippet?: string;
 }
 
 export function apiOk<T>(data: T): ApiResponse<T> {
   return { ok: true, data };
 }
 
-export function apiError(message: string, code: string): ApiResponse<never> {
-  return { ok: false, error: { message, code } };
+export function apiError(message: string, code: string, details: Partial<Omit<ApiError, 'message' | 'code'>> = {}): ApiResponse<never> {
+  return { ok: false, error: { message, code, ...details } };
 }
 
 export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
@@ -76,7 +79,11 @@ export function createErrorHandler(jsonLimit: string) {
       return;
     }
 
-    res.status(500).json(apiError(resolveErrorResponseMessage(error), safeError.code || 'INTERNAL_SERVER_ERROR'));
+    res.status(500).json(apiError(
+      resolveErrorResponseMessage(error),
+      safeError.code || 'INTERNAL_SERVER_ERROR',
+      readPublicErrorDetails(error),
+    ));
   };
 }
 
@@ -137,6 +144,20 @@ function resolveErrorResponseMessage(error: unknown): string {
   }
 
   return 'Server failed to process the request. Please try again later.';
+}
+
+function readPublicErrorDetails(error: unknown): Partial<Omit<ApiError, 'message' | 'code'>> {
+  if (!error || typeof error !== 'object') return {};
+  const record = error as Record<string, unknown>;
+  const provider = typeof record.provider === 'string' ? sanitizeLogText(record.provider) : undefined;
+  const rawStatusCode = record.statusCode ?? record.status ?? record.httpStatus;
+  const statusCode = typeof rawStatusCode === 'number' ? rawStatusCode : undefined;
+  const rawSnippet = typeof record.rawSnippet === 'string' ? sanitizeLogText(record.rawSnippet) : undefined;
+  return {
+    ...(provider ? { provider } : {}),
+    ...(typeof statusCode === 'number' ? { statusCode } : {}),
+    ...(rawSnippet ? { rawSnippet } : {}),
+  };
 }
 
 function sanitizeStackForLog(stack: string | undefined): string[] | undefined {

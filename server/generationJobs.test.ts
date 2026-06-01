@@ -233,7 +233,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
         strength: 'balanced',
       },
     });
-    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 8);
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 1);
   });
 
   it('creates a material-replace smart-type job without a mask', async () => {
@@ -774,7 +774,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
         manualRoomLabels: [],
       },
     });
-    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 10);
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 1);
   });
 
   it('rejects plan-colorize jobs without a source image', async () => {
@@ -935,7 +935,7 @@ describe('generation job credits', () => {
       });
 
     expect(createResponse.status).toBe(201);
-    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 10);
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 1);
 
     const jobId = createResponse.body.data.job.id;
     const firstCancel = await request(app).post(`/api/generation-jobs/${encodeURIComponent(jobId)}/cancel`);
@@ -945,7 +945,7 @@ describe('generation job credits', () => {
     expect(firstCancel.status).toBe(200);
     expect(secondCancel.status).toBe(200);
     expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance);
-    expect(transactions.filter(transaction => transaction.type === 'refund' && transaction.referenceId === jobId)).toHaveLength(1);
+    expect(transactions.filter(transaction => transaction.type === 'generate_refund' && transaction.referenceId === jobId)).toHaveLength(1);
   });
 
   it('clamps legacy batchCount requests to one result and single-image credit cost', async () => {
@@ -965,7 +965,7 @@ describe('generation job credits', () => {
 
     expect(response.status).toBe(201);
     expect(response.body.data.job.config.batchCount).toBe(1);
-    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 10);
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 1);
   });
 
   it('creates design-variants jobs with batchCount 2 and charges two outputs', async () => {
@@ -989,7 +989,7 @@ describe('generation job credits', () => {
       variantStrategy: 'style-matrix',
       variantStyles: ['modern-minimal', 'natural-wood'],
     });
-    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 20);
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 2);
   });
 
   it('creates design-variants jobs with default batchCount 4 and charges four outputs', async () => {
@@ -1010,7 +1010,7 @@ describe('generation job credits', () => {
     expect(response.status).toBe(201);
     expect(response.body.data.job.config.batchCount).toBe(4);
     expect(response.body.data.job.config.variantStyles).toEqual(['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood']);
-    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 40);
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 4);
   });
 
   it('creates design-variants jobs with batchCount 8 and charges eight outputs', async () => {
@@ -1040,7 +1040,7 @@ describe('generation job credits', () => {
       variantNames: ['现代极简', '温润木质'],
     });
     expect(response.body.data.job.config.variantStyles).toHaveLength(8);
-    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 80);
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 8);
   });
 
   it.each([1, 3, 5, 9])('rejects invalid design-variants batchCount %s', async (batchCount) => {
@@ -1322,7 +1322,7 @@ describe('generation job credits', () => {
 
     const transactions = await storage.listCreditTransactions(DEV_AUTH_USER_ID);
     expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance);
-    expect(transactions.filter(transaction => transaction.type === 'refund' && transaction.referenceId === jobId)).toHaveLength(1);
+    expect(transactions.filter(transaction => transaction.type === 'generate_refund' && transaction.referenceId === jobId)).toHaveLength(1);
   });
 });
 
@@ -1752,7 +1752,7 @@ describe('credit adjustments', () => {
   it('rejects debit when balance is insufficient', async () => {
     const result = await storage.adjustCredits({
       userId: 'credit-insufficient-user',
-      type: 'debit',
+      type: 'generate_charge',
       amount: -10,
       reason: 'Generation job',
       referenceType: 'generation_job',
@@ -1768,7 +1768,7 @@ describe('credit adjustments', () => {
   it('keeps balance and transaction consistent after a successful debit', async () => {
     await storage.adjustCredits({
       userId: 'credit-debit-user',
-      type: 'grant',
+      type: 'admin_grant',
       amount: 30,
       reason: 'Test grant',
       referenceType: 'system',
@@ -1777,7 +1777,7 @@ describe('credit adjustments', () => {
 
     const result = await storage.adjustCredits({
       userId: 'credit-debit-user',
-      type: 'debit',
+      type: 'generate_charge',
       amount: -10,
       reason: 'Generation job',
       referenceType: 'generation_job',
@@ -1785,7 +1785,7 @@ describe('credit adjustments', () => {
     });
 
     const balance = await storage.getCreditBalance('credit-debit-user');
-    const transaction = await storage.getCreditTransactionByReference('credit-debit-user', 'debit', 'job_debit_user');
+    const transaction = await storage.getCreditTransactionByReference('credit-debit-user', 'generate_charge', 'job_debit_user');
 
     expect(result?.balance.balance).toBe(20);
     expect(result?.transaction.balanceAfter).toBe(20);
@@ -1797,7 +1797,7 @@ describe('credit adjustments', () => {
   it('does not apply the same refund twice', async () => {
     await storage.adjustCredits({
       userId: 'credit-refund-user',
-      type: 'grant',
+      type: 'admin_grant',
       amount: 20,
       reason: 'Test grant',
       referenceType: 'system',
@@ -1805,7 +1805,7 @@ describe('credit adjustments', () => {
     });
     await storage.adjustCredits({
       userId: 'credit-refund-user',
-      type: 'debit',
+      type: 'generate_charge',
       amount: -10,
       reason: 'Generation job',
       referenceType: 'generation_job',
@@ -1814,7 +1814,7 @@ describe('credit adjustments', () => {
 
     const firstRefund = await storage.adjustCredits({
       userId: 'credit-refund-user',
-      type: 'refund',
+      type: 'generate_refund',
       amount: 10,
       reason: 'Refund generation job',
       referenceType: 'generation_job',
@@ -1822,7 +1822,7 @@ describe('credit adjustments', () => {
     });
     const secondRefund = await storage.adjustCredits({
       userId: 'credit-refund-user',
-      type: 'refund',
+      type: 'generate_refund',
       amount: 10,
       reason: 'Refund generation job',
       referenceType: 'generation_job',
@@ -1834,7 +1834,7 @@ describe('credit adjustments', () => {
 
     expect(firstRefund?.transaction.id).toBe(secondRefund?.transaction.id);
     expect(balance.balance).toBe(20);
-    expect(transactions.filter(transaction => transaction.type === 'refund' && transaction.referenceId === 'job_refund_user')).toHaveLength(1);
+    expect(transactions.filter(transaction => transaction.type === 'generate_refund' && transaction.referenceId === 'job_refund_user')).toHaveLength(1);
   });
 });
 
@@ -1899,7 +1899,7 @@ async function drainDevUserCredits(label: string) {
 
   await storage.adjustCredits({
     userId: DEV_AUTH_USER_ID,
-    type: 'debit',
+    type: 'generate_charge',
     amount: -balance.balance,
     reason: `Drain credits for ${label}`,
     referenceType: 'system',
@@ -1914,7 +1914,7 @@ async function restoreDevUserCredits(targetBalance: number, label: string) {
 
   await storage.adjustCredits({
     userId: DEV_AUTH_USER_ID,
-    type: 'grant',
+    type: 'admin_grant',
     amount: delta,
     reason: `Restore credits for ${label}`,
     referenceType: 'system',

@@ -14,6 +14,8 @@ export interface GenerationResponse {
   id: string;
   provider: GenerationProvider;
   imageDataUrl: string;
+  imageUrl?: string | null;
+  outputImageUrl?: string | null;
   createdAt: string;
   warnings: string[];
 }
@@ -89,6 +91,8 @@ function parseGenerationResponse(value: unknown): GenerationResponse {
     id: value.id,
     provider: value.provider,
     imageDataUrl: value.imageDataUrl,
+    imageUrl: typeof value.imageUrl === 'string' ? value.imageUrl : null,
+    outputImageUrl: typeof value.outputImageUrl === 'string' ? value.outputImageUrl : null,
     createdAt: value.createdAt,
     warnings: value.warnings,
   };

@@ -78,7 +78,7 @@ export interface GenerationJob {
   prompt: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];
-  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
   progress: number;
   provider: string;
   outputAssetId: string | null;
@@ -93,6 +93,9 @@ export interface GenerationJob {
   sourceModelAssetId?: string | null;
   snapshotAssetId?: string | null;
   modelSnapshotMetadata?: ModelSnapshotMetadata | null;
+  creditCost: number;
+  creditRefunded: boolean;
+  failureReason: string | null;
 }
 
 export type GenerationJobPhase =
@@ -103,7 +106,8 @@ export type GenerationJobPhase =
   | 'save-result'
   | 'succeeded'
   | 'failed'
-  | 'cancelled';
+  | 'cancelled'
+  | 'timeout';
 
 export interface GenerationJobDiagnostics {
   phase?: GenerationJobPhase;
@@ -132,12 +136,14 @@ export interface GenerationJobDiagnostics {
     providerModel?: string;
     providerMs?: number;
     httpStatus?: number;
+    statusCode?: number;
     retryCount?: number;
     fallbackProvider?: string;
     fallbackReason?: string;
     providerError?: string;
     providerStatus?: string;
     userMessage?: string;
+    rawSnippet?: string;
   };
   images?: {
     qualityMode?: 'draft' | 'fast' | 'balanced' | 'high';
@@ -267,7 +273,7 @@ export interface CreditBalance {
 export interface CreditTransaction {
   id: string;
   userId: string;
-  type: 'grant' | 'debit' | 'refund';
+  type: 'admin_grant' | 'generate_charge' | 'generate_refund' | 'grant' | 'debit' | 'refund';
   amount: number;
   balanceAfter: number;
   reason: string;
@@ -357,10 +363,11 @@ export type CreateGenerationJobInput = {
   config: Record<string, unknown>;
   inputAssetIds: string[];
   provider: string;
+  creditCost?: number;
 };
 
 export type UpdateGenerationJobInput = Partial<
-  Pick<GenerationJob, 'status' | 'progress' | 'outputAssetId' | 'outputAssetIds' | 'errorMessage' | 'startedAt' | 'finishedAt'>
+  Pick<GenerationJob, 'status' | 'progress' | 'outputAssetId' | 'outputAssetIds' | 'errorMessage' | 'startedAt' | 'finishedAt' | 'creditCost' | 'creditRefunded' | 'failureReason'>
 > & {
   diagnostics?: GenerationJobDiagnostics;
 };

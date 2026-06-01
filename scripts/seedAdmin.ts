@@ -51,7 +51,7 @@ async function main(): Promise<void> {
 
   await adjustCredits({
     userId: profile.id,
-    type: 'grant',
+    type: 'admin_grant',
     amount: initialCredits,
     reason: 'seed_admin',
     referenceType: 'system',

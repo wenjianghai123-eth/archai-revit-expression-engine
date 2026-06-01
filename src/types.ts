@@ -11,8 +11,8 @@ export enum GenerationStep {
 
 export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
 export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
-export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
-export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled';
+export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
+export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
 export type QualityMode = 'draft' | 'fast' | 'balanced' | 'high';
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
 export type DesignVariantBatchCount = 2 | 4 | 8;
@@ -29,6 +29,7 @@ export type VariantStyleKey =
   | 'premium-gray'
   | 'custom';
 export type MaterialReplaceStrength = 'subtle' | 'balanced' | 'strong';
+export type SecondaryEditAction = 'regenerate' | 'similar' | 'realism' | 'lighting' | 'style' | 'continue-edit';
 export type PlanDrawingType = 'residential' | 'commercial' | 'office' | 'hotel' | 'landscape' | 'site-plan' | 'custom';
 export type PlanExpressionTemplate = 'zoning-color' | 'colored-plan' | 'landscape-plan' | 'furniture-enhance' | 'annotation-plan' | 'circulation-analysis';
 export type MaterialReplaceEditMode = 'smart-type' | 'mask';
@@ -77,12 +78,14 @@ export interface GenerationJobDiagnostics {
     name?: string;
     model?: string;
     httpStatus?: number;
+    statusCode?: number;
     retryCount?: number;
     fallbackProvider?: string;
     fallbackReason?: string;
     providerError?: string;
     providerStatus?: string;
     userMessage?: string;
+    rawSnippet?: string;
     providerMs?: number;
     providerModel?: string;
   };
@@ -240,7 +243,9 @@ export interface GenerationConfig {
   buildingType?: string;
   spaceType?: string;
   renderStyle?: string;
+  smartMaterial?: string;
   atmosphere?: string;
+  changeStrength?: 'weak' | 'medium' | 'strong';
   panoramaChangeStrength?: 'weak' | 'medium' | 'strong';
   panoramaQuality?: 'standard' | 'high';
   customPrompt?: string;
@@ -266,12 +271,18 @@ export interface GenerationConfig {
   enableLandscapeFill?: boolean;
   preserveLinework?: boolean;
   manualRoomLabels?: string[];
+  parentResultId?: string | null;
+  parentJobId?: string | null;
+  parentRecordId?: string | null;
+  secondaryEditAction?: SecondaryEditAction;
 }
 
 export interface GenerationResultOption {
   id: string;
   imageUrl: string;
   assetId?: string;
+  jobId?: string;
+  parentResultId?: string;
   isSelected: boolean;
   isFavorite: boolean;
   createdAt?: string;
@@ -283,6 +294,17 @@ export interface GenerationResultOption {
   variantStyle?: VariantStyleKey;
   variantStyleLabel?: string;
   stylePackId?: string;
+}
+
+export interface ContinuationSource {
+  parentResultId: string;
+  parentJobId?: string | null;
+  parentRecordId?: string | null;
+  imageUrl: string;
+  assetId?: string;
+  label: string;
+  action: SecondaryEditAction;
+  createdAt: string;
 }
 
 export interface StepState {
@@ -309,6 +331,7 @@ export interface StepState {
   generationProgress: number;
   generationLogs: string[];
   viewMode: 'original' | 'after' | 'compare' | 'overlay';
+  continuationSource?: ContinuationSource | null;
   selectedModelAsset?: AssetModel | null;
   modelSnapshot?: UploadedImage | null;
   modelSnapshotMetadata?: ModelSnapshotMetadata | null;
@@ -391,6 +414,10 @@ export interface GenerationHistoryItem {
   sourceModelAssetId?: string;
   snapshotAssetId?: string;
   modelSnapshotMetadata?: ModelSnapshotMetadata;
+  parentResultId?: string | null;
+  parentJobId?: string | null;
+  parentRecordId?: string | null;
+  secondaryEditAction?: SecondaryEditAction;
   resultStored?: boolean;
   storageWarning?: string;
   panoramaRecord?: PanoramaRecord;

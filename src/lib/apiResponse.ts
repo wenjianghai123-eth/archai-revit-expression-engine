@@ -43,7 +43,9 @@ export function readApiErrorMessage(value: unknown, fallbackStatus?: number): st
   const code = readApiErrorCode(value);
   const message = readRawApiErrorMessage(value);
   if (message) {
-    return code ? `${code}: ${message}` : message;
+    const detail = readApiErrorDetails(value);
+    const base = code ? `${code}: ${message}` : message;
+    return detail.length > 0 ? `${base} | ${detail.join(' | ')}` : base;
   }
 
   if (fallbackStatus) {
@@ -51,6 +53,23 @@ export function readApiErrorMessage(value: unknown, fallbackStatus?: number): st
   }
 
   return null;
+}
+
+function readApiErrorDetails(value: unknown): string[] {
+  const details: string[] = [];
+  const error = isRecord(value) && isRecord(value.error) ? value.error : isRecord(value) ? value : null;
+  if (!error) return details;
+
+  if (typeof error.provider === 'string' && error.provider.trim().length > 0) {
+    details.push(`provider=${error.provider.trim()}`);
+  }
+  if (typeof error.statusCode === 'number') {
+    details.push(`statusCode=${error.statusCode}`);
+  }
+  if (typeof error.rawSnippet === 'string' && error.rawSnippet.trim().length > 0) {
+    details.push(`raw=${error.rawSnippet.trim()}`);
+  }
+  return details;
 }
 
 export function readApiErrorCode(value: unknown): string | null {

@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
-import { GenerationConfig, GenerationHistoryItem, GenerationProvider, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, StepState, UploadedImage } from '../types';
+import { GenerationConfig, GenerationHistoryItem, GenerationProvider, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, SecondaryEditAction, StepState, UploadedImage } from '../types';
 import { createUploadedImage, validateImageFile } from '../utils/file';
 import { uploadImageAsset } from '../lib/api';
 import { GenerationStatusPanel } from './workspace/GenerationStatusPanel';
@@ -34,6 +34,7 @@ interface WorkspaceProps {
   onCancelGeneration: () => void;
   onSelectGenerationResult: (resultId: string) => void;
   onToggleGenerationFavorite: (resultId: string) => void;
+  onSecondaryEditResult: (resultId: string, action: SecondaryEditAction) => void;
   onRenameGenerationResult: (resultId: string, variantName: string) => void;
   onSetViewMode: (viewMode: StepState['viewMode']) => void;
   onNextStep: () => void;
@@ -41,6 +42,7 @@ interface WorkspaceProps {
   onHistoryRecord?: (record: GenerationHistoryItem) => void;
   backendProvider: GenerationProvider | null;
   isCreditsInsufficient: boolean;
+  estimatedCreditCost: number;
 }
 
 const acceptedImageTypes = 'image/png,image/jpeg,image/webp';
@@ -60,6 +62,7 @@ export function MainWorkspace({
   onCancelGeneration,
   onSelectGenerationResult,
   onToggleGenerationFavorite,
+  onSecondaryEditResult,
   onRenameGenerationResult,
   onSetViewMode,
   onNextStep,
@@ -67,6 +70,7 @@ export function MainWorkspace({
   onHistoryRecord,
   backendProvider,
   isCreditsInsufficient,
+  estimatedCreditCost,
 }: WorkspaceProps) {
   const inputFileRef = useRef<HTMLInputElement>(null);
   const materialFileRef = useRef<HTMLInputElement>(null);
@@ -343,6 +347,7 @@ export function MainWorkspace({
           onGenerate={onGenerate}
           onSelectGenerationResult={onSelectGenerationResult}
           onToggleGenerationFavorite={onToggleGenerationFavorite}
+          onSecondaryEditResult={onSecondaryEditResult}
           onRenameGenerationResult={onRenameGenerationResult}
         />
         <GenerationStatusPanel
@@ -358,11 +363,13 @@ export function MainWorkspace({
           selectedResultId={selectedResult?.id || null}
           viewModeOptions={viewModeOptions}
           topPanels={null}
+          estimatedCreditCost={estimatedCreditCost}
           onGenerate={onGenerate}
           onRegenerate={onRegenerate}
           onCancelGeneration={onCancelGeneration}
           onSelectGenerationResult={onSelectGenerationResult}
           onToggleGenerationFavorite={onToggleGenerationFavorite}
+          onSecondaryEditResult={onSecondaryEditResult}
           onSetViewMode={onSetViewMode}
           onNextStep={onGenerate}
           onReset={onReset}
@@ -397,11 +404,13 @@ export function MainWorkspace({
           selectedResultId={selectedResult?.id || null}
           viewModeOptions={viewModeOptions}
           topPanels={null}
+          estimatedCreditCost={estimatedCreditCost}
           onGenerate={onGenerate}
           onRegenerate={onRegenerate}
           onCancelGeneration={onCancelGeneration}
           onSelectGenerationResult={onSelectGenerationResult}
           onToggleGenerationFavorite={onToggleGenerationFavorite}
+          onSecondaryEditResult={onSecondaryEditResult}
           onSetViewMode={onSetViewMode}
           onNextStep={onGenerate}
           onReset={onReset}
@@ -432,11 +441,13 @@ export function MainWorkspace({
           selectedResultId={selectedResult?.id || null}
           viewModeOptions={viewModeOptions}
           topPanels={null}
+          estimatedCreditCost={estimatedCreditCost}
           onGenerate={onGenerate}
           onRegenerate={onRegenerate}
           onCancelGeneration={onCancelGeneration}
           onSelectGenerationResult={onSelectGenerationResult}
           onToggleGenerationFavorite={onToggleGenerationFavorite}
+          onSecondaryEditResult={onSecondaryEditResult}
           onSetViewMode={onSetViewMode}
           onNextStep={onGenerate}
           onReset={onReset}
@@ -457,6 +468,7 @@ export function MainWorkspace({
           onUpdateInputImage={onUpdateInputImage}
           onGenerate={onGenerate}
           onHistoryRecord={onHistoryRecord}
+          onSecondaryEditResult={onSecondaryEditResult}
         />
       </div>
     );
@@ -542,11 +554,13 @@ export function MainWorkspace({
             {isFloorplanStep || isMaterialReplaceStep ? materialTexturesPanel : null}
           </>
         )}
+        estimatedCreditCost={estimatedCreditCost}
         onGenerate={onGenerate}
         onRegenerate={onRegenerate}
         onCancelGeneration={onCancelGeneration}
         onSelectGenerationResult={onSelectGenerationResult}
         onToggleGenerationFavorite={onToggleGenerationFavorite}
+        onSecondaryEditResult={onSecondaryEditResult}
         onSetViewMode={onSetViewMode}
         onNextStep={onNextStep}
         onReset={onReset}

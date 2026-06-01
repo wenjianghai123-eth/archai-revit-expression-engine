@@ -27,7 +27,7 @@ export function createGeminiProvider(apiKey: string): ImageGenerationProvider {
 
       const image = extractImageDataUrl(response.candidates?.[0]?.content?.parts);
       if (!image) {
-        throw new Error(`Gemini 模型 ${model} 未返回图片结果，已回退到 mock provider。`);
+        throw createGeminiOutputError(`Gemini 模型 ${model} 未返回图片结果。`, response);
       }
 
       return {
@@ -40,6 +40,30 @@ export function createGeminiProvider(apiKey: string): ImageGenerationProvider {
       };
     },
   };
+}
+
+function createGeminiOutputError(message: string, rawResponse: unknown): Error {
+  const error = new Error(message) as Error & {
+    provider?: string;
+    providerError?: string;
+    providerStatus?: string;
+    userMessage?: string;
+    rawSnippet?: string;
+  };
+  error.provider = 'gemini';
+  error.providerError = 'invalid_provider_output';
+  error.providerStatus = 'failed';
+  error.userMessage = message;
+  error.rawSnippet = createRawSnippet(rawResponse);
+  return error;
+}
+
+function createRawSnippet(value: unknown): string {
+  try {
+    return (JSON.stringify(value) || String(value)).slice(0, 800);
+  } catch {
+    return String(value).slice(0, 800);
+  }
 }
 
 function buildRequestParts(input: GenerateImageInput, warnings: string[]): Part[] {

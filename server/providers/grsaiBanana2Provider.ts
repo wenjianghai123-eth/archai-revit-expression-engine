@@ -166,7 +166,7 @@ async function createGeneration(input: {
   const body = await readJson(response) as GrsaiCreateResponse;
 
   if (!response.ok) {
-    throw createHttpError(`Grsai Banana2 create failed: HTTP ${response.status}${formatResponseSummary(body)}`, response.status);
+    throw createHttpError(`Grsai Banana2 create failed: HTTP ${response.status}${formatResponseSummary(body)}`, response.status, body);
   }
 
   if (typeof body.code === 'number' && body.code !== 0) {
@@ -207,7 +207,7 @@ async function pollGeneration(input: {
     const body = await readJson(response) as GrsaiResultResponse;
 
     if (!response.ok) {
-      throw createHttpError(`Grsai Banana2 result failed: HTTP ${response.status}${formatResponseSummary(body)}`, response.status);
+      throw createHttpError(`Grsai Banana2 result failed: HTTP ${response.status}${formatResponseSummary(body)}`, response.status, body);
     }
 
     if (body.code === -22) {
@@ -361,10 +361,32 @@ function isRetryableError(error: unknown): boolean {
     || (typeof status === 'number' && status >= 500);
 }
 
-function createHttpError(message: string, status: number): Error {
-  const error = new Error(formatHttpErrorMessage(message, status)) as Error & { status?: number };
+function createHttpError(message: string, status: number, rawBody?: unknown): Error {
+  const error = new Error(formatHttpErrorMessage(message, status)) as Error & {
+    status?: number;
+    statusCode?: number;
+    provider?: string;
+    providerError?: string;
+    providerStatus?: string;
+    rawSnippet?: string;
+  };
   error.status = status;
+  error.statusCode = status;
+  error.provider = 'grsai-banana2';
+  error.providerError = 'http_error';
+  error.providerStatus = 'failed';
+  if (rawBody !== undefined) {
+    error.rawSnippet = createRawSnippet(rawBody);
+  }
   return error;
+}
+
+function createRawSnippet(value: unknown): string {
+  try {
+    return (JSON.stringify(value) || String(value)).slice(0, 800);
+  } catch {
+    return String(value).slice(0, 800);
+  }
 }
 
 function formatHttpErrorMessage(message: string, status: number): string {
@@ -374,16 +396,14 @@ function formatHttpErrorMessage(message: string, status: number): string {
 }
 
 function normalizeImageDataUrl(dataUrl: string): NormalizedDataUrl {
-  const match = /^data:([^;,]+)((?:;[^,]*)?),(.*)$/su.exec(dataUrl);
-  if (!match || !match[1].startsWith('image/')) {
-    throw new Error('Grsai Banana2 returned an invalid image data URL.');
+  const match = /^data:(image\/[a-z0-9.+-]+)(?:;charset=[^;,]+)?;base64,([a-z0-9+/=\s]+)$/iu.exec(dataUrl);
+  if (!match) {
+    throw new Error(`Grsai Banana2 returned an invalid image data URL. Expected data:image/...;base64,<base64>. Raw prefix: ${dataUrl.slice(0, 80)}`);
   }
 
   const mimeType = match[1].toLowerCase();
-  const parameters = match[2] || '';
-  const payload = match[3];
-  const isBase64 = /(?:^|;)base64(?:;|$)/iu.test(parameters);
-  const content = isBase64 ? Buffer.from(payload, 'base64') : Buffer.from(decodeURIComponent(payload));
+  const payload = match[2].replace(/\s/g, '');
+  const content = Buffer.from(payload, 'base64');
 
   if (content.length === 0) {
     throw new Error('Grsai Banana2 returned an empty image data URL.');
@@ -536,7 +556,52 @@ function extractTaskId(body: GrsaiCreateResponse): string | null {
 }
 
 function normalizeTaskResult(value: unknown): GrsaiTaskResult {
-  return isRecord(value) ? value as GrsaiTaskResult : {};
+  const result = isRecord(value) ? value as GrsaiTaskResult : {};
+  const imageReferences = extractImageReferences(value);
+  if (imageReferences.length === 0) return result;
+  return {
+    ...result,
+    results: imageReferences.map((url, index) => ({
+      ...(result.results?.[index] || {}),
+      url,
+    })),
+  };
+}
+
+function extractImageReferences(value: unknown, keyHint = '', depth = 0): string[] {
+  if (depth > 6) return [];
+  if (typeof value === 'string') {
+    const reference = normalizeImageReferenceString(value, keyHint);
+    return reference ? [reference] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap(item => extractImageReferences(item, keyHint, depth + 1));
+  }
+  if (!isRecord(value)) return [];
+
+  const preferredKeys = ['url', 'imageUrl', 'imageDataUrl', 'dataUrl', 'remoteUrl', 'urls', 'images', 'image', 'output', 'outputs', 'result', 'results', 'data', 'content', 'b64_json', 'base64'];
+  const refs: string[] = [];
+  const seen = new Set<string>();
+  for (const key of preferredKeys) {
+    if (!(key in value)) continue;
+    seen.add(key);
+    refs.push(...extractImageReferences(value[key], key, depth + 1));
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (seen.has(key) || !/(image|img|url|output|result|data|content|base64|b64)/iu.test(key)) continue;
+    refs.push(...extractImageReferences(child, key, depth + 1));
+  }
+  return Array.from(new Set(refs));
+}
+
+function normalizeImageReferenceString(value: string, keyHint: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^data:/iu.test(trimmed) || isHttpUrl(trimmed)) return trimmed;
+  if (/^(b64_json|base64)$/iu.test(keyHint) && /^[a-z0-9+/=\s]+$/iu.test(trimmed)) {
+    return `data:image/png;base64,${trimmed.replace(/\s/g, '')}`;
+  }
+  return null;
 }
 
 function createTaskFailureError(result: GrsaiTaskResult): Error {
@@ -566,7 +631,17 @@ function formatResponseSummary(value: unknown): string {
 
 function readApiKey(value: string | undefined): string {
   if (isNonEmptyString(value)) return value;
-  throw new Error('GRSAI_API_KEY is required when GENERATION_PROVIDER=grsai, AI_PROVIDER=grsai-banana2, or AI_PROVIDER=grsai-nano-banana.');
+  const error = new Error('GRSAI_API_KEY is required when GENERATION_PROVIDER=grsai, AI_PROVIDER=grsai-banana2, or AI_PROVIDER=grsai-nano-banana.') as Error & {
+    provider?: string;
+    providerError?: string;
+    providerStatus?: string;
+    userMessage?: string;
+  };
+  error.provider = 'grsai-banana2';
+  error.providerError = 'missing_provider_secret';
+  error.providerStatus = 'configuration_error';
+  error.userMessage = 'GRSAI_API_KEY 未配置，无法调用 GRS AI。若只需本地测试，请设置 AI_PROVIDER=mock。';
+  throw error;
 }
 
 function readImageContentType(headerValue: string | null, url: string): string {

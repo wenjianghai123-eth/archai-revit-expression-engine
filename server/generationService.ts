@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createStoredFilename, fileStorageProvider, uploadsDir } from './fileStorage';
 import { isProviderFallbackEnabled } from './providers/fallback';
@@ -11,6 +12,8 @@ import { getImageSizeFromDataUrl, isValidTargetDimension } from './image/imageMe
 import { normalizeGeneratedImageDataUrl } from './image/normalizeImage';
 import { prepareImageForProvider, prepareMaskForProvider, PreparedProviderImage } from './image/prepareProviderImage';
 import { composeLocalInpaintResult, createLocalInpaintContext, LocalInpaintContext } from './image/localInpaint';
+import { buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode } from '../src/promptTemplates/intelligentPromptTemplates';
+import { getGenerationOutputCount } from '../src/utils/generationCredits';
 import {
   adjustCredits,
   createGenerationRecord,
@@ -32,6 +35,8 @@ export interface GenerateResponseBody {
   id: string;
   provider: ProviderName;
   imageDataUrl: string;
+  imageUrl?: string | null;
+  outputImageUrl?: string | null;
   createdAt: string;
   warnings: string[];
 }
@@ -91,29 +96,44 @@ export function getGenerationProviderName(): ProviderName {
   return provider.name;
 }
 
-export function calculateGenerationCreditsCost(mode: GenerationRecord['mode'], config: Record<string, unknown>): number {
-  const baseCost = mode === 'inpaint' || mode === 'material-replace' ? 8 : 10;
-  return baseCost * resolveBatchCountForJobConfig(mode, config);
-}
-
 export async function refundGenerationJobCredits(jobId: string): Promise<void> {
   const job = await getGenerationJob(jobId);
   if (!job) return;
+  if (!isRefundableGenerationJobStatus(job.status)) return;
+  if (job.creditRefunded) return;
 
-  const existingRefund = await getCreditTransactionByReference(job.userId, 'refund', job.id);
-  if (existingRefund) return;
+  const existingRefund = await getCreditTransactionByReference(job.userId, 'generate_refund', job.id)
+    || await getCreditTransactionByReference(job.userId, 'refund', job.id);
+  if (existingRefund) {
+    await updateGenerationJob(job.id, {
+      creditRefunded: true,
+      failureReason: job.failureReason || job.errorMessage || job.status,
+    });
+    return;
+  }
 
-  const debit = await getCreditTransactionByReference(job.userId, 'debit', job.id);
+  const debit = await getCreditTransactionByReference(job.userId, 'generate_charge', job.id)
+    || await getCreditTransactionByReference(job.userId, 'debit', job.id);
   if (!debit || debit.amount >= 0) return;
 
-  await adjustCredits({
+  const result = await adjustCredits({
     userId: job.userId,
-    type: 'refund',
+    type: 'generate_refund',
     amount: Math.abs(debit.amount),
-    reason: `Refund generation job ${job.mode}`,
+    reason: `Refund generation job ${job.mode}: ${job.failureReason || job.errorMessage || job.status}`,
     referenceType: 'generation_job',
     referenceId: job.id,
   });
+  if (result) {
+    await updateGenerationJob(job.id, {
+      creditRefunded: true,
+      failureReason: job.failureReason || job.errorMessage || job.status,
+    });
+  }
+}
+
+function isRefundableGenerationJobStatus(status: GenerationJob['status']): boolean {
+  return status === 'failed' || status === 'cancelled' || status === 'timeout';
 }
 
 export async function restorePendingGenerationJobs(): Promise<void> {
@@ -160,8 +180,14 @@ export function removeQueuedGenerationJob(jobId: string): void {
   }
 }
 
-export async function generateWithFallbackResponse(input: GenerateImageInput): Promise<GenerateResponseBody> {
-  return toGenerateResponseBody(await generateWithFallback(input));
+export async function generateWithFallbackResponse(input: GenerateImageInput, userId?: string): Promise<GenerateResponseBody> {
+  const output = await generateWithFallback(input);
+  let outputImageUrl: string | null = null;
+  if (userId) {
+    const asset = await saveGeneratedDataUrl(userId, output.dataUrl, `legacy-generation-${output.id}`);
+    outputImageUrl = asset.url;
+  }
+  return toGenerateResponseBody(output, outputImageUrl);
 }
 
 async function runGenerationWorker(): Promise<void> {
@@ -198,7 +224,7 @@ async function runGenerationWorker(): Promise<void> {
 
 async function processGenerationJob(jobId: string): Promise<void> {
   const job = await getGenerationJob(jobId);
-  if (!job || job.status === 'cancelled' || job.status === 'succeeded') return;
+  if (!job || job.status === 'cancelled' || job.status === 'succeeded' || job.status === 'failed' || job.status === 'timeout') return;
   const diagnostics: GenerationJobDiagnostics = {
     ...job.diagnostics,
     phase: 'prepare-input',
@@ -341,6 +367,17 @@ async function processGenerationJob(jobId: string): Promise<void> {
       throw new Error('Provider did not return a generation result.');
     }
 
+    const latestJob = await getGenerationJob(job.id);
+    if (latestJob?.status === 'cancelled') {
+      await updateGenerationJob(job.id, {
+        progress: Math.min(latestJob.progress, 99),
+        failureReason: latestJob.failureReason || 'cancelled',
+        finishedAt: latestJob.finishedAt || new Date().toISOString(),
+      });
+      await refundGenerationJobCredits(job.id);
+      return;
+    }
+
     markTiming(diagnostics, 'jobFinishedAt', 'succeeded');
     finalizeDurations(diagnostics);
     logJobTiming(job.id, diagnostics);
@@ -371,22 +408,28 @@ async function processGenerationJob(jobId: string): Promise<void> {
   } catch (error) {
     const providerError = normalizeProviderFailure(error);
     const message = providerError.userMessage || (error instanceof Error ? error.message : 'Generation failed.');
-    if (providerError.userMessage || providerError.providerError || providerError.providerStatus) {
+    if (providerError.userMessage || providerError.providerError || providerError.providerStatus || providerError.statusCode || providerError.rawSnippet) {
       diagnostics.provider = {
         ...diagnostics.provider,
+        name: providerError.provider || diagnostics.provider?.name || provider.name,
         providerError: providerError.providerError,
         providerStatus: providerError.providerStatus,
         userMessage: providerError.userMessage,
+        httpStatus: providerError.statusCode || diagnostics.provider?.httpStatus,
+        statusCode: providerError.statusCode,
+        rawSnippet: providerError.rawSnippet,
       };
     }
-    markTiming(diagnostics, 'jobFinishedAt', 'failed');
+    const terminalStatus = isTimeoutGenerationFailure(error, providerError.statusCode) ? 'timeout' : 'failed';
+    markTiming(diagnostics, 'jobFinishedAt', terminalStatus);
     finalizeDurations(diagnostics);
     logJobTiming(job.id, diagnostics, message);
     console.error('Generation job failed', { jobId: job.id, error: message });
     await updateGenerationJob(job.id, {
-      status: 'failed',
+      status: terminalStatus,
       progress: 100,
       errorMessage: message,
+      failureReason: message,
       finishedAt: diagnostics.timing?.jobFinishedAt,
       diagnostics,
     });
@@ -738,15 +781,7 @@ async function saveGeneratedDataUrl(userId: string, dataUrl: string, basename: s
 }
 
 function parseDataUrl(dataUrl: string): { mimeType: string; content: Buffer } {
-  const match = /^data:([^;,]+)(?:;charset=[^;,]+)?;base64,(.+)$/u.exec(dataUrl);
-  if (!match) {
-    throw new Error('Provider returned an invalid data URL.');
-  }
-
-  return {
-    mimeType: match[1],
-    content: Buffer.from(match[2], 'base64'),
-  };
+  return parseImageDataUrl(dataUrl, 'Provider output');
 }
 
 function getExtensionForMimeType(mimeType: string): string {
@@ -827,10 +862,10 @@ async function readRemoteImageUrlAsDataUrl(url: string, fallbackMimeType = 'imag
   }
 
   const contentType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase();
-  const mimeType = contentType?.startsWith('image/') ? contentType : fallbackMimeType;
-  if (!mimeType.startsWith('image/')) {
+  if (contentType && !contentType.startsWith('image/')) {
     throw new Error('Downloaded URL did not return an image.');
   }
+  const mimeType = contentType || fallbackMimeType;
 
   const content = Buffer.from(await response.arrayBuffer());
   if (content.length === 0) {
@@ -852,12 +887,12 @@ function isRemoteImageUrl(url: string): boolean {
 async function generateWithFallback(input: GenerateImageInput): Promise<GenerateImageOutput> {
   if (provider.name === 'mock') {
     const startedAt = Date.now();
-    return withProviderDuration(normalizeProviderOutput(await provider.generateImage(input)), startedAt);
+    return withProviderDuration(await normalizeProviderOutput(await provider.generateImage(input), provider.name), startedAt);
   }
 
   const startedAt = Date.now();
   try {
-    return withProviderDuration(normalizeProviderOutput(await provider.generateImage(input)), startedAt);
+    return withProviderDuration(await normalizeProviderOutput(await provider.generateImage(input), provider.name), startedAt);
   } catch (error) {
     const fallbackProvider = createConfiguredFallbackProvider(error);
     if (fallbackProvider) {
@@ -868,14 +903,14 @@ async function generateWithFallback(input: GenerateImageInput): Promise<Generate
         reason: message,
       });
       const fallbackOutput = await fallbackProvider.generateImage(input);
-      return withProviderDuration(normalizeProviderOutput({
-        ...fallbackOutput,
+      return withProviderDuration(await normalizeProviderOutput({
+        ...(isRecord(fallbackOutput) ? fallbackOutput : {}),
         metadata: {
-          ...fallbackOutput.metadata,
+          ...(isRecord(fallbackOutput) && isRecord(fallbackOutput.metadata) ? fallbackOutput.metadata : {}),
           fallbackProvider: fallbackProvider.name,
           fallbackReason: message,
         },
-      }), startedAt);
+      }, fallbackProvider.name), startedAt);
     }
 
     if (isMissingProviderSecretError(error) || isGrsaiProvider(provider.name)) {
@@ -887,10 +922,10 @@ async function generateWithFallback(input: GenerateImageInput): Promise<Generate
     }
 
     const message = error instanceof Error ? error.message : `${provider.name} provider failed.`;
-    return withProviderDuration(normalizeProviderOutput(createMockGeneration(input, [
+    return withProviderDuration(await normalizeProviderOutput(createMockGeneration(input, [
       `${provider.name} provider failed to complete this generation: ${message}`,
       '已自动回退到 mock provider，避免请求中断。',
-    ])), startedAt);
+    ]), 'mock'), startedAt);
   }
 }
 
@@ -905,38 +940,188 @@ function withProviderDuration(output: GenerateImageOutput, startedAt: number): G
   };
 }
 
-function toGenerateResponseBody(output: GenerateImageOutput): GenerateResponseBody {
+function toGenerateResponseBody(output: GenerateImageOutput, outputImageUrl: string | null = null): GenerateResponseBody {
   return {
     id: output.id,
     provider: output.provider,
     imageDataUrl: output.dataUrl,
+    imageUrl: outputImageUrl,
+    outputImageUrl,
     createdAt: output.createdAt,
     warnings: output.warnings,
   };
 }
 
-function normalizeProviderOutput(output: GenerateImageOutput): GenerateImageOutput {
-  if (!isNonEmptyString(output.id)) {
-    throw new Error('Generation provider returned an invalid id.');
+async function normalizeProviderOutput(output: unknown, fallbackProvider: ProviderName): Promise<GenerateImageOutput> {
+  if (!isRecord(output)) {
+    throw createProviderOutputError('Generation provider returned a non-object response.', output, fallbackProvider);
   }
 
-  if (!isProviderName(output.provider)) {
-    throw new Error('Generation provider returned an invalid provider name.');
+  const providerName = isProviderName(output.provider) ? output.provider : fallbackProvider;
+  const extracted = readProviderImageReference(output);
+  let dataUrl = typeof output.dataUrl === 'string' ? output.dataUrl : extracted?.value;
+  let remoteUrl = typeof output.remoteUrl === 'string' ? output.remoteUrl : undefined;
+  let mimeType = typeof output.mimeType === 'string' ? output.mimeType : undefined;
+
+  if (!isNonEmptyString(dataUrl)) {
+    throw createProviderOutputError(
+      'Generation provider did not return an image. Expected dataUrl, imageDataUrl, url/imageUrl, urls/images/output/results, or equivalent fields.',
+      output,
+      providerName,
+    );
   }
 
-  if (!isNonEmptyString(output.createdAt)) {
-    throw new Error('Generation provider returned an invalid createdAt value.');
+  if (isRemoteImageUrl(dataUrl)) {
+    remoteUrl = dataUrl;
+    dataUrl = await readRemoteImageUrlAsDataUrl(dataUrl);
   }
 
-  if (!Array.isArray(output.warnings) || !output.warnings.every(item => typeof item === 'string')) {
-    throw new Error('Generation provider returned invalid warnings.');
+  const parsed = parseImageDataUrl(dataUrl, 'Generation provider output', output, providerName);
+  const metadata = isRecord(output.metadata) ? output.metadata : {};
+  mimeType = mimeType || parsed.mimeType;
+
+  return {
+    id: isNonEmptyString(output.id) ? output.id : randomUUID(),
+    provider: providerName,
+    dataUrl: `data:${parsed.mimeType};base64,${parsed.content.toString('base64')}`,
+    remoteUrl,
+    mimeType,
+    metadata: {
+      ...metadata,
+      normalizedOutputSource: extracted?.path,
+      normalizedOutputKind: remoteUrl ? 'remote-url' : 'data-url',
+    },
+    createdAt: isNonEmptyString(output.createdAt) ? output.createdAt : new Date().toISOString(),
+    warnings: Array.isArray(output.warnings) && output.warnings.every(item => typeof item === 'string') ? output.warnings : [],
+  };
+}
+
+interface ProviderImageReference {
+  value: string;
+  path: string;
+}
+
+function readProviderImageReference(output: unknown): ProviderImageReference | null {
+  return collectProviderImageReferences(output, '$').at(0) || null;
+}
+
+function collectProviderImageReferences(value: unknown, pathLabel: string, keyHint = '', depth = 0): ProviderImageReference[] {
+  if (depth > 6) return [];
+
+  if (typeof value === 'string') {
+    const imageReference = normalizeProviderImageString(value, keyHint);
+    return imageReference ? [{ value: imageReference, path: pathLabel }] : [];
   }
 
-  if (!isValidImageDataUrl(output.dataUrl)) {
-    throw new Error('Generation provider returned an invalid image data URL.');
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => collectProviderImageReferences(item, `${pathLabel}[${index}]`, keyHint, depth + 1));
   }
 
-  return output;
+  if (!isRecord(value)) return [];
+
+  const preferredKeys = [
+    'dataUrl',
+    'imageDataUrl',
+    'imageUrl',
+    'outputImageUrl',
+    'url',
+    'remoteUrl',
+    'urls',
+    'images',
+    'image',
+    'output',
+    'outputs',
+    'result',
+    'results',
+    'data',
+    'content',
+    'b64_json',
+    'base64',
+  ];
+  const collected: ProviderImageReference[] = [];
+  const seen = new Set<string>();
+
+  for (const key of preferredKeys) {
+    if (!(key in value)) continue;
+    seen.add(key);
+    collected.push(...collectProviderImageReferences(value[key], `${pathLabel}.${key}`, key, depth + 1));
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    if (seen.has(key) || !isLikelyImageContainerKey(key)) continue;
+    collected.push(...collectProviderImageReferences(child, `${pathLabel}.${key}`, key, depth + 1));
+  }
+
+  return collected;
+}
+
+function normalizeProviderImageString(value: string, keyHint: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^data:/iu.test(trimmed) || isRemoteImageUrl(trimmed)) return trimmed;
+  if (/^(b64_json|base64)$/iu.test(keyHint) && /^[a-z0-9+/=\s]+$/iu.test(trimmed)) {
+    return `data:image/png;base64,${trimmed.replace(/\s/g, '')}`;
+  }
+  return null;
+}
+
+function isLikelyImageContainerKey(key: string): boolean {
+  return /(image|img|url|output|result|data|content|base64|b64)/iu.test(key);
+}
+
+function parseImageDataUrl(dataUrl: string, context: string, rawOutput?: unknown, providerName?: ProviderName): { mimeType: string; content: Buffer } {
+  const match = /^data:(image\/[a-z0-9.+-]+)(?:;charset=[^;,]+)?;base64,([a-z0-9+/=\s]+)$/iu.exec(dataUrl);
+  if (!match) {
+    throw createProviderOutputError(
+      `${context} returned an invalid image data URL. Expected format: data:image/...;base64,<base64>.`,
+      rawOutput ?? dataUrl,
+      providerName,
+    );
+  }
+
+  const base64 = match[2].replace(/\s/g, '');
+  const content = Buffer.from(base64, 'base64');
+  if (content.length === 0) {
+    throw createProviderOutputError(`${context} returned an empty image data URL.`, rawOutput ?? dataUrl, providerName);
+  }
+
+  return {
+    mimeType: match[1].toLowerCase(),
+    content,
+  };
+}
+
+function createProviderOutputError(message: string, rawOutput: unknown, providerName?: ProviderName): Error {
+  const error = new Error(message) as Error & {
+    provider?: string;
+    providerError?: string;
+    providerStatus?: string;
+    userMessage?: string;
+    rawSnippet?: string;
+  };
+  error.provider = providerName;
+  error.providerError = 'invalid_provider_output';
+  error.providerStatus = 'failed';
+  error.userMessage = message;
+  error.rawSnippet = createRawSnippet(rawOutput);
+  return error;
+}
+
+function createRawSnippet(value: unknown): string {
+  return sanitizeProviderSnippet(value).slice(0, 800);
+}
+
+function sanitizeProviderSnippet(value: unknown): string {
+  try {
+    return JSON.stringify(value, (_key, child) => {
+      if (typeof child !== 'string') return child;
+      if (child.startsWith('data:image/')) return `${child.slice(0, 64)}...[data-url omitted, length=${child.length}]`;
+      if (child.length > 500) return `${child.slice(0, 500)}...[truncated, length=${child.length}]`;
+      return child;
+    }) || String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function isProviderName(value: unknown): value is ProviderName {
@@ -968,14 +1153,31 @@ function isRetryableProviderFailure(error: unknown): boolean {
     || (typeof status === 'number' && status >= 500);
 }
 
-function normalizeProviderFailure(error: unknown): { providerError?: string; providerStatus?: string; userMessage?: string } {
-  if (!isProviderMaintenanceError(error)) return {};
-  const providerError = readErrorStringField(error, 'providerError') || 'model maintenance';
-  const providerStatus = readErrorStringField(error, 'providerStatus') || 'failed';
+function normalizeProviderFailure(error: unknown): {
+  provider?: string;
+  providerError?: string;
+  providerStatus?: string;
+  userMessage?: string;
+  statusCode?: number;
+  rawSnippet?: string;
+} {
+  const provider = readErrorStringField(error, 'provider');
+  const providerError = readErrorStringField(error, 'providerError') || (isProviderMaintenanceError(error) ? 'model maintenance' : undefined);
+  const providerStatus = readErrorStringField(error, 'providerStatus') || (providerError ? 'failed' : undefined);
+  const userMessage = readErrorStringField(error, 'userMessage')
+    || (isProviderMaintenanceError(error) ? providerMaintenanceUserMessage : undefined);
+  const statusCode = error instanceof Error ? readErrorStatus(error) : undefined;
+  const rawSnippet = readErrorStringField(error, 'rawSnippet');
+
+  if (!provider && !providerError && !providerStatus && !userMessage && typeof statusCode !== 'number' && !rawSnippet) return {};
+
   return {
+    provider,
     providerError,
     providerStatus,
-    userMessage: providerMaintenanceUserMessage,
+    userMessage,
+    statusCode,
+    rawSnippet,
   };
 }
 
@@ -1024,10 +1226,30 @@ function selectProvider(): ImageGenerationProvider {
   }
 
   if (requestedProvider === 'gemini' && !geminiApiKey) {
-    console.warn('AI_PROVIDER=gemini but GEMINI_API_KEY is missing; falling back to mock provider.');
+    console.warn(`${readRequestedProviderVariableName()}=gemini but GEMINI_API_KEY is missing; generation calls will fail clearly. Use AI_PROVIDER=mock for local mock generation.`);
+    return createMissingSecretProvider('gemini', 'GEMINI_API_KEY');
   }
 
   return mockProvider;
+}
+
+function createMissingSecretProvider(name: ProviderName, envVarName: string): ImageGenerationProvider {
+  return {
+    name,
+    async generateImage(): Promise<GenerateImageOutput> {
+      const error = new Error(`${envVarName} is required when ${readRequestedProviderVariableName()}=${name}. Use AI_PROVIDER=mock for local mock generation.`) as Error & {
+        provider?: string;
+        providerError?: string;
+        providerStatus?: string;
+        userMessage?: string;
+      };
+      error.provider = name;
+      error.providerError = 'missing_provider_secret';
+      error.providerStatus = 'configuration_error';
+      error.userMessage = `${envVarName} 未配置，无法调用 ${name}。如需本地测试，请设置 AI_PROVIDER=mock。`;
+      return Promise.reject(error);
+    },
+  };
 }
 
 function readRequestedProviderName(): string {
@@ -1074,52 +1296,13 @@ const sameStyleVariantPrompts = [
   'Variant H: refined presentation with distinctive atmosphere.',
 ];
 
-const designVariantBasePrompt = 'Create one distinct design variant from the input image. Preserve the original layout, structure, camera angle, perspective, and main proportions. Change the design through materials, colors, lighting, furniture, landscape, and atmosphere. Keep it realistic and suitable for architectural or interior presentation. Do not alter the core geometry.';
-
-const materialReplaceObjectLabels: Record<string, string> = {
-  floor: 'floor',
-  wall: 'wall',
-  ceiling: 'ceiling',
-  cabinet: 'cabinet',
-  sofa: 'sofa',
-  'table-chair': 'table and chairs',
-  lighting: 'lighting fixtures',
-  plant: 'plants or greenery',
-  'door-window': 'doors or windows',
-  'feature-wall': 'feature wall',
-  other: 'selected area',
-};
-
-const materialReplaceMaterialLabels: Record<string, string> = {
-  'light-wood': 'light wood finish',
-  'dark-wood': 'dark wood finish',
-  walnut: 'walnut wood finish',
-  microcement: 'microcement finish',
-  'rock-slab': 'sintered stone slab',
-  marble: 'marble finish',
-  terrazzo: 'terrazzo finish',
-  tile: 'ceramic tile finish',
-  leather: 'leather material',
-  fabric: 'fabric upholstery',
-  metal: 'metal finish',
-  glass: 'glass material',
-  'art-paint': 'artistic paint finish',
-  'linear-light': 'linear lighting',
-  'warm-light-strip': 'warm LED light strip',
-  plant: 'natural greenery',
-  custom: 'custom material described by the user',
-};
-
-const materialReplaceSmartPrompt = 'Replace the {targetObjectTypeLabel} area with {targetMaterialLabel}. Preserve the original layout, camera angle, perspective, geometry, lighting, shadows, and other non-target areas. Keep the result realistic and naturally integrated. Do not change the room structure or add unrelated objects.';
-const materialReplaceMaskPrompt = 'Edit only the masked area. Replace the selected {targetObjectTypeLabel} with {targetMaterialLabel}. Preserve the original layout, camera angle, perspective, geometry, lighting, shadows, and all unmasked areas. Keep the result realistic and naturally integrated. Do not change the room structure or add unrelated objects.';
-
 function resolveBatchCountForJob(job: GenerationJob): 1 | 2 | 4 | 8 {
   return resolveBatchCountForJobConfig(job.mode, job.config);
 }
 
 function resolveBatchCountForJobConfig(mode: GenerationRecord['mode'], config: Record<string, unknown>): 1 | 2 | 4 | 8 {
-  if (mode !== 'design-variants') return 1;
-  return config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8 ? config.batchCount : 4;
+  const outputCount = getGenerationOutputCount(mode, config);
+  return outputCount === 2 || outputCount === 4 || outputCount === 8 ? outputCount : 1;
 }
 
 function resolveVariantStyles(config: Record<string, unknown>, batchCount: 1 | 2 | 4 | 8): string[] {
@@ -1197,6 +1380,7 @@ function mergeProviderDiagnostics(diagnostics: GenerationJobDiagnostics, outputs
     providerModel: typeof lastOutput?.metadata?.model === 'string' ? lastOutput.metadata.model : diagnostics.provider?.providerModel,
     providerMs: readProviderMs(outputs),
     httpStatus: typeof lastOutput?.metadata?.httpStatus === 'number' ? lastOutput.metadata.httpStatus : diagnostics.provider?.httpStatus,
+    statusCode: typeof lastOutput?.metadata?.httpStatus === 'number' ? lastOutput.metadata.httpStatus : diagnostics.provider?.statusCode,
     retryCount,
     fallbackProvider: typeof lastOutput?.metadata?.fallbackProvider === 'string' ? lastOutput.metadata.fallbackProvider : diagnostics.provider?.fallbackProvider,
     fallbackReason: typeof lastOutput?.metadata?.fallbackReason === 'string' ? lastOutput.metadata.fallbackReason : diagnostics.provider?.fallbackReason,
@@ -1213,31 +1397,15 @@ function readProviderMs(outputs: GenerateImageOutput[]): number | undefined {
 
 function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount: 1 | 2 | 4 | 8, style: string, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
   const strategy = job.config.variantStrategy === 'same-style' ? 'same-style' : 'style-matrix';
-  const strength = job.config.strength === 'subtle' || job.config.strength === 'strong' ? job.config.strength : 'balanced';
   const customStyle = style === 'custom' && typeof job.config.customStyleLabel === 'string'
     ? `Direction: ${job.config.customStyleLabel.trim()}.`
     : variantStylePrompts[style] || variantStylePrompts['modern-minimal'];
-  if (isCompactQualityMode(qualityMode)) {
-    return [
-      'Create a quick design option from the input image. Keep layout, camera, walls, openings, and main furniture positions.',
-      customStyle,
-      strategy === 'same-style' ? sameStyleVariantPrompts[index] : undefined,
-      typeof job.config.customPrompt === 'string' && job.config.customPrompt.trim().length > 0 ? `Note: ${job.config.customPrompt.trim()}` : undefined,
-      `Option ${readVariantCode(index)} of ${batchCount}.`,
-    ].filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
-  }
   const parts = [
-    designVariantBasePrompt,
-    customStyle,
+    buildSmartPromptForJob(job, qualityMode, {
+      variantStyle: customStyle,
+      variantName: resolveVariantName(job.config, index),
+    }),
     strategy === 'same-style' ? sameStyleVariantPrompts[index] : undefined,
-    strength === 'subtle'
-      ? 'Change intensity: subtle.'
-      : strength === 'strong'
-        ? 'Change intensity: strong, but keep the structure.'
-        : 'Change intensity: balanced.',
-    typeof job.config.customPrompt === 'string' && job.config.customPrompt.trim().length > 0
-      ? `User note: ${job.config.customPrompt.trim()}`
-      : undefined,
     `This is ${readVariantLabel(index)} of ${batchCount}.`,
   ];
   return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
@@ -1275,196 +1443,31 @@ function buildProviderPromptForJob(job: GenerationJob, qualityMode: QualityMode 
     return buildDesignVariantPrompt(job, 0, resolveBatchCountForJob(job), resolveVariantStyles(job.config, resolveBatchCountForJob(job))[0] || 'modern-minimal', qualityMode);
   }
 
-  if (job.mode === 'material-replace') {
-    return buildMaterialReplacePrompt(job, qualityMode);
-  }
-
-  if (job.mode === 'plan-colorize') {
-    return buildPlanColorizePrompt(job, qualityMode);
-  }
-
-  if (job.mode === 'panorama-roam-render') {
-    return buildPanoramaRoamRenderPrompt(job, qualityMode);
-  }
-
-  if (isCompactQualityMode(qualityMode) && (job.mode === 'style-render' || job.mode === 'inpaint' || job.mode === 'floorplan')) {
-    return buildCompactGenericPrompt(job);
-  }
-
-  if (job.mode !== 'model-render') return job.prompt;
-
-  const buildingType = readMeaningfulConfigString(job.config.buildingType);
-  const spaceType = readMeaningfulConfigString(job.config.spaceType);
-  const renderStyle = readMeaningfulConfigString(job.config.renderStyle) || readMeaningfulConfigString(job.config.style);
-  const atmosphere = readMeaningfulConfigString(job.config.atmosphere) || readMeaningfulConfigString(job.config.lighting);
-  const customPrompt = readMeaningfulConfigString(job.config.customPrompt) || readMeaningfulConfigString(job.config.userPrompt);
-  const parts = [
-    isCompactQualityMode(qualityMode)
-      ? 'Quick realistic render from this 3D model snapshot. Keep geometry, camera, layout, and proportions.'
-      : 'The input image is a 3D clay or white model viewport snapshot. Transform it into a realistic architectural or interior rendering. Preserve the original geometry, massing, layout, camera angle, perspective, composition, and spatial proportions. Add appropriate materials, lighting, shadows, environment, furniture, landscape details, and atmosphere. Do not change the fundamental structure unless explicitly requested.',
-    buildingType ? `Building type: ${buildingType}.` : undefined,
-    spaceType ? `Space type: ${spaceType}.` : undefined,
-    renderStyle ? `Rendering style: ${renderStyle}.` : undefined,
-    atmosphere ? `Atmosphere: ${atmosphere}.` : undefined,
-    customPrompt ? `User note: ${customPrompt}.` : undefined,
-  ];
-  return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+  return buildSmartPromptForJob(job, qualityMode);
 }
 
-function buildPanoramaRoamRenderPrompt(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
-  const buildingType = readMeaningfulConfigString(job.config.buildingType);
-  const spaceType = readMeaningfulConfigString(job.config.spaceType);
-  const renderStyle = readMeaningfulConfigString(job.config.renderStyle) || readMeaningfulConfigString(job.config.style);
-  const atmosphere = readMeaningfulConfigString(job.config.atmosphere) || readMeaningfulConfigString(job.config.lighting);
-  const customPrompt = readMeaningfulConfigString(job.config.customPrompt) || readMeaningfulConfigString(job.config.userPrompt);
-  const changeStrength = readPanoramaChangeStrengthInstruction(job.config.panoramaChangeStrength);
-  if (isCompactQualityMode(qualityMode)) {
-    return [
-      'Quick 2:1 360 panorama render from this model panorama. Keep equirectangular canvas, horizon, layout, and geometry.',
-      changeStrength,
-      renderStyle ? `Style: ${renderStyle}.` : undefined,
-      atmosphere ? `Light: ${atmosphere}.` : undefined,
-      customPrompt ? `Note: ${customPrompt}.` : undefined,
-    ].filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
-  }
-  const parts = [
-    'The input image is a 2:1 equirectangular 360 panorama captured from a 3D clay or white model. Transform it into a cinematic, photorealistic architectural or interior 360 panorama rendering. Preserve the exact equirectangular 2:1 canvas, full 360 continuity, camera position, spatial layout, geometry, proportions, horizon, and room or building structure. Add realistic materials, lighting, shadows, environment, furniture, landscape details, and atmosphere. Do not convert it into a normal perspective view. Do not crop, pad, add borders, labels, or watermarks.',
-    changeStrength,
-    buildingType ? `Building type: ${buildingType}.` : undefined,
-    spaceType ? `Space type: ${spaceType}.` : undefined,
-    renderStyle ? `Rendering style: ${renderStyle}.` : undefined,
-    atmosphere ? `Atmosphere: ${atmosphere}.` : undefined,
-    customPrompt ? `User note: ${customPrompt}.` : undefined,
-  ];
-  return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+function buildSmartPromptForJob(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job), overrides: Partial<BuildSmartPromptInputForJob> = {}): string {
+  const mode = job.mode as SmartPromptMode;
+  const userPromptFallback = typeof job.config.userPrompt === 'string' ? job.config.userPrompt : job.prompt;
+  return buildSmartPrompt({
+    mode,
+    config: job.config,
+    userPrompt: readSmartPromptUserSupplement(mode, job.config, userPromptFallback),
+    hasMaterialReferences: readStringArray(job.config.materialReferenceAssetIds).length > 0
+      || readStringArray(job.config.materialTextureAssetIds).length > 0
+      || readMaterialTextureSourceNames(job.config).length > 0,
+    materialNames: readMaterialTextureSourceNames(job.config),
+    hasMask: job.config.maskMode === 'asset-mask',
+    useFullImageMask: job.config.maskMode === 'full-image',
+    hasFurnitureReference: readStringArray(job.config.furnitureReferenceAssetIds).length > 0,
+    qualityMode,
+    ...overrides,
+  });
 }
 
-function readPanoramaChangeStrengthInstruction(strength: GenerationJob['config']['panoramaChangeStrength']): string {
-  if (strength === 'weak') {
-    return 'Change strength: weak. Preserve original elements, layout, structure, furniture positions, main composition, and spatial organization; avoid adding extra elements; focus on faithful rendering and subtle refinement.';
-  }
-  if (strength === 'strong') {
-    return 'Change strength: strong. Preserve the core spatial structure, proportions, camera position, and 360 continuity, but allow stronger creative enhancement, richer scene details, more expressive atmosphere, stronger material variation, decoration, and furnishing enrichment.';
-  }
-  return 'Change strength: medium. Preserve the original spatial layout, composition, core elements, furniture positions, and major design features largely intact. Moderately enhance materials, lighting, atmosphere, texture quality, and a small amount of detail, while avoiding excessive new objects or drastic scene changes.';
-}
-
-function buildMaterialReplacePrompt(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
-  const targetObjectKey = typeof job.config.targetObjectType === 'string' ? job.config.targetObjectType.trim() : 'other';
-  const targetMaterialKey = typeof job.config.targetMaterial === 'string' ? job.config.targetMaterial.trim() : 'custom';
-  const targetObjectTypeLabel = materialReplaceObjectLabels[targetObjectKey] || materialReplaceObjectLabels.other;
-  const targetMaterialLabel = materialReplaceMaterialLabels[targetMaterialKey] || materialReplaceMaterialLabels.custom;
-  const strength = job.config.strength === 'subtle' || job.config.strength === 'strong' ? job.config.strength : 'balanced';
-  const editMode = job.config.editMode === 'mask' ? 'mask' : 'smart-type';
-  const hasMaterialReference = readStringArray(job.config.materialReferenceAssetIds).length > 0
-    || readStringArray(job.config.materialTextureAssetIds).length > 0;
-  const customMaterialPrompt = typeof job.config.customMaterialPrompt === 'string' ? job.config.customMaterialPrompt.trim() : '';
-  if (isCompactQualityMode(qualityMode)) {
-    return [
-      `Replace ${targetObjectTypeLabel} material with ${targetMaterialLabel}.`,
-      'Keep geometry, lighting direction, perspective, and unmasked areas unchanged.',
-      customMaterialPrompt ? `Note: ${customMaterialPrompt}` : undefined,
-    ].filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
-  }
-  const basePrompt = editMode === 'mask' ? materialReplaceMaskPrompt : materialReplaceSmartPrompt;
-  const parts = [
-    basePrompt
-      .replace('{targetObjectTypeLabel}', targetObjectTypeLabel)
-      .replace('{targetMaterialLabel}', targetMaterialLabel),
-    hasMaterialReference
-      ? 'Use the material reference only for texture, color, finish, and material feeling. Do not copy its composition or objects.'
-      : undefined,
-    strength === 'subtle'
-      ? 'Change intensity: subtle.'
-      : strength === 'strong'
-        ? 'Change intensity: strong, but preserve the structure.'
-        : 'Change intensity: balanced.',
-    customMaterialPrompt ? `User note: ${customMaterialPrompt}` : undefined,
-  ];
-  return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
-}
-
-const planColorizeBasePrompt = 'Transform the input black-and-white architectural plan into a clear colored presentation plan. Preserve the original walls, openings, layout, linework, proportions, and spatial relationships. Add professional architectural graphics, clean color fills, readable hierarchy, and presentation-quality details. Do not change the core plan geometry.';
-const planDrawingPrompts: Record<string, string> = {
-  residential: 'Plan type: residential interior plan.',
-  commercial: 'Plan type: commercial space plan.',
-  office: 'Plan type: office plan.',
-  hotel: 'Plan type: hotel or hospitality plan.',
-  landscape: 'Plan type: landscape plan.',
-  'site-plan': 'Plan type: site plan or masterplan.',
-  custom: 'Plan type: custom architectural drawing.',
-};
-const planTemplatePrompts: Record<string, string> = {
-  'zoning-color': 'Focus on functional zoning colors with clear room/area differentiation.',
-  'colored-plan': 'Create a polished colored floor plan with furniture, material fills, and clear visual hierarchy.',
-  'landscape-plan': 'Enhance paving, planting, lawn, water, circulation, and outdoor materials.',
-  'furniture-enhance': 'Clarify and enhance furniture, fixtures, and interior layout symbols.',
-  'annotation-plan': 'Add concise room labels and readable annotation style.',
-  'circulation-analysis': 'Add clear circulation arrows and movement hierarchy.',
-};
-
-function buildPlanColorizePrompt(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
-  const drawingType = typeof job.config.drawingType === 'string' ? job.config.drawingType : 'residential';
-  const template = typeof job.config.template === 'string' ? job.config.template : 'colored-plan';
-  const labels = readStringArray(job.config.manualRoomLabels);
-  if (isCompactQualityMode(qualityMode)) {
-    return [
-      'Quick colored architectural plan. Preserve walls, openings, layout, linework, and canvas ratio.',
-      planDrawingPrompts[drawingType],
-      planTemplatePrompts[template],
-      typeof job.config.customPrompt === 'string' && job.config.customPrompt.trim().length > 0 ? `Note: ${job.config.customPrompt.trim()}` : undefined,
-    ].filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
-  }
-  const parts = [
-    planColorizeBasePrompt,
-    planDrawingPrompts[drawingType],
-    planTemplatePrompts[template],
-    job.config.enableZoningColor ? 'Use distinct but harmonious colors for different functional areas.' : undefined,
-    job.config.enableRoomLabels ? 'Add concise room or area labels where appropriate.' : undefined,
-    job.config.enableFurnitureEnhance ? 'Enhance furniture and fixture symbols while preserving layout.' : undefined,
-    job.config.enableCirculationArrows ? 'Add subtle circulation arrows without cluttering the plan.' : undefined,
-    job.config.enableScaleEnhance ? 'Improve scale readability with furniture, paving, texture, and line hierarchy.' : undefined,
-    job.config.enableLandscapeFill ? 'Add landscape fills such as planting, paving, lawn, water, and outdoor texture.' : undefined,
-    job.config.preserveLinework !== false ? 'Keep the original linework crisp and visible.' : undefined,
-    labels.length > 0 ? `Use these labels when appropriate: ${labels.join(', ')}.` : undefined,
-    typeof job.config.customPrompt === 'string' && job.config.customPrompt.trim().length > 0 ? `User note: ${job.config.customPrompt.trim()}` : undefined,
-  ];
-  return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
-}
-
-function buildCompactGenericPrompt(job: GenerationJob): string {
-  const userPrompt = readMeaningfulConfigString(job.config.customPrompt) || readMeaningfulConfigString(job.config.userPrompt) || job.prompt.trim();
-  if (job.mode === 'floorplan') {
-    return [
-      'Quick colored floor plan. Preserve original layout, walls, openings, furniture positions, linework, and top-down plan view.',
-      userPrompt ? `Note: ${userPrompt}` : undefined,
-    ].filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
-  }
-
-  if (job.mode === 'style-render') {
-    return [
-      'Quick architectural render from the input image. Keep composition, perspective, layout, and main outlines.',
-      userPrompt ? `Note: ${userPrompt}` : undefined,
-    ].filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
-  }
-
-  return [
-    'Quick local edit. Follow the mask when provided and keep unmasked areas unchanged.',
-    userPrompt ? `Note: ${userPrompt}` : undefined,
-  ].filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
-}
-
-function isCompactQualityMode(qualityMode: QualityMode): boolean {
-  return qualityMode === 'draft' || qualityMode === 'fast';
-}
-
-function readMeaningfulConfigString(value: unknown): string {
-  if (typeof value !== 'string') return '';
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  const normalized = trimmed.toLowerCase();
-  if (normalized === 'none' || normalized === 'null' || normalized === 'undefined') return '';
-  return trimmed;
+interface BuildSmartPromptInputForJob {
+  variantStyle: string;
+  variantName: string;
 }
 
 function readModelSnapshotMetadata(value: unknown): GenerationRecord['modelSnapshotMetadata'] {
@@ -1561,7 +1564,9 @@ function readPositiveInteger(value: string | undefined, fallback: number): numbe
 }
 
 function readErrorStatus(error: Error): number | undefined {
-  const status = (error as Error & { status?: unknown }).status;
+  const status = (error as Error & { status?: unknown; statusCode?: unknown; httpStatus?: unknown }).status
+    ?? (error as Error & { statusCode?: unknown }).statusCode
+    ?? (error as Error & { httpStatus?: unknown }).httpStatus;
   if (typeof status === 'number') return status;
   const match = /HTTP\s+(\d{3})|returned\s+(\d{3})/iu.exec(error.message);
   const parsed = Number(match?.[1] || match?.[2]);
@@ -1573,11 +1578,33 @@ function isMaskMode(value: unknown): value is MaskMode {
 }
 
 function isMissingProviderSecretError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes('GRSAI_API_KEY is required');
+  return error instanceof Error && (
+    error.message.includes('GRSAI_API_KEY is required')
+    || error.message.includes('GEMINI_API_KEY is required')
+    || readErrorStringField(error, 'providerError') === 'missing_provider_secret'
+  );
+}
+
+function isTimeoutGenerationFailure(error: unknown, statusCode?: number): boolean {
+  if (statusCode === 408 || statusCode === 504) return true;
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return message.includes('timed out')
+    || message.includes('timeout')
+    || message.includes('aborterror')
+    || message.includes('aborted');
 }
 
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter(isNonEmptyString) : [];
+}
+
+function readMaterialTextureSourceNames(config: Record<string, unknown>): string[] {
+  const sources = config.materialTextureSources;
+  if (!Array.isArray(sources)) return [];
+  return sources
+    .map(source => isRecord(source) && typeof source.name === 'string' ? source.name.trim() : '')
+    .filter(isNonEmptyString);
 }
 
 function isGrsaiProvider(name: ProviderName): boolean {

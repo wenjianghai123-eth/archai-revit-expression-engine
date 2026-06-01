@@ -1,6 +1,7 @@
 import { ArrowRight, ImagePlus, Map, Sparkles } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { GenerationConfig, PlanDrawingType, PlanExpressionTemplate, StepState, UploadedImage } from '../types';
+import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 
 interface PlanColorizePanelProps {
   state: StepState;
@@ -121,6 +122,8 @@ export function PlanColorizePanel({
             </div>
           </OptionGroup>
 
+          <SmartPromptAssistant mode="plan-colorize" config={state.config} compact onUpdateConfig={onUpdateConfig} />
+
           <OptionGroup title="增强项">
             <div className="space-y-2">
               {enhancementOptions.map(option => (
@@ -138,10 +141,10 @@ export function PlanColorizePanel({
           </OptionGroup>
 
           <label className="block rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <span className="text-xs font-bold text-slate-500">自定义补充提示词</span>
+            <span className="text-xs font-bold text-slate-500">额外补充要求</span>
             <textarea
               value={state.config.customPrompt || ''}
-              onChange={event => onUpdateConfig({ customPrompt: event.currentTarget.value, prompt: event.currentTarget.value })}
+              onChange={event => onUpdateConfig({ customPrompt: event.currentTarget.value })}
               placeholder="可补充房间名称、功能分区、动线或表达偏好；不填写也可以生成。"
               className="mt-3 h-24 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-blue-300"
             />

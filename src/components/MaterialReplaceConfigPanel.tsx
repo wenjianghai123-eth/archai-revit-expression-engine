@@ -1,4 +1,5 @@
 import { GenerationConfig } from '../types';
+import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 
 interface MaterialReplaceConfigPanelProps {
   config: GenerationConfig;
@@ -91,6 +92,14 @@ export function MaterialReplaceConfigPanel({
         </button>
       </div>
 
+      <SmartPromptAssistant
+        mode="material-replace"
+        config={config}
+        compact
+        fields={['buildingType', 'spaceType', 'renderStyle', 'lighting']}
+        onUpdateConfig={onUpdateConfig}
+      />
+
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
           <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">目标区域</label>
@@ -159,7 +168,7 @@ export function MaterialReplaceConfigPanel({
       </div>
 
       <div className="space-y-2">
-        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">补充描述</label>
+        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">额外补充要求</label>
         <textarea
           value={config.customMaterialPrompt || ''}
           onChange={event => onUpdateConfig({ customMaterialPrompt: event.target.value })}

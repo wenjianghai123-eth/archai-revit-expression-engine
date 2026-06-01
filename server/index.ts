@@ -73,7 +73,6 @@ import {
   sniffModelFile,
 } from './upload';
 import {
-  calculateGenerationCreditsCost,
   enqueueGenerationJob,
   generateWithFallbackResponse,
   getGenerationProviderName,
@@ -83,6 +82,7 @@ import {
   removeQueuedGenerationJob,
   restorePendingGenerationJobs,
 } from './generationService';
+import { getGenerationCreditCost, getGenerationOutputCount } from '../src/utils/generationCredits';
 import { createAssetsRouter } from './routes/assets';
 import { createSupabaseAuthUser, resetSupabaseAuthUserPassword, updateSupabaseAuthUserMetadata } from './supabaseAdmin';
 import { getModelConversionConfig } from './modelConversionService';
@@ -259,7 +259,7 @@ app.post('/api/admin/users', requireAuth, requireAdmin, async (
     });
     const creditResult = await adjustCredits({
       userId: user.id,
-      type: 'grant',
+      type: 'admin_grant',
       amount: body.value.initialCredits,
       reason: 'admin_user_create',
       referenceType: 'system',
@@ -344,7 +344,7 @@ app.post('/api/admin/users/:userId/credits', requireAuth, requireAdmin, async (
   try {
     const result = await adjustCredits({
       userId: req.params.userId,
-      type: 'grant',
+      type: 'admin_grant',
       amount: body.value.amount,
       reason: body.value.reason,
       referenceType: 'system',
@@ -376,7 +376,7 @@ app.post('/api/admin/credits/grant', requireAuth, requireAdmin, async (
   try {
     const result = await adjustCredits({
       userId: body.value.userId,
-      type: 'grant',
+      type: 'admin_grant',
       amount: body.value.amount,
       reason: body.value.reason,
       referenceType: 'system',
@@ -431,14 +431,14 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
       return;
     }
 
-    const creditsCost = calculateGenerationCreditsCost(body.value.mode, body.value.config);
+    const creditsCost = getGenerationCreditCost(body.value.mode, body.value.config);
     logGenerationJobCreateStage(req, 'create generation job', {
       userId: user.id,
       projectId: body.value.projectId,
       mode: body.value.mode,
       creditsCost,
     });
-    const job = await createGenerationJob({ ...body.value, userId: user.id, provider: getGenerationProviderName() });
+    const job = await createGenerationJob({ ...body.value, userId: user.id, provider: getGenerationProviderName(), creditCost: creditsCost });
     if (!job) {
       logGenerationJobCreateStage(req, 'create generation job failed', { userId: user.id, projectId: body.value.projectId });
       res.status(404).json(apiError('Project not found.', 'PROJECT_NOT_FOUND'));
@@ -450,9 +450,9 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
     try {
       debit = await adjustCredits({
         userId: user.id,
-        type: 'debit',
+        type: 'generate_charge',
         amount: -creditsCost,
-        reason: `Generation job ${job.mode} x${resolveChargedOutputCount(body.value.mode, body.value.config)}`,
+        reason: `Generation job ${job.mode} x${getGenerationOutputCount(body.value.mode, body.value.config)}`,
         referenceType: 'generation_job',
         referenceId: job.id,
       });
@@ -471,6 +471,7 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
         status: 'cancelled',
         progress: 0,
         errorMessage: 'Credits are insufficient.',
+        failureReason: 'Credits are insufficient.',
         finishedAt: new Date().toISOString(),
       });
       res.status(402).json(apiError('Credits are insufficient.', 'CREDITS_INSUFFICIENT'));
@@ -503,7 +504,11 @@ app.get('/api/generation-jobs/:id', requireAuth, async (
       return;
     }
 
-    res.json(apiOk({ job: { ...job, results: await listGenerationResults(job.id, getRequiredCurrentUser(req).id) } }));
+    if (isRefundableGenerationJobStatus(job.status) && !job.creditRefunded) {
+      await refundGenerationJobCredits(job.id);
+    }
+    const latestJob = await getGenerationJob(req.params.id, getRequiredCurrentUser(req).id);
+    res.json(apiOk({ job: { ...(latestJob || job), results: await listGenerationResults(job.id, getRequiredCurrentUser(req).id) } }));
   } catch (error) {
     next(error);
   }
@@ -525,7 +530,8 @@ app.post('/api/generation-jobs/:id/cancel', requireAuth, async (
     if (job.status === 'cancelled') {
       await refundGenerationJobCredits(job.id);
     }
-    res.json(apiOk({ job }));
+    const latestJob = await getGenerationJob(job.id, getRequiredCurrentUser(req).id);
+    res.json(apiOk({ job: latestJob || job }));
   } catch (error) {
     next(error);
   }
@@ -563,7 +569,7 @@ app.post('/api/generate/floorplan', requireLegacyGenerationEndpoint, requireAuth
   }
 
   try {
-    res.json(await generateWithFallbackResponse({ ...body.value, mode: 'floorplan' }));
+    res.json(await generateWithFallbackResponse({ ...body.value, mode: 'floorplan' }, getRequiredCurrentUser(req).id));
   } catch (error) {
     next(error);
   }
@@ -577,7 +583,7 @@ app.post('/api/generate/style-render', requireLegacyGenerationEndpoint, requireA
   }
 
   try {
-    res.json(await generateWithFallbackResponse({ ...body.value, mode: 'style-render' }));
+    res.json(await generateWithFallbackResponse({ ...body.value, mode: 'style-render' }, getRequiredCurrentUser(req).id));
   } catch (error) {
     next(error);
   }
@@ -591,7 +597,7 @@ app.post('/api/generate/inpaint', requireLegacyGenerationEndpoint, requireAuth, 
   }
 
   try {
-    res.json(await generateWithFallbackResponse({ ...body.value, mode: 'inpaint' }));
+    res.json(await generateWithFallbackResponse({ ...body.value, mode: 'inpaint' }, getRequiredCurrentUser(req).id));
   } catch (error) {
     next(error);
   }
@@ -1416,10 +1422,6 @@ function normalizePlanColorizeConfig(
   return { ok: true };
 }
 
-function resolveChargedOutputCount(mode: GenerationRecord['mode'], config: Record<string, unknown>): number {
-  return mode === 'design-variants' && (config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8) ? config.batchCount : 1;
-}
-
 function validateGenerationJobCreateBody(
   body: unknown,
 ): { ok: true; value: Omit<Parameters<typeof createGenerationJob>[0], 'provider' | 'userId'> } | { ok: false; error: ApiError } {
@@ -1851,6 +1853,7 @@ async function markGenerationJobCancelledAfterDebitFailure(jobId: string, error:
       status: 'cancelled',
       progress: 0,
       errorMessage: message,
+      failureReason: message,
       finishedAt: new Date().toISOString(),
     });
   } catch (updateError) {
@@ -1859,6 +1862,10 @@ async function markGenerationJobCancelledAfterDebitFailure(jobId: string, error:
       error: updateError instanceof Error ? sanitizeLogText(updateError.message) : sanitizeLogText(String(updateError)),
     });
   }
+}
+
+function isRefundableGenerationJobStatus(status: GenerationJob['status']): boolean {
+  return status === 'failed' || status === 'cancelled' || status === 'timeout';
 }
 
 function logGenerationJobCreateStage(req: Request, stage: string, fields: Record<string, unknown> = {}): void {

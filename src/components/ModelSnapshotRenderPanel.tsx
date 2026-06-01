@@ -4,6 +4,7 @@ import { AssetModel, GenerationConfig, ModelSnapshotMetadata, StepState, Uploade
 import { getModelAsset, listModelAssets, ModelAssetRecord, optimizeModelAsset, uploadImageAsset, uploadModelAsset } from '../lib/api';
 import { ModelViewer, ModelViewerHandle } from './ModelViewer';
 import { mapModelAssetRecordToAssetModel, mapModelToOriginalSource } from './modelAssetUtils';
+import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 
 interface ModelSnapshotRenderPanelProps {
   state: StepState;
@@ -16,10 +17,6 @@ const modelAccept = '.glb,.gltf,.obj,.dae,.stl,.zip,model/gltf-binary,model/gltf
 const MAX_MODEL_SIZE_MB = 600;
 const MAX_MODEL_SIZE_BYTES = MAX_MODEL_SIZE_MB * 1024 * 1024;
 const MODEL_OPTIMIZATION_THRESHOLD_BYTES = 30 * 1024 * 1024;
-const buildingTypes = ['住宅', '商业', '办公', '展厅', '酒店', '景观', '自定义'];
-const spaceTypes = ['外立面', '客厅', '餐厅', '卧室', '大堂', '办公区', '庭院', '自定义'];
-const renderStyles = ['现代极简', '自然木质', '轻奢', '侘寂', '工业风', '参数化', '写实建筑表现'];
-const atmospheres = ['日景', '夜景', '暖光', '自然光', '高级灯光', '清晨', '黄昏'];
 
 export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputImage, onGenerate }: ModelSnapshotRenderPanelProps) {
   const viewerRef = useRef<ModelViewerHandle>(null);
@@ -436,16 +433,13 @@ export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputI
             </div>
 
             <div className="space-y-3 border-t border-slate-100 pt-4">
-              <SelectField label="建筑类型" value={state.config.buildingType || '住宅'} options={buildingTypes} onChange={value => onUpdateConfig({ buildingType: value })} />
-              <SelectField label="空间类型" value={state.config.spaceType || '外立面'} options={spaceTypes} onChange={value => onUpdateConfig({ spaceType: value })} />
-              <SelectField label="渲染风格" value={state.config.renderStyle || state.config.style || '现代极简'} options={renderStyles} onChange={value => onUpdateConfig({ renderStyle: value, style: value })} />
-              <SelectField label="氛围" value={state.config.atmosphere || state.config.lighting || '日景'} options={atmospheres} onChange={value => onUpdateConfig({ atmosphere: value, lighting: value })} />
+              <SmartPromptAssistant mode="model-render" config={state.config} compact onUpdateConfig={onUpdateConfig} />
               <label className="block">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">自定义提示词</span>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">额外补充要求</span>
                 <textarea
                   value={state.config.customPrompt || state.config.prompt}
-                  onChange={event => onUpdateConfig({ customPrompt: event.target.value, prompt: event.target.value })}
-                  placeholder="补充材质、光线、场景或设计意图..."
+                  onChange={event => onUpdateConfig({ customPrompt: event.target.value })}
+                  placeholder="可选：补充材质、光线、场景或设计意图；不填写也会根据上方参数生成。"
                   className="mt-2 h-24 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-blue-300"
                 />
               </label>
@@ -505,21 +499,6 @@ function ModelOptimizationSummary({ model }: { model: AssetModel }) {
       <p><span className="font-bold text-slate-700">原始大小：</span>{formatFileSize(model.originalFileSize || 0)}</p>
       {model.optimizedFileSize ? <p><span className="font-bold text-slate-700">预览大小：</span>{formatFileSize(model.optimizedFileSize)}</p> : null}
     </div>
-  );
-}
-
-function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
-  return (
-    <label className="block">
-      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{label}</span>
-      <select
-        value={value}
-        onChange={event => onChange(event.target.value)}
-        className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300"
-      >
-        {options.map(option => <option key={option} value={option}>{option}</option>)}
-      </select>
-    </label>
   );
 }
 

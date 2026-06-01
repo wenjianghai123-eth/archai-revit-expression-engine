@@ -76,6 +76,9 @@ type GenerationJobRow = {
   updated_at: string;
   started_at: string | null;
   finished_at: string | null;
+  credit_cost?: number | null;
+  credit_refunded?: boolean | null;
+  failure_reason?: string | null;
   diagnostics?: unknown;
 };
 
@@ -517,6 +520,9 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       updated_at: now,
       started_at: null,
       finished_at: null,
+      credit_cost: input.creditCost ?? 0,
+      credit_refunded: false,
+      failure_reason: null,
     };
     const { data, error } = await this.client.from('generation_jobs').insert(row).select('*').single();
     assertNoSupabaseError(error, 'creating generation job');
@@ -554,6 +560,9 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     if (input.errorMessage !== undefined) patch.error_message = input.errorMessage;
     if (input.startedAt !== undefined) patch.started_at = input.startedAt;
     if (input.finishedAt !== undefined) patch.finished_at = input.finishedAt;
+    if (input.creditCost !== undefined) patch.credit_cost = input.creditCost;
+    if (input.creditRefunded !== undefined) patch.credit_refunded = input.creditRefunded;
+    if (input.failureReason !== undefined) patch.failure_reason = input.failureReason;
     if (input.diagnostics !== undefined) {
       const current = await this.getGenerationJob(id);
       patch.config = {
@@ -576,7 +585,7 @@ export class SupabaseStorageAdapter implements StorageAdapter {
   async cancelGenerationJob(id: string, userId?: string): Promise<GenerationJob | null> {
     const current = await this.getGenerationJob(id, userId);
     if (!current) return null;
-    if (current.status === 'succeeded' || current.status === 'failed' || current.status === 'cancelled') {
+    if (current.status === 'succeeded' || current.status === 'failed' || current.status === 'cancelled' || current.status === 'timeout') {
       return current;
     }
 
@@ -584,6 +593,7 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     return this.updateGenerationJob(id, {
       status: 'cancelled',
       progress: Math.min(current.progress, 99),
+      failureReason: 'cancelled',
       finishedAt: now,
     });
   }
@@ -828,14 +838,16 @@ export class SupabaseStorageAdapter implements StorageAdapter {
         projectCount: projectRows.length,
         generationJobCount: jobRows.length,
         succeededJobCount: jobRows.filter(job => job.status === 'succeeded').length,
-        failedJobCount: jobRows.filter(job => job.status === 'failed').length,
-        totalCreditsConsumed: transactionRows
-          .filter(transaction => transaction.type === 'debit')
-          .reduce((total, transaction) => total + Math.abs(transaction.amount), 0),
+        failedJobCount: jobRows.filter(job => job.status === 'failed' || job.status === 'timeout').length,
+        totalCreditsConsumed: transactionRows.reduce((total, transaction) => {
+          if (transaction.type === 'generate_charge' || transaction.type === 'debit') return total + Math.abs(transaction.amount);
+          if (transaction.type === 'generate_refund' || transaction.type === 'refund') return total - Math.abs(transaction.amount);
+          return total;
+        }, 0),
       },
       recentJobs: [...mappedJobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 20),
       recentErrorJobs: mappedJobs
-        .filter(job => job.status === 'failed')
+        .filter(job => job.status === 'failed' || job.status === 'timeout')
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
         .slice(0, 20),
     };
@@ -908,6 +920,9 @@ function mapGenerationJobRow(row: GenerationJobRow): GenerationJob {
     startedAt: row.started_at,
     finishedAt: row.finished_at,
     diagnostics,
+    creditCost: row.credit_cost ?? readNumberFromConfig(row.config, 'creditCost') ?? 0,
+    creditRefunded: row.credit_refunded ?? readBooleanFromConfig(row.config, 'creditRefunded') ?? false,
+    failureReason: row.failure_reason ?? readStringFromConfig(row.config, 'failureReason') ?? null,
   };
 }
 
@@ -917,6 +932,21 @@ function readDiagnostics(row: GenerationJobRow): GenerationJob['diagnostics'] {
     return row.config.__diagnostics as GenerationJob['diagnostics'];
   }
   return undefined;
+}
+
+function readNumberFromConfig(config: Record<string, unknown>, key: string): number | undefined {
+  const value = config[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function readBooleanFromConfig(config: Record<string, unknown>, key: string): boolean | undefined {
+  const value = config[key];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function readStringFromConfig(config: Record<string, unknown>, key: string): string | undefined {
+  const value = config[key];
+  return typeof value === 'string' ? value : undefined;
 }
 
 function mapGenerationResultRow(row: GenerationResultRow): GenerationResult {

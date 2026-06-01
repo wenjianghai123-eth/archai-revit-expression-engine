@@ -1,7 +1,6 @@
 import { useCallback, type Dispatch, type SetStateAction } from 'react';
 import { generateFloorplanTo3D, generateInpainting, generateStyleRender } from '../api/generation';
-import { buildFloorplanColorPrompt } from '../prompts/floorplanPrompts';
-import { buildInpaintPrompt } from '../prompts/inpaintPrompts';
+import { buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode } from '../promptTemplates/intelligentPromptTemplates';
 import { saveGenerationRecord } from '../storage/history';
 import {
   createGenerationJob,
@@ -12,6 +11,7 @@ import {
   type CreditBalance,
 } from '../lib/api';
 import { GenerationConfig, GenerationHistoryItem, GenerationMode, GenerationProvider, GenerationStep, StepState, UploadedImage, VariantStyleKey } from '../types';
+import { getGenerationCreditCost } from '../utils/generationCredits';
 
 interface UseGenerationRunnerOptions {
   currentStep: GenerationStep;
@@ -32,12 +32,12 @@ export function useGenerationRunner({
   refreshCreditBalance,
   setHistoryItems,
 }: UseGenerationRunnerOptions) {
-  const estimatedCreditCost = calculateGenerationCreditsCost(currentStep, stepStates[currentStep].config);
+  const estimatedCreditCost = getGenerationCreditCost(getGenerationRecordMode(currentStep), stepStates[currentStep].config);
   const isCreditsInsufficient = Boolean(creditBalance && creditBalance.balance < estimatedCreditCost);
 
   const handleGenerate = useCallback(async () => {
     const stateAtStart = stepStates[currentStep];
-    const requiredCredits = calculateGenerationCreditsCost(currentStep, stateAtStart.config);
+    const requiredCredits = getGenerationCreditCost(getGenerationRecordMode(currentStep), stateAtStart.config);
     if (creditBalance && creditBalance.balance < requiredCredits) {
       setStepStates(prev => ({
         ...prev,
@@ -159,6 +159,7 @@ export function useGenerationRunner({
       try {
         const generationMode = getGenerationRecordMode(currentStep);
         const promptForRequest = buildPromptForGeneration(currentStep, stateAtStart.config.prompt, stateAtStart);
+        const userSupplementPrompt = readSupplementalPromptForGeneration(currentStep, stateAtStart.config);
         const configForRequest = buildConfigForGeneration(currentStep, stateAtStart.config);
         const targetSizeConfig = buildTargetSizeConfig(stateAtStart.inputImage);
         const furnitureReferenceAssetIds = stateAtStart.furnitureReferences
@@ -206,9 +207,7 @@ export function useGenerationRunner({
             variantStyles: currentStep === GenerationStep.DesignVariants ? resolveVariantStyles(stateAtStart.config) : undefined,
             variantNames: currentStep === GenerationStep.DesignVariants ? resolveVariantNames(stateAtStart.config) : undefined,
             customStyleLabel: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.customStyleLabel : undefined,
-            userPrompt: currentStep === GenerationStep.ModelSnapshotRender || currentStep === GenerationStep.PanoramaQuickRender
-              ? stateAtStart.config.customPrompt
-              : stateAtStart.config.prompt,
+            userPrompt: userSupplementPrompt,
             editTarget: currentStep === GenerationStep.MaterialReplace
               ? 'material'
               : currentStep === GenerationStep.LocalInpainting ? stateAtStart.config.editTarget || 'general' : stateAtStart.config.editTarget,
@@ -234,6 +233,8 @@ export function useGenerationRunner({
             spaceType: stateAtStart.config.spaceType,
             renderStyle: stateAtStart.config.renderStyle,
             atmosphere: stateAtStart.config.atmosphere,
+            smartMaterial: stateAtStart.config.smartMaterial,
+            changeStrength: stateAtStart.config.changeStrength,
             panoramaChangeStrength: stateAtStart.config.panoramaChangeStrength,
             panoramaQuality: stateAtStart.config.panoramaQuality,
             customPrompt: stateAtStart.config.customPrompt,
@@ -341,7 +342,7 @@ export function useGenerationRunner({
             id: latestJob.id,
             projectId: selectedProjectId,
             step: currentStep,
-            prompt: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.customMaterialPrompt || '' : stateAtStart.config.prompt,
+            prompt: userSupplementPrompt,
             style: currentStep === GenerationStep.PanoramaQuickRender
               ? stateAtStart.config.renderStyle || stateAtStart.config.style || '漫游全景快渲'
               : readHistoryStyle(currentStep, stateAtStart.config),
@@ -390,19 +391,18 @@ export function useGenerationRunner({
           return;
         }
 
+        const readableJobError = formatGenerationJobError(latestJob);
         setStepStates(prev => ({
           ...prev,
           [currentStep]: {
             ...prev[currentStep],
             isGenerating: false,
             generationStatus: 'error',
-            generationError: latestJob.status === 'cancelled'
-              ? '生成任务已取消。'
-              : latestJob.diagnostics?.provider?.userMessage || latestJob.errorMessage || '生成任务失败。',
+            generationError: readableJobError,
             generationJobStatus: latestJob.status,
             generationJobDiagnostics: latestJob.diagnostics || null,
             generationProgress: latestJob.progress,
-            generationLogs: [...prev[currentStep].generationLogs, `${latestJob.status}: ${latestJob.diagnostics?.provider?.userMessage || latestJob.errorMessage || '任务结束。'}`].slice(-8),
+            generationLogs: [...prev[currentStep].generationLogs, `${latestJob.status}: ${readableJobError}`].slice(-8),
           },
         }));
         void refreshCreditBalance();
@@ -483,7 +483,7 @@ export function useGenerationRunner({
         case GenerationStep.StyleRender:
           response = await generateStyleRender({
             inputImageDataUrl: stateAtStart.inputImage.dataUrl,
-            prompt: stateAtStart.config.prompt,
+            prompt: buildPromptForGeneration(currentStep, stateAtStart.config.prompt, stateAtStart),
             config: forceSingleOutputConfig(stateAtStart.config),
           });
           break;
@@ -505,22 +505,26 @@ export function useGenerationRunner({
       }
 
       let projectSaveWarning: string | null = null;
+      const backendOutputImageUrl = response.outputImageUrl || response.imageUrl || null;
+      const displayOutputImage = backendOutputImageUrl || response.imageDataUrl;
       if (selectedProjectId) {
-        let outputImageUrl: string | null = null;
+        let outputImageUrl: string | null = backendOutputImageUrl;
 
-        try {
+        if (!outputImageUrl) {
+          try {
           const outputFile = dataUrlToFile(response.imageDataUrl, `archai-result-${response.id}`);
           const outputAsset = await uploadImageAsset(outputFile, outputFile.name);
           outputImageUrl = outputAsset.url;
-        } catch (uploadError) {
-          const message = uploadError instanceof Error ? uploadError.message : '生成结果上传失败。';
-          projectSaveWarning = `生成结果暂未保存为文件，将使用预览数据记录：${message}`;
+          } catch (uploadError) {
+            const message = uploadError instanceof Error ? uploadError.message : '生成结果上传失败。';
+            projectSaveWarning = `生成结果暂未保存为文件，将使用预览数据记录：${message}`;
+          }
         }
 
         try {
           await createProjectGeneration(selectedProjectId, {
             mode: getGenerationRecordMode(currentStep),
-            prompt: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.customMaterialPrompt || '' : stateAtStart.config.prompt,
+            prompt: readSupplementalPromptForGeneration(currentStep, stateAtStart.config),
             inputImageUrl: stateAtStart.inputImage.url,
             inputImageDataPreview: stateAtStart.inputImage.url ? null : stateAtStart.inputImage.dataUrl,
             outputImageUrl,
@@ -542,11 +546,11 @@ export function useGenerationRunner({
           id: response.id,
           projectId: selectedProjectId,
           step: currentStep,
-          prompt: currentStep === GenerationStep.MaterialReplace ? currentState.config.customMaterialPrompt || '' : currentState.config.prompt,
+          prompt: readSupplementalPromptForGeneration(currentStep, currentState.config),
           style: readHistoryStyle(currentStep, currentState.config),
           createdAt: new Date(response.createdAt).toLocaleString('zh-CN', { hour12: false }),
           provider: response.provider,
-          outputImage: response.imageDataUrl,
+          outputImage: displayOutputImage,
           inputImageUrl: currentState.inputImage?.url,
           inputImageDataPreview: currentState.inputImage?.url ? undefined : currentState.inputImage?.dataUrl,
           inputImageAssetId: currentState.inputImage?.assetId,
@@ -573,10 +577,10 @@ export function useGenerationRunner({
         ...prev,
         [currentStep]: {
           ...currentState,
-          outputImage: response.imageDataUrl,
+          outputImage: displayOutputImage,
           generationResults: [{
             id: response.id,
-            imageUrl: response.imageDataUrl,
+            imageUrl: displayOutputImage,
             isSelected: true,
             isFavorite: false,
             createdAt: response.createdAt,
@@ -630,55 +634,44 @@ function getGenerationRecordMode(step: GenerationStep): GenerationMode {
   return 'inpaint';
 }
 
-function calculateGenerationCreditsCost(step: GenerationStep, config: GenerationConfig): number {
-  const baseCost = step === GenerationStep.LocalInpainting || step === GenerationStep.MaterialReplace ? 8 : 10;
-  const batchCount = step === GenerationStep.DesignVariants && (config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8)
-    ? config.batchCount
-    : 1;
-  return baseCost * batchCount;
+function formatGenerationJobError(job: Awaited<ReturnType<typeof getGenerationJob>>): string {
+  if (job.status === 'cancelled') return '生成任务已取消。';
+  const provider = job.diagnostics?.provider;
+  const details = [
+    provider?.name ? `provider=${provider.name}` : job.provider ? `provider=${job.provider}` : undefined,
+    typeof (provider?.statusCode ?? provider?.httpStatus) === 'number' ? `statusCode=${provider?.statusCode ?? provider?.httpStatus}` : undefined,
+    provider?.providerStatus ? `providerStatus=${provider.providerStatus}` : undefined,
+    provider?.providerError ? `providerError=${provider.providerError}` : undefined,
+    provider?.rawSnippet ? `raw=${provider.rawSnippet}` : undefined,
+  ].filter((item): item is string => Boolean(item));
+  const message = provider?.userMessage || job.errorMessage || '生成任务失败。';
+  const refundMessage = job.creditRefunded ? '已退还算力点。' : '';
+  return [message, refundMessage, details.length > 0 ? details.join('\n') : '']
+    .filter(part => part.trim().length > 0)
+    .join('\n');
 }
 
 function buildPromptForGeneration(step: GenerationStep, prompt: string, state?: StepState): string {
-  if (step === GenerationStep.DesignVariants) {
-    return prompt || state?.config.customPrompt || 'Design variants';
-  }
+  const mode = getSmartPromptMode(step);
+  return buildSmartPrompt({
+    mode,
+    config: state?.config || { prompt },
+    userPrompt: state ? readSupplementalPromptForGeneration(step, state.config, prompt) : prompt,
+    hasMaterialReferences: Boolean(state?.materialImage?.dataUrl || (state?.materialTextures.length || 0) > 0),
+    materialNames: state?.materialTextures.map(texture => texture.name || '').filter(Boolean),
+    hasMask: Boolean(state?.maskImage?.dataUrl),
+    useFullImageMask: Boolean(state?.useFullImageMask),
+    hasFurnitureReference: Boolean(state && state.furnitureReferences.length > 0),
+    qualityMode: state?.config.qualityMode,
+  });
+}
 
-  if (step === GenerationStep.PlanColorize) {
-    return prompt || state?.config.customPrompt || 'Plan colorize';
-  }
+function readSupplementalPromptForGeneration(step: GenerationStep, config: GenerationConfig, fallback = ''): string {
+  return readSmartPromptUserSupplement(getSmartPromptMode(step), config, fallback);
+}
 
-  if (step === GenerationStep.ModelSnapshotRender && state) {
-    return buildModelRenderPrompt(state.config);
-  }
-
-  if (step === GenerationStep.PanoramaQuickRender && state) {
-    return buildPanoramaRoamRenderPrompt(state.config);
-  }
-
-  if (step === GenerationStep.MaterialReplace && state) {
-    return state.config.customMaterialPrompt || 'Material replacement';
-  }
-
-  if (step === GenerationStep.FloorplanTo3D) {
-    return buildFloorplanColorPrompt({
-      userPrompt: prompt,
-      hasMaterialReferences: Boolean(state?.materialImage?.dataUrl || (state?.materialTextures.length || 0) > 0),
-      materialNames: state?.materialTextures.map(texture => texture.name || '').filter(Boolean),
-    });
-  }
-
-  if (step === GenerationStep.LocalInpainting && state) {
-    return buildInpaintPrompt({
-      userPrompt: prompt,
-      hasMask: Boolean(state.maskImage?.dataUrl),
-      useFullImageMask: Boolean(state.useFullImageMask),
-      hasMaterialReference: Boolean(state.materialImage?.dataUrl || state.materialTextures.length > 0),
-      hasFurnitureReference: state.furnitureReferences.length > 0,
-      editTarget: state.config.editTarget || 'general',
-    });
-  }
-
-  return prompt;
+function getSmartPromptMode(step: GenerationStep): SmartPromptMode {
+  return getGenerationRecordMode(step) as SmartPromptMode;
 }
 
 function buildTargetSizeConfig(image: UploadedImage): Pick<GenerationConfig, 'sourceImageWidth' | 'sourceImageHeight' | 'targetWidth' | 'targetHeight' | 'targetAspectRatio'> {
@@ -804,58 +797,6 @@ function readHistoryStyle(step: GenerationStep, config: GenerationConfig): strin
   if (step === GenerationStep.PlanColorize) return config.template || '图纸智能表达';
   if (step === GenerationStep.ModelSnapshotRender) return config.renderStyle || config.style || '白模快渲';
   return config.style || '未设置风格';
-}
-
-function buildModelRenderPrompt(config: GenerationConfig): string {
-  const customPrompt = readMeaningfulPrompt(config.customPrompt || config.prompt);
-  return [
-    'The input image is a 3D clay or white model viewport snapshot. Transform it into a realistic architectural or interior rendering. Preserve the original geometry, massing, layout, camera angle, perspective, composition, and spatial proportions. Add appropriate materials, lighting, shadows, environment, furniture, landscape details, and atmosphere. Do not change the fundamental structure unless explicitly requested.',
-    readMeaningfulPrompt(config.buildingType) ? `Building type: ${config.buildingType}.` : undefined,
-    readMeaningfulPrompt(config.spaceType) ? `Space type: ${config.spaceType}.` : undefined,
-    readMeaningfulPrompt(config.renderStyle || config.style) ? `Rendering style: ${config.renderStyle || config.style}.` : undefined,
-    readMeaningfulPrompt(config.atmosphere || config.lighting) ? `Atmosphere: ${config.atmosphere || config.lighting}.` : undefined,
-    customPrompt ? `User note: ${customPrompt}.` : undefined,
-  ].filter((item): item is string => Boolean(item)).join(' ');
-}
-
-function buildPanoramaRoamRenderPrompt(config: GenerationConfig): string {
-  const customPrompt = readMeaningfulPrompt(config.customPrompt || config.prompt);
-  return [
-    'The input image is a 2:1 equirectangular 360 panorama captured from a 3D clay or white model. Transform it into an ultra-detailed, high-resolution, photorealistic architectural or interior 360 panorama rendering with crisp lighting, sharp architectural visualization, realistic materials, rich texture detail, clear edges, refined shadows, and high-end visual quality. Preserve the exact equirectangular 2:1 canvas, full 360 continuity, camera position, spatial layout, geometry, proportions, horizon, and room or building structure. Do not convert it into a normal perspective view. Do not crop, pad, add borders, labels, or watermarks.',
-    readPanoramaQualityInstruction(config.panoramaQuality),
-    readPanoramaChangeStrengthInstruction(config.panoramaChangeStrength),
-    readMeaningfulPrompt(config.buildingType) ? `Building type: ${config.buildingType}.` : undefined,
-    readMeaningfulPrompt(config.spaceType) ? `Space type: ${config.spaceType}.` : undefined,
-    readMeaningfulPrompt(config.renderStyle || config.style) ? `Rendering style: ${config.renderStyle || config.style}.` : undefined,
-    readMeaningfulPrompt(config.atmosphere || config.lighting) ? `Atmosphere: ${config.atmosphere || config.lighting}.` : undefined,
-    customPrompt ? `User note: ${customPrompt}.` : undefined,
-  ].filter((item): item is string => Boolean(item)).join(' ');
-}
-
-function readPanoramaQualityInstruction(quality: GenerationConfig['panoramaQuality']): string {
-  if (quality === 'standard') {
-    return 'Panorama quality: standard 2048x1024 minimum; maintain clean, sharp, photorealistic details without blur or low-resolution artifacts.';
-  }
-  return 'Panorama quality: high definition 4096x2048 target when available; produce crisp, ultra-detailed, high-resolution photorealistic output suitable for final architectural presentation.';
-}
-
-function readPanoramaChangeStrengthInstruction(strength: GenerationConfig['panoramaChangeStrength']): string {
-  if (strength === 'weak') {
-    return 'Change strength: weak. Preserve original elements, layout, structure, furniture positions, main composition, and spatial organization; avoid adding extra elements; focus on faithful rendering and subtle refinement.';
-  }
-  if (strength === 'strong') {
-    return 'Change strength: strong. Preserve the core spatial structure, proportions, camera position, and 360 continuity, but allow stronger creative enhancement, richer scene details, more expressive atmosphere, stronger material variation, decoration, and furnishing enrichment.';
-  }
-  return 'Change strength: medium. Preserve the original spatial layout, composition, core elements, furniture positions, and major design features largely intact. Moderately enhance materials, lighting, atmosphere, texture quality, and a small amount of detail, while avoiding excessive new objects or drastic scene changes.';
-}
-
-function readMeaningfulPrompt(value: unknown): string {
-  if (typeof value !== 'string') return '';
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  const normalized = trimmed.toLowerCase();
-  if (normalized === 'none' || normalized === 'null' || normalized === 'undefined') return '';
-  return trimmed;
 }
 
 function delay(ms: number): Promise<void> {

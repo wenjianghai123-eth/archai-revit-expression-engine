@@ -8,6 +8,7 @@ import {
   GenerationStep,
   PanoramaCapturePayload,
   PanoramaRecord,
+  SecondaryEditAction,
   StepState,
   UploadedImage,
 } from '../types';
@@ -24,6 +25,7 @@ import {
   resolvePreferredModelSource,
 } from './modelAssetUtils';
 import { PanoramaViewer } from './PanoramaViewer';
+import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 
 interface PanoramaQuickRenderPanelProps {
   state: StepState;
@@ -34,6 +36,7 @@ interface PanoramaQuickRenderPanelProps {
   onUpdateInputImage: (image: UploadedImage | null) => void;
   onGenerate: () => void;
   onHistoryRecord?: (record: GenerationHistoryItem) => void;
+  onSecondaryEditResult?: (resultId: string, action: SecondaryEditAction) => void;
 }
 
 interface PanoramaRenderResult {
@@ -59,10 +62,6 @@ const MAX_MODEL_SIZE_MB = 600;
 const MAX_MODEL_SIZE_BYTES = MAX_MODEL_SIZE_MB * 1024 * 1024;
 const PANORAMA_SLOT_INDICES = [1, 2, 3, 4] as const;
 const PANORAMA_SLOT_STORAGE_PREFIX = 'archai:panorama-quick-render-slots:v1';
-const buildingTypeOptions = ['住宅', '商业', '办公', '酒店', '展厅', '景观', '建筑外立面'];
-const spaceTypeOptions = ['客厅', '卧室', '大堂', '办公区', '展厅', '庭院', '外立面'];
-const renderStyleOptions = ['电影级写实', '现代极简', '自然木质', '轻奢', '侘寂', '工业风'];
-const atmosphereOptions = ['自然日光', '暖光', '高级灯光', '黄昏', '夜景', '清爽明亮'];
 const changeStrengthOptions = [
   { value: 'weak', label: '弱', desc: '忠实渲染 / 小幅优化' },
   { value: 'medium', label: '中等', desc: '材质、灯光、氛围适度增强' },
@@ -804,7 +803,7 @@ export function PanoramaQuickRenderPanel({
                     <button
                       key={option.value}
                       type="button"
-                      onClick={() => onUpdateConfig({ panoramaChangeStrength: option.value })}
+                      onClick={() => onUpdateConfig({ panoramaChangeStrength: option.value, changeStrength: option.value })}
                       className={`rounded-lg border px-2 py-2 text-left transition-colors ${panoramaChangeStrength === option.value ? 'border-blue-500 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
                     >
                       <span className="block text-sm font-bold">{option.label}</span>
@@ -838,12 +837,15 @@ export function PanoramaQuickRenderPanel({
                   ))}
                 </div>
               </div>
-              <SelectField label="建筑类型" value={config.buildingType || ''} options={buildingTypeOptions} emptyLabel="自动判断" onChange={value => onUpdateConfig({ buildingType: value })} />
-              <SelectField label="空间类型" value={config.spaceType || ''} options={spaceTypeOptions} emptyLabel="自动判断" onChange={value => onUpdateConfig({ spaceType: value })} />
-              <SelectField label="风格" value={config.renderStyle || ''} options={renderStyleOptions} emptyLabel="电影级写实" onChange={value => onUpdateConfig({ renderStyle: value })} />
-              <SelectField label="氛围" value={config.atmosphere || ''} options={atmosphereOptions} emptyLabel="自动匹配" onChange={value => onUpdateConfig({ atmosphere: value })} />
+              <SmartPromptAssistant
+                mode="panorama-roam-render"
+                config={config}
+                compact
+                fields={['buildingType', 'spaceType', 'renderStyle', 'smartMaterial', 'lighting']}
+                onUpdateConfig={onUpdateConfig}
+              />
               <label className="block text-xs font-bold text-slate-600">
-                补充提示词
+                额外补充要求
                 <textarea
                   value={config.customPrompt || ''}
                   onChange={event => onUpdateConfig({ customPrompt: event.target.value })}
@@ -970,30 +972,6 @@ function PanoramaShareCard({ shareUrl, qrCodeUrl }: { shareUrl: string; qrCodeUr
         </div>
       </div>
     </div>
-  );
-}
-
-function SelectField({
-  label,
-  value,
-  options,
-  emptyLabel,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: string[];
-  emptyLabel: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="block text-xs font-bold text-slate-600">
-      {label}
-      <select value={value} onChange={event => onChange(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800">
-        <option value="">{emptyLabel}</option>
-        {options.map(option => <option key={option} value={option}>{option}</option>)}
-      </select>
-    </label>
   );
 }
 

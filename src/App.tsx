@@ -3,14 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, lazy, useState, useCallback } from 'react';
+import React, { Suspense, lazy, useState, useCallback, useEffect } from 'react';
 import { Sidebar, Stepper } from './components/Navigation';
 import { HistoryView } from './components/HistoryView';
 import { SettingsModal } from './components/SettingsModal';
 import { LoginPage } from './components/LoginPage';
 import { CreativeHome } from './components/CreativeHome';
 import { ProjectList } from './components/ProjectList';
-import { GenerationStep, GenerationHistoryItem, StepState, UploadedImage } from './types';
+import { GenerationStep, GenerationHistoryItem, StepState, UploadedImage, SecondaryEditAction } from './types';
 import { PROMPT_TEMPLATES } from './constants';
 import {
   cancelGenerationJob,
@@ -24,6 +24,7 @@ import { useGenerationWorkflow } from './hooks/useGenerationWorkflow';
 import { useGenerationRunner } from './hooks/useGenerationRunner';
 import { useProjectSelection } from './hooks/useProjectSelection';
 import { clearGenerationHistory, deleteGenerationRecord, listGenerationRecords } from './storage/history';
+import { buildSecondaryEditConfigPatch } from './utils/secondaryEdit';
 import { motion, AnimatePresence } from 'motion/react';
 
 const MainWorkspace = lazy(() => import('./components/MainWorkspace').then(module => ({ default: module.MainWorkspace })));
@@ -71,6 +72,7 @@ export default function App() {
   } = useGenerationWorkflow(() => setActiveTab('generate'));
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<GenerationHistoryItem[]>(() => listGenerationRecords());
+  const [queuedSecondaryGenerationId, setQueuedSecondaryGenerationId] = useState<string | null>(null);
   const { backendHealth, refreshBackendHealth } = useBackendHealth(isSettingsOpen);
   const { creditBalance, creditError, refreshCreditBalance } = useCreditBalance(Boolean(currentUser));
   const panoramaShareId = readPanoramaShareId();
@@ -164,6 +166,12 @@ export default function App() {
     setHistoryItems,
   });
 
+  useEffect(() => {
+    if (!queuedSecondaryGenerationId) return;
+    setQueuedSecondaryGenerationId(null);
+    void handleGenerate();
+  }, [handleGenerate, queuedSecondaryGenerationId]);
+
   const handleCancelGeneration = useCallback(async () => {
     const jobId = stepStates[currentStep].generationJobId;
     if (!jobId) return;
@@ -176,7 +184,7 @@ export default function App() {
           ...prev[currentStep],
           isGenerating: false,
           generationStatus: 'error',
-          generationError: '生成任务已取消。',
+          generationError: job.creditRefunded ? '生成任务已取消。\n已退还算力点。' : '生成任务已取消。',
           generationJobStatus: job.status,
           generationJobDiagnostics: job.diagnostics || null,
           generationProgress: job.progress,
@@ -251,6 +259,79 @@ export default function App() {
 
     void updateGenerationResult(result.id, { metadata: { variantName } }).catch(() => undefined);
   }, [currentStep, stepStates]);
+
+  const handleSecondaryEditResult = useCallback((resultId: string, action: SecondaryEditAction) => {
+    const currentState = stepStates[currentStep];
+    const result = currentState.generationResults.find(item => item.id === resultId)
+      || (currentState.outputImage
+        ? {
+            id: currentState.generationResultId || resultId,
+            imageUrl: currentState.outputImage,
+            isSelected: true,
+            isFavorite: false,
+            createdAt: currentState.generationCreatedAt || undefined,
+          }
+        : null);
+
+    if (!result) return;
+
+    const label = result.variantName || result.variantLabel || '当前结果';
+    const imageUrl = result.imageUrl;
+    const nextInputImage: UploadedImage = {
+      id: `secondary-${result.id}-${Date.now()}`,
+      name: `${label}.png`,
+      type: readImageMimeType(imageUrl),
+      size: 0,
+      dataUrl: imageUrl,
+      url: imageUrl.startsWith('data:') ? undefined : imageUrl,
+      assetId: result.assetId,
+    };
+    const configPatch = buildSecondaryEditConfigPatch(currentStep, currentState.config, action);
+
+    setStepStates(prev => ({
+      ...prev,
+      [currentStep]: {
+        ...prev[currentStep],
+        inputImage: nextInputImage,
+        maskImage: null,
+        useFullImageMask: false,
+        config: {
+          ...prev[currentStep].config,
+          ...configPatch,
+          parentResultId: result.id,
+          parentJobId: result.jobId || prev[currentStep].generationJobId,
+          parentRecordId: prev[currentStep].generationResultId,
+          secondaryEditAction: action,
+        },
+        continuationSource: {
+          parentResultId: result.id,
+          parentJobId: result.jobId || prev[currentStep].generationJobId,
+          parentRecordId: prev[currentStep].generationResultId,
+          imageUrl,
+          assetId: result.assetId,
+          label,
+          action,
+          createdAt: new Date().toISOString(),
+        },
+        outputImage: null,
+        generationResults: [],
+        selectedGenerationResultId: null,
+        generationStatus: 'ready',
+        generationError: null,
+        generationWarnings: [],
+        generationProvider: null,
+        generationResultId: null,
+        generationCreatedAt: null,
+        generationJobId: null,
+        generationJobStatus: null,
+        generationJobDiagnostics: null,
+        generationProgress: 0,
+        generationLogs: [`secondary-edit: 已基于「${label}」创建二次编辑任务。`],
+        viewMode: 'original',
+      },
+    }));
+    setQueuedSecondaryGenerationId(`${result.id}:${action}:${Date.now()}`);
+  }, [currentStep, setStepStates, stepStates]);
 
   const handleSetViewMode = useCallback((viewMode: StepState['viewMode']) => {
     setStepStates(prev => ({
@@ -450,6 +531,7 @@ export default function App() {
                         onCancelGeneration={handleCancelGeneration}
                         onSelectGenerationResult={handleSelectGenerationResult}
                         onToggleGenerationFavorite={handleToggleGenerationFavorite}
+                        onSecondaryEditResult={handleSecondaryEditResult}
                         onRenameGenerationResult={handleRenameGenerationResult}
                         onSetViewMode={handleSetViewMode}
                         onNextStep={handleNextStep}
@@ -457,6 +539,7 @@ export default function App() {
                         onHistoryRecord={record => setHistoryItems(items => [record, ...items.filter(item => item.id !== record.id)])}
                         backendProvider={backendHealth.data?.provider || null}
                         isCreditsInsufficient={isCreditsInsufficient}
+                        estimatedCreditCost={estimatedCreditCost}
                       />
                     </Suspense>
                   </motion.div>
@@ -568,4 +651,14 @@ function buildHistoryInputImage(item: GenerationHistoryItem): UploadedImage | nu
     url: item.inputImageUrl,
     assetId: item.inputImageAssetId,
   };
+}
+
+function readImageMimeType(imageUrl: string): string {
+  const dataUrlMimeType = /^data:([^;,]+)/u.exec(imageUrl)?.[1];
+  if (dataUrlMimeType) return dataUrlMimeType;
+  const pathname = imageUrl.split('?')[0]?.toLowerCase() || '';
+  if (pathname.endsWith('.jpg') || pathname.endsWith('.jpeg')) return 'image/jpeg';
+  if (pathname.endsWith('.webp')) return 'image/webp';
+  if (pathname.endsWith('.svg')) return 'image/svg+xml';
+  return 'image/png';
 }

@@ -1,8 +1,9 @@
 import { Download, FileText, Heart, ImagePlus, LayoutGrid, Printer, Sparkles, Star } from 'lucide-react';
 import { type ReactNode, useState } from 'react';
 import { designVariantPacks, getDesignVariantPack } from '../constants/designVariantPacks';
-import { DesignVariantBatchCount, GenerationConfig, GenerationResultOption, StepState, UploadedImage, VariantStyleKey } from '../types';
+import { DesignVariantBatchCount, GenerationConfig, GenerationResultOption, SecondaryEditAction, StepState, UploadedImage, VariantStyleKey } from '../types';
 import { downloadDataUrl } from '../utils/download';
+import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 import { getDataUrlExtension } from './workspace/workspaceUtils';
 
 interface DesignVariantsPanelProps {
@@ -11,12 +12,14 @@ interface DesignVariantsPanelProps {
   selectedResultId: string | null;
   previewImage: string | null | undefined;
   uploadError: string | null;
+  estimatedCreditCost: number;
   onUploadInput: () => void;
   onUpdateInputImage: (image: UploadedImage | null) => void;
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
   onGenerate: () => void;
   onSelectGenerationResult: (resultId: string) => void;
   onToggleGenerationFavorite: (resultId: string) => void;
+  onSecondaryEditResult?: (resultId: string, action: SecondaryEditAction) => void;
   onRenameGenerationResult: (resultId: string, variantName: string) => void;
 }
 
@@ -60,12 +63,14 @@ export function DesignVariantsPanel({
   selectedResultId,
   previewImage,
   uploadError,
+  estimatedCreditCost,
   onUploadInput,
   onUpdateInputImage,
   onUpdateConfig,
   onGenerate,
   onSelectGenerationResult,
   onToggleGenerationFavorite,
+  onSecondaryEditResult,
   onRenameGenerationResult,
 }: DesignVariantsPanelProps) {
   const [exportMode, setExportMode] = useState<'compare' | 'report' | null>(null);
@@ -132,6 +137,9 @@ export function DesignVariantsPanel({
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            <span className="inline-flex items-center rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600">
+              本次预计 {estimatedCreditCost} 算力点
+            </span>
             <button type="button" onClick={() => setExportMode('compare')} disabled={resultOptions.length === 0} className="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 disabled:opacity-50">
               <Printer className="h-4 w-4" />
               导出对比页
@@ -179,6 +187,14 @@ export function DesignVariantsPanel({
               <SegmentedButton active={variantStrategy === 'same-style'} onClick={() => onUpdateConfig({ variantStrategy: 'same-style' })} label="同一风格多方案" />
             </ControlGroup>
 
+            <SmartPromptAssistant
+              mode="design-variants"
+              config={state.config}
+              compact
+              fields={['buildingType', 'spaceType', 'smartMaterial', 'lighting', 'changeStrength']}
+              onUpdateConfig={onUpdateConfig}
+            />
+
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <p className="text-xs font-bold text-slate-500">风格包</p>
               <div className="mt-3 grid gap-2">
@@ -193,8 +209,8 @@ export function DesignVariantsPanel({
             </div>
 
             <label className="block rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <span className="text-xs font-bold text-slate-500">自定义补充</span>
-              <textarea value={state.config.customPrompt || ''} onChange={event => onUpdateConfig({ customPrompt: event.currentTarget.value, prompt: event.currentTarget.value })} placeholder="可选，例如：保留原始结构和相机角度，强化自然采光。" className="mt-3 h-24 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-blue-300" />
+              <span className="text-xs font-bold text-slate-500">额外补充要求</span>
+              <textarea value={state.config.customPrompt || ''} onChange={event => onUpdateConfig({ customPrompt: event.currentTarget.value })} placeholder="可选，例如：保留原始结构和相机角度，强化自然采光。" className="mt-3 h-24 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-blue-300" />
             </label>
           </aside>
 
@@ -224,7 +240,7 @@ export function DesignVariantsPanel({
 
             <div className={`grid gap-3 ${batchCount === 2 ? 'lg:grid-cols-2' : batchCount === 8 ? 'md:grid-cols-2 2xl:grid-cols-4' : 'lg:grid-cols-2'}`}>
               {resultOptions.length > 0 ? resultOptions.map((result, index) => (
-                <VariantCard key={result.id} result={result} index={index} active={result.id === selectedResultId || result.isSelected} style={selectedStyles[index]} fallbackName={variantNames[index]} onSelect={() => onSelectGenerationResult(result.id)} onFavorite={() => onToggleGenerationFavorite(result.id)} onRename={name => handleResultNameChange(result, index, name)} />
+                <VariantCard key={result.id} result={result} index={index} active={result.id === selectedResultId || result.isSelected} style={selectedStyles[index]} fallbackName={variantNames[index]} onSelect={() => onSelectGenerationResult(result.id)} onFavorite={() => onToggleGenerationFavorite(result.id)} onContinueEdit={() => onSecondaryEditResult?.(result.id, 'continue-edit')} onRename={name => handleResultNameChange(result, index, name)} />
               )) : Array.from({ length: batchCount }).map((_, index) => (
                 <PlaceholderCard key={index} index={index} style={selectedStyles[index]} name={variantNames[index]} onNameChange={name => handleConfigNameChange(index, name)} onStyleChange={style => handleStyleChange(index, style)} />
               ))}
@@ -249,7 +265,7 @@ function PlaceholderCard({ index, style, name, onNameChange, onStyleChange }: { 
   );
 }
 
-function VariantCard({ result, index, active, style, fallbackName, onSelect, onFavorite, onRename }: { result: GenerationResultOption; index: number; active: boolean; style: VariantStyleKey | undefined; fallbackName: string; onSelect: () => void; onFavorite: () => void; onRename: (name: string) => void }) {
+function VariantCard({ result, index, active, style, fallbackName, onSelect, onFavorite, onContinueEdit, onRename }: { result: GenerationResultOption; index: number; active: boolean; style: VariantStyleKey | undefined; fallbackName: string; onSelect: () => void; onFavorite: () => void; onContinueEdit: () => void; onRename: (name: string) => void }) {
   const label = result.variantName || result.variantLabel || fallbackName || readVariantLabel(index);
   const styleLabel = result.variantStyleLabel || readVariantStyleLabel(result.variantStyle || style);
   return (
@@ -275,7 +291,7 @@ function VariantCard({ result, index, active, style, fallbackName, onSelect, onF
           <button type="button" onClick={onFavorite} className="rounded-md bg-slate-100 px-2 py-2 text-xs font-bold text-slate-700">收藏</button>
           <button type="button" onClick={() => downloadDataUrl(result.imageUrl, `${label}-${Date.now()}.${getDataUrlExtension(result.imageUrl)}`)} className="rounded-md bg-slate-100 px-2 py-2 text-xs font-bold text-slate-700">下载</button>
         </div>
-        <button type="button" onClick={onSelect} className="inline-flex items-center gap-1 text-xs font-bold text-blue-700"><Star className="h-3.5 w-3.5" />继续编辑</button>
+        <button type="button" onClick={onContinueEdit} className="inline-flex items-center gap-1 text-xs font-bold text-blue-700"><Star className="h-3.5 w-3.5" />继续编辑</button>
       </div>
     </article>
   );

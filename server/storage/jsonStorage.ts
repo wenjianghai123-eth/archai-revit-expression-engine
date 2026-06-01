@@ -496,6 +496,7 @@ async function createGenerationJob(input: {
   config: Record<string, unknown>;
   inputAssetIds: string[];
   provider: string;
+  creditCost?: number;
 }): Promise<GenerationJob | null> {
   const db = await readDatabase();
   const project = db.projects.find(item => item.id === input.projectId && item.userId === input.userId && !item.deletedAt);
@@ -523,6 +524,9 @@ async function createGenerationJob(input: {
     updatedAt: now,
     startedAt: null,
     finishedAt: null,
+    creditCost: input.creditCost ?? 0,
+    creditRefunded: false,
+    failureReason: null,
     diagnostics: {
       phase: 'queued',
       timing: { jobCreatedAt: now },
@@ -565,6 +569,9 @@ async function updateGenerationJob(
   if (input.errorMessage !== undefined) job.errorMessage = input.errorMessage;
   if (input.startedAt !== undefined) job.startedAt = input.startedAt;
   if (input.finishedAt !== undefined) job.finishedAt = input.finishedAt;
+  if (input.creditCost !== undefined) job.creditCost = input.creditCost;
+  if (input.creditRefunded !== undefined) job.creditRefunded = input.creditRefunded;
+  if (input.failureReason !== undefined) job.failureReason = input.failureReason;
   if (input.diagnostics !== undefined) job.diagnostics = input.diagnostics;
   job.updatedAt = new Date().toISOString();
 
@@ -580,13 +587,14 @@ async function cancelGenerationJob(id: string, userId?: string): Promise<Generat
     return null;
   }
 
-  if (job.status === 'succeeded' || job.status === 'failed' || job.status === 'cancelled') {
+  if (job.status === 'succeeded' || job.status === 'failed' || job.status === 'cancelled' || job.status === 'timeout') {
     return job;
   }
 
   const now = new Date().toISOString();
   job.status = 'cancelled';
   job.progress = Math.min(job.progress, 99);
+  job.failureReason = 'cancelled';
   job.updatedAt = now;
   job.finishedAt = now;
   await writeDatabase(db);
@@ -844,7 +852,7 @@ function ensureCreditBalance(db: AppDatabase, userId: string): CreditBalance {
     db.creditTransactions.unshift({
       id: `credit_tx_${randomUUID()}`,
       userId,
-      type: 'grant',
+      type: 'admin_grant',
       amount: initialCredits,
       balanceAfter: initialCredits,
       reason: 'Development user initial credits',
@@ -871,7 +879,7 @@ async function getAdminDashboard(): Promise<AdminDashboard> {
 
   const recentJobs = [...db.generationJobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 20);
   const recentErrorJobs = db.generationJobs
-    .filter(job => job.status === 'failed')
+    .filter(job => job.status === 'failed' || job.status === 'timeout')
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .slice(0, 20);
 
@@ -881,10 +889,12 @@ async function getAdminDashboard(): Promise<AdminDashboard> {
       projectCount: db.projects.filter(project => !project.deletedAt).length,
       generationJobCount: db.generationJobs.length,
       succeededJobCount: db.generationJobs.filter(job => job.status === 'succeeded').length,
-      failedJobCount: db.generationJobs.filter(job => job.status === 'failed').length,
-      totalCreditsConsumed: db.creditTransactions
-        .filter(transaction => transaction.type === 'debit')
-        .reduce((total, transaction) => total + Math.abs(transaction.amount), 0),
+      failedJobCount: db.generationJobs.filter(job => job.status === 'failed' || job.status === 'timeout').length,
+      totalCreditsConsumed: db.creditTransactions.reduce((total, transaction) => {
+        if (transaction.type === 'generate_charge' || transaction.type === 'debit') return total + Math.abs(transaction.amount);
+        if (transaction.type === 'generate_refund' || transaction.type === 'refund') return total - Math.abs(transaction.amount);
+        return total;
+      }, 0),
     },
     recentJobs,
     recentErrorJobs,
@@ -902,7 +912,7 @@ async function readDatabase(): Promise<AppDatabase> {
     projects: normalizeUserScopedItems(Array.isArray(parsed.projects) ? parsed.projects : []),
     generationRecords: normalizeUserScopedItems(Array.isArray(parsed.generationRecords) ? parsed.generationRecords : []),
     generationResults: normalizeUserScopedItems(Array.isArray(parsed.generationResults) ? parsed.generationResults : []),
-    generationJobs: normalizeUserScopedItems(Array.isArray(parsed.generationJobs) ? parsed.generationJobs : []),
+    generationJobs: normalizeGenerationJobs(normalizeUserScopedItems(Array.isArray(parsed.generationJobs) ? parsed.generationJobs : [])),
     imageAssets: normalizeUserScopedItems(Array.isArray(parsed.imageAssets) ? parsed.imageAssets : []),
     modelAssets: normalizeUserScopedItems(Array.isArray(parsed.modelAssets) ? parsed.modelAssets : []),
     shareLinks: Array.isArray(parsed.shareLinks) ? parsed.shareLinks : [],
@@ -913,6 +923,15 @@ async function readDatabase(): Promise<AppDatabase> {
 
 function normalizeUserScopedItems<T extends { userId?: string }>(items: T[]): Array<T & { userId: string }> {
   return items.map(item => ({ ...item, userId: item.userId || DEV_AUTH_USER_ID }));
+}
+
+function normalizeGenerationJobs(jobs: Array<GenerationJob & { userId: string }>): Array<GenerationJob & { userId: string }> {
+  return jobs.map(job => ({
+    ...job,
+    creditCost: typeof job.creditCost === 'number' ? job.creditCost : 0,
+    creditRefunded: typeof job.creditRefunded === 'boolean' ? job.creditRefunded : false,
+    failureReason: typeof job.failureReason === 'string' ? job.failureReason : null,
+  }));
 }
 
 async function writeDatabase(db: AppDatabase): Promise<void> {
