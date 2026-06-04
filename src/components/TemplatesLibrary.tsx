@@ -49,6 +49,7 @@ function readRecentUsage(): Record<string, string> {
 function featureLabel(feature: PromptTemplate['feature']): string {
   if (feature === 'floorplan') return '平面彩平';
   if (feature === 'style-render') return '风格渲染';
+  if (feature === 'object-insert') return '元素植入';
   return '局部修饰';
 }
 

@@ -47,6 +47,7 @@ type GenerationRecordRow = {
   project_id: string;
   job_id: string | null;
   mode: GenerationRecord['mode'];
+  step?: GenerationRecord['step'];
   prompt: string;
   input_image_url: string | null;
   input_image_data_preview: string | null;
@@ -63,6 +64,7 @@ type GenerationJobRow = {
   user_id: string;
   project_id: string;
   mode: GenerationJob['mode'];
+  step?: GenerationJob['step'];
   prompt: string;
   config: Record<string, unknown>;
   input_asset_ids: string[];
@@ -393,6 +395,7 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       project_id: input.projectId,
       job_id: input.jobId ?? null,
       mode: input.mode,
+      step: input.step ?? null,
       prompt: input.prompt,
       input_image_url: input.inputImageUrl ?? null,
       input_image_data_preview: input.inputImageDataPreview ?? null,
@@ -496,14 +499,17 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     if (!project) return null;
 
     const now = new Date().toISOString();
+    const step = input.step ?? readGenerationJobStep(input.config) ?? null;
     const row: GenerationJobRow = {
       id: `job_${randomUUID()}`,
       user_id: input.userId,
       project_id: input.projectId,
       mode: input.mode,
+      step,
       prompt: input.prompt,
       config: {
         ...input.config,
+        ...(step && input.config.step === undefined ? { step } : {}),
         __diagnostics: {
           phase: 'queued',
           timing: { jobCreatedAt: now },
@@ -887,6 +893,7 @@ function mapGenerationRecordRow(row: GenerationRecordRow): GenerationRecord {
     projectId: row.project_id,
     jobId: row.job_id,
     mode: row.mode,
+    step: row.step ?? null,
     prompt: row.prompt,
     inputImageUrl: row.input_image_url,
     inputImageDataPreview: row.input_image_data_preview,
@@ -906,6 +913,7 @@ function mapGenerationJobRow(row: GenerationJobRow): GenerationJob {
     userId: row.user_id,
     projectId: row.project_id,
     mode: row.mode,
+    step: row.step ?? readGenerationJobStep(row.config) ?? null,
     prompt: row.prompt,
     config: row.config,
     inputAssetIds: row.input_asset_ids,
@@ -947,6 +955,24 @@ function readBooleanFromConfig(config: Record<string, unknown>, key: string): bo
 function readStringFromConfig(config: Record<string, unknown>, key: string): string | undefined {
   const value = config[key];
   return typeof value === 'string' ? value : undefined;
+}
+
+function readGenerationJobStep(config: Record<string, unknown> | undefined): GenerationJob['step'] {
+  const value = config?.step;
+  if (isGenerationJobStep(value)) return value;
+  return isRecord(config?.objectInsert) ? 'object_insert' : null;
+}
+
+function isGenerationJobStep(value: unknown): value is NonNullable<GenerationJob['step']> {
+  return value === 'floorplan_to_3d'
+    || value === 'style_render'
+    || value === 'local_inpainting'
+    || value === 'model_snapshot_render'
+    || value === 'design_variants'
+    || value === 'material_replace'
+    || value === 'plan_colorize'
+    || value === 'panorama_quick_render'
+    || value === 'object_insert';
 }
 
 function mapGenerationResultRow(row: GenerationResultRow): GenerationResult {

@@ -361,6 +361,7 @@ async function createGenerationRecord(input: {
   projectId: string;
   jobId?: string | null;
   mode: GenerationRecord['mode'];
+  step?: GenerationRecord['step'];
   prompt: string;
   inputImageUrl?: string | null;
   inputImageDataPreview?: string | null;
@@ -386,6 +387,7 @@ async function createGenerationRecord(input: {
     projectId: input.projectId,
     jobId: input.jobId ?? null,
     mode: input.mode,
+    step: input.step ?? null,
     prompt: input.prompt,
     inputImageUrl: input.inputImageUrl ?? null,
     inputImageDataPreview: input.inputImageDataPreview ?? null,
@@ -492,6 +494,7 @@ async function createGenerationJob(input: {
   userId: string;
   projectId: string;
   mode: GenerationJob['mode'];
+  step?: GenerationJob['step'];
   prompt: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];
@@ -506,13 +509,15 @@ async function createGenerationJob(input: {
   }
 
   const now = new Date().toISOString();
+  const step = input.step ?? readGenerationJobStep(input.config) ?? null;
   const job: GenerationJob = {
     id: `job_${randomUUID()}`,
     userId: input.userId,
     projectId: input.projectId,
     mode: input.mode,
+    step,
     prompt: input.prompt,
-    config: input.config,
+    config: step && input.config.step === undefined ? { ...input.config, step } : input.config,
     inputAssetIds: input.inputAssetIds,
     status: 'queued',
     progress: 0,
@@ -928,10 +933,31 @@ function normalizeUserScopedItems<T extends { userId?: string }>(items: T[]): Ar
 function normalizeGenerationJobs(jobs: Array<GenerationJob & { userId: string }>): Array<GenerationJob & { userId: string }> {
   return jobs.map(job => ({
     ...job,
+    step: job.step ?? readGenerationJobStep(job.config) ?? null,
     creditCost: typeof job.creditCost === 'number' ? job.creditCost : 0,
     creditRefunded: typeof job.creditRefunded === 'boolean' ? job.creditRefunded : false,
     failureReason: typeof job.failureReason === 'string' ? job.failureReason : null,
   }));
+}
+
+function readGenerationJobStep(config: Record<string, unknown> | undefined): GenerationJob['step'] {
+  const value = config?.step;
+  if (isGenerationJobStep(value)) return value;
+  return typeof config?.objectInsert === 'object' && config.objectInsert !== null && !Array.isArray(config.objectInsert)
+    ? 'object_insert'
+    : null;
+}
+
+function isGenerationJobStep(value: unknown): value is NonNullable<GenerationJob['step']> {
+  return value === 'floorplan_to_3d'
+    || value === 'style_render'
+    || value === 'local_inpainting'
+    || value === 'model_snapshot_render'
+    || value === 'design_variants'
+    || value === 'material_replace'
+    || value === 'plan_colorize'
+    || value === 'panorama_quick_render'
+    || value === 'object_insert';
 }
 
 async function writeDatabase(db: AppDatabase): Promise<void> {

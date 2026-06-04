@@ -44,6 +44,19 @@ interface PanoramaRenderResult {
   renderedAt: string;
 }
 
+type PanoramaReferenceType = 'revit_screenshot' | 'floor_plan' | 'material_reference' | 'style_reference' | 'render_reference';
+
+interface PanoramaReferenceImage {
+  id: string;
+  assetId: string;
+  name: string;
+  type: string;
+  size: number;
+  url: string;
+  referenceType: PanoramaReferenceType;
+  uploadedAt: string;
+}
+
 interface PanoramaCaptureSlot {
   slotIndex: number;
   title: string;
@@ -54,6 +67,9 @@ interface PanoramaCaptureSlot {
   projectId?: string | null;
   createdAt: string;
   updatedAt: string;
+  referenceAssetIds?: string[];
+  referenceTypes?: PanoramaReferenceType[];
+  referenceImages?: PanoramaReferenceImage[];
   renderResult?: PanoramaRenderResult;
 }
 
@@ -62,6 +78,19 @@ const MAX_MODEL_SIZE_MB = 600;
 const MAX_MODEL_SIZE_BYTES = MAX_MODEL_SIZE_MB * 1024 * 1024;
 const PANORAMA_SLOT_INDICES = [1, 2, 3, 4] as const;
 const PANORAMA_SLOT_STORAGE_PREFIX = 'archai:panorama-quick-render-slots:v1';
+const MAX_PANORAMA_REFERENCE_IMAGES = 6;
+const referenceTypeOptions: Array<{ value: PanoramaReferenceType; label: string }> = [
+  { value: 'revit_screenshot', label: 'Revit 截图' },
+  { value: 'floor_plan', label: '平面图' },
+  { value: 'material_reference', label: '材质图' },
+  { value: 'style_reference', label: '风格图' },
+  { value: 'render_reference', label: '效果图' },
+];
+const panoramaReferenceStrengthOptions: Array<{ value: 'low' | 'medium' | 'high'; label: string }> = [
+  { value: 'low', label: '低' },
+  { value: 'medium', label: '中' },
+  { value: 'high', label: '高' },
+];
 const changeStrengthOptions = [
   { value: 'weak', label: '弱', desc: '忠实渲染 / 小幅优化' },
   { value: 'medium', label: '中等', desc: '材质、灯光、氛围适度增强' },
@@ -83,11 +112,14 @@ export function PanoramaQuickRenderPanel({
   onHistoryRecord,
 }: PanoramaQuickRenderPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const referenceFileInputRef = useRef<HTMLInputElement>(null);
   const viewerRef = useRef<ModelViewerHandle>(null);
   const [model, setModel] = useState<AssetModel | null>(null);
   const [models, setModels] = useState<AssetModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isUploadingReferences, setIsUploadingReferences] = useState(false);
+  const [referenceImages, setReferenceImages] = useState<PanoramaReferenceImage[]>([]);
   const [isCapturing, setIsCapturing] = useState(false);
   const [panoramaRecord, setPanoramaRecord] = useState<PanoramaRecord | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -101,10 +133,14 @@ export function PanoramaQuickRenderPanel({
   const [batchQueue, setBatchQueue] = useState<number[]>([]);
   const [batchActiveSlotIndex, setBatchActiveSlotIndex] = useState<number | null>(null);
   const [isBatchRendering, setIsBatchRendering] = useState(false);
+  const [pendingRenderSlotIndex, setPendingRenderSlotIndex] = useState<number | null>(null);
+  const [pendingRenderAssetId, setPendingRenderAssetId] = useState('');
+  const [pendingRenderRequestId, setPendingRenderRequestId] = useState('');
   const [slotsStorageKey, setSlotsStorageKey] = useState('');
   const lastHandledOutputRef = useRef<string>('');
 
   const activeSlot = slots.find(slot => slot.slotIndex === activeSlotIndex) || null;
+  const activeRenderSlot = activeSlot || slots.find(item => item.slotIndex === captureSlotIndex) || null;
   const currentRawPanoramaUrl = activeSlot?.rawImage.url || activeSlot?.rawImage.dataUrl || panoramaRecord?.panoramaUrl || state.inputImage?.url || state.inputImage?.dataUrl || '';
   const currentRenderedPanoramaUrl = activeSlot?.renderResult?.imageUrl || panoramaRecord?.renderedPanoramaUrl || '';
   const panoramaUrl = panoramaPreviewKind === 'rendered' ? currentRenderedPanoramaUrl : currentRawPanoramaUrl;
@@ -129,39 +165,130 @@ export function PanoramaQuickRenderPanel({
   const canCapturePanorama = Boolean(model?.previewable && preferredModelSource?.url);
   const panoramaChangeStrength = config.panoramaChangeStrength || 'medium';
   const panoramaQuality = config.panoramaQuality || 'high';
+  const panoramaReferenceStrength = config.panoramaReferenceStrength || 'medium';
+  const providerSupportsReferences = providerSupportsPanoramaReferences(provider);
+  const referenceUsageText = `当前使用 ${getSlotRawAssetId(activeSlot) || state.inputImage?.assetId || state.inputImage?.id ? 1 : 0} 张全景图 + ${referenceImages.length} 张参考图`;
+  const renderButtonDisabledReason = getRenderButtonDisabledReason({
+    projectId,
+    slot: activeRenderSlot,
+    isGenerating: state.isGenerating,
+    isBatchRendering,
+    isPreparing: Boolean(pendingRenderAssetId),
+  });
+  const batchRenderButtonDisabledReason = getBatchRenderButtonDisabledReason({
+    projectId,
+    slots: renderableSelectedSlots,
+    isGenerating: state.isGenerating,
+    isBatchRendering,
+    isPreparing: Boolean(pendingRenderAssetId),
+  });
 
-  const applySlotAsCurrent = useCallback((slot: PanoramaCaptureSlot, nextPreviewKind: 'raw' | 'rendered' = 'raw') => {
+  const syncReferenceImages = useCallback((nextReferenceImages: PanoramaReferenceImage[]) => {
+    const limitedReferences = normalizePanoramaReferenceImages(nextReferenceImages);
+    setReferenceImages(limitedReferences);
+
+    const sourceAssetId = getSlotRawAssetId(activeSlot) || state.inputImage?.assetId || state.inputImage?.id;
+    if (activeSlot) {
+      setSlots(previous => previous.map(slot => {
+        if (slot.slotIndex !== activeSlot.slotIndex) return slot;
+        return {
+          ...slot,
+          referenceAssetIds: readReferenceAssetIds(limitedReferences),
+          referenceTypes: readReferenceTypes(limitedReferences),
+          referenceImages: limitedReferences,
+          updatedAt: new Date().toISOString(),
+        };
+      }));
+    }
+
+    onUpdateConfig(buildPanoramaReferenceConfig(sourceAssetId, limitedReferences, panoramaReferenceStrength));
+  }, [activeSlot, onUpdateConfig, panoramaReferenceStrength, state.inputImage?.assetId, state.inputImage?.id]);
+
+  const applySlotAsCurrent = useCallback((slot: PanoramaCaptureSlot, nextPreviewKind: 'raw' | 'rendered' = 'raw', nextReferenceImages?: PanoramaReferenceImage[]) => {
+    const slotReferences = normalizePanoramaReferenceImages(nextReferenceImages ?? slot.referenceImages ?? []);
+    const sourceAssetId = getSlotRawAssetId(slot);
+    const normalizedRawImage = normalizeSlotRawImage(slot);
     setActiveSlotIndex(slot.slotIndex);
     setCaptureSlotIndex(slot.slotIndex);
     setPanoramaRecord(slot.panoramaRecord);
+    setReferenceImages(slotReferences);
     setPrimaryPreviewTab('panorama');
     setPanoramaPreviewKind(nextPreviewKind === 'rendered' && slot.renderResult ? 'rendered' : 'raw');
-    onUpdateInputImage(slot.rawImage);
+    onUpdateInputImage(normalizedRawImage);
     onUpdateConfig({
       sourceModelAssetId: slot.modelId,
-      sourceImageAssetId: slot.rawImage.assetId || slot.rawImage.id,
-      panoramaAssetId: slot.rawImage.assetId || slot.rawImage.id,
-      targetWidth: slot.rawImage.width,
-      targetHeight: slot.rawImage.height,
+      sourceImageAssetId: sourceAssetId,
+      panoramaAssetId: sourceAssetId,
+      targetWidth: normalizedRawImage.width,
+      targetHeight: normalizedRawImage.height,
       targetAspectRatio: '2:1',
       qualityMode: 'high',
       panoramaQuality: slot.capture.panoramaQuality || panoramaQuality,
       panoramaChangeStrength,
       panoramaCapture: slot.capture,
+      ...buildPanoramaReferenceConfig(sourceAssetId, slotReferences, panoramaReferenceStrength),
     });
-  }, [onUpdateConfig, onUpdateInputImage, panoramaChangeStrength, panoramaQuality]);
+  }, [onUpdateConfig, onUpdateInputImage, panoramaChangeStrength, panoramaQuality, panoramaReferenceStrength]);
 
   const submitSlotForGeneration = useCallback((slotIndex: number): boolean => {
     const slot = slots.find(item => item.slotIndex === slotIndex);
-    if (!slot) {
-      setMessage('请先保存该位置的渲染前全景图。');
+    const disabledReason = getRenderButtonDisabledReason({
+      projectId,
+      slot,
+      isGenerating: state.isGenerating,
+      isBatchRendering: false,
+      isPreparing: false,
+    });
+    if (disabledReason) {
+      setMessage(disabledReason);
+      return false;
+    }
+    if (!slot) return false;
+
+    const sourceAssetId = getSlotRawAssetId(slot);
+    if (!sourceAssetId) {
+      setMessage('当前全景图缺少 assetId，无法创建 AI 生成任务。请重新截图生成全景图。');
       return false;
     }
 
-    applySlotAsCurrent(slot, 'raw');
-    window.setTimeout(() => onGenerate(), 0);
+    const slotReferences = normalizePanoramaReferenceImages(slot.referenceImages?.length ? slot.referenceImages : referenceImages);
+    if (slotReferences.length > 0 && !providerSupportsReferences) {
+      setMessage('当前 provider 不支持参考图增强。请切换到 Gemini、GRS Banana2/Nano Banana 或移除参考图后再渲染。');
+      return false;
+    }
+
+    const missingAssetReference = slotReferences.find(reference => !reference.assetId);
+    if (missingAssetReference) {
+      setMessage(`参考图「${missingAssetReference.name || '未命名'}」缺少 assetId，请重新上传该参考图。`);
+      return false;
+    }
+
+    const updatedSlot: PanoramaCaptureSlot = {
+      ...slot,
+      rawImage: normalizeSlotRawImage(slot),
+      referenceAssetIds: readReferenceAssetIds(slotReferences),
+      referenceTypes: readReferenceTypes(slotReferences),
+      referenceImages: slotReferences,
+      updatedAt: new Date().toISOString(),
+    };
+    const requestId = createRenderRequestId();
+    setSlots(previous => upsertPanoramaSlot(previous, updatedSlot));
+    applySlotAsCurrent(updatedSlot, 'raw', slotReferences);
+    setPendingRenderSlotIndex(updatedSlot.slotIndex);
+    setPendingRenderAssetId(sourceAssetId);
+    setPendingRenderRequestId(requestId);
+    setMessage('正在准备 AI 渲染任务...');
+    debugPanoramaRender('queue render', {
+      slotIndex,
+      rawImageAssetId: slot.rawImage.assetId,
+      rawImageId: slot.rawImage.id,
+      pendingRenderAssetId: sourceAssetId,
+      stateInputAssetId: state.inputImage?.assetId,
+      configPanoramaAssetId: config.panoramaAssetId,
+      requestId,
+    });
     return true;
-  }, [applySlotAsCurrent, onGenerate, slots]);
+  }, [applySlotAsCurrent, config.panoramaAssetId, projectId, providerSupportsReferences, referenceImages, slots, state.inputImage?.assetId, state.isGenerating]);
 
   useEffect(() => {
     setIsLoadingModels(true);
@@ -182,6 +309,7 @@ export function PanoramaQuickRenderPanel({
       setActiveSlotIndex(1);
       setCaptureSlotIndex(1);
       setSelectedSlotIndices([]);
+      setReferenceImages([]);
       return;
     }
 
@@ -194,6 +322,7 @@ export function PanoramaQuickRenderPanel({
     setCaptureSlotIndex(nextActiveIndex);
     setSelectedSlotIndices(storedSlots[0] ? [storedSlots[0].slotIndex] : []);
     setPanoramaRecord(storedSlots[0]?.panoramaRecord || null);
+    setReferenceImages(storedSlots[0]?.referenceImages || []);
     setPanoramaPreviewKind('raw');
   }, [model?.id, projectId]);
 
@@ -202,6 +331,70 @@ export function PanoramaQuickRenderPanel({
     if (slotsStorageKey !== getPanoramaSlotStorageKey(projectId, model.id)) return;
     writeStoredPanoramaSlots(slotsStorageKey, slots);
   }, [model?.id, projectId, slots, slotsStorageKey]);
+
+  useEffect(() => {
+    if (!pendingRenderAssetId || !pendingRenderRequestId) return;
+    const stateInputAssetId = state.inputImage?.assetId || '';
+    const stateInputId = state.inputImage?.id || '';
+    const configPanoramaAssetId = config.panoramaAssetId || config.sourceImageAssetId || '';
+    const isSynced = stateInputAssetId === pendingRenderAssetId
+      || stateInputId === pendingRenderAssetId
+      || configPanoramaAssetId === pendingRenderAssetId;
+
+    debugPanoramaRender('pending sync check', {
+      pendingRenderSlotIndex,
+      pendingRenderAssetId,
+      pendingRenderRequestId,
+      stateInputAssetId,
+      stateInputId,
+      configPanoramaAssetId,
+      isGenerating: state.isGenerating,
+      isSynced,
+      willCallGenerate: isSynced && !state.isGenerating,
+    });
+
+    if (!isSynced || state.isGenerating) return;
+
+    setPendingRenderSlotIndex(null);
+    setPendingRenderAssetId('');
+    setPendingRenderRequestId('');
+    setMessage('正在创建 AI 生成任务...');
+    debugPanoramaRender('call onGenerate', {
+      pendingRenderSlotIndex,
+      pendingRenderAssetId,
+      stateInputAssetId,
+      configPanoramaAssetId,
+      willCallGenerate: true,
+    });
+    onGenerate();
+  }, [
+    config.panoramaAssetId,
+    config.sourceImageAssetId,
+    onGenerate,
+    pendingRenderAssetId,
+    pendingRenderRequestId,
+    pendingRenderSlotIndex,
+    state.inputImage?.assetId,
+    state.inputImage?.id,
+    state.isGenerating,
+  ]);
+
+  useEffect(() => {
+    if (state.generationStatus !== 'error') return;
+    if (!pendingRenderAssetId && !isBatchRendering && batchActiveSlotIndex === null) return;
+    setPendingRenderSlotIndex(null);
+    setPendingRenderAssetId('');
+    setPendingRenderRequestId('');
+    setBatchQueue([]);
+    setIsBatchRendering(false);
+    setBatchActiveSlotIndex(null);
+    setMessage(state.generationError || 'AI 全景渲染失败，请查看下方错误信息。');
+    debugPanoramaRender('render failed, stop pending/batch', {
+      generationError: state.generationError,
+      generationStatus: state.generationStatus,
+      generationProgress: state.generationProgress,
+    });
+  }, [batchActiveSlotIndex, isBatchRendering, pendingRenderAssetId, state.generationError, state.generationProgress, state.generationStatus]);
 
   useEffect(() => {
     if (!state.outputImage || state.outputImage === lastHandledOutputRef.current) return;
@@ -238,20 +431,21 @@ export function PanoramaQuickRenderPanel({
     setPanoramaPreviewKind('rendered');
 
     if (batchActiveSlotIndex !== null) {
-      setBatchQueue(previous => {
-        const [nextSlotIndex, ...remaining] = previous;
-        if (nextSlotIndex) {
-          window.setTimeout(() => submitSlotForGeneration(nextSlotIndex), 250);
-        } else {
-          window.setTimeout(() => {
-            setIsBatchRendering(false);
-            setBatchActiveSlotIndex(null);
-          }, 0);
+      const [nextSlotIndex, ...remaining] = batchQueue;
+      setBatchQueue(remaining);
+      if (nextSlotIndex) {
+        setBatchActiveSlotIndex(nextSlotIndex);
+        if (!submitSlotForGeneration(nextSlotIndex)) {
+          setIsBatchRendering(false);
+          setBatchActiveSlotIndex(null);
+          setBatchQueue([]);
         }
-        return remaining;
-      });
+      } else {
+        setIsBatchRendering(false);
+        setBatchActiveSlotIndex(null);
+      }
     }
-  }, [activeSlotIndex, batchActiveSlotIndex, slots, state.outputImage, submitSlotForGeneration]);
+  }, [activeSlotIndex, batchActiveSlotIndex, batchQueue, slots, state.outputImage, submitSlotForGeneration]);
 
   const handleModelUpload = async (fileList: FileList | null) => {
     const file = fileList?.[0];
@@ -276,6 +470,7 @@ export function PanoramaQuickRenderPanel({
       setModels(previous => [nextModel, ...previous.filter(item => item.id !== nextModel.id)]);
       setModel(nextModel);
       setPanoramaRecord(null);
+      setReferenceImages([]);
       setPrimaryPreviewTab('model');
       onUpdateInputImage(null);
       const captureSize = getPanoramaCaptureSize(panoramaQuality);
@@ -289,6 +484,7 @@ export function PanoramaQuickRenderPanel({
         targetWidth: captureSize.width,
         targetHeight: captureSize.height,
         targetAspectRatio: '2:1',
+        ...buildPanoramaReferenceConfig(undefined, [], panoramaReferenceStrength),
       });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '模型上传失败，请重试。');
@@ -386,6 +582,7 @@ export function PanoramaQuickRenderPanel({
           panoramaQuality: actualPanoramaQuality,
           panoramaChangeStrength,
           panoramaCapture: payload,
+          ...buildPanoramaReferenceConfig(imageAsset.id, referenceImages, panoramaReferenceStrength),
         },
         sourceModelAssetId: model.id,
         snapshotAssetId: imageAsset.id,
@@ -403,6 +600,9 @@ export function PanoramaQuickRenderPanel({
           projectId,
           createdAt: existingSlot?.createdAt || payload.capturedAt,
           updatedAt: payload.capturedAt,
+          referenceAssetIds: readReferenceAssetIds(referenceImages),
+          referenceTypes: readReferenceTypes(referenceImages),
+          referenceImages,
         };
         return upsertPanoramaSlot(previous, nextSlot);
       });
@@ -425,6 +625,7 @@ export function PanoramaQuickRenderPanel({
         panoramaQuality: actualPanoramaQuality,
         panoramaChangeStrength,
         panoramaCapture: payload,
+        ...buildPanoramaReferenceConfig(imageAsset.id, referenceImages, panoramaReferenceStrength),
       });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '当前视点捕捉失败，请重试。');
@@ -439,6 +640,7 @@ export function PanoramaQuickRenderPanel({
     if (!slot) {
       setActiveSlotIndex(slotIndex);
       setPanoramaRecord(null);
+      setReferenceImages([]);
       setPanoramaPreviewKind('raw');
       return;
     }
@@ -465,38 +667,124 @@ export function PanoramaQuickRenderPanel({
       setPanoramaRecord(nextSlot?.panoramaRecord || null);
       setPanoramaPreviewKind('raw');
       if (nextSlot) {
-        onUpdateInputImage(nextSlot.rawImage);
+        onUpdateInputImage(normalizeSlotRawImage(nextSlot));
+        setReferenceImages(nextSlot.referenceImages || []);
       } else {
         onUpdateInputImage(null);
+        setReferenceImages([]);
       }
     }
   };
 
   const handleGenerateActiveSlot = () => {
-    if (state.isGenerating || isBatchRendering) return;
     const slot = activeSlot || slots.find(item => item.slotIndex === captureSlotIndex);
-    if (!slot) {
-      setMessage('请先在模型中截图并保存一个渲染前全景图。');
+    debugPanoramaRender('click active render button', {
+      slotIndex: slot?.slotIndex,
+      rawImageAssetId: slot?.rawImage.assetId,
+      rawImageId: slot?.rawImage.id,
+      pendingRenderAssetId,
+      stateInputAssetId: state.inputImage?.assetId,
+      configPanoramaAssetId: config.panoramaAssetId,
+      disabledReason: renderButtonDisabledReason,
+    });
+    const disabledReason = getRenderButtonDisabledReason({
+      projectId,
+      slot,
+      isGenerating: state.isGenerating,
+      isBatchRendering,
+      isPreparing: Boolean(pendingRenderAssetId),
+    });
+    if (disabledReason) {
+      setMessage(disabledReason);
       return;
     }
     setBatchQueue([]);
     setIsBatchRendering(false);
     setBatchActiveSlotIndex(slot.slotIndex);
-    submitSlotForGeneration(slot.slotIndex);
+    if (!submitSlotForGeneration(slot.slotIndex)) {
+      setBatchActiveSlotIndex(null);
+    }
   };
 
   const handleGenerateSelectedSlots = () => {
-    if (state.isGenerating || isBatchRendering) return;
     const targetSlots = renderableSelectedSlots.length > 0 ? renderableSelectedSlots : (activeSlot ? [activeSlot] : []);
-    if (targetSlots.length === 0) {
-      setMessage('请先选择至少一个已保存的全景槽位。');
+    debugPanoramaRender('click batch render button', {
+      slotIndices: targetSlots.map(slot => slot.slotIndex),
+      pendingRenderAssetId,
+      stateInputAssetId: state.inputImage?.assetId,
+      configPanoramaAssetId: config.panoramaAssetId,
+      disabledReason: batchRenderButtonDisabledReason,
+    });
+    const disabledReason = getBatchRenderButtonDisabledReason({
+      projectId,
+      slots: targetSlots,
+      isGenerating: state.isGenerating,
+      isBatchRendering,
+      isPreparing: Boolean(pendingRenderAssetId),
+    });
+    if (disabledReason) {
+      setMessage(disabledReason);
       return;
     }
     const [firstSlot, ...remainingSlots] = targetSlots.sort((a, b) => a.slotIndex - b.slotIndex);
     setBatchQueue(remainingSlots.map(slot => slot.slotIndex));
     setIsBatchRendering(targetSlots.length > 1);
     setBatchActiveSlotIndex(firstSlot.slotIndex);
-    submitSlotForGeneration(firstSlot.slotIndex);
+    if (!submitSlotForGeneration(firstSlot.slotIndex)) {
+      setBatchQueue([]);
+      setIsBatchRendering(false);
+      setBatchActiveSlotIndex(null);
+    }
+  };
+
+  const handleReferenceUpload = async (fileList: FileList | null) => {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+
+    const remainingSlots = MAX_PANORAMA_REFERENCE_IMAGES - referenceImages.length;
+    if (remainingSlots <= 0) {
+      setMessage(`最多支持 ${MAX_PANORAMA_REFERENCE_IMAGES} 张参考图。`);
+      return;
+    }
+
+    const supportedFiles = files.filter(isSupportedReferenceImageFile).slice(0, remainingSlots);
+    if (supportedFiles.length === 0) {
+      setMessage('请上传 JPG、PNG 或 WebP 格式的参考图。');
+      return;
+    }
+
+    setIsUploadingReferences(true);
+    setMessage(files.length > supportedFiles.length ? `已忽略超出数量或格式不支持的参考图，最多 ${MAX_PANORAMA_REFERENCE_IMAGES} 张。` : null);
+    try {
+      const uploadedReferences = await Promise.all(supportedFiles.map(async file => {
+        const asset = await uploadImageAsset(file, file.name);
+        return {
+          id: asset.id,
+          assetId: asset.id,
+          name: file.name || asset.filename,
+          type: file.type || asset.mimeType,
+          size: file.size || asset.size,
+          url: asset.url,
+          referenceType: 'revit_screenshot' as PanoramaReferenceType,
+          uploadedAt: asset.createdAt || new Date().toISOString(),
+        };
+      }));
+      syncReferenceImages([...referenceImages, ...uploadedReferences]);
+    } catch (error) {
+      setMessage(error instanceof Error ? `参考图上传失败：${error.message}` : '参考图上传失败，请重试。');
+    } finally {
+      setIsUploadingReferences(false);
+    }
+  };
+
+  const handleReferenceTypeChange = (referenceId: string, referenceType: PanoramaReferenceType) => {
+    syncReferenceImages(referenceImages.map(reference => (
+      reference.id === referenceId ? { ...reference, referenceType } : reference
+    )));
+  };
+
+  const handleRemoveReference = (referenceId: string) => {
+    syncReferenceImages(referenceImages.filter(reference => reference.id !== referenceId));
   };
 
   return (
@@ -508,6 +796,17 @@ export function PanoramaQuickRenderPanel({
         className="hidden"
         onChange={event => {
           void handleModelUpload(event.currentTarget.files);
+          event.currentTarget.value = '';
+        }}
+      />
+      <input
+        ref={referenceFileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        multiple
+        className="hidden"
+        onChange={event => {
+          void handleReferenceUpload(event.currentTarget.files);
           event.currentTarget.value = '';
         }}
       />
@@ -608,6 +907,12 @@ export function PanoramaQuickRenderPanel({
 
             {message ? <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">{message}</div> : null}
 
+            <PanoramaGenerationStateCard
+              state={state}
+              pendingRenderAssetId={pendingRenderAssetId}
+              pendingRenderSlotIndex={pendingRenderSlotIndex}
+            />
+
             <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
               <div className="flex items-center justify-between gap-2">
                 <div>
@@ -691,6 +996,89 @@ export function PanoramaQuickRenderPanel({
               </div>
             </div>
 
+            <div className="space-y-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-bold text-slate-900">参考图增强</p>
+                  <p className="mt-1 text-[11px] leading-4 text-slate-500">{referenceUsageText}</p>
+                </div>
+                <span className="rounded bg-white px-2 py-1 text-[10px] font-bold text-slate-500">
+                  {referenceImages.length}/{MAX_PANORAMA_REFERENCE_IMAGES}
+                </span>
+              </div>
+
+              {referenceImages.length === 0 ? (
+                <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-700">
+                  仅使用白模全景图，材质可能不准确。可上传 Revit 截图、平面图、材质图或效果图作为 AI 参考。
+                </div>
+              ) : null}
+
+              {referenceImages.length > 0 && !providerSupportsReferences ? (
+                <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[11px] leading-5 text-red-700">
+                  当前 provider 不支持参考图增强，请切换到 Gemini、GRS Banana2/Nano Banana 或移除参考图。
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => referenceFileInputRef.current?.click()}
+                  disabled={isUploadingReferences || referenceImages.length >= MAX_PANORAMA_REFERENCE_IMAGES}
+                  className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-bold text-slate-800 shadow-sm ring-1 ring-slate-200 disabled:opacity-50"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  {isUploadingReferences ? '上传中...' : '上传参考图'}
+                </button>
+                <div className="inline-flex rounded-lg bg-white p-1 text-xs font-bold shadow-sm ring-1 ring-slate-200">
+                  {panoramaReferenceStrengthOptions.map(option => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => onUpdateConfig({
+                        ...buildPanoramaReferenceConfig(getSlotRawAssetId(activeSlot) || state.inputImage?.assetId || state.inputImage?.id, referenceImages, option.value),
+                      })}
+                      className={`rounded-md px-2 py-1 ${panoramaReferenceStrength === option.value ? 'bg-slate-950 text-white' : 'text-slate-500'}`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {referenceImages.length > 0 ? (
+                <div className="space-y-2">
+                  {referenceImages.map(reference => (
+                    <div key={reference.id} className="flex gap-2 rounded-lg border border-slate-200 bg-white p-2">
+                      <img src={reference.url} alt={reference.name} className="h-14 w-20 shrink-0 rounded-md bg-slate-100 object-cover" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-bold text-slate-800">{reference.name}</p>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <select
+                            value={reference.referenceType}
+                            onChange={event => handleReferenceTypeChange(reference.id, event.target.value as PanoramaReferenceType)}
+                            className="min-w-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-bold text-slate-700"
+                          >
+                            {referenceTypeOptions.map(option => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                          <span className="text-[10px] text-slate-400">assetId 已绑定</span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveReference(reference.id)}
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-red-500"
+                        title="移除参考图"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
             <button
               type="button"
               onClick={handleCaptureViewpoint}
@@ -704,22 +1092,28 @@ export function PanoramaQuickRenderPanel({
             <button
               type="button"
               onClick={handleGenerateActiveSlot}
-              disabled={!activeSlot?.rawImage.assetId || state.isGenerating || isBatchRendering}
+              disabled={Boolean(renderButtonDisabledReason)}
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-sm font-bold text-white disabled:opacity-50"
             >
               <Sparkles className="h-4 w-4" />
-              {state.isGenerating || isBatchRendering ? '正在 AI 渲染全景...' : 'AI 渲染当前槽位'}
+              {pendingRenderAssetId ? '正在准备 AI 渲染任务...' : state.isGenerating || isBatchRendering ? '正在 AI 渲染全景...' : 'AI 渲染当前槽位'}
             </button>
+            {renderButtonDisabledReason ? (
+              <p className="mt-1 text-[11px] font-semibold leading-4 text-amber-700">{renderButtonDisabledReason}</p>
+            ) : null}
 
             <button
               type="button"
               onClick={handleGenerateSelectedSlots}
-              disabled={renderableSelectedSlots.length === 0 || state.isGenerating || isBatchRendering}
+              disabled={Boolean(batchRenderButtonDisabledReason)}
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-800 disabled:opacity-50"
             >
               <Sparkles className="h-4 w-4" />
               {isBatchRendering ? `批量渲染中 ${batchActiveSlotIndex || ''}` : `批量渲染已选槽位（${renderableSelectedSlots.length}）`}
             </button>
+            {batchRenderButtonDisabledReason ? (
+              <p className="mt-1 text-[11px] font-semibold leading-4 text-amber-700">{batchRenderButtonDisabledReason}</p>
+            ) : null}
 
             <ResultPreview
               imageUrl={panoramaUrl}
@@ -899,6 +1293,64 @@ function MainPanoramaPreview({ imageUrl, previewMode }: { imageUrl: string; prev
   );
 }
 
+function PanoramaGenerationStateCard({
+  state,
+  pendingRenderAssetId,
+  pendingRenderSlotIndex,
+}: {
+  state: StepState;
+  pendingRenderAssetId: string;
+  pendingRenderSlotIndex: number | null;
+}) {
+  const shouldShow = Boolean(
+    pendingRenderAssetId
+      || state.generationStatus !== 'ready'
+      || state.generationError
+      || state.generationLogs.length > 0,
+  );
+  if (!shouldShow) return null;
+
+  const recentLogs = state.generationLogs.slice(-4);
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-bold text-slate-900">AI 生成状态</p>
+          <p className="mt-1 text-[11px] leading-4 text-slate-500">
+            {pendingRenderAssetId
+              ? `正在准备槽位 ${pendingRenderSlotIndex || '-'} 的 AI 渲染任务...`
+              : readPanoramaGenerationStatusLabel(state.generationStatus)}
+          </p>
+        </div>
+        <span className="rounded bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">
+          {Math.max(0, Math.min(100, state.generationProgress || 0))}%
+        </span>
+      </div>
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
+        <div
+          className={`h-full rounded-full ${state.generationStatus === 'error' ? 'bg-red-500' : 'bg-blue-600'}`}
+          style={{ width: `${Math.max(pendingRenderAssetId ? 6 : 0, Math.min(100, state.generationProgress || 0))}%` }}
+        />
+      </div>
+      {state.generationError ? (
+        <div className="mt-3 whitespace-pre-wrap break-words rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[11px] leading-5 text-red-700">
+          {state.generationError}
+        </div>
+      ) : null}
+      {state.generationJobStatus ? (
+        <p className="mt-2 text-[11px] leading-4 text-slate-500">任务状态：{state.generationJobStatus}</p>
+      ) : null}
+      {recentLogs.length > 0 ? (
+        <div className="mt-2 space-y-1 rounded-lg bg-slate-50 px-3 py-2">
+          {recentLogs.map((log, index) => (
+            <p key={`${log}-${index}`} className="whitespace-pre-wrap break-words text-[10px] leading-4 text-slate-500">{log}</p>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ResultPreview({
   imageUrl,
   previewKind,
@@ -994,6 +1446,116 @@ function dataUrlToFile(dataUrl: string, filename: string): File {
     bytes[index] = binary.charCodeAt(index);
   }
   return new File([bytes], filename, { type: mimeType });
+}
+
+function getSlotRawAssetId(slot: PanoramaCaptureSlot | null | undefined): string {
+  return slot?.rawImage?.assetId || slot?.rawImage?.id || '';
+}
+
+function normalizeSlotRawImage(slot: PanoramaCaptureSlot): UploadedImage {
+  const assetId = getSlotRawAssetId(slot);
+  if (!assetId) return slot.rawImage;
+  return {
+    ...slot.rawImage,
+    id: slot.rawImage.id || assetId,
+    assetId,
+  };
+}
+
+function getRenderButtonDisabledReason(input: {
+  projectId?: string | null;
+  slot?: PanoramaCaptureSlot | null;
+  isGenerating: boolean;
+  isBatchRendering: boolean;
+  isPreparing: boolean;
+}): string {
+  if (!input.projectId) return '请先选择项目';
+  if (!input.slot) return '请先生成 360 全景截图';
+  if (!input.slot.rawImage) return '当前槽位没有原始全景图';
+  if (!getSlotRawAssetId(input.slot)) return '全景图尚未上传为素材，请重新生成全景截图';
+  if (input.isPreparing) return '正在准备 AI 渲染任务...';
+  if (input.isGenerating) return 'AI 正在渲染中';
+  if (input.isBatchRendering) return '批量渲染进行中';
+  return '';
+}
+
+function getBatchRenderButtonDisabledReason(input: {
+  projectId?: string | null;
+  slots: PanoramaCaptureSlot[];
+  isGenerating: boolean;
+  isBatchRendering: boolean;
+  isPreparing: boolean;
+}): string {
+  if (!input.projectId) return '请先选择项目';
+  if (input.slots.length === 0) return '请先生成 360 全景截图';
+  const invalidSlot = input.slots.find(slot => !slot.rawImage || !getSlotRawAssetId(slot));
+  if (invalidSlot && !invalidSlot.rawImage) return `槽位 ${invalidSlot.slotIndex} 没有原始全景图`;
+  if (invalidSlot) return `槽位 ${invalidSlot.slotIndex} 的全景图尚未上传为素材，请重新生成全景截图`;
+  if (input.isPreparing) return '正在准备 AI 渲染任务...';
+  if (input.isGenerating) return 'AI 正在渲染中';
+  if (input.isBatchRendering) return '批量渲染进行中';
+  return '';
+}
+
+function readPanoramaGenerationStatusLabel(status: StepState['generationStatus']): string {
+  if (status === 'uploading') return '正在上传输入素材...';
+  if (status === 'generating') return '正在创建或执行 AI 生成任务...';
+  if (status === 'success') return 'AI 全景渲染已完成';
+  if (status === 'error') return 'AI 全景渲染失败';
+  return '等待生成';
+}
+
+function createRenderRequestId(): string {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `render-${Date.now()}`;
+}
+
+function debugPanoramaRender(label: string, details: Record<string, unknown>): void {
+  if (import.meta.env.DEV) {
+    console.debug(`[PanoramaQuickRender] ${label}`, details);
+  }
+}
+
+function normalizePanoramaReferenceImages(images: PanoramaReferenceImage[]): PanoramaReferenceImage[] {
+  return images
+    .filter(reference => Boolean(reference.url))
+    .slice(0, MAX_PANORAMA_REFERENCE_IMAGES);
+}
+
+function readReferenceAssetIds(images: PanoramaReferenceImage[]): string[] {
+  return normalizePanoramaReferenceImages(images)
+    .map(reference => reference.assetId)
+    .filter((assetId): assetId is string => Boolean(assetId));
+}
+
+function readReferenceTypes(images: PanoramaReferenceImage[]): PanoramaReferenceType[] {
+  return normalizePanoramaReferenceImages(images).map(reference => reference.referenceType);
+}
+
+function buildPanoramaReferenceConfig(
+  sourceAssetId: string | undefined,
+  references: PanoramaReferenceImage[],
+  strength: 'low' | 'medium' | 'high',
+): Partial<GenerationConfig> {
+  const referenceAssetIds = readReferenceAssetIds(references);
+  return {
+    panoramaSourceAssetId: sourceAssetId,
+    panoramaReferenceAssetIds: referenceAssetIds,
+    panoramaReferenceTypes: readReferenceTypes(references),
+    panoramaReferenceMode: referenceAssetIds.length > 0 ? 'reference_guided' : undefined,
+    panoramaReferenceStrength: strength,
+  };
+}
+
+function providerSupportsPanoramaReferences(provider: GenerationProvider | null): boolean {
+  if (!provider || provider === 'mock') return true;
+  return provider === 'gemini' || provider === 'grsai-banana2' || provider === 'grsai-nano-banana';
+}
+
+function isSupportedReferenceImageFile(file: File): boolean {
+  return file.type === 'image/png'
+    || file.type === 'image/jpeg'
+    || file.type === 'image/webp'
+    || /\.(png|jpe?g|webp)$/iu.test(file.name);
 }
 
 function createShareId(): string {

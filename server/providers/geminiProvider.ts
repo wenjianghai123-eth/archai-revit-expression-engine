@@ -67,6 +67,7 @@ function createRawSnippet(value: unknown): string {
 }
 
 function buildRequestParts(input: GenerateImageInput, warnings: string[]): Part[] {
+  const isObjectInsert = isObjectInsertInput(input);
   const parts: Part[] = [
     {
       text: buildPrompt(input),
@@ -78,20 +79,24 @@ function buildRequestParts(input: GenerateImageInput, warnings: string[]): Part[
 
   if (input.materialImageDataUrl) {
     parts.push({
-      text: 'Reference material image:',
+      text: isObjectInsert
+        ? 'Furniture/object reference image. Use only for general form, material, color, and proportion guidance:'
+        : 'Reference material image:',
     });
     parts.push({
       inlineData: toInlineData(input.materialImageDataUrl),
     });
   }
 
-  appendReferenceImages(parts, 'Additional reference image:', input.referenceImageDataUrls);
+  appendReferenceImages(parts, isObjectInsert ? 'Placement guide image. Use only for position, scale, and direction:' : 'Additional reference image:', input.referenceImageDataUrls);
   appendReferenceImages(parts, 'Material reference image. Use only for material, color, texture, and surface quality:', input.materialReferenceImageDataUrls);
   appendReferenceImages(parts, 'Furniture reference image. Use only for furniture type, form, proportion, material, color, and style:', input.furnitureReferenceImageDataUrls);
 
   if (input.maskImageDataUrl) {
     parts.push({
-      text: input.maskMode === 'full-image'
+      text: isObjectInsert
+        ? 'Placement mask image. White indicates the local target area; preserve unmarked areas as much as possible:'
+        : input.maskMode === 'full-image'
         ? 'Full-image inpainting mask. The user explicitly wants the whole image eligible for repainting:'
         : 'Mask image for inpainting. If this model cannot use a mask directly, preserve unmasked areas as much as possible:',
     });
@@ -106,6 +111,19 @@ function buildRequestParts(input: GenerateImageInput, warnings: string[]): Part[
 }
 
 function buildPrompt(input: GenerateImageInput): string {
+  if (isObjectInsertInput(input)) {
+    return [
+      input.prompt,
+      buildObjectInsertProviderInputPrompt(input),
+      'Use the second image only for general form, material, color, and proportion guidance when it is provided.',
+      'Use the placement guide or mask only for location, scale, direction, and local target area when provided.',
+      'Generate a similar unbranded furniture/object in the designated area of the first interior/architectural scene.',
+      'Match perspective, scale, lighting, shadows, materials, occlusion, depth, and scene atmosphere. Keep unrelated areas unchanged.',
+      'Produce one natural photorealistic architectural rendering. Do not generate brand Logo, trademarks, watermarks, text, people, sensitive content, labels, borders, UI, collage, or split-screen comparison.',
+      `Generation config JSON: ${JSON.stringify(input.config)}`,
+    ].filter(Boolean).join('\n');
+  }
+
   if (input.qualityMode === 'draft' || input.qualityMode === 'fast') {
     return [
       input.prompt,
@@ -141,6 +159,44 @@ function buildPrompt(input: GenerateImageInput): string {
     `User prompt: ${input.prompt}`,
     `Generation config JSON: ${JSON.stringify(input.config)}`,
   ].join('\n');
+}
+
+function isObjectInsertInput(input: GenerateImageInput): boolean {
+  return input.step === 'object_insert'
+    || input.config.step === 'object_insert'
+    || isRecord(input.config.objectInsert);
+}
+
+function buildObjectInsertProviderInputPrompt(input: GenerateImageInput): string {
+  const mode = readObjectInsertDebugMode(input.config);
+  if (mode === 'source_prompt') {
+    return 'Input order: image 1 is the original interior/architectural scene. This debug request sends only the source image and prompt.';
+  }
+  if (mode === 'source_object') {
+    return 'Input order: image 1 is the original interior/architectural scene; image 2 is a furniture/object reference. No placement guide or mask is provided in this debug request.';
+  }
+  if (mode === 'source_object_mask') {
+    return 'Input order: image 1 is the original interior/architectural scene; image 2 is a furniture/object reference; the mask image indicates the local editing area. No placement guide is provided in this debug request.';
+  }
+  if (mode === 'source_object_preview') {
+    return 'Input order: image 1 is the original interior/architectural scene; image 2 is a furniture/object reference; image 3 is a placement guide. No mask is provided in this debug request.';
+  }
+  return 'Input order: image 1 is the original interior/architectural scene; image 2 is a furniture/object reference; image 3 is a placement guide; the mask image indicates the local editing area.';
+}
+
+function readObjectInsertDebugMode(config: Record<string, unknown>): string {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.debugMode === 'string'
+    ? nested.debugMode
+    : typeof config.objectInsertDebugMode === 'string'
+      ? config.objectInsertDebugMode
+      : '';
+  return value === 'source_prompt'
+    || value === 'source_object'
+    || value === 'source_object_mask'
+    || value === 'source_object_preview'
+    ? value
+    : 'full';
 }
 
 function appendReferenceImages(parts: Part[], label: string, dataUrls: string[] | undefined): void {
@@ -180,4 +236,8 @@ function extractImageDataUrl(parts: Part[] | undefined): { dataUrl: string; mime
     dataUrl: `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`,
     mimeType: imagePart.inlineData.mimeType,
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

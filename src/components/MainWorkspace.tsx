@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
-import { GenerationConfig, GenerationHistoryItem, GenerationProvider, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, SecondaryEditAction, StepState, UploadedImage } from '../types';
+import { GenerationConfig, GenerationHistoryItem, GenerationProvider, GenerationRunStateOverride, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, SecondaryEditAction, StepState, UploadedImage } from '../types';
 import { createUploadedImage, validateImageFile } from '../utils/file';
 import { uploadImageAsset } from '../lib/api';
 import { GenerationStatusPanel } from './workspace/GenerationStatusPanel';
@@ -13,6 +13,7 @@ import { PanoramaQuickRenderPanel } from './PanoramaQuickRenderPanel';
 import { DesignVariantsPanel } from './DesignVariantsPanel';
 import { PlanColorizePanel } from './PlanColorizePanel';
 import { MaterialReplaceConfigPanel } from './MaterialReplaceConfigPanel';
+import { ObjectInsertPanel } from './ObjectInsertPanel';
 import { UploadErrors, UploadTarget, ViewModeOption } from './workspace/workspaceTypes';
 import { getUploadedImageSrc, isLocalInpaintingStep, maxFurnitureReferences, maxMaterialTextures, readGenerationStatusLabel } from './workspace/workspaceUtils';
 
@@ -29,7 +30,7 @@ interface WorkspaceProps {
   onUpdateMaterialTextures: (textures: MaterialTexture[]) => void;
   onUpdateFurnitureReferences: (references: ReferenceImage[]) => void;
   onUpdateMaskImage: (maskDataUrl: string | null, useFullImage: boolean, feather?: number) => void;
-  onGenerate: () => void;
+  onGenerate: (stateOverride?: GenerationRunStateOverride) => void;
   onRegenerate: () => void;
   onCancelGeneration: () => void;
   onSelectGenerationResult: (resultId: string) => void;
@@ -43,6 +44,7 @@ interface WorkspaceProps {
   backendProvider: GenerationProvider | null;
   isCreditsInsufficient: boolean;
   estimatedCreditCost: number;
+  isAdmin?: boolean;
 }
 
 const acceptedImageTypes = 'image/png,image/jpeg,image/webp';
@@ -71,6 +73,7 @@ export function MainWorkspace({
   backendProvider,
   isCreditsInsufficient,
   estimatedCreditCost,
+  isAdmin = false,
 }: WorkspaceProps) {
   const inputFileRef = useRef<HTMLInputElement>(null);
   const materialFileRef = useRef<HTMLInputElement>(null);
@@ -88,6 +91,7 @@ export function MainWorkspace({
   const isPlanColorizeStep = step === GenerationStep.PlanColorize;
   const isMaterialReplaceStep = step === GenerationStep.MaterialReplace;
   const isPanoramaQuickRenderStep = step === GenerationStep.PanoramaQuickRender;
+  const isObjectInsertStep = step === GenerationStep.ObjectInsert;
   const materialReplaceEditMode = state.config.editMode === 'mask' ? 'mask' : 'smart-type';
   const hasMaterialReplaceTarget = Boolean(state.config.targetMaterial || state.materialTextures.length > 0 || (state.config.customMaterialPrompt || '').trim());
   const hasMaskSelection = Boolean(state.maskImage?.dataUrl || state.useFullImageMask);
@@ -341,6 +345,7 @@ export function MainWorkspace({
           selectedResultId={selectedResult?.id || null}
           previewImage={previewImage}
           uploadError={uploadErrors.input}
+          estimatedCreditCost={estimatedCreditCost}
           onUploadInput={() => handleUploadClick('input')}
           onUpdateInputImage={onUpdateInputImage}
           onUpdateConfig={onUpdateConfig}
@@ -469,6 +474,22 @@ export function MainWorkspace({
           onGenerate={onGenerate}
           onHistoryRecord={onHistoryRecord}
           onSecondaryEditResult={onSecondaryEditResult}
+        />
+      </div>
+    );
+  }
+
+  if (isObjectInsertStep) {
+    return (
+      <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">
+        <ObjectInsertPanel
+          state={state}
+          selectedProjectId={selectedProjectId}
+          onUpdateInputImage={onUpdateInputImage}
+          onUpdateMaterialImage={onUpdateMaterialImage}
+          onUpdateConfig={onUpdateConfig}
+          onGenerate={onGenerate}
+          isAdmin={isAdmin}
         />
       </div>
     );

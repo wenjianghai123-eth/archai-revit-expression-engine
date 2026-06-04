@@ -10,6 +10,8 @@ export const mockProvider: ImageGenerationProvider = {
 
 export function createMockGeneration(input: GenerateImageInput, extraWarnings: string[] = []): GenerateImageOutput {
   const createdAt = new Date().toISOString();
+  const isObjectInsert = isObjectInsertInput(input);
+  const visualMode: GenerateImageInput['mode'] | 'object-insert' = isObjectInsert ? 'object-insert' : input.mode;
   const warnings = [
     '当前为服务端 mock provider，未调用真实模型。',
     ...extraWarnings,
@@ -38,14 +40,19 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
   if (input.mode === 'plan-colorize') {
     warnings.push('Mock plan-colorize 已接收图纸智能表达配置，结果仅用于开发占位。');
   }
+  if (isObjectInsert) {
+    warnings.push('Mock object-insert received source, object reference, placement preview, and mask inputs; result is a development placeholder.');
+  }
 
   return {
     id: crypto.randomUUID(),
     provider: 'mock',
-    dataUrl: createMockImageDataUrl(input.mode, input.prompt, createdAt, readMockSize(input)),
+    dataUrl: createMockImageDataUrl(visualMode, input.prompt, createdAt, readMockSize(input)),
     mimeType: 'image/svg+xml',
     metadata: {
       mode: input.mode,
+      step: input.step || input.config.step,
+      businessMode: visualMode,
       inputSource: typeof input.config.inputSource === 'string'
         ? input.config.inputSource
         : typeof input.config.modelSnapshotMetadata === 'object' && input.config.modelSnapshotMetadata && 'inputSource' in input.config.modelSnapshotMetadata
@@ -71,7 +78,7 @@ export function createMockGeneration(input: GenerateImageInput, extraWarnings: s
 }
 
 function createMockImageDataUrl(
-  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render',
+  mode: GenerateImageInput['mode'] | 'object-insert',
   prompt: string,
   createdAt: string,
   size: { width: number; height: number },
@@ -85,6 +92,7 @@ function createMockImageDataUrl(
     'material-replace': 'Mock Material Replace',
     'plan-colorize': 'Mock Plan Colorize',
     'panorama-roam-render': 'Mock Panorama Roam Render',
+    'object-insert': 'Mock Object Insert',
   }[mode];
   const promptPreview = prompt.length > 90 ? `${prompt.slice(0, 90)}...` : prompt;
   const svg = `
@@ -97,7 +105,7 @@ function createMockImageDataUrl(
       </defs>
       <rect width="${size.width}" height="${size.height}" fill="url(#bg)"/>
       <rect x="${size.width * 0.08}" y="${size.height * 0.12}" width="${size.width * 0.84}" height="${size.height * 0.76}" rx="18" fill="#ffffff" opacity="0.82"/>
-      ${mode === 'inpaint' || mode === 'material-replace' ? '<rect x="360" y="310" width="480" height="230" rx="28" fill="#fb7185" opacity="0.28"/><rect x="380" y="330" width="440" height="190" rx="22" fill="none" stroke="#be123c" stroke-width="8" stroke-dasharray="18 14"/>' : ''}
+      ${mode === 'inpaint' || mode === 'material-replace' || mode === 'object-insert' ? '<rect x="360" y="310" width="480" height="230" rx="28" fill="#fb7185" opacity="0.28"/><rect x="380" y="330" width="440" height="190" rx="22" fill="none" stroke="#be123c" stroke-width="8" stroke-dasharray="18 14"/>' : ''}
       <path d="M220 560 L360 360 L520 480 L680 260 L980 560 Z" fill="#2563eb" opacity="0.18"/>
       <path d="M220 560 L360 360 L520 480 L680 260 L980 560" fill="none" stroke="#2563eb" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
       <text x="140" y="180" fill="#0f172a" font-family="Arial, sans-serif" font-size="44" font-weight="700">${escapeSvg(title)}</text>
@@ -111,6 +119,16 @@ function createMockImageDataUrl(
   `;
 
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+}
+
+function isObjectInsertInput(input: GenerateImageInput): boolean {
+  return input.step === 'object_insert'
+    || input.config.step === 'object_insert'
+    || isRecord(input.config.objectInsert);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function readMockSize(input: GenerateImageInput): { width: number; height: number } {

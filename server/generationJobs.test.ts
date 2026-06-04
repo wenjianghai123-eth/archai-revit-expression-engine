@@ -71,6 +71,8 @@ describe('POST /api/generation-jobs asset ownership', () => {
     const modelAsset = await createModelAssetForUser(DEV_AUTH_USER_ID);
     const config = createConfigForMode(mode, imageAsset.id, maskAsset.id, modelAsset.id);
 
+    const inputAssetIds = [imageAsset.id];
+
     const response = await request(app)
       .post('/api/generation-jobs')
       .send({
@@ -78,7 +80,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
         mode,
         prompt: mode === 'floorplan' || mode === 'style-render' ? 'render this' : '',
         config,
-        inputAssetIds: [imageAsset.id],
+        inputAssetIds,
       });
 
     expect(response.status).toBe(201);
@@ -87,7 +89,64 @@ describe('POST /api/generation-jobs asset ownership', () => {
       projectId: project.id,
       mode,
       status: 'queued',
-      inputAssetIds: [imageAsset.id],
+      inputAssetIds,
+    });
+  });
+
+  it('creates an object_insert step job using inpaint mode', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Object insert step' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const objectAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const previewAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const maskAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const placement = { x: 12, y: 24, width: 120, height: 80, rotation: 0 };
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'inpaint',
+        step: 'object_insert',
+        prompt: 'insert the chair',
+        config: {
+          step: 'object_insert',
+          sourceImageAssetId: sourceAsset.id,
+          objectInsert: {
+            objectReferenceAssetId: objectAsset.id,
+            previewAssetId: previewAsset.id,
+            maskAssetId: maskAsset.id,
+            placement,
+          },
+        },
+        inputAssetIds: [sourceAsset.id, objectAsset.id, previewAsset.id, maskAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job).toMatchObject({
+      userId: DEV_AUTH_USER_ID,
+      projectId: project.id,
+      mode: 'inpaint',
+      step: 'object_insert',
+      status: 'queued',
+      inputAssetIds: [sourceAsset.id, objectAsset.id, previewAsset.id, maskAsset.id],
+      config: {
+        step: 'object_insert',
+        sourceImageAssetId: sourceAsset.id,
+        objectReferenceAssetId: objectAsset.id,
+        placementPreviewAssetId: previewAsset.id,
+        placementMaskAssetId: maskAsset.id,
+        maskMode: 'asset-mask',
+        maskAssetId: maskAsset.id,
+        editTarget: 'furniture',
+        objectPlacement: placement,
+        objectInsert: {
+          sourceImageAssetId: sourceAsset.id,
+          objectReferenceAssetId: objectAsset.id,
+          previewAssetId: previewAsset.id,
+          maskAssetId: maskAsset.id,
+          placement,
+        },
+      },
     });
   });
 

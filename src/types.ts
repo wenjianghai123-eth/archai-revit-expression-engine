@@ -7,9 +7,20 @@ export enum GenerationStep {
   MaterialReplace = 6,
   PlanColorize = 7,
   PanoramaQuickRender = 8,
+  ObjectInsert = 9,
 }
 
 export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
+export type GenerationJobStep =
+  | 'floorplan_to_3d'
+  | 'style_render'
+  | 'local_inpainting'
+  | 'model_snapshot_render'
+  | 'design_variants'
+  | 'material_replace'
+  | 'plan_colorize'
+  | 'panorama_quick_render'
+  | 'object_insert';
 export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
 export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
@@ -30,6 +41,7 @@ export type VariantStyleKey =
   | 'custom';
 export type MaterialReplaceStrength = 'subtle' | 'balanced' | 'strong';
 export type SecondaryEditAction = 'regenerate' | 'similar' | 'realism' | 'lighting' | 'style' | 'continue-edit';
+export type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview';
 export type PlanDrawingType = 'residential' | 'commercial' | 'office' | 'hotel' | 'landscape' | 'site-plan' | 'custom';
 export type PlanExpressionTemplate = 'zoning-color' | 'colored-plan' | 'landscape-plan' | 'furniture-enhance' | 'annotation-plan' | 'circulation-analysis';
 export type MaterialReplaceEditMode = 'smart-type' | 'mask';
@@ -207,6 +219,7 @@ export interface ModelOptimizationMetadata {
 
 export interface GenerationConfig {
   prompt: string;
+  step?: GenerationJobStep;
   style?: string;
   lighting: string;
   materialStrength: number;
@@ -258,6 +271,18 @@ export interface GenerationConfig {
   sourceImageAssetId?: string;
   snapshotAssetId?: string;
   panoramaAssetId?: string;
+  panoramaSourceAssetId?: string;
+  panoramaReferenceAssetIds?: string[];
+  panoramaReferenceTypes?: Array<'revit_screenshot' | 'floor_plan' | 'material_reference' | 'style_reference' | 'render_reference'>;
+  panoramaReferenceMode?: 'reference_guided';
+  panoramaReferenceStrength?: 'low' | 'medium' | 'high';
+  objectReferenceAssetId?: string;
+  placementPreviewAssetId?: string;
+  placementMaskAssetId?: string;
+  objectPlacement?: ObjectPlacement;
+  objectInsert?: ObjectInsertConfig;
+  objectInsertDebugMode?: ObjectInsertDebugMode;
+  objectInsertExtraPrompt?: string;
   inputSource?: 'model-capture' | 'uploaded-snapshot';
   modelSnapshotMetadata?: ModelSnapshotMetadata;
   panoramaCapture?: PanoramaCapturePayload;
@@ -275,6 +300,24 @@ export interface GenerationConfig {
   parentJobId?: string | null;
   parentRecordId?: string | null;
   secondaryEditAction?: SecondaryEditAction;
+}
+
+export interface ObjectPlacement {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+}
+
+export interface ObjectInsertConfig {
+  sourceImageAssetId?: string;
+  objectReferenceAssetId?: string;
+  previewAssetId?: string;
+  maskAssetId?: string;
+  placement: ObjectPlacement;
+  extraPrompt?: string;
+  debugMode?: ObjectInsertDebugMode;
 }
 
 export interface GenerationResultOption {
@@ -337,6 +380,14 @@ export interface StepState {
   modelSnapshotMetadata?: ModelSnapshotMetadata | null;
 }
 
+export interface GenerationRunStateOverride {
+  config?: GenerationConfig;
+  inputImage?: UploadedImage | null;
+  materialImage?: UploadedImage | null;
+  maskImage?: UploadedImage | null;
+  useFullImageMask?: boolean;
+}
+
 export interface UploadedImage {
   id: string;
   name: string;
@@ -371,7 +422,7 @@ export interface PromptTemplate {
   id: string;
   title: string;
   category: string;
-  feature: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
+  feature: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render' | 'object-insert';
   supportedModes?: GenerationStep[] | string[];
   description: string;
   previewImage: string;

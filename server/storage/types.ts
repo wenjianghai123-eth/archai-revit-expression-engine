@@ -11,6 +11,16 @@ export interface Project {
 }
 
 export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
+export type GenerationJobStep =
+  | 'floorplan_to_3d'
+  | 'style_render'
+  | 'local_inpainting'
+  | 'model_snapshot_render'
+  | 'design_variants'
+  | 'material_replace'
+  | 'plan_colorize'
+  | 'panorama_quick_render'
+  | 'object_insert';
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
 export type VariantStyleKey =
   | 'modern-minimal'
@@ -55,6 +65,7 @@ export interface GenerationRecord {
   projectId: string;
   jobId?: string | null;
   mode: GenerationMode;
+  step?: GenerationJobStep | null;
   prompt: string;
   inputImageUrl?: string | null;
   inputImageDataPreview?: string | null;
@@ -75,6 +86,7 @@ export interface GenerationJob {
   userId: string;
   projectId: string;
   mode: GenerationMode;
+  step?: GenerationJobStep | null;
   prompt: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];
@@ -343,6 +355,7 @@ export type CreateGenerationRecordInput = {
   projectId: string;
   jobId?: string | null;
   mode: GenerationRecord['mode'];
+  step?: GenerationRecord['step'];
   prompt: string;
   inputImageUrl?: string | null;
   inputImageDataPreview?: string | null;
@@ -359,6 +372,7 @@ export type CreateGenerationJobInput = {
   userId: string;
   projectId: string;
   mode: GenerationJob['mode'];
+  step?: GenerationJob['step'];
   prompt: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];

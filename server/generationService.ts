@@ -225,6 +225,7 @@ async function runGenerationWorker(): Promise<void> {
 async function processGenerationJob(jobId: string): Promise<void> {
   const job = await getGenerationJob(jobId);
   if (!job || job.status === 'cancelled' || job.status === 'succeeded' || job.status === 'failed' || job.status === 'timeout') return;
+  const isObjectInsert = isObjectInsertJob(job);
   const diagnostics: GenerationJobDiagnostics = {
     ...job.diagnostics,
     phase: 'prepare-input',
@@ -356,6 +357,19 @@ async function processGenerationJob(jobId: string): Promise<void> {
                 sourceModelAssetId: typeof job.config.sourceModelAssetId === 'string' ? job.config.sourceModelAssetId : undefined,
                 inputSource: 'panorama-capture',
               }
+          : isObjectInsert
+            ? {
+                ...(providerOutput.metadata || {}),
+                mode: job.mode,
+                step: 'object_insert',
+                businessFeature: 'object-insert',
+                objectInsertDebugMode: readObjectInsertDebugMode(job.config),
+                sourceImageAssetId: readObjectInsertJobConfig(job).sourceImageAssetId || job.inputAssetIds[0],
+                objectReferenceAssetId: readObjectInsertJobConfig(job).objectReferenceAssetId || job.inputAssetIds[1],
+                placementPreviewAssetId: readObjectInsertJobConfig(job).previewAssetId || job.inputAssetIds[2],
+                placementMaskAssetId: readObjectInsertJobConfig(job).maskAssetId || job.inputAssetIds[3],
+                objectPlacement: readObjectInsertJobConfig(job).placement,
+              }
           : undefined,
       });
 
@@ -396,6 +410,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
       projectId: job.projectId,
       jobId: job.id,
       mode: job.mode,
+      step: isObjectInsert ? 'object_insert' : job.step ?? readGenerationJobStep(job.config) ?? null,
       prompt: typeof job.config.userPrompt === 'string' ? job.config.userPrompt : job.prompt,
       inputImageUrl: await getInputAssetUrl(job.inputAssetIds[0], job.userId),
       outputImageUrl: firstOutputAsset.url,
@@ -442,37 +457,81 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   imageDiagnostics: NonNullable<GenerationJobDiagnostics['images']>;
   localInpaint?: LocalInpaintContext;
 }> {
-  const materialReferenceAssetIds = Array.from(new Set([
-    ...readStringArray(job.config.materialTextureAssetIds),
-    ...readStringArray(job.config.materialReferenceAssetIds),
-  ]));
-  const assetIds = Array.from(new Set([
-    ...job.inputAssetIds,
-    ...materialReferenceAssetIds,
-  ]));
+  const isPanoramaReferenceMode = job.mode === 'panorama-roam-render';
+  const isObjectInsertMode = isObjectInsertJob(job);
+  const objectInsertConfig = readObjectInsertJobConfig(job);
+  const objectInsertDebugMode = isObjectInsertMode ? readObjectInsertDebugMode(job.config) : 'full';
+  const objectInsertNeedsObject = objectInsertIncludesObject(objectInsertDebugMode);
+  const objectInsertNeedsPreview = objectInsertIncludesPreview(objectInsertDebugMode);
+  const objectInsertNeedsMask = objectInsertIncludesMask(objectInsertDebugMode);
+  const objectReferenceAssetId = isObjectInsertMode ? objectInsertConfig.objectReferenceAssetId : '';
+  const placementPreviewAssetId = isObjectInsertMode ? objectInsertConfig.previewAssetId : '';
+  const placementMaskAssetId = isObjectInsertMode ? objectInsertConfig.maskAssetId : '';
+  const materialReferenceAssetIds = isPanoramaReferenceMode || isObjectInsertMode
+    ? []
+    : Array.from(new Set([
+        ...readStringArray(job.config.materialTextureAssetIds),
+        ...readStringArray(job.config.materialReferenceAssetIds),
+      ]));
+  const panoramaReferenceAssetIds = isPanoramaReferenceMode ? readStringArray(job.config.panoramaReferenceAssetIds).slice(0, 6) : [];
+  const assetIds = isObjectInsertMode
+    ? [
+        readConfigStringValue(job.config.sourceImageAssetId) || job.inputAssetIds[0],
+        objectInsertNeedsObject ? objectReferenceAssetId || job.inputAssetIds[1] : '',
+        objectInsertNeedsPreview ? placementPreviewAssetId || job.inputAssetIds[objectInsertNeedsObject ? 2 : 1] : '',
+      ].filter(isNonEmptyString)
+    : isPanoramaReferenceMode
+    ? Array.from(new Set([
+        ...job.inputAssetIds,
+        ...panoramaReferenceAssetIds,
+      ].filter(isNonEmptyString))).slice(0, 1 + 6)
+    : Array.from(new Set([
+        ...job.inputAssetIds,
+        ...materialReferenceAssetIds,
+      ]));
   const imageDataUrls = await Promise.all(assetIds.map(assetId => getImageAssetDataUrl(assetId, job.userId)));
   const inputImageDataUrl = imageDataUrls[0];
   if (!inputImageDataUrl) {
     throw new Error('Input image asset was not found.');
   }
 
-  const ownedMaterialReferenceImageDataUrls = await getOwnedAssetDataUrls(materialReferenceAssetIds, job.userId, 3, 'material reference');
-  const publicMaterialReferenceImageDataUrls = await getMaterialTextureSourceDataUrls(job.config);
+  const ownedMaterialReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode
+    ? []
+    : await getOwnedAssetDataUrls(materialReferenceAssetIds, job.userId, 3, 'material reference');
+  const publicMaterialReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode
+    ? []
+    : await getMaterialTextureSourceDataUrls(job.config);
   const materialReferenceImageDataUrls = [
     ...ownedMaterialReferenceImageDataUrls,
     ...publicMaterialReferenceImageDataUrls,
   ].slice(0, 3);
-  const furnitureReferenceImageDataUrls = await getOwnedAssetDataUrls(readStringArray(job.config.furnitureReferenceAssetIds), job.userId, 3, 'furniture reference');
+  const furnitureReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode
+    ? []
+    : await getOwnedAssetDataUrls(readStringArray(job.config.furnitureReferenceAssetIds), job.userId, 3, 'furniture reference');
   const additionalImageDataUrls = imageDataUrls.slice(1).filter(isNonEmptyString);
-  const materialImageDataUrl = materialReferenceImageDataUrls[0] || additionalImageDataUrls[0];
+  const objectReferenceImageDataUrl = isObjectInsertMode && objectInsertNeedsObject ? additionalImageDataUrls[0] : undefined;
+  const objectPlacementPreviewDataUrl = isObjectInsertMode && objectInsertNeedsPreview
+    ? additionalImageDataUrls[objectInsertNeedsObject ? 1 : 0]
+    : undefined;
+  const materialImageDataUrl = isObjectInsertMode
+    ? objectReferenceImageDataUrl
+    : isPanoramaReferenceMode ? undefined : materialReferenceImageDataUrls[0] || additionalImageDataUrls[0];
   const floorplanTextureUrls = job.mode === 'floorplan' ? await getFloorplanTextureDataUrls(job.config) : [];
-  const referenceImageDataUrls = [
-    ...additionalImageDataUrls.slice(1).filter(url => !materialReferenceImageDataUrls.includes(url) && !furnitureReferenceImageDataUrls.includes(url)),
-    ...floorplanTextureUrls,
-  ];
-  const isMaskedEditMode = job.mode === 'inpaint' || job.mode === 'material-replace';
-  const maskMode = isMaskedEditMode && isMaskMode(job.config.maskMode) ? job.config.maskMode : undefined;
-  const maskAssetId = maskMode === 'asset-mask' && typeof job.config.maskAssetId === 'string' ? job.config.maskAssetId : null;
+  const referenceImageDataUrls = isObjectInsertMode
+    ? [objectPlacementPreviewDataUrl].filter(isNonEmptyString)
+    : isPanoramaReferenceMode
+    ? additionalImageDataUrls.slice(0, 6)
+    : [
+        ...additionalImageDataUrls.slice(1).filter(url => !materialReferenceImageDataUrls.includes(url) && !furnitureReferenceImageDataUrls.includes(url)),
+        ...floorplanTextureUrls,
+      ];
+  const isMaskedEditMode = job.mode === 'inpaint' || job.mode === 'material-replace' || isObjectInsertMode;
+  const maskMode = isObjectInsertMode
+    ? objectInsertNeedsMask && isMaskMode(job.config.maskMode) ? job.config.maskMode : undefined
+    : isMaskedEditMode && isMaskMode(job.config.maskMode) ? job.config.maskMode : undefined;
+  const maskAssetId = maskMode === 'asset-mask'
+    ? readConfigStringValue(job.config.maskAssetId) || placementMaskAssetId || null
+    : null;
   const maskImageDataUrl = maskMode === 'full-image'
     ? createFullImageMaskDataUrl()
     : maskAssetId ? await getImageAssetDataUrl(maskAssetId, job.userId) : undefined;
@@ -481,6 +540,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   const targetDimensions = resolveQualityTargetDimensions(job.mode, qualityMode, await resolveTargetDimensions(job.mode, job.config, inputImageDataUrl));
   const rawInput: GenerateImageInput = {
     mode: job.mode,
+    step: isObjectInsertMode ? 'object_insert' : job.step ?? readGenerationJobStep(job.config) ?? undefined,
     inputImageDataUrl,
     materialImageDataUrl,
     referenceImageDataUrls,
@@ -493,7 +553,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     targetWidth: targetDimensions.targetWidth,
     targetHeight: targetDimensions.targetHeight,
     targetAspectRatio: targetDimensions.targetAspectRatio,
-    editTarget: job.mode === 'material-replace' ? 'material' : readEditTarget(job.config.editTarget),
+    editTarget: job.mode === 'material-replace' ? 'material' : isObjectInsertMode ? 'furniture' : readEditTarget(job.config.editTarget),
     qualityMode,
   };
 
@@ -1146,6 +1206,7 @@ function createConfiguredFallbackProvider(error: unknown): ImageGenerationProvid
 
 function isRetryableProviderFailure(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
+  if (isSafetyRejectedProviderError(error)) return false;
   const status = readErrorStatus(error);
   return error.message.includes('timed out')
     || isProviderMaintenanceError(error)
@@ -1162,9 +1223,13 @@ function normalizeProviderFailure(error: unknown): {
   rawSnippet?: string;
 } {
   const provider = readErrorStringField(error, 'provider');
-  const providerError = readErrorStringField(error, 'providerError') || (isProviderMaintenanceError(error) ? 'model maintenance' : undefined);
+  const safetyRejected = isSafetyRejectedProviderError(error);
+  const providerError = readErrorStringField(error, 'providerError')
+    || (safetyRejected ? 'PROVIDER_SAFETY_REJECTED' : undefined)
+    || (isProviderMaintenanceError(error) ? 'model maintenance' : undefined);
   const providerStatus = readErrorStringField(error, 'providerStatus') || (providerError ? 'failed' : undefined);
   const userMessage = readErrorStringField(error, 'userMessage')
+    || (safetyRejected ? 'AI 平台安全策略拒绝了本次生成。建议更换无水印、无 Logo、无人物、无品牌标识的参考图，或改用文字描述家具；也可以删减高风险提示词后重试。' : undefined)
     || (isProviderMaintenanceError(error) ? providerMaintenanceUserMessage : undefined);
   const statusCode = error instanceof Error ? readErrorStatus(error) : undefined;
   const rawSnippet = readErrorStringField(error, 'rawSnippet');
@@ -1188,6 +1253,18 @@ function isProviderMaintenanceError(error: unknown): boolean {
   return error.message.toLowerCase().includes('model maintenance')
     || providerError?.toLowerCase() === 'model maintenance'
     || userMessage === providerMaintenanceUserMessage;
+}
+
+function isSafetyRejectedProviderError(error: unknown): boolean {
+  if (!(error instanceof Error) && !isRecord(error)) return false;
+  const text = [
+    error instanceof Error ? error.message : '',
+    readErrorStringField(error, 'providerError'),
+    readErrorStringField(error, 'providerStatus'),
+    readErrorStringField(error, 'userMessage'),
+    readErrorStringField(error, 'rawSnippet'),
+  ].filter(isNonEmptyString).join(' ').toLowerCase();
+  return /safety|policy|moderation|violation|rejected|blocked|unsafe|sensitive|违规|安全策略|内容审核|拒绝/iu.test(text);
 }
 
 function readErrorStringField(error: unknown, field: string): string | undefined {
@@ -1447,7 +1524,8 @@ function buildProviderPromptForJob(job: GenerationJob, qualityMode: QualityMode 
 }
 
 function buildSmartPromptForJob(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job), overrides: Partial<BuildSmartPromptInputForJob> = {}): string {
-  const mode = job.mode as SmartPromptMode;
+  const isObjectInsert = isObjectInsertJob(job);
+  const mode = (isObjectInsert ? 'object-insert' : job.mode) as SmartPromptMode;
   const userPromptFallback = typeof job.config.userPrompt === 'string' ? job.config.userPrompt : job.prompt;
   return buildSmartPrompt({
     mode,
@@ -1455,11 +1533,12 @@ function buildSmartPromptForJob(job: GenerationJob, qualityMode: QualityMode = r
     userPrompt: readSmartPromptUserSupplement(mode, job.config, userPromptFallback),
     hasMaterialReferences: readStringArray(job.config.materialReferenceAssetIds).length > 0
       || readStringArray(job.config.materialTextureAssetIds).length > 0
-      || readMaterialTextureSourceNames(job.config).length > 0,
+      || readMaterialTextureSourceNames(job.config).length > 0
+      || isObjectInsert,
     materialNames: readMaterialTextureSourceNames(job.config),
     hasMask: job.config.maskMode === 'asset-mask',
     useFullImageMask: job.config.maskMode === 'full-image',
-    hasFurnitureReference: readStringArray(job.config.furnitureReferenceAssetIds).length > 0,
+    hasFurnitureReference: readStringArray(job.config.furnitureReferenceAssetIds).length > 0 || isObjectInsert,
     qualityMode,
     ...overrides,
   });
@@ -1597,6 +1676,82 @@ function isTimeoutGenerationFailure(error: unknown, statusCode?: number): boolea
 
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter(isNonEmptyString) : [];
+}
+
+function readConfigStringValue(value: unknown): string {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : '';
+}
+
+function readGenerationJobStep(config: Record<string, unknown>): GenerationJob['step'] {
+  return isGenerationJobStep(config.step) ? config.step : null;
+}
+
+function isGenerationJobStep(value: unknown): value is NonNullable<GenerationJob['step']> {
+  return value === 'floorplan_to_3d'
+    || value === 'style_render'
+    || value === 'local_inpainting'
+    || value === 'model_snapshot_render'
+    || value === 'design_variants'
+    || value === 'material_replace'
+    || value === 'plan_colorize'
+    || value === 'panorama_quick_render'
+    || value === 'object_insert';
+}
+
+function isObjectInsertJob(job: GenerationJob): boolean {
+  return job.step === 'object_insert' || readGenerationJobStep(job.config) === 'object_insert' || isRecord(job.config.objectInsert);
+}
+
+type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview';
+
+function readObjectInsertDebugMode(config: Record<string, unknown>): ObjectInsertDebugMode {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.debugMode === 'string'
+    ? nested.debugMode
+    : typeof config.objectInsertDebugMode === 'string'
+      ? config.objectInsertDebugMode
+      : '';
+  return value === 'source_prompt'
+    || value === 'source_object'
+    || value === 'source_object_mask'
+    || value === 'source_object_preview'
+    ? value
+    : 'full';
+}
+
+function objectInsertIncludesObject(mode: ObjectInsertDebugMode): boolean {
+  return mode !== 'source_prompt';
+}
+
+function objectInsertIncludesPreview(mode: ObjectInsertDebugMode): boolean {
+  return mode === 'full' || mode === 'source_object_preview';
+}
+
+function objectInsertIncludesMask(mode: ObjectInsertDebugMode): boolean {
+  return mode === 'full' || mode === 'source_object_mask';
+}
+
+function readObjectInsertJobConfig(job: GenerationJob): {
+  sourceImageAssetId: string;
+  objectReferenceAssetId: string;
+  previewAssetId: string;
+  maskAssetId: string;
+  placement?: Record<string, unknown>;
+} {
+  const nested = isRecord(job.config.objectInsert) ? job.config.objectInsert : {};
+  return {
+    sourceImageAssetId: readConfigStringValue(nested.sourceImageAssetId) || readConfigStringValue(job.config.sourceImageAssetId),
+    objectReferenceAssetId: readConfigStringValue(nested.objectReferenceAssetId) || readConfigStringValue(job.config.objectReferenceAssetId),
+    previewAssetId: readConfigStringValue(nested.previewAssetId) || readConfigStringValue(job.config.placementPreviewAssetId),
+    maskAssetId: readConfigStringValue(nested.maskAssetId)
+      || readConfigStringValue(job.config.placementMaskAssetId)
+      || readConfigStringValue(job.config.maskAssetId),
+    placement: isRecord(nested.placement)
+      ? nested.placement
+      : isRecord(job.config.objectPlacement)
+        ? job.config.objectPlacement
+        : undefined,
+  };
 }
 
 function readMaterialTextureSourceNames(config: Record<string, unknown>): string[] {

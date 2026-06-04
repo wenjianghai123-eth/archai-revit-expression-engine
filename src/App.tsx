@@ -540,6 +540,7 @@ export default function App() {
                         backendProvider={backendHealth.data?.provider || null}
                         isCreditsInsufficient={isCreditsInsufficient}
                         estimatedCreditCost={estimatedCreditCost}
+                        isAdmin={currentUser.role === 'admin'}
                       />
                     </Suspense>
                   </motion.div>

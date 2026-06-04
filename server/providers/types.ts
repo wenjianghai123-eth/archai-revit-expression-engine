@@ -1,10 +1,21 @@
 export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
+export type GenerationJobStep =
+  | 'floorplan_to_3d'
+  | 'style_render'
+  | 'local_inpainting'
+  | 'model_snapshot_render'
+  | 'design_variants'
+  | 'material_replace'
+  | 'plan_colorize'
+  | 'panorama_quick_render'
+  | 'object_insert';
 export type ProviderName = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type MaskMode = 'asset-mask' | 'full-image';
 export type QualityMode = 'draft' | 'fast' | 'balanced' | 'high';
 
 export interface GenerateImageInput {
   mode: GenerationMode;
+  step?: GenerationJobStep | string | null;
   inputImageDataUrl: string;
   materialImageDataUrl?: string;
   referenceImageDataUrls?: string[];

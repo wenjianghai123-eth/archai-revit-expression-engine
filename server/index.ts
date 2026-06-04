@@ -137,6 +137,7 @@ interface PublicSharePayload {
 interface PublicGenerationRecord {
   id: string;
   mode: GenerationRecord['mode'];
+  step?: GenerationRecord['step'];
   prompt: string;
   inputImageUrl: string | null;
   inputImageDataPreview: string | null;
@@ -409,7 +410,8 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
 
   try {
     const user = getRequiredCurrentUser(req);
-    logGenerationJobCreateStage(req, 'get project', { userId: user.id, projectId: body.value.projectId, mode: body.value.mode });
+    logGenerationJobModeStepDebug('route accepted body', { mode: body.value.mode, step: body.value.step });
+    logGenerationJobCreateStage(req, 'get project', { userId: user.id, projectId: body.value.projectId, mode: body.value.mode, step: body.value.step });
     const project = await getProject(body.value.projectId, user.id);
     if (!project) {
       logGenerationJobCreateStage(req, 'get project failed', { userId: user.id, projectId: body.value.projectId });
@@ -421,9 +423,10 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
       userId: user.id,
       projectId: body.value.projectId,
       mode: body.value.mode,
+      step: body.value.step,
       inputAssetCount: body.value.inputAssetIds.length,
     });
-    const assetValidation = await validateGenerationJobAssets(body.value.inputAssetIds, body.value.mode, body.value.config, user.id);
+    const assetValidation = await validateGenerationJobAssets(body.value.inputAssetIds, body.value.mode, body.value.step, body.value.config, user.id);
     if (assetValidation.ok === false) {
       logGenerationJobCreateStage(req, 'validate assets failed', { errorCode: assetValidation.error.code });
       const status = assetValidation.error.code === 'GENERATION_JOB_SOURCE_MODEL_NOT_FOUND' ? 403 : 404;
@@ -436,6 +439,7 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
       userId: user.id,
       projectId: body.value.projectId,
       mode: body.value.mode,
+      step: body.value.step,
       creditsCost,
     });
     const job = await createGenerationJob({ ...body.value, userId: user.id, provider: getGenerationProviderName(), creditCost: creditsCost });
@@ -1188,6 +1192,10 @@ function validateGenerationRecordCreateBody(
     return { ok: false, error: { message: 'Generation mode is invalid.', code: 'GENERATION_MODE_INVALID' } };
   }
 
+  if (body.step !== undefined && body.step !== null && body.step !== '' && !isGenerationStep(body.step)) {
+    return { ok: false, error: { message: 'Generation step is invalid.', code: 'GENERATION_STEP_INVALID' } };
+  }
+
   if (typeof body.prompt !== 'string') {
     return { ok: false, error: { message: 'Generation prompt must be a string.', code: 'GENERATION_PROMPT_INVALID' } };
   }
@@ -1217,6 +1225,7 @@ function validateGenerationRecordCreateBody(
     value: {
       projectId,
       mode: body.mode,
+      step: isGenerationStep(body.step) ? body.step : undefined,
       prompt: body.prompt,
       provider: body.provider.trim(),
       status: isGenerationStatus(body.status) ? body.status : undefined,
@@ -1422,6 +1431,22 @@ function normalizePlanColorizeConfig(
   return { ok: true };
 }
 
+function normalizeObjectPlacement(value: unknown): { x: number; y: number; width: number; height: number; rotation: number } | null {
+  if (!isRecord(value)) return null;
+  const x = readFiniteNumber(value.x);
+  const y = readFiniteNumber(value.y);
+  const width = readFiniteNumber(value.width);
+  const height = readFiniteNumber(value.height);
+  const rotation = readFiniteNumber(value.rotation);
+  if (x === null || y === null || width === null || height === null || rotation === null) return null;
+  if (width <= 0 || height <= 0) return null;
+  return { x, y, width, height, rotation };
+}
+
+function readFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 function validateGenerationJobCreateBody(
   body: unknown,
 ): { ok: true; value: Omit<Parameters<typeof createGenerationJob>[0], 'provider' | 'userId'> } | { ok: false; error: ApiError } {
@@ -1434,6 +1459,7 @@ function validateGenerationJobCreateBody(
   }
 
   if (!isGenerationMode(body.mode)) {
+    logGenerationJobModeStepDebug('mode validation failed', { mode: body.mode, step: isRecord(body.config) ? body.step ?? body.config.step : body.step });
     return { ok: false, error: { message: 'Generation mode is invalid.', code: 'GENERATION_JOB_MODE_INVALID' } };
   }
 
@@ -1464,6 +1490,31 @@ function validateGenerationJobCreateBody(
   }
 
   const config: Record<string, unknown> = { ...body.config };
+  const stepCandidate = body.step !== undefined
+    ? body.step
+    : config.step !== undefined
+      ? config.step
+      : isRecord(config.objectInsert)
+        ? 'object_insert'
+        : undefined;
+  if (stepCandidate !== undefined && stepCandidate !== null && stepCandidate !== '') {
+    if (!isGenerationStep(stepCandidate)) {
+      logGenerationJobModeStepDebug('step validation failed', { mode: body.mode, step: stepCandidate });
+      return { ok: false, error: { message: 'Generation step is invalid.', code: 'GENERATION_JOB_STEP_INVALID' } };
+    }
+    config.step = stepCandidate;
+  }
+  const generationStep = isGenerationStep(config.step) ? config.step : null;
+  logGenerationJobModeStepDebug('validate body mode/step', { mode: body.mode, step: generationStep });
+  if (generationStep === 'object_insert' && body.mode !== 'inpaint') {
+    return {
+      ok: false,
+      error: {
+        message: '元素植入应使用合法的局部编辑 mode=inpaint，并通过 step=object_insert 标识业务功能。',
+        code: 'GENERATION_JOB_OBJECT_INSERT_MODE_INVALID',
+      },
+    };
+  }
   if (config.sourceImageAssetId === undefined && isNonEmptyString(body.sourceImageAssetId)) {
     config.sourceImageAssetId = body.sourceImageAssetId.trim();
   }
@@ -1524,6 +1575,93 @@ function validateGenerationJobCreateBody(
     config.targetHeight = isReasonableImageDimension(config.targetHeight) ? config.targetHeight : 1024;
     if (isNonEmptyString(config.sourceModelAssetId)) config.sourceModelAssetId = config.sourceModelAssetId.trim();
   }
+  if (generationStep === 'object_insert') {
+    const inputAssetIds = body.inputAssetIds.map(item => item.trim());
+    const objectInsertConfig = isRecord(config.objectInsert) ? { ...config.objectInsert } : {};
+    const debugMode = readObjectInsertDebugMode(config);
+    const needsObject = objectInsertIncludesObject(debugMode);
+    const needsPreview = objectInsertIncludesPreview(debugMode);
+    const needsMask = objectInsertIncludesMask(debugMode);
+    const needsPlacement = needsPreview || needsMask;
+    const sourceImageAssetId = isNonEmptyString(config.sourceImageAssetId)
+      ? config.sourceImageAssetId.trim()
+      : isNonEmptyString(objectInsertConfig.sourceImageAssetId)
+        ? objectInsertConfig.sourceImageAssetId.trim()
+      : inputAssetIds[0] || '';
+    const objectReferenceAssetId = isNonEmptyString(objectInsertConfig.objectReferenceAssetId)
+      ? objectInsertConfig.objectReferenceAssetId.trim()
+      : isNonEmptyString(config.objectReferenceAssetId)
+        ? config.objectReferenceAssetId.trim()
+      : inputAssetIds[1] || '';
+    const placementPreviewAssetId = isNonEmptyString(objectInsertConfig.previewAssetId)
+      ? objectInsertConfig.previewAssetId.trim()
+      : isNonEmptyString(config.placementPreviewAssetId)
+      ? config.placementPreviewAssetId.trim()
+      : inputAssetIds[2] || '';
+    const placementMaskAssetId = isNonEmptyString(objectInsertConfig.maskAssetId)
+      ? objectInsertConfig.maskAssetId.trim()
+      : isNonEmptyString(config.placementMaskAssetId)
+        ? config.placementMaskAssetId.trim()
+      : isNonEmptyString(config.maskAssetId)
+        ? config.maskAssetId.trim()
+        : inputAssetIds[3] || '';
+
+    const missingAssetMessage = !sourceImageAssetId || !inputAssetIds.includes(sourceImageAssetId)
+      ? '元素植入需要原始场景图素材。'
+      : needsObject && (!objectReferenceAssetId || !inputAssetIds.includes(objectReferenceAssetId))
+        ? '元素植入需要物体参考图素材。'
+      : needsPreview && (!placementPreviewAssetId || !inputAssetIds.includes(placementPreviewAssetId))
+        ? '元素植入需要 placement preview 素材。'
+      : needsMask && (!placementMaskAssetId || !inputAssetIds.includes(placementMaskAssetId))
+        ? '元素植入需要 placement mask 素材。'
+      : '';
+    if (missingAssetMessage) {
+      return { ok: false, error: { message: missingAssetMessage, code: 'GENERATION_JOB_OBJECT_INSERT_INPUTS_REQUIRED' } };
+    }
+
+    const placement = normalizeObjectPlacement(objectInsertConfig.placement ?? config.objectPlacement);
+    if (needsPlacement && !placement) {
+      return { ok: false, error: { message: '元素植入需要有效的 placement 信息。', code: 'GENERATION_JOB_OBJECT_PLACEMENT_INVALID' } };
+    }
+
+    const extraPrompt = isNonEmptyString(objectInsertConfig.extraPrompt)
+      ? objectInsertConfig.extraPrompt.trim()
+      : typeof config.objectInsertExtraPrompt === 'string'
+        ? config.objectInsertExtraPrompt.trim()
+        : '';
+
+    config.sourceImageAssetId = sourceImageAssetId;
+    config.objectInsertDebugMode = debugMode;
+    if (needsObject) config.objectReferenceAssetId = objectReferenceAssetId;
+    else delete config.objectReferenceAssetId;
+    if (needsPreview) config.placementPreviewAssetId = placementPreviewAssetId;
+    else delete config.placementPreviewAssetId;
+    if (needsMask) config.placementMaskAssetId = placementMaskAssetId;
+    else delete config.placementMaskAssetId;
+    if (placement) config.objectPlacement = placement;
+    else delete config.objectPlacement;
+    config.objectInsert = {
+      sourceImageAssetId,
+      objectReferenceAssetId: needsObject ? objectReferenceAssetId : undefined,
+      previewAssetId: needsPreview ? placementPreviewAssetId : undefined,
+      maskAssetId: needsMask ? placementMaskAssetId : undefined,
+      placement,
+      extraPrompt,
+      debugMode,
+    };
+    if (needsMask) {
+      config.maskMode = 'asset-mask';
+      config.maskAssetId = placementMaskAssetId;
+    } else {
+      delete config.maskMode;
+      delete config.maskAssetId;
+    }
+    config.editTarget = 'furniture';
+    config.batchCount = 1;
+    config.preserveStructure = config.preserveStructure !== false;
+    config.preserveCamera = config.preserveCamera !== false;
+    if (typeof config.objectInsertExtraPrompt === 'string') config.objectInsertExtraPrompt = config.objectInsertExtraPrompt.trim();
+  }
   if (config.editTarget !== undefined && config.editTarget !== 'general' && config.editTarget !== 'material' && config.editTarget !== 'furniture') {
     return { ok: false, error: { message: 'editTarget must be general, material, or furniture.', code: 'GENERATION_JOB_EDIT_TARGET_INVALID' } };
   }
@@ -1551,7 +1689,7 @@ function validateGenerationJobCreateBody(
     }
     config.sourceImageAssetId = sourceImageAssetId;
   }
-  if (body.mode === 'inpaint' || body.mode === 'material-replace') {
+  if (body.mode === 'inpaint' || body.mode === 'material-replace' || generationStep === 'object_insert') {
     if (config.maskMode === undefined || config.maskMode === null || config.maskMode === '') {
       if (body.mode === 'material-replace' && config.editMode === 'mask') {
         return { ok: false, error: { message: '精细涂抹模式下请先选择需要替换的区域', code: 'GENERATION_JOB_MASK_REQUIRED' } };
@@ -1595,6 +1733,7 @@ function validateGenerationJobCreateBody(
     value: {
       projectId: body.projectId.trim(),
       mode: body.mode,
+      step: generationStep,
       prompt: body.prompt,
       config,
       inputAssetIds: body.inputAssetIds.map(item => item.trim()),
@@ -1671,6 +1810,7 @@ function toPublicSharePayload(
     generations: generations.map(generation => ({
       id: generation.id,
       mode: generation.mode,
+      step: generation.step ?? null,
       prompt: generation.prompt,
       inputImageUrl: generation.inputImageUrl ?? null,
       inputImageDataPreview: generation.inputImageDataPreview ?? null,
@@ -1696,8 +1836,79 @@ function isNullableString(value: unknown): value is string | null {
   return typeof value === 'string' || value === null;
 }
 
+const allowedGenerationModes: GenerationRecord['mode'][] = [
+  'floorplan',
+  'style-render',
+  'inpaint',
+  'model-render',
+  'design-variants',
+  'material-replace',
+  'plan-colorize',
+  'panorama-roam-render',
+];
+
+const allowedGenerationSteps: Array<NonNullable<GenerationJob['step']>> = [
+  'floorplan_to_3d',
+  'style_render',
+  'local_inpainting',
+  'model_snapshot_render',
+  'design_variants',
+  'material_replace',
+  'plan_colorize',
+  'panorama_quick_render',
+  'object_insert',
+];
+
 function isGenerationMode(value: unknown): value is GenerationRecord['mode'] {
-  return value === 'floorplan' || value === 'style-render' || value === 'inpaint' || value === 'model-render' || value === 'design-variants' || value === 'material-replace' || value === 'plan-colorize' || value === 'panorama-roam-render';
+  return allowedGenerationModes.includes(value as GenerationRecord['mode']);
+}
+
+function isGenerationStep(value: unknown): value is NonNullable<GenerationJob['step']> {
+  return allowedGenerationSteps.includes(value as NonNullable<GenerationJob['step']>);
+}
+
+function isObjectInsertStep(step: GenerationJob['step'], config: Record<string, unknown>): boolean {
+  return step === 'object_insert' || config.step === 'object_insert' || isRecord(config.objectInsert);
+}
+
+type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview';
+
+function readObjectInsertDebugMode(config: Record<string, unknown>): ObjectInsertDebugMode {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.debugMode === 'string'
+    ? nested.debugMode
+    : typeof config.objectInsertDebugMode === 'string'
+      ? config.objectInsertDebugMode
+      : '';
+  return value === 'source_prompt'
+    || value === 'source_object'
+    || value === 'source_object_mask'
+    || value === 'source_object_preview'
+    ? value
+    : 'full';
+}
+
+function objectInsertIncludesObject(mode: ObjectInsertDebugMode): boolean {
+  return mode !== 'source_prompt';
+}
+
+function objectInsertIncludesPreview(mode: ObjectInsertDebugMode): boolean {
+  return mode === 'full' || mode === 'source_object_preview';
+}
+
+function objectInsertIncludesMask(mode: ObjectInsertDebugMode): boolean {
+  return mode === 'full' || mode === 'source_object_mask';
+}
+
+function logGenerationJobModeStepDebug(stage: string, fields: { mode?: unknown; step?: unknown } = {}): void {
+  if (process.env.NODE_ENV === 'production') return;
+  console.debug('[GenerationJob mode/step]', {
+    stage,
+    mode: typeof fields.mode === 'string' ? sanitizeLogText(fields.mode) : fields.mode,
+    step: typeof fields.step === 'string' ? sanitizeLogText(fields.step) : fields.step,
+    allowedModes: allowedGenerationModes,
+    allowedSteps: allowedGenerationSteps,
+  });
 }
 
 function isGenerationStatus(value: unknown): value is GenerationRecord['status'] {
@@ -1719,9 +1930,11 @@ function isStringArrayWithLimit(value: unknown, limit: number): value is string[
 async function validateGenerationJobAssets(
   inputAssetIds: string[],
   mode: GenerationRecord['mode'],
+  step: GenerationJob['step'],
   config: Record<string, unknown>,
   userId: string,
 ): Promise<{ ok: true } | { ok: false; error: ApiError }> {
+  const isObjectInsert = isObjectInsertStep(step, config);
   for (const assetId of inputAssetIds) {
     const asset = await getImageAsset(assetId, userId);
     if (!asset) {
@@ -1752,7 +1965,7 @@ async function validateGenerationJobAssets(
     }
   }
 
-  const maskAssetId = (mode === 'inpaint' || mode === 'material-replace') && config.maskMode === 'asset-mask' && typeof config.maskAssetId === 'string'
+  const maskAssetId = (mode === 'inpaint' || mode === 'material-replace' || isObjectInsert) && config.maskMode === 'asset-mask' && typeof config.maskAssetId === 'string'
     ? config.maskAssetId.trim()
     : '';
   if (maskAssetId.length > 0) {

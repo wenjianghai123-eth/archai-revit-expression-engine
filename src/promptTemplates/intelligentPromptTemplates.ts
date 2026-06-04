@@ -6,7 +6,8 @@ export type SmartPromptMode =
   | 'design-variants'
   | 'material-replace'
   | 'plan-colorize'
-  | 'panorama-roam-render';
+  | 'panorama-roam-render'
+  | 'object-insert';
 
 export type SmartPromptChangeStrength = 'weak' | 'medium' | 'strong';
 
@@ -91,9 +92,29 @@ const materialReplaceMaskPrompt = [
 const panoramaBasePrompt = [
   'The input image is a 2:1 equirectangular 360 panorama captured from a 3D clay or white model.',
   'Transform it into a cinematic, photorealistic architectural or interior 360 panorama rendering.',
-  'Preserve the exact equirectangular 2:1 canvas, full 360 continuity, camera position, spatial layout, geometry, proportions, horizon, and room or building structure.',
-  'Do not convert it into a normal perspective view. Do not crop, pad, add borders, labels, or watermarks.',
+  'Preserve the exact equirectangular 2:1 canvas, full 360 continuity, camera position, spatial layout, geometry, proportions, horizon, doors, windows, walls, ceiling, floor, and the main room or building structure.',
+  'Do not convert it into a normal perspective view. Do not output a line drawing, blueprint, collage, split-screen image, cropped view, padded view, border, label, or watermark.',
 ].join('\n');
+
+const objectInsertBasePrompt = [
+  '第一张图是原始室内/建筑场景。',
+  '第二张图是家具/物体参考图，仅用于参考大致形态、材质、颜色和比例。',
+  '第三张图是摆放位置示意图，仅用于判断位置、尺度和方向。',
+  '请在第一张图的指定区域生成一个相似的无品牌家具/物体，使其自然融入原场景。',
+  '匹配原图的透视、尺度、光照、阴影、材质、景深和遮挡关系。',
+  '保持原图中未标记区域尽量不变。',
+  '不要生成任何品牌 Logo、商标、水印、文字、人物或敏感内容。',
+  '避免产生平面贴片感。',
+  '输出真实自然的建筑/室内效果图。',
+].join('\n');
+
+const panoramaReferenceTypeLabels: Record<string, string> = {
+  revit_screenshot: 'Revit screenshot',
+  floor_plan: 'floor plan',
+  material_reference: 'material reference',
+  style_reference: 'style reference',
+  render_reference: 'render reference',
+};
 
 const targetObjectLabels: Record<string, string> = {
   floor: '地面',
@@ -174,6 +195,8 @@ export function buildSmartPrompt(input: BuildSmartPromptInput): string {
       return buildPlanColorizePrompt(input, userPrompt);
     case 'panorama-roam-render':
       return buildPanoramaPrompt(input, userPrompt);
+    case 'object-insert':
+      return buildObjectInsertPrompt(input, userPrompt);
   }
 }
 
@@ -184,6 +207,10 @@ export function readSmartPromptUserSupplement(mode: SmartPromptMode, config?: ob
 
   if (mode === 'material-replace') {
     return readConfigString(config, 'customMaterialPrompt') || customPrompt || explicitUserPrompt || fallback.trim() || prompt;
+  }
+
+  if (mode === 'object-insert') {
+    return readConfigString(config, 'objectInsertExtraPrompt') || customPrompt || explicitUserPrompt || fallback.trim() || prompt;
   }
 
   if (mode === 'plan-colorize' || mode === 'model-render' || mode === 'panorama-roam-render' || mode === 'design-variants') {
@@ -321,8 +348,104 @@ function buildPanoramaPrompt(input: BuildSmartPromptInput, userPrompt: string): 
   return joinPrompt([
     panoramaBasePrompt,
     buildStructuredContext(input.config, input.mode),
+    buildPanoramaReferencePrompt(input.config),
     changeStrengthInstruction(readSmartPromptChangeStrength(input.config, input.mode), input.mode),
     userPrompt ? `User extra requirements: ${userPrompt}` : 'No extra user requirements. Use the structured selections to create a stable default 360 panorama render.',
+  ]);
+}
+
+function buildObjectInsertPrompt(input: BuildSmartPromptInput, userPrompt: string): string {
+  const debugMode = readObjectInsertDebugMode(input.config);
+  return joinPrompt([
+    objectInsertBasePrompt,
+    buildObjectInsertInputModePrompt(debugMode),
+    buildStructuredContext(input.config, input.mode),
+    buildObjectPlacementPrompt(input.config),
+    changeStrengthInstruction(readSmartPromptChangeStrength(input.config, input.mode), input.mode),
+    userPrompt ? `用户补充要求：${userPrompt}` : '用户未输入补充要求，请根据摆放示意和参考图生成稳定、自然、写实的建筑/室内效果图。',
+    '只输出一张真实自然的建筑/室内效果图。不要添加文字、标签、品牌 Logo、商标、水印、UI、边框、拼贴或分屏对比。',
+  ]);
+}
+
+function buildObjectInsertInputModePrompt(mode: string): string {
+  if (mode === 'source_prompt') {
+    return [
+      '调试输入：本次仅提交第一张原始场景图和文字要求。',
+      '请只根据第一张图和文字要求进行克制的室内/建筑局部表达，保持画面主体结构稳定。',
+    ].join('\n');
+  }
+
+  if (mode === 'source_object') {
+    return [
+      '调试输入：本次提交第一张原始场景图和第二张家具/物体参考图，不提交摆放示意图或 mask。',
+      '第二张图只用于参考形态、材质、颜色和比例；如位置不明确，请做保守、自然的放置判断。',
+    ].join('\n');
+  }
+
+  if (mode === 'source_object_mask') {
+    return [
+      '调试输入：本次提交第一张原始场景图、第二张家具/物体参考图和局部编辑 mask，不提交摆放示意图。',
+      'mask 的白色区域表示目标区域；黑色区域和未标记区域尽量保持不变。',
+    ].join('\n');
+  }
+
+  if (mode === 'source_object_preview') {
+    return [
+      '调试输入：本次提交第一张原始场景图、第二张家具/物体参考图和第三张摆放位置示意图，不提交 mask。',
+      '第三张图仅用于判断位置、尺度和方向。',
+    ].join('\n');
+  }
+
+  return '完整输入：第一张原始场景图、第二张家具/物体参考图、第三张摆放位置示意图，以及局部编辑 mask。';
+}
+
+function readObjectInsertDebugMode(config: object | undefined): string {
+  const mode = readConfigString(config, 'objectInsertDebugMode')
+    || (isRecord(readConfigValue(config, 'objectInsert')) ? readConfigString(readConfigValue(config, 'objectInsert') as object, 'debugMode') : '');
+  return mode === 'source_prompt'
+    || mode === 'source_object'
+    || mode === 'source_object_mask'
+    || mode === 'source_object_preview'
+    ? mode
+    : 'full';
+}
+
+function buildObjectPlacementPrompt(config: object | undefined): string | undefined {
+  const placement = readConfigValue(config, 'objectPlacement');
+  if (!placement || typeof placement !== 'object' || Array.isArray(placement)) return undefined;
+  const record = placement as Record<string, unknown>;
+  const x = readFiniteNumber(record.x);
+  const y = readFiniteNumber(record.y);
+  const width = readFiniteNumber(record.width);
+  const height = readFiniteNumber(record.height);
+  const rotation = readFiniteNumber(record.rotation);
+  if ([x, y, width, height, rotation].every(value => value === undefined)) return undefined;
+  return `Placement metadata in source-image pixels: x=${formatPlacementNumber(x)}, y=${formatPlacementNumber(y)}, width=${formatPlacementNumber(width)}, height=${formatPlacementNumber(height)}, rotation=${formatPlacementNumber(rotation)} degrees. Use the placement preview and mask as the visual authority if metadata and pixels differ.`;
+}
+
+function buildPanoramaReferencePrompt(config: object | undefined): string | undefined {
+  const referenceAssetIds = readStringArray(config, 'panoramaReferenceAssetIds');
+  if (referenceAssetIds.length === 0) return undefined;
+
+  const referenceTypes = readStringArray(config, 'panoramaReferenceTypes').slice(0, referenceAssetIds.length);
+  const strength = readConfigString(config, 'panoramaReferenceStrength') || 'medium';
+  const referenceTypeSummary = referenceTypes.length > 0
+    ? referenceTypes.map((type, index) => `Image ${index + 2}: ${panoramaReferenceTypeLabels[type] || type}`).join('; ')
+    : `Images 2-${referenceAssetIds.length + 1}: reference images`;
+  const strengthInstruction = strength === 'low'
+    ? 'Reference strength: low. Use references gently; keep the source panorama dominant.'
+    : strength === 'high'
+      ? 'Reference strength: high. Strongly borrow material, style, lighting, furniture, and functional cues while still preserving the first panorama structure exactly.'
+      : 'Reference strength: medium. Apply references clearly but conservatively; keep the first panorama structure and major elements dominant.';
+
+  return joinPrompt([
+    'Reference-guided panorama mode is enabled.',
+    'Image 1 is the source 360 equirectangular panorama and is the only authority for geometry, composition, camera position, room boundaries, openings, wall/ceiling/floor layout, and main spatial organization.',
+    'Images 2-N are reference images only. Use them for materials, style, lighting, furniture, atmosphere, and space function cues; do not copy their camera angle, composition, unrelated objects, or background.',
+    'If a reference is a floor plan, use it only to understand spatial relationships and functional zoning; never render the final output as a floor plan, blueprint, top-down plan, line drawing, collage, or split-screen image.',
+    'The final output must remain a cinematic realistic architectural/interior 360 panorama with strict 2:1 equirectangular aspect ratio and continuous 360-degree coverage.',
+    referenceTypeSummary,
+    strengthInstruction,
   ]);
 }
 
@@ -341,6 +464,10 @@ function buildCompactSmartPrompt(input: BuildSmartPromptInput): string {
 
   if (input.mode === 'material-replace') {
     return buildMaterialReplacePrompt(input, input.userPrompt || '');
+  }
+
+  if (input.mode === 'object-insert') {
+    return buildObjectInsertPrompt(input, input.userPrompt || '');
   }
 
   return joinPrompt(['Quick local edit. Follow the mask when provided and keep unrelated areas unchanged.', context, strength, note]);
@@ -394,6 +521,12 @@ function changeStrengthInstruction(strength: SmartPromptChangeStrength, mode: Sm
     return 'Change strength: medium. Preserve the original spatial layout, composition, and major design features while moderately enhancing materials, lighting, atmosphere, and texture quality.';
   }
 
+  if (mode === 'object-insert') {
+    if (strength === 'weak') return 'Change strength: weak. Keep the source image highly stable and only integrate the inserted object with minimal surrounding adjustment.';
+    if (strength === 'strong') return 'Change strength: strong. Integrate the object with more complete lighting, shadow, material, and occlusion reconstruction while preserving all unrelated areas.';
+    return 'Change strength: medium. Naturally integrate the object with clear but restrained lighting, shadow, scale, perspective, and material matching.';
+  }
+
   if (strength === 'weak') return 'Change strength: weak. Keep the original composition and design very stable, with subtle refinement only.';
   if (strength === 'strong') return 'Change strength: strong. Allow richer design expression and atmosphere, but preserve the core structure, camera, and spatial relationships.';
   return 'Change strength: medium. Preserve the original layout and main design features while moderately enhancing materials, lighting, atmosphere, and detail quality.';
@@ -414,6 +547,10 @@ function readConfigValue(config: object | undefined, key: string): unknown {
   return (config as Record<string, unknown>)[key];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function readMeaningfulText(value: unknown): string {
   if (typeof value !== 'string') return '';
   const trimmed = value.trim();
@@ -425,6 +562,14 @@ function readMeaningfulText(value: unknown): string {
 
 function readBooleanConfig(config: object | undefined, key: string): boolean {
   return readConfigValue(config, key) === true;
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function formatPlacementNumber(value: number | undefined): string {
+  return value === undefined ? 'unknown' : String(Number(value.toFixed(2)));
 }
 
 function readStringArray(config: object | undefined, key: string): string[] {

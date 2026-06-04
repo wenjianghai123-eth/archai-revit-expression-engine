@@ -42,12 +42,25 @@ export interface ProjectInput {
   coverImageUrl?: string | null;
 }
 
+export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
+export type GenerationJobStep =
+  | 'floorplan_to_3d'
+  | 'style_render'
+  | 'local_inpainting'
+  | 'model_snapshot_render'
+  | 'design_variants'
+  | 'material_replace'
+  | 'plan_colorize'
+  | 'panorama_quick_render'
+  | 'object_insert';
+
 export interface GenerationRecord {
   id: string;
   userId: string;
   projectId: string;
   jobId?: string | null;
-  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
+  mode: GenerationMode;
+  step?: GenerationJobStep | null;
   prompt: string;
   inputImageUrl?: string | null;
   inputImageDataPreview?: string | null;
@@ -79,6 +92,7 @@ export interface GenerationResult {
 
 export interface GenerationRecordInput {
   mode: GenerationRecord['mode'];
+  step?: GenerationRecord['step'];
   prompt: string;
   inputImageUrl?: string | null;
   inputImageDataPreview?: string | null;
@@ -154,7 +168,8 @@ export interface GenerationJob {
   id: string;
   userId: string;
   projectId: string;
-  mode: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
+  mode: GenerationMode;
+  step?: GenerationJobStep | null;
   prompt: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];
@@ -231,6 +246,7 @@ export interface GenerationJobDiagnostics {
 export interface GenerationJobInput {
   projectId: string;
   mode: GenerationJob['mode'];
+  step?: GenerationJob['step'];
   prompt: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];
@@ -262,6 +278,7 @@ export interface PublicSharePayload {
 export interface PublicShareGeneration {
   id: string;
   mode: GenerationRecord['mode'];
+  step?: GenerationRecord['step'];
   prompt: string;
   inputImageUrl: string | null;
   inputImageDataPreview: string | null;

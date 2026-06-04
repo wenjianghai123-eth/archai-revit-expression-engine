@@ -143,6 +143,7 @@ create table if not exists public.generation_jobs (
   user_id uuid not null references auth.users(id) on delete cascade,
   project_id text not null references public.projects(id) on delete cascade,
   mode text not null check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render')),
+  step text check (step is null or step in ('floorplan_to_3d', 'style_render', 'local_inpainting', 'model_snapshot_render', 'design_variants', 'material_replace', 'plan_colorize', 'panorama_quick_render', 'object_insert')),
   prompt text not null,
   config jsonb not null default '{}'::jsonb,
   input_asset_ids text[] not null default '{}'::text[],
@@ -167,6 +168,7 @@ create table if not exists public.generation_records (
   project_id text not null references public.projects(id) on delete cascade,
   job_id text references public.generation_jobs(id) on delete set null,
   mode text not null check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render')),
+  step text check (step is null or step in ('floorplan_to_3d', 'style_render', 'local_inpainting', 'model_snapshot_render', 'design_variants', 'material_replace', 'plan_colorize', 'panorama_quick_render', 'object_insert')),
   prompt text not null,
   input_image_url text,
   input_image_data_preview text,
@@ -240,10 +242,12 @@ alter table public.generation_jobs
   add column if not exists finished_at timestamptz,
   add column if not exists credit_cost integer not null default 0,
   add column if not exists credit_refunded boolean not null default false,
-  add column if not exists failure_reason text;
+  add column if not exists failure_reason text,
+  add column if not exists step text;
 
 alter table public.generation_records
-  add column if not exists job_id text references public.generation_jobs(id) on delete set null;
+  add column if not exists job_id text references public.generation_jobs(id) on delete set null,
+  add column if not exists step text;
 
 create table if not exists public.generation_results (
   id text primary key,
@@ -296,6 +300,12 @@ begin
     check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render'));
 end $$;
 
+alter table public.generation_jobs
+  drop constraint if exists generation_jobs_step_check;
+alter table public.generation_jobs
+  add constraint generation_jobs_step_check
+  check (step is null or step in ('floorplan_to_3d', 'style_render', 'local_inpainting', 'model_snapshot_render', 'design_variants', 'material_replace', 'plan_colorize', 'panorama_quick_render', 'object_insert'));
+
 do $$
 declare
   constraint_name text;
@@ -333,6 +343,12 @@ begin
     add constraint generation_records_mode_check
     check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render'));
 end $$;
+
+alter table public.generation_records
+  drop constraint if exists generation_records_step_check;
+alter table public.generation_records
+  add constraint generation_records_step_check
+  check (step is null or step in ('floorplan_to_3d', 'style_render', 'local_inpainting', 'model_snapshot_render', 'design_variants', 'material_replace', 'plan_colorize', 'panorama_quick_render', 'object_insert'));
 
 do $$
 declare
@@ -746,8 +762,8 @@ Supabase's service role bypasses RLS for server-side operations. Do not put the 
 - `profiles`: `id`, `email`, `name`, `role`, `status`, `created_at`, `updated_at`
 - `image_assets`: `id`, `user_id`, `url`, `filename`, `mime_type`, `size`, `created_at`
 - `model_assets`: `id`, `user_id`, `url`, `preview_url`, `optimized_url`, `thumbnail_url`, `filename`, `original_filename`, `file_type`, `mime_type`, `size`, `metadata`, `created_at`, `deleted_at`
-- `generation_jobs`: `id`, `user_id`, `project_id`, `mode`, `prompt`, `config`, `input_asset_ids`, `status`, `progress`, `provider`, `output_asset_id`, `output_asset_ids`, `error_message`, `created_at`, `updated_at`, `started_at`, `finished_at`, `credit_cost`, `credit_refunded`, `failure_reason`
-- `generation_records`: `id`, `user_id`, `project_id`, `job_id`, `mode`, `prompt`, `input_image_url`, `input_image_data_preview`, `output_image_url`, `output_image_data_preview`, `provider`, `status`, `created_at`, `updated_at`
+- `generation_jobs`: `id`, `user_id`, `project_id`, `mode`, `step`, `prompt`, `config`, `input_asset_ids`, `status`, `progress`, `provider`, `output_asset_id`, `output_asset_ids`, `error_message`, `created_at`, `updated_at`, `started_at`, `finished_at`, `credit_cost`, `credit_refunded`, `failure_reason`
+- `generation_records`: `id`, `user_id`, `project_id`, `job_id`, `mode`, `step`, `prompt`, `input_image_url`, `input_image_data_preview`, `output_image_url`, `output_image_data_preview`, `provider`, `status`, `created_at`, `updated_at`
 - `generation_results`: `id`, `user_id`, `project_id`, `job_id`, `asset_id`, `image_url`, `is_selected`, `is_favorite`, `metadata`, `created_at`, `updated_at`
 - `share_links`: `id`, `project_id`, `token`, `permission`, `expires_at`, `created_at`, `revoked_at`
 - `credit_balances`: `user_id`, `balance`, `updated_at`

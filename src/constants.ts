@@ -425,6 +425,25 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
     atmosphere: "自然光",
     changeStrength: 'medium',
   },
+  [GenerationStep.ObjectInsert]: {
+    prompt: "",
+    qualityMode: 'balanced',
+    style: "元素植入",
+    lighting: "匹配原图",
+    materialStrength: 0.8,
+    batchCount: 1,
+    preserveStructure: true,
+    preserveCamera: true,
+    customPrompt: "",
+    objectInsertExtraPrompt: "",
+    objectPlacement: {
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+      rotation: 0,
+    },
+  },
 };
 
 export const PROMPT_TEMPLATES: PromptTemplate[] = [

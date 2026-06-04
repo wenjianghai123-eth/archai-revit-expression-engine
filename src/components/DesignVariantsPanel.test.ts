@@ -9,6 +9,7 @@ const defaultProps = {
   selectedResultId: null,
   previewImage: null,
   uploadError: null,
+  estimatedCreditCost: 1,
   onUploadInput: () => undefined,
   onUpdateInputImage: () => undefined,
   onUpdateConfig: () => undefined,

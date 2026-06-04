@@ -51,6 +51,15 @@ const toolCards = [
     image: 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&q=80&w=900',
   },
   {
+    step: GenerationStep.ObjectInsert,
+    title: '元素植入',
+    desc: '上传原始效果图和物体参考图，在画布中拖拽摆放后导出植入示意。',
+    input: '输入：效果图 + 物体图',
+    output: '输出：preview / mask',
+    icon: Layers,
+    image: 'https://images.unsplash.com/photo-1618220179428-22790b461013?auto=format&fit=crop&q=80&w=900',
+  },
+  {
     step: GenerationStep.MaterialReplace,
     title: '材质软装替换',
     desc: '选择局部区域，替换地面、墙面、家具、灯光或材质。',
@@ -303,5 +312,6 @@ function stepLabel(step: GenerationStep): string {
   if (step === GenerationStep.PlanColorize) return '图纸智能表达';
   if (step === GenerationStep.ModelSnapshotRender) return '白模快渲';
   if (step === GenerationStep.PanoramaQuickRender) return '漫游全景快渲';
+  if (step === GenerationStep.ObjectInsert) return '元素植入';
   return '局部修饰';
 }

@@ -333,7 +333,7 @@ function GenerationCard({
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap gap-2">
-            <span className="arch-pill">{modeLabel(generation.mode)}</span>
+            <span className="arch-pill">{modeLabel(generation.mode, generation.step)}</span>
             <span className="arch-pill">{generation.provider}</span>
             <span className="arch-pill">{generation.status === 'succeeded' ? '成功' : '失败'}</span>
           </div>
@@ -510,7 +510,7 @@ function ProjectReportPrintView({ project, reportOptions }: { project: Project; 
           <article key={option.key} className="pdf-report-item">
             <div className="pdf-report-item-title">
               <span>方案 {index + 1}</span>
-              <span>{modeLabel(generation.mode)} · {formatDate(generation.createdAt)}</span>
+              <span>{modeLabel(generation.mode, generation.step)} · {formatDate(generation.createdAt)}</span>
             </div>
             <div className="pdf-report-images">
               <PrintImage src={option.imageUrl} label={option.label} />
@@ -607,7 +607,8 @@ function buildReportKey(generationId: string, resultId: string): string {
   return `${generationId}:${resultId}`;
 }
 
-function modeLabel(mode: GenerationRecord['mode']): string {
+function modeLabel(mode: GenerationRecord['mode'], step?: GenerationRecord['step']): string {
+  if (step === 'object_insert') return '元素植入';
   if (mode === 'floorplan') return '平面生成';
   if (mode === 'style-render') return '风格渲染';
   if (mode === 'design-variants') return '方案变体';
@@ -615,6 +616,7 @@ function modeLabel(mode: GenerationRecord['mode']): string {
   if (mode === 'panorama-roam-render') return '漫游全景快渲';
   if (mode === 'model-render') return '白模快渲';
   if (mode === 'material-replace') return '材质软装替换';
+  if ((mode as string) === 'object-insert') return '元素植入';
   return '局部重绘';
 }
 

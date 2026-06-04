@@ -135,7 +135,7 @@ function PublicGenerationCard({
       <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex flex-wrap gap-2">
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{modeLabel(generation.mode)}</span>
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{modeLabel(generation.mode, generation.step)}</span>
             <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
               生成时间：{formatDate(generation.createdAt)}
             </span>
@@ -207,12 +207,14 @@ function getPublicResultImages(generation: PublicShareGeneration): Array<{ id: s
   return fallbackImage ? [{ id: generation.id, imageUrl: fallbackImage, isSelected: true }] : [];
 }
 
-function modeLabel(mode: PublicShareGeneration['mode']): string {
+function modeLabel(mode: PublicShareGeneration['mode'], step?: PublicShareGeneration['step']): string {
+  if (step === 'object_insert') return '元素植入';
   if (mode === 'floorplan') return '平面生成';
   if (mode === 'style-render') return '风格渲染';
   if (mode === 'plan-colorize') return '图纸智能表达';
   if (mode === 'panorama-roam-render') return '漫游全景快渲';
   if (mode === 'model-render') return '白模快渲';
+  if ((mode as string) === 'object-insert') return '元素植入';
   return '局部重绘';
 }
 

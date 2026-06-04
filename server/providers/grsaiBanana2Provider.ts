@@ -303,6 +303,12 @@ async function fetchWithRetry(
     try {
       const response = await fetchWithTimeout(url, init, options.requestTimeoutMs);
       options.diagnostics.httpStatus = response.status;
+      if (isRetryableStatus(response.status)) {
+        const possibleSafetyBody = await readJson(response.clone());
+        if (isSafetyRejectedProviderPayload('', possibleSafetyBody)) {
+          return response;
+        }
+      }
       if (!isRetryableStatus(response.status) || attempt >= options.maxRetries) {
         return response;
       }
@@ -368,13 +374,17 @@ function createHttpError(message: string, status: number, rawBody?: unknown): Er
     provider?: string;
     providerError?: string;
     providerStatus?: string;
+    userMessage?: string;
     rawSnippet?: string;
   };
   error.status = status;
   error.statusCode = status;
   error.provider = 'grsai-banana2';
-  error.providerError = 'http_error';
+  error.providerError = isSafetyRejectedProviderPayload(message, rawBody) ? 'PROVIDER_SAFETY_REJECTED' : 'http_error';
   error.providerStatus = 'failed';
+  if (error.providerError === 'PROVIDER_SAFETY_REJECTED') {
+    error.userMessage = 'AI 平台安全策略拒绝了本次生成。建议更换无水印、无 Logo、无人物、无品牌标识的参考图，或改用文字描述家具；也可以删减高风险提示词后重试。';
+  }
   if (rawBody !== undefined) {
     error.rawSnippet = createRawSnippet(rawBody);
   }
@@ -393,6 +403,11 @@ function formatHttpErrorMessage(message: string, status: number): string {
   if (status === 429) return 'Grsai returned 429 rate limit';
   if (status >= 500) return 'Grsai returned 5xx upstream error';
   return message;
+}
+
+function isSafetyRejectedProviderPayload(message: string, rawBody: unknown): boolean {
+  const text = [message, rawBody === undefined ? '' : createRawSnippet(rawBody)].join('\n');
+  return /safety|policy|moderation|violation|rejected|blocked|unsafe|sensitive|违规|安全策略|内容审核|拒绝/iu.test(text);
 }
 
 function normalizeImageDataUrl(dataUrl: string): NormalizedDataUrl {
@@ -417,6 +432,15 @@ function normalizeImageDataUrl(dataUrl: string): NormalizedDataUrl {
 }
 
 function buildReferenceUrls(input: GenerateImageInput): string[] {
+  if (isObjectInsertInput(input)) {
+    return [
+      input.inputImageDataUrl,
+      input.materialImageDataUrl,
+      ...(input.referenceImageDataUrls || []),
+      input.maskImageDataUrl,
+    ].filter(isNonEmptyString);
+  }
+
   const materialReferences = (input.materialReferenceImageDataUrls || []).slice(0, 3);
   const furnitureReferences = (input.furnitureReferenceImageDataUrls || []).slice(0, 3);
   const maxAdditionalReferences = Math.max(0, readPositiveInteger(process.env.MAX_PROVIDER_REFERENCE_IMAGES, 6) - materialReferences.length - furnitureReferences.length - (input.materialImageDataUrl ? 1 : 0));
@@ -431,6 +455,18 @@ function buildReferenceUrls(input: GenerateImageInput): string[] {
 }
 
 function buildPrompt(input: GenerateImageInput): string {
+  if (isObjectInsertInput(input)) {
+    return [
+      input.prompt,
+      buildObjectInsertProviderInputPrompt(input),
+      'Use the second image only for general form, material, color, and proportion guidance when it is provided.',
+      'Use the placement guide or mask only for location, scale, direction, and local target area when provided.',
+      'Generate a similar unbranded furniture/object in the designated area of the first interior/architectural scene.',
+      'Match perspective, scale, lighting, shadows, materials, occlusion, depth, and scene atmosphere. Keep unrelated areas unchanged.',
+      'Produce one natural photorealistic architectural rendering. Do not generate brand Logo, trademarks, watermarks, text, people, sensitive content, labels, borders, collage, or split-screen.',
+    ].filter(isNonEmptyString).join('\n');
+  }
+
   if (input.qualityMode === 'draft' || input.qualityMode === 'fast') {
     if (input.mode === 'inpaint' || input.mode === 'material-replace') return buildInpaintPrompt(input);
     return [
@@ -495,6 +531,44 @@ function buildPrompt(input: GenerateImageInput): string {
   pieces.push('不要添加文字、水印、标签、边框或界面元素。');
 
   return pieces.filter(Boolean).join('\n');
+}
+
+function isObjectInsertInput(input: GenerateImageInput): boolean {
+  return input.step === 'object_insert'
+    || input.config.step === 'object_insert'
+    || isRecord(input.config.objectInsert);
+}
+
+function buildObjectInsertProviderInputPrompt(input: GenerateImageInput): string {
+  const mode = readObjectInsertDebugMode(input.config);
+  if (mode === 'source_prompt') {
+    return 'Input order: image 1 is the original interior/architectural scene. This debug request sends only the source image and prompt.';
+  }
+  if (mode === 'source_object') {
+    return 'Input order: image 1 is the original interior/architectural scene; image 2 is a furniture/object reference. No placement guide or mask is provided in this debug request.';
+  }
+  if (mode === 'source_object_mask') {
+    return 'Input order: image 1 is the original interior/architectural scene; image 2 is a furniture/object reference; image 3 is the placement mask. No placement guide is provided in this debug request.';
+  }
+  if (mode === 'source_object_preview') {
+    return 'Input order: image 1 is the original interior/architectural scene; image 2 is a furniture/object reference; image 3 is a placement guide. No mask is provided in this debug request.';
+  }
+  return 'Input order: image 1 is the original interior/architectural scene; image 2 is a furniture/object reference; image 3 is a placement guide; image 4 is the placement mask.';
+}
+
+function readObjectInsertDebugMode(config: Record<string, unknown>): string {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.debugMode === 'string'
+    ? nested.debugMode
+    : typeof config.objectInsertDebugMode === 'string'
+      ? config.objectInsertDebugMode
+      : '';
+  return value === 'source_prompt'
+    || value === 'source_object'
+    || value === 'source_object_mask'
+    || value === 'source_object_preview'
+    ? value
+    : 'full';
 }
 
 function buildInpaintPrompt(input: GenerateImageInput): string {
