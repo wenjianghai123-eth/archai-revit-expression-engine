@@ -12,6 +12,7 @@ export interface LocalInpaintInput {
   inputImageDataUrl: string;
   maskImageDataUrl: string;
   paddingRatio?: number;
+  cropScale?: number;
   maxAreaRatio?: number;
 }
 
@@ -44,7 +45,9 @@ export async function createLocalInpaintContext(input: LocalInpaintInput): Promi
   const maxAreaRatio = input.maxAreaRatio ?? 0.65;
   if ((bbox.width * bbox.height) / (imageMeta.width * imageMeta.height) >= maxAreaRatio) return null;
 
-  const padded = padBoundingBox(bbox, imageMeta.width, imageMeta.height, input.paddingRatio ?? 0.15);
+  const padded = input.cropScale && Number.isFinite(input.cropScale)
+    ? scaleBoundingBox(bbox, imageMeta.width, imageMeta.height, input.cropScale)
+    : padBoundingBox(bbox, imageMeta.width, imageMeta.height, input.paddingRatio ?? 0.15);
   const region = { left: padded.x, top: padded.y, width: padded.width, height: padded.height };
   const cropImage = await sharp(image.content).extract(region).png().toBuffer();
   const cropMask = await sharp(normalizedMask).extract(region).png().toBuffer();
@@ -93,6 +96,7 @@ export async function composeLocalInpaintResult(input: {
   resultCropDataUrl: string;
   maskCropDataUrl: string;
   bbox: MaskBoundingBox;
+  featherRadius?: number;
 }): Promise<string> {
   const original = parseImageDataUrl(input.originalImageDataUrl);
   const crop = parseImageDataUrl(input.resultCropDataUrl);
@@ -101,7 +105,7 @@ export async function composeLocalInpaintResult(input: {
   const maskRaw = await sharp(mask.content)
     .resize(input.bbox.width, input.bbox.height, { fit: 'fill', kernel: sharp.kernel.nearest })
     .greyscale()
-    .threshold(10)
+    .blur(Math.max(0.3, input.featherRadius ?? 0.3))
     .raw()
     .toBuffer();
 
@@ -128,4 +132,35 @@ function padBoundingBox(box: MaskBoundingBox, imageWidth: number, imageHeight: n
   const right = Math.min(imageWidth, box.x + box.width + pad);
   const bottom = Math.min(imageHeight, box.y + box.height + pad);
   return { x, y, width: right - x, height: bottom - y };
+}
+
+function scaleBoundingBox(box: MaskBoundingBox, imageWidth: number, imageHeight: number, scale: number): MaskBoundingBox {
+  const safeScale = Math.min(2, Math.max(1.1, scale));
+  const targetWidth = Math.min(imageWidth, Math.max(box.width, Math.round(box.width * safeScale)));
+  const targetHeight = Math.min(imageHeight, Math.max(box.height, Math.round(box.height * safeScale)));
+  const centerX = box.x + box.width / 2;
+  const centerY = box.y + box.height / 2;
+  const x = clamp(Math.round(centerX - targetWidth / 2), 0, Math.max(0, imageWidth - targetWidth));
+  const y = clamp(Math.round(centerY - targetHeight / 2), 0, Math.max(0, imageHeight - targetHeight));
+  return { x, y, width: targetWidth, height: targetHeight };
+}
+
+export async function cropImageDataUrlToBox(dataUrl: string, bbox: MaskBoundingBox): Promise<string> {
+  const parsed = parseImageDataUrl(dataUrl);
+  const metadata = await sharp(parsed.content).metadata();
+  if (!metadata.width || !metadata.height) return dataUrl;
+  const left = clamp(bbox.x, 0, Math.max(0, metadata.width - 1));
+  const top = clamp(bbox.y, 0, Math.max(0, metadata.height - 1));
+  const width = Math.max(1, Math.min(bbox.width, metadata.width - left));
+  const height = Math.max(1, Math.min(bbox.height, metadata.height - top));
+  const crop = await sharp(parsed.content)
+    .resize(metadata.width, metadata.height, { fit: 'fill' })
+    .extract({ left, top, width, height })
+    .png()
+    .toBuffer();
+  return toImageDataUrl(crop, 'image/png');
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }

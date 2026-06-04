@@ -11,8 +11,9 @@ import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider, MaskM
 import { getImageSizeFromDataUrl, isValidTargetDimension } from './image/imageMetadata';
 import { normalizeGeneratedImageDataUrl } from './image/normalizeImage';
 import { prepareImageForProvider, prepareMaskForProvider, PreparedProviderImage } from './image/prepareProviderImage';
-import { composeLocalInpaintResult, createLocalInpaintContext, LocalInpaintContext } from './image/localInpaint';
+import { composeLocalInpaintResult, createLocalInpaintContext, cropImageDataUrlToBox, LocalInpaintContext } from './image/localInpaint';
 import { buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode } from '../src/promptTemplates/intelligentPromptTemplates';
+import { findPlanColorizeStyle, maxPlanColorizeBatchCount, planColorizeStyleOptions, resolvePlanColorizeStyles, type PlanColorizeStyleOption } from '../src/constants/planColorizeStyles';
 import { getGenerationOutputCount } from '../src/utils/generationCredits';
 import {
   adjustCredits,
@@ -92,6 +93,22 @@ const providerImageDefaults: Record<QualityMode, ProviderImageSettings> = {
   },
 };
 
+interface ProviderBatchSuccess {
+  index: number;
+  variantStyle: string;
+  planStyle: PlanColorizeStyleOption;
+  providerOutput: GenerateImageOutput;
+}
+
+interface ProviderBatchFailure {
+  index: number;
+  variantStyle: string;
+  planStyle: PlanColorizeStyleOption;
+  error: unknown;
+}
+
+type ProviderBatchResult = ProviderBatchSuccess | ProviderBatchFailure;
+
 export function getGenerationProviderName(): ProviderName {
   return provider.name;
 }
@@ -130,6 +147,23 @@ export async function refundGenerationJobCredits(jobId: string): Promise<void> {
       failureReason: job.failureReason || job.errorMessage || job.status,
     });
   }
+}
+
+async function refundPartialPlanColorizeCredits(job: GenerationJob, failedCount: number): Promise<void> {
+  if (job.mode !== 'plan-colorize' || failedCount <= 0) return;
+  const referenceId = `${job.id}:partial-plan-colorize:${failedCount}`;
+  const existingRefund = await getCreditTransactionByReference(job.userId, 'generate_refund', referenceId)
+    || await getCreditTransactionByReference(job.userId, 'refund', referenceId);
+  if (existingRefund) return;
+
+  await adjustCredits({
+    userId: job.userId,
+    type: 'generate_refund',
+    amount: failedCount,
+    reason: `Refund ${failedCount} failed plan colorize batch output(s) for job ${job.id}`,
+    referenceType: 'generation_job',
+    referenceId,
+  });
 }
 
 function isRefundableGenerationJobStatus(status: GenerationJob['status']): boolean {
@@ -253,32 +287,64 @@ async function processGenerationJob(jobId: string): Promise<void> {
     await updateGenerationJob(job.id, { progress: 22, diagnostics });
 
     const batchCount = resolveBatchCountForJob(job);
-    const variantStyles = resolveVariantStyles(job.config, batchCount);
+    const variantStyles = job.mode === 'design-variants' ? resolveVariantStyles(job.config, batchCount) : ['modern-minimal'];
+    const planColorizeStyles = resolvePlanColorizeStylesForJob(job.config, batchCount);
     const outputAssetIds: string[] = [];
     let firstOutput: GenerateImageOutput | null = null;
     let firstOutputAsset: ImageAsset | null = null;
 
     markTiming(diagnostics, 'providerRequestStartedAt', 'provider-request');
     await updateGenerationJob(job.id, { progress: resolveVariantStartProgress(batchCount, 0), diagnostics });
-    const providerResults = await mapWithConcurrency(
+    const providerResults: ProviderBatchResult[] = await mapWithConcurrency(
       Array.from({ length: batchCount }, (_, index) => index),
       job.mode === 'design-variants' ? readPositiveInteger(process.env.GENERATION_VARIANT_CONCURRENCY, 1) : 1,
       async (index) => {
         const variantStyle = variantStyles[index] || 'modern-minimal';
-        const providerInput = buildProviderInputForVariant(job, input, index, batchCount, variantStyle);
-        const providerOutput = await generateWithFallback(providerInput);
-        await updateGenerationJob(job.id, {
-          progress: job.mode === 'design-variants' ? resolveVariantCompleteProgress(batchCount, index) : 75,
-          diagnostics,
-        });
-        return { index, variantStyle, providerOutput };
+        const planStyle = planColorizeStyles[index] || planColorizeStyles[0] || planColorizeStyleOptions[0];
+        try {
+          const providerInput = buildProviderInputForVariant(job, input, index, batchCount, variantStyle, planStyle);
+          const providerOutput = await generateWithFallback(providerInput);
+          await updateGenerationJob(job.id, {
+            progress: job.mode === 'design-variants' || job.mode === 'plan-colorize' ? resolveVariantCompleteProgress(batchCount, index) : 75,
+            diagnostics,
+          });
+          return { index, variantStyle, planStyle, providerOutput };
+        } catch (error) {
+          if (job.mode !== 'plan-colorize' || batchCount <= 1) throw error;
+          return { index, variantStyle, planStyle, error };
+        }
       },
     );
+    const successfulProviderResults = providerResults.filter(isProviderBatchSuccess);
+    const failedProviderResults = providerResults.filter(isProviderBatchFailure);
+    if (failedProviderResults.length > 0) {
+      diagnostics.provider = {
+        ...diagnostics.provider,
+        providerError: `${failedProviderResults.length} plan colorize style output(s) failed.`,
+        rawSnippet: failedProviderResults
+          .map(result => `${result.planStyle.name}: ${result.error instanceof Error ? result.error.message : String(result.error)}`)
+          .join('\n')
+          .slice(0, 1200),
+      };
+      try {
+        await refundPartialPlanColorizeCredits(job, failedProviderResults.length);
+      } catch (refundError) {
+        console.warn('Failed to refund partial plan colorize credits', {
+          jobId: job.id,
+          failedCount: failedProviderResults.length,
+          error: refundError instanceof Error ? refundError.message : String(refundError),
+        });
+      }
+    }
+    if (successfulProviderResults.length === 0) {
+      const firstFailure = failedProviderResults[0]?.error;
+      throw firstFailure instanceof Error ? firstFailure : new Error('All plan colorize style outputs failed.');
+    }
     markTiming(diagnostics, 'providerRequestFinishedAt');
-    mergeProviderDiagnostics(diagnostics, providerResults.map(result => result.providerOutput));
-    await updateGenerationJob(job.id, { progress: job.mode === 'design-variants' ? 75 : 75, diagnostics });
+    mergeProviderDiagnostics(diagnostics, successfulProviderResults.map(result => result.providerOutput));
+    await updateGenerationJob(job.id, { progress: job.mode === 'design-variants' || job.mode === 'plan-colorize' ? 75 : 75, diagnostics });
 
-    for (const { index, variantStyle, providerOutput } of providerResults) {
+    for (const { index, variantStyle, planStyle, providerOutput } of successfulProviderResults) {
 
       markTiming(diagnostics, 'postprocessStartedAt', 'postprocess');
       let outputDataUrl = await normalizeGeneratedImageDataUrl({
@@ -293,6 +359,9 @@ async function processGenerationJob(jobId: string): Promise<void> {
           resultCropDataUrl: outputDataUrl,
           maskCropDataUrl: localInpaint.cropMaskDataUrl,
           bbox: localInpaint.bbox,
+          featherRadius: isObjectInsert
+            ? readPositiveInteger(process.env.OBJECT_INSERT_LOCAL_FEATHER_RADIUS, 8)
+            : readPositiveInteger(process.env.LOCAL_INPAINT_FEATHER_RADIUS, 2),
         });
       }
       const output = {
@@ -341,6 +410,12 @@ async function processGenerationJob(jobId: string): Promise<void> {
                 enableScaleEnhance: Boolean(job.config.enableScaleEnhance),
                 enableLandscapeFill: Boolean(job.config.enableLandscapeFill),
                 preserveLinework: job.config.preserveLinework !== false,
+                planColorizeStyleIndex: index,
+                selectedStyleId: planStyle.id,
+                selectedStyleName: planStyle.name,
+                selectedStylePromptHint: planStyle.promptHint,
+                batchGroupId: typeof job.config.batchGroupId === 'string' ? job.config.batchGroupId : undefined,
+                batchCount,
               }
           : job.mode === 'material-replace'
             ? {
@@ -366,9 +441,11 @@ async function processGenerationJob(jobId: string): Promise<void> {
                 objectInsertDebugMode: readObjectInsertDebugMode(job.config),
                 sourceImageAssetId: readObjectInsertJobConfig(job).sourceImageAssetId || job.inputAssetIds[0],
                 objectReferenceAssetId: readObjectInsertJobConfig(job).objectReferenceAssetId || job.inputAssetIds[1],
+                placementGuideAssetId: readObjectInsertJobConfig(job).previewAssetId || job.inputAssetIds[2],
                 placementPreviewAssetId: readObjectInsertJobConfig(job).previewAssetId || job.inputAssetIds[2],
                 placementMaskAssetId: readObjectInsertJobConfig(job).maskAssetId || job.inputAssetIds[3],
                 objectPlacement: readObjectInsertJobConfig(job).placement,
+                positionConstraintStrength: readObjectInsertJobConfig(job).positionConstraintStrength,
               }
           : undefined,
       });
@@ -558,14 +635,24 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   };
 
   const localInpaint = await maybeCreateLocalInpaintContext(rawInput);
+  const localReferenceImageDataUrls = localInpaint && isObjectInsertMode
+    ? await Promise.all((rawInput.referenceImageDataUrls || []).map(dataUrl => cropImageDataUrlToBox(dataUrl, localInpaint.bbox)))
+    : rawInput.referenceImageDataUrls;
   const providerInput = localInpaint
     ? {
         ...rawInput,
         inputImageDataUrl: localInpaint.cropImageDataUrl,
+        referenceImageDataUrls: localReferenceImageDataUrls,
         maskImageDataUrl: localInpaint.cropMaskDataUrl,
         targetWidth: localInpaint.bbox.width,
         targetHeight: localInpaint.bbox.height,
         targetAspectRatio: getAspectRatioString(localInpaint.bbox.width, localInpaint.bbox.height),
+        config: {
+          ...rawInput.config,
+          objectInsertLocalEdit: isObjectInsertMode || undefined,
+          objectInsertLocalCropScale: isObjectInsertMode ? readObjectInsertLocalCropScale() : undefined,
+          objectInsertCropBbox: isObjectInsertMode ? localInpaint.bbox : undefined,
+        },
       }
     : rawInput;
   const prepared = await prepareGenerateInputForProvider(providerInput);
@@ -577,6 +664,8 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     prepared.imageDiagnostics.maskWidth = localInpaint.maskWidth;
     prepared.imageDiagnostics.maskHeight = localInpaint.maskHeight;
     prepared.imageDiagnostics.furnitureReferenceCount = rawInput.furnitureReferenceImageDataUrls?.length || 0;
+    prepared.imageDiagnostics.localEditMode = isObjectInsertMode ? 'object_insert_crop' : 'masked_crop';
+    prepared.imageDiagnostics.localCropScale = isObjectInsertMode ? readObjectInsertLocalCropScale() : undefined;
   }
   return { ...prepared, localInpaint: localInpaint || undefined };
 }
@@ -703,13 +792,29 @@ export async function prepareGenerateInputForProvider(input: GenerateImageInput)
 async function maybeCreateLocalInpaintContext(input: GenerateImageInput): Promise<LocalInpaintContext | null> {
   if (input.mode !== 'inpaint' && input.mode !== 'material-replace') return null;
   if (input.maskMode !== 'asset-mask' || !input.maskImageDataUrl) return null;
+  const isObjectInsert = isObjectInsertInput(input);
 
   return createLocalInpaintContext({
     inputImageDataUrl: input.inputImageDataUrl,
     maskImageDataUrl: input.maskImageDataUrl,
-    paddingRatio: Number(process.env.LOCAL_INPAINT_PADDING_RATIO || 0.15),
-    maxAreaRatio: Number(process.env.LOCAL_INPAINT_MAX_AREA_RATIO || 0.65),
+    paddingRatio: isObjectInsert ? undefined : Number(process.env.LOCAL_INPAINT_PADDING_RATIO || 0.15),
+    cropScale: isObjectInsert ? readObjectInsertLocalCropScale() : undefined,
+    maxAreaRatio: isObjectInsert
+      ? Number(process.env.OBJECT_INSERT_LOCAL_CROP_MAX_AREA_RATIO || 0.85)
+      : Number(process.env.LOCAL_INPAINT_MAX_AREA_RATIO || 0.65),
   });
+}
+
+function readObjectInsertLocalCropScale(): number {
+  const parsed = Number(process.env.OBJECT_INSERT_LOCAL_CROP_SCALE || 1.75);
+  if (!Number.isFinite(parsed)) return 1.75;
+  return Math.min(2, Math.max(1.5, parsed));
+}
+
+function isObjectInsertInput(input: GenerateImageInput): boolean {
+  return input.step === 'object_insert'
+    || input.config.step === 'object_insert'
+    || isRecord(input.config.objectInsert);
 }
 
 export function resolveProviderImageSettings(qualityMode: QualityMode | undefined): ProviderImageSettings {
@@ -1373,21 +1478,23 @@ const sameStyleVariantPrompts = [
   'Variant H: refined presentation with distinctive atmosphere.',
 ];
 
-function resolveBatchCountForJob(job: GenerationJob): 1 | 2 | 4 | 8 {
+function resolveBatchCountForJob(job: GenerationJob): number {
   return resolveBatchCountForJobConfig(job.mode, job.config);
 }
 
-function resolveBatchCountForJobConfig(mode: GenerationRecord['mode'], config: Record<string, unknown>): 1 | 2 | 4 | 8 {
+function resolveBatchCountForJobConfig(mode: GenerationRecord['mode'], config: Record<string, unknown>): number {
   const outputCount = getGenerationOutputCount(mode, config);
-  return outputCount === 2 || outputCount === 4 || outputCount === 8 ? outputCount : 1;
+  if (mode === 'design-variants') return outputCount === 2 || outputCount === 4 || outputCount === 8 ? outputCount : 1;
+  if (mode === 'plan-colorize') return outputCount >= 1 && outputCount <= maxPlanColorizeBatchCount ? Math.floor(outputCount) : 1;
+  return 1;
 }
 
-function resolveVariantStyles(config: Record<string, unknown>, batchCount: 1 | 2 | 4 | 8): string[] {
+function resolveVariantStyles(config: Record<string, unknown>, batchCount: number): string[] {
   if (batchCount === 1) return ['modern-minimal'];
   const styles = Array.isArray(config.variantStyles)
     ? config.variantStyles.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
     : [];
-  const defaults = defaultVariantStylesByCount[batchCount];
+  const defaults = batchCount === 2 || batchCount === 4 || batchCount === 8 ? defaultVariantStylesByCount[batchCount] : defaultVariantStylesByCount[4];
   const resolved = [...styles];
   for (const style of defaults) {
     if (resolved.length >= batchCount) break;
@@ -1396,13 +1503,53 @@ function resolveVariantStyles(config: Record<string, unknown>, batchCount: 1 | 2
   return resolved.slice(0, batchCount);
 }
 
+function resolvePlanColorizeStylesForJob(config: Record<string, unknown>, batchCount: number): PlanColorizeStyleOption[] {
+  const ids = Array.isArray(config.planColorizeStyleIds)
+    ? config.planColorizeStyleIds.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+  const fallbackId = typeof config.selectedStyleId === 'string' ? config.selectedStyleId : undefined;
+  const styles = resolvePlanColorizeStyles(ids.length > 0 ? ids : fallbackId, fallbackId).slice(0, maxPlanColorizeBatchCount);
+  const resolved = [...styles];
+  while (resolved.length < batchCount) {
+    const fallback = findPlanColorizeStyle(resolved[resolved.length]?.id) || planColorizeStyleOptions[resolved.length % planColorizeStyleOptions.length];
+    resolved.push(fallback);
+  }
+  return resolved.slice(0, batchCount);
+}
+
+function isProviderBatchSuccess(result: ProviderBatchResult): result is ProviderBatchSuccess {
+  return 'providerOutput' in result;
+}
+
+function isProviderBatchFailure(result: ProviderBatchResult): result is ProviderBatchFailure {
+  return 'error' in result;
+}
+
 function buildProviderInputForVariant(
   job: GenerationJob,
   input: GenerateImageInput,
   index: number,
-  batchCount: 1 | 2 | 4 | 8,
+  batchCount: number,
   variantStyle: string,
+  planStyle?: PlanColorizeStyleOption,
 ): GenerateImageInput {
+  if (job.mode === 'plan-colorize') {
+    const style = planStyle || planColorizeStyleOptions[0];
+    return {
+      ...input,
+      prompt: buildPlanColorizeBatchPrompt(job, index, batchCount, style, input.qualityMode),
+      config: {
+        ...input.config,
+        planColorizeStyleIndex: index,
+        selectedStyleId: style.id,
+        selectedStyleName: style.name,
+        selectedStylePromptHint: style.promptHint,
+        batchGroupId: typeof job.config.batchGroupId === 'string' ? job.config.batchGroupId : undefined,
+        batchCount,
+      },
+    };
+  }
+
   if (job.mode !== 'design-variants') return input;
 
   return {
@@ -1472,7 +1619,7 @@ function readProviderMs(outputs: GenerateImageOutput[]): number | undefined {
   return values.reduce((sum, value) => sum + value, 0);
 }
 
-function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount: 1 | 2 | 4 | 8, style: string, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
+function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount: number, style: string, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
   const strategy = job.config.variantStrategy === 'same-style' ? 'same-style' : 'style-matrix';
   const customStyle = style === 'custom' && typeof job.config.customStyleLabel === 'string'
     ? `Direction: ${job.config.customStyleLabel.trim()}.`
@@ -1486,6 +1633,22 @@ function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount:
     `This is ${readVariantLabel(index)} of ${batchCount}.`,
   ];
   return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+}
+
+function buildPlanColorizeBatchPrompt(job: GenerationJob, index: number, batchCount: number, style: PlanColorizeStyleOption, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
+  return [
+    buildSmartPromptForJob(job, qualityMode, {
+      config: {
+        ...job.config,
+        selectedStyleId: style.id,
+        selectedStyleName: style.name,
+        selectedStylePromptHint: style.promptHint,
+        planColorizeStyleIndex: index,
+        batchCount,
+      },
+    }),
+    `This is colored plan style ${index + 1} of ${batchCount}: ${style.name}.`,
+  ].filter(part => part.trim().length > 0).join(' ');
 }
 
 function readVariantLabel(index: number): string {
@@ -1503,15 +1666,16 @@ function resolveVariantName(config: Record<string, unknown>, index: number): str
   return names[index] || readVariantLabel(index);
 }
 
-function resolveVariantStartProgress(batchCount: 1 | 2 | 4 | 8, index: number): number {
+function resolveVariantStartProgress(batchCount: number, index: number): number {
   if (batchCount === 1) return 28;
   return index === 0 ? 15 : resolveVariantCompleteProgress(batchCount, index - 1);
 }
 
-function resolveVariantCompleteProgress(batchCount: 1 | 2 | 4 | 8, index: number): number {
+function resolveVariantCompleteProgress(batchCount: number, index: number): number {
   if (batchCount === 2) return index === 0 ? 60 : 90;
   if (batchCount === 4) return [40, 60, 80, 90][index] || 90;
   if (batchCount === 8) return [25, 35, 45, 55, 65, 75, 84, 92][index] || 92;
+  if (batchCount > 1) return Math.min(92, Math.round(30 + ((index + 1) / batchCount) * 60));
   return 80;
 }
 
@@ -1545,6 +1709,7 @@ function buildSmartPromptForJob(job: GenerationJob, qualityMode: QualityMode = r
 }
 
 interface BuildSmartPromptInputForJob {
+  config: Record<string, unknown>;
   variantStyle: string;
   variantName: string;
 }
@@ -1703,6 +1868,7 @@ function isObjectInsertJob(job: GenerationJob): boolean {
 }
 
 type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview';
+type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
 
 function readObjectInsertDebugMode(config: Record<string, unknown>): ObjectInsertDebugMode {
   const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
@@ -1717,6 +1883,16 @@ function readObjectInsertDebugMode(config: Record<string, unknown>): ObjectInser
     || value === 'source_object_preview'
     ? value
     : 'full';
+}
+
+function readObjectInsertPositionConstraintStrength(config: Record<string, unknown>): ObjectInsertPositionConstraintStrength {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.positionConstraintStrength === 'string'
+    ? nested.positionConstraintStrength
+    : typeof config.positionConstraintStrength === 'string'
+      ? config.positionConstraintStrength
+      : '';
+  return value === 'low' || value === 'medium' || value === 'high' ? value : 'high';
 }
 
 function objectInsertIncludesObject(mode: ObjectInsertDebugMode): boolean {
@@ -1736,16 +1912,21 @@ function readObjectInsertJobConfig(job: GenerationJob): {
   objectReferenceAssetId: string;
   previewAssetId: string;
   maskAssetId: string;
+  positionConstraintStrength: ObjectInsertPositionConstraintStrength;
   placement?: Record<string, unknown>;
 } {
   const nested = isRecord(job.config.objectInsert) ? job.config.objectInsert : {};
   return {
     sourceImageAssetId: readConfigStringValue(nested.sourceImageAssetId) || readConfigStringValue(job.config.sourceImageAssetId),
     objectReferenceAssetId: readConfigStringValue(nested.objectReferenceAssetId) || readConfigStringValue(job.config.objectReferenceAssetId),
-    previewAssetId: readConfigStringValue(nested.previewAssetId) || readConfigStringValue(job.config.placementPreviewAssetId),
+    previewAssetId: readConfigStringValue(nested.guideAssetId)
+      || readConfigStringValue(nested.previewAssetId)
+      || readConfigStringValue(job.config.placementGuideAssetId)
+      || readConfigStringValue(job.config.placementPreviewAssetId),
     maskAssetId: readConfigStringValue(nested.maskAssetId)
       || readConfigStringValue(job.config.placementMaskAssetId)
       || readConfigStringValue(job.config.maskAssetId),
+    positionConstraintStrength: readObjectInsertPositionConstraintStrength(job.config),
     placement: isRecord(nested.placement)
       ? nested.placement
       : isRecord(job.config.objectPlacement)

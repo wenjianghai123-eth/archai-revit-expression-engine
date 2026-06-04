@@ -97,15 +97,21 @@ const panoramaBasePrompt = [
 ].join('\n');
 
 const objectInsertBasePrompt = [
-  '第一张图是原始室内/建筑场景。',
-  '第二张图是家具/物体参考图，仅用于参考大致形态、材质、颜色和比例。',
-  '第三张图是摆放位置示意图，仅用于判断位置、尺度和方向。',
-  '请在第一张图的指定区域生成一个相似的无品牌家具/物体，使其自然融入原场景。',
-  '匹配原图的透视、尺度、光照、阴影、材质、景深和遮挡关系。',
-  '保持原图中未标记区域尽量不变。',
-  '不要生成任何品牌 Logo、商标、水印、文字、人物或敏感内容。',
-  '避免产生平面贴片感。',
-  '输出真实自然的建筑/室内效果图。',
+  'Object Insert for architectural/interior local editing.',
+  'Input image 1: the original interior/architectural scene image.',
+  'Input image 2: the upholstered chair reference image. Use it only for general chair form, upholstery material, color, proportion, and style cues.',
+  'Input image 3: the placement guide. It shows the exact target guide box, center, size, rotation, translucent chair placement, and outline.',
+  'Input image 4, if provided: the edit-area mask. White is editable; black and unmasked areas must remain unchanged.',
+  'Insert one similar upholstered chair according to the placement guide and selected position constraint strength.',
+  'Use the masked / guided area as the placement authority.',
+  'Keep the chair aligned with the guide box center, size, and rotation according to the selected position constraint strength.',
+  'Place it behind the long sofa if spatially applicable.',
+  'Respect occlusion: if the sofa blocks the chair, the chair should be partially occluded.',
+  'Match perspective, scale, lighting, shadows, materials, depth of field, and scene atmosphere.',
+  'Keep all unmasked regions unchanged.',
+  'Do not freely change the composition, camera framing, room layout, sofa position, wall/floor/ceiling structure, or unrelated furniture.',
+  'Do not generate brand Logo, trademarks, watermarks, text, people, or sensitive content.',
+  'Output one natural photorealistic architectural/interior rendering.',
 ].join('\n');
 
 const panoramaReferenceTypeLabels: Record<string, string> = {
@@ -325,11 +331,16 @@ function buildMaterialReplacePrompt(input: BuildSmartPromptInput, userPrompt: st
 function buildPlanColorizePrompt(input: BuildSmartPromptInput, userPrompt: string): string {
   const drawingType = readConfigString(input.config, 'drawingType') || 'residential';
   const template = readConfigString(input.config, 'template') || 'colored-plan';
+  const selectedStyleName = readConfigString(input.config, 'selectedStyleName');
+  const selectedStylePromptHint = readConfigString(input.config, 'selectedStylePromptHint');
   const labels = readStringArray(input.config, 'manualRoomLabels');
   return joinPrompt([
     planColorizeBasePrompt,
     drawingTypePrompts[drawingType],
     planTemplatePrompts[template],
+    selectedStyleName ? `Selected colored-plan style: ${selectedStyleName}.` : undefined,
+    selectedStylePromptHint,
+    'Keep the original plan structure, walls, doors, windows, room divisions, and circulation geometry unchanged. The selected style should only affect color palette, material fills, atmosphere, and presentation expression.',
     buildStructuredContext(input.config, input.mode),
     readBooleanConfig(input.config, 'enableZoningColor') ? 'Use distinct but harmonious colors for different functional areas.' : undefined,
     readBooleanConfig(input.config, 'enableRoomLabels') ? 'Add concise room or area labels where appropriate.' : undefined,
@@ -359,6 +370,7 @@ function buildObjectInsertPrompt(input: BuildSmartPromptInput, userPrompt: strin
   return joinPrompt([
     objectInsertBasePrompt,
     buildObjectInsertInputModePrompt(debugMode),
+    buildObjectInsertPositionConstraintPrompt(input.config),
     buildStructuredContext(input.config, input.mode),
     buildObjectPlacementPrompt(input.config),
     changeStrengthInstruction(readSmartPromptChangeStrength(input.config, input.mode), input.mode),
@@ -370,33 +382,33 @@ function buildObjectInsertPrompt(input: BuildSmartPromptInput, userPrompt: strin
 function buildObjectInsertInputModePrompt(mode: string): string {
   if (mode === 'source_prompt') {
     return [
-      '调试输入：本次仅提交第一张原始场景图和文字要求。',
-      '请只根据第一张图和文字要求进行克制的室内/建筑局部表达，保持画面主体结构稳定。',
+      'Debug input: only image 1 and the text prompt are provided.',
+      'Without a placement guide or mask, keep the edit conservative and do not freely alter the composition.',
     ].join('\n');
   }
 
   if (mode === 'source_object') {
     return [
-      '调试输入：本次提交第一张原始场景图和第二张家具/物体参考图，不提交摆放示意图或 mask。',
-      '第二张图只用于参考形态、材质、颜色和比例；如位置不明确，请做保守、自然的放置判断。',
+      'Debug input: image 1 and image 2 are provided, but no placement guide or mask is provided.',
+      'Use image 2 only for chair form, material, color, and proportion; keep placement conservative if the target position is not explicit.',
     ].join('\n');
   }
 
   if (mode === 'source_object_mask') {
     return [
-      '调试输入：本次提交第一张原始场景图、第二张家具/物体参考图和局部编辑 mask，不提交摆放示意图。',
-      'mask 的白色区域表示目标区域；黑色区域和未标记区域尽量保持不变。',
+      'Debug input: image 1, image 2, and the edit-area mask are provided, but no placement guide is provided.',
+      'The chair must stay inside the white mask area. Keep black and unmasked areas unchanged.',
     ].join('\n');
   }
 
   if (mode === 'source_object_preview') {
     return [
-      '调试输入：本次提交第一张原始场景图、第二张家具/物体参考图和第三张摆放位置示意图，不提交 mask。',
-      '第三张图仅用于判断位置、尺度和方向。',
+      'Debug input: image 1, image 2, and image 3 placement guide are provided, but no mask is provided.',
+      'Image 3 is the strongest authority for the chair position, center, size, rotation, and guide box.',
     ].join('\n');
   }
 
-  return '完整输入：第一张原始场景图、第二张家具/物体参考图、第三张摆放位置示意图，以及局部编辑 mask。';
+  return 'Full input: image 1 original scene, image 2 upholstered chair reference, image 3 placement guide, and image 4 edit-area mask. The placement guide and mask define location, size, rotation, and edit extent according to the selected position constraint strength.';
 }
 
 function readObjectInsertDebugMode(config: object | undefined): string {
@@ -410,6 +422,37 @@ function readObjectInsertDebugMode(config: object | undefined): string {
     : 'full';
 }
 
+function buildObjectInsertPositionConstraintPrompt(config: object | undefined): string {
+  const strength = readObjectInsertPositionConstraintStrength(config);
+  if (strength === 'low') {
+    return [
+      'Position constraint strength: low.',
+      'The generated chair may be naturally adjusted near the guided area when needed for perspective, floor contact, occlusion, or scene logic.',
+      'Keep it close to the placement guide and do not move it to a different functional area.',
+    ].join('\n');
+  }
+  if (strength === 'medium') {
+    return [
+      'Position constraint strength: medium.',
+      'Keep the chair as close as possible to the user placement guide center, size, and rotation, while allowing only small natural corrections for perspective, floor contact, and occlusion.',
+      'The chair should remain visually aligned with the guide / mask area.',
+    ].join('\n');
+  }
+  return [
+    'Position constraint strength: high.',
+    'The chair must be generated inside the guide / mask specified area and must not visibly drift away from the guide box center, size, or rotation.',
+    'Treat the placement guide, mask, and normalized placement metadata as strict location and scale constraints.',
+    'Keep all unmasked regions unchanged.',
+  ].join('\n');
+}
+
+function readObjectInsertPositionConstraintStrength(config: object | undefined): string {
+  const nested = readConfigValue(config, 'objectInsert');
+  const nestedValue = isRecord(nested) ? readConfigString(nested, 'positionConstraintStrength') : '';
+  const value = nestedValue || readConfigString(config, 'positionConstraintStrength');
+  return value === 'low' || value === 'medium' || value === 'high' ? value : 'high';
+}
+
 function buildObjectPlacementPrompt(config: object | undefined): string | undefined {
   const placement = readConfigValue(config, 'objectPlacement');
   if (!placement || typeof placement !== 'object' || Array.isArray(placement)) return undefined;
@@ -420,7 +463,20 @@ function buildObjectPlacementPrompt(config: object | undefined): string | undefi
   const height = readFiniteNumber(record.height);
   const rotation = readFiniteNumber(record.rotation);
   if ([x, y, width, height, rotation].every(value => value === undefined)) return undefined;
-  return `Placement metadata in source-image pixels: x=${formatPlacementNumber(x)}, y=${formatPlacementNumber(y)}, width=${formatPlacementNumber(width)}, height=${formatPlacementNumber(height)}, rotation=${formatPlacementNumber(rotation)} degrees. Use the placement preview and mask as the visual authority if metadata and pixels differ.`;
+  const sourceWidth = readFiniteNumber(readConfigValue(config, 'sourceImageWidth'));
+  const sourceHeight = readFiniteNumber(readConfigValue(config, 'sourceImageHeight'));
+  const normalized = buildNormalizedPlacementMetadata({ x, y, width, height, rotation, sourceWidth, sourceHeight });
+  const strength = readObjectInsertPositionConstraintStrength(config);
+  const metadataInstruction = strength === 'low'
+    ? 'Use this metadata together with the placement guide and mask. The generated chair may make small natural placement corrections near this area when required by perspective, floor contact, or occlusion.'
+    : strength === 'medium'
+      ? 'Use this metadata together with the placement guide and mask. The generated chair should remain closely centered, sized, and rotated according to these values, with only small natural corrections.'
+      : 'Use this metadata together with the placement guide and mask. The generated chair should remain centered, sized, and rotated according to these values and must not drift outside the guided / masked area.';
+  return [
+    `Placement metadata in source-image pixels: x=${formatPlacementNumber(x)}, y=${formatPlacementNumber(y)}, width=${formatPlacementNumber(width)}, height=${formatPlacementNumber(height)}, rotation=${formatPlacementNumber(rotation)} degrees.`,
+    normalized,
+    metadataInstruction,
+  ].filter((part): part is string => Boolean(part)).join('\n');
 }
 
 function buildPanoramaReferencePrompt(config: object | undefined): string | undefined {
@@ -570,6 +626,34 @@ function readFiniteNumber(value: unknown): number | undefined {
 
 function formatPlacementNumber(value: number | undefined): string {
   return value === undefined ? 'unknown' : String(Number(value.toFixed(2)));
+}
+
+function buildNormalizedPlacementMetadata(input: {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  rotation?: number;
+  sourceWidth?: number;
+  sourceHeight?: number;
+}): string | undefined {
+  if (!input.sourceWidth || !input.sourceHeight || !input.width || !input.height || input.x === undefined || input.y === undefined) return undefined;
+  const centerX = (input.x + input.width / 2) / input.sourceWidth;
+  const centerY = (input.y + input.height / 2) / input.sourceHeight;
+  const widthRatio = input.width / input.sourceWidth;
+  const heightRatio = input.height / input.sourceHeight;
+  return [
+    'Normalized placement metadata:',
+    `centerX=${formatRatio(centerX)}`,
+    `centerY=${formatRatio(centerY)}`,
+    `widthRatio=${formatRatio(widthRatio)}`,
+    `heightRatio=${formatRatio(heightRatio)}`,
+    `rotation=${formatPlacementNumber(input.rotation)} degrees`,
+  ].join(' ');
+}
+
+function formatRatio(value: number): string {
+  return String(Number(value.toFixed(4)));
 }
 
 function readStringArray(config: object | undefined, key: string): string[] {

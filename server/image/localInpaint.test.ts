@@ -1,6 +1,6 @@
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
-import { composeLocalInpaintResult, createLocalInpaintContext, getMaskBoundingBox } from './localInpaint';
+import { composeLocalInpaintResult, createLocalInpaintContext, cropImageDataUrlToBox, getMaskBoundingBox } from './localInpaint';
 import { toImageDataUrl } from './imageMetadata';
 
 describe('local inpaint image helpers', () => {
@@ -51,6 +51,28 @@ describe('local inpaint image helpers', () => {
       paddingRatio: 0,
       maxAreaRatio: 0.65,
     })).resolves.toBeNull();
+  });
+
+  it('supports scaled object-insert crop and crops guide images to the same bbox', async () => {
+    const original = await sharp({ create: { width: 100, height: 80, channels: 3, background: '#111111' } }).png().toBuffer();
+    const guide = await sharp({ create: { width: 100, height: 80, channels: 3, background: '#222222' } }).png().toBuffer();
+    const mask = await createMask(100, 80, { x: 40, y: 30, width: 20, height: 20 });
+    const context = await createLocalInpaintContext({
+      inputImageDataUrl: toImageDataUrl(original, 'image/png'),
+      maskImageDataUrl: toImageDataUrl(mask, 'image/png'),
+      cropScale: 1.75,
+      maxAreaRatio: 0.85,
+    });
+
+    expect(context?.bbox.width).toBe(35);
+    expect(context?.bbox.height).toBe(35);
+    expect(context?.bbox.x).toBe(33);
+    expect(context?.bbox.y).toBe(23);
+
+    const croppedGuide = await cropImageDataUrlToBox(toImageDataUrl(guide, 'image/png'), context?.bbox || { x: 0, y: 0, width: 1, height: 1 });
+    const metadata = await sharp(Buffer.from(croppedGuide.split(',')[1], 'base64')).metadata();
+    expect(metadata.width).toBe(35);
+    expect(metadata.height).toBe(35);
   });
 });
 

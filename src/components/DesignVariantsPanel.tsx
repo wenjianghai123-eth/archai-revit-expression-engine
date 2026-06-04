@@ -1,8 +1,9 @@
 import { Download, FileText, Heart, ImagePlus, LayoutGrid, Printer, Sparkles, Star } from 'lucide-react';
 import { type ReactNode, useState } from 'react';
 import { designVariantPacks, getDesignVariantPack } from '../constants/designVariantPacks';
-import { DesignVariantBatchCount, GenerationConfig, GenerationResultOption, SecondaryEditAction, StepState, UploadedImage, VariantStyleKey } from '../types';
+import { DesignVariantBatchCount, GenerationConfig, GenerationResultOption, GenerationStep, SecondaryEditAction, StepState, UploadedImage, VariantStyleKey } from '../types';
 import { downloadDataUrl } from '../utils/download';
+import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 import { getDataUrlExtension } from './workspace/workspaceUtils';
 
@@ -210,6 +211,14 @@ export function DesignVariantsPanel({
 
             <label className="block rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <span className="text-xs font-bold text-slate-500">额外补充要求</span>
+              <div className="mt-3">
+                <PromptVoiceAssistant
+                  generationStep={GenerationStep.DesignVariants}
+                  currentPrompt={state.config.customPrompt || ''}
+                  context={state.config as unknown as Record<string, unknown>}
+                  onApplyPrompt={prompt => onUpdateConfig({ customPrompt: prompt })}
+                />
+              </div>
               <textarea value={state.config.customPrompt || ''} onChange={event => onUpdateConfig({ customPrompt: event.currentTarget.value })} placeholder="可选，例如：保留原始结构和相机角度，强化自然采光。" className="mt-3 h-24 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-blue-300" />
             </label>
           </aside>

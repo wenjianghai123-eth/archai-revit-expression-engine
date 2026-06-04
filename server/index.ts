@@ -82,11 +82,13 @@ import {
   removeQueuedGenerationJob,
   restorePendingGenerationJobs,
 } from './generationService';
+import { defaultPlanColorizeStyleId, maxPlanColorizeBatchCount, resolvePlanColorizeStyles } from '../src/constants/planColorizeStyles';
 import { getGenerationCreditCost, getGenerationOutputCount } from '../src/utils/generationCredits';
 import { createAssetsRouter } from './routes/assets';
 import { createSupabaseAuthUser, resetSupabaseAuthUserPassword, updateSupabaseAuthUserMetadata } from './supabaseAdmin';
 import { getModelConversionConfig } from './modelConversionService';
 import { getModelOptimizationConfig } from './modelOptimizationService';
+import { polishPromptText, PromptPolishRequest, PromptPolishResult } from './promptPolishService';
 
 export const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -176,6 +178,29 @@ app.get('/api/auth/me', (req: Request, res: Response) => {
   }
 
   res.json(apiOk({ user }));
+});
+
+app.post('/api/prompts/polish', requireAuth, async (
+  req: Request,
+  res: Response<ApiResponse<PromptPolishResult>>,
+  next: NextFunction,
+) => {
+  const body = validatePromptPolishBody(req.body);
+  if (body.ok === false) {
+    res.status(400).json(apiError(body.error.message, body.error.code));
+    return;
+  }
+
+  try {
+    res.json(apiOk(await polishPromptText(body.value)));
+  } catch (error) {
+    const code = error instanceof Error ? (error as Error & { code?: string }).code : undefined;
+    if (code === 'PROMPT_POLISH_SAFETY_BLOCKED') {
+      res.status(400).json(apiError(error instanceof Error ? error.message : '提示词包含高风险内容。', code));
+      return;
+    }
+    next(error);
+  }
 });
 
 app.use('/api/assets', createAssetsRouter({ maxImageMb, maxModelMb }));
@@ -861,6 +886,43 @@ function requireLegacyGenerationEndpoint(_req: Request, res: Response, next: Nex
   next();
 }
 
+function validatePromptPolishBody(
+  body: unknown,
+): { ok: true; value: PromptPolishRequest } | { ok: false; error: ApiError } {
+  if (!isRecord(body)) {
+    return { ok: false, error: { message: 'Request body must be a JSON object.', code: 'INVALID_REQUEST_BODY' } };
+  }
+
+  if (!isNonEmptyString(body.rawText)) {
+    return { ok: false, error: { message: '请先输入或识别一段语音文本。', code: 'PROMPT_POLISH_RAW_TEXT_REQUIRED' } };
+  }
+
+  const rawText = body.rawText.trim();
+  if (rawText.length > 2000) {
+    return { ok: false, error: { message: '语音文本过长，请控制在 2000 字以内。', code: 'PROMPT_POLISH_RAW_TEXT_TOO_LONG' } };
+  }
+
+  const generationStep = typeof body.generationStep === 'string' || typeof body.generationStep === 'number'
+    ? String(body.generationStep).trim()
+    : '';
+  if (!generationStep) {
+    return { ok: false, error: { message: 'generationStep is required.', code: 'PROMPT_POLISH_STEP_REQUIRED' } };
+  }
+
+  if (body.context !== undefined && !isRecord(body.context)) {
+    return { ok: false, error: { message: 'context must be an object.', code: 'PROMPT_POLISH_CONTEXT_INVALID' } };
+  }
+
+  return {
+    ok: true,
+    value: {
+      rawText,
+      generationStep,
+      context: isRecord(body.context) ? body.context : undefined,
+    },
+  };
+}
+
 function validateGenerateBody(
   body: unknown,
   options: { promptRequired: boolean } = { promptRequired: false },
@@ -1412,10 +1474,17 @@ function normalizePlanColorizeConfig(
     delete config.enableLandscapeFill;
     delete config.preserveLinework;
     delete config.manualRoomLabels;
+    delete config.planColorizeBatchEnabled;
+    delete config.planColorizeStyleIds;
+    delete config.planColorizeStyleNames;
+    delete config.planColorizeStylePromptHints;
+    delete config.selectedStyleId;
+    delete config.selectedStyleName;
+    delete config.selectedStylePromptHint;
+    delete config.batchGroupId;
     return { ok: true };
   }
 
-  config.batchCount = 1;
   config.drawingType = typeof config.drawingType === 'string' && planDrawingTypes.has(config.drawingType) ? config.drawingType : 'residential';
   config.template = typeof config.template === 'string' && planExpressionTemplates.has(config.template) ? config.template : 'colored-plan';
   config.enableZoningColor = config.enableZoningColor !== false;
@@ -1426,6 +1495,24 @@ function normalizePlanColorizeConfig(
   config.enableLandscapeFill = config.enableLandscapeFill === true;
   config.preserveLinework = config.preserveLinework !== false;
   config.manualRoomLabels = readStringArray(config.manualRoomLabels).slice(0, 24);
+  const requestedStyleIds = readStringArray(config.planColorizeStyleIds).slice(0, maxPlanColorizeBatchCount);
+  const selectedStyleId = typeof config.selectedStyleId === 'string' && config.selectedStyleId.trim().length > 0
+    ? config.selectedStyleId.trim()
+    : defaultPlanColorizeStyleId;
+  const styles = resolvePlanColorizeStyles(requestedStyleIds.length > 0 ? requestedStyleIds : selectedStyleId, selectedStyleId)
+    .slice(0, maxPlanColorizeBatchCount);
+  const primaryStyle = styles[0];
+  config.batchCount = styles.length;
+  config.planColorizeBatchEnabled = styles.length > 1 || config.planColorizeBatchEnabled === true;
+  config.planColorizeStyleIds = styles.map(style => style.id);
+  config.planColorizeStyleNames = styles.map(style => style.name);
+  config.planColorizeStylePromptHints = styles.map(style => style.promptHint);
+  config.selectedStyleId = primaryStyle.id;
+  config.selectedStyleName = primaryStyle.name;
+  config.selectedStylePromptHint = primaryStyle.promptHint;
+  config.batchGroupId = typeof config.batchGroupId === 'string' && config.batchGroupId.trim().length > 0
+    ? config.batchGroupId.trim().slice(0, 120)
+    : `plan-colorize-${Date.now()}-${randomBytes(4).toString('hex')}`;
   if (typeof config.customPrompt !== 'string' || config.customPrompt.trim().length === 0) delete config.customPrompt;
   else config.customPrompt = config.customPrompt.trim();
   return { ok: true };
@@ -1579,6 +1666,7 @@ function validateGenerationJobCreateBody(
     const inputAssetIds = body.inputAssetIds.map(item => item.trim());
     const objectInsertConfig = isRecord(config.objectInsert) ? { ...config.objectInsert } : {};
     const debugMode = readObjectInsertDebugMode(config);
+    const positionConstraintStrength = readObjectInsertPositionConstraintStrength(config);
     const needsObject = objectInsertIncludesObject(debugMode);
     const needsPreview = objectInsertIncludesPreview(debugMode);
     const needsMask = objectInsertIncludesMask(debugMode);
@@ -1593,8 +1681,12 @@ function validateGenerationJobCreateBody(
       : isNonEmptyString(config.objectReferenceAssetId)
         ? config.objectReferenceAssetId.trim()
       : inputAssetIds[1] || '';
-    const placementPreviewAssetId = isNonEmptyString(objectInsertConfig.previewAssetId)
+    const placementPreviewAssetId = isNonEmptyString(objectInsertConfig.guideAssetId)
+      ? objectInsertConfig.guideAssetId.trim()
+      : isNonEmptyString(objectInsertConfig.previewAssetId)
       ? objectInsertConfig.previewAssetId.trim()
+      : isNonEmptyString(config.placementGuideAssetId)
+      ? config.placementGuideAssetId.trim()
       : isNonEmptyString(config.placementPreviewAssetId)
       ? config.placementPreviewAssetId.trim()
       : inputAssetIds[2] || '';
@@ -1611,7 +1703,7 @@ function validateGenerationJobCreateBody(
       : needsObject && (!objectReferenceAssetId || !inputAssetIds.includes(objectReferenceAssetId))
         ? '元素植入需要物体参考图素材。'
       : needsPreview && (!placementPreviewAssetId || !inputAssetIds.includes(placementPreviewAssetId))
-        ? '元素植入需要 placement preview 素材。'
+        ? '元素植入需要 placement guide 素材。'
       : needsMask && (!placementMaskAssetId || !inputAssetIds.includes(placementMaskAssetId))
         ? '元素植入需要 placement mask 素材。'
       : '';
@@ -1632,10 +1724,13 @@ function validateGenerationJobCreateBody(
 
     config.sourceImageAssetId = sourceImageAssetId;
     config.objectInsertDebugMode = debugMode;
+    config.positionConstraintStrength = positionConstraintStrength;
     if (needsObject) config.objectReferenceAssetId = objectReferenceAssetId;
     else delete config.objectReferenceAssetId;
     if (needsPreview) config.placementPreviewAssetId = placementPreviewAssetId;
     else delete config.placementPreviewAssetId;
+    if (needsPreview) config.placementGuideAssetId = placementPreviewAssetId;
+    else delete config.placementGuideAssetId;
     if (needsMask) config.placementMaskAssetId = placementMaskAssetId;
     else delete config.placementMaskAssetId;
     if (placement) config.objectPlacement = placement;
@@ -1643,11 +1738,13 @@ function validateGenerationJobCreateBody(
     config.objectInsert = {
       sourceImageAssetId,
       objectReferenceAssetId: needsObject ? objectReferenceAssetId : undefined,
+      guideAssetId: needsPreview ? placementPreviewAssetId : undefined,
       previewAssetId: needsPreview ? placementPreviewAssetId : undefined,
       maskAssetId: needsMask ? placementMaskAssetId : undefined,
       placement,
       extraPrompt,
       debugMode,
+      positionConstraintStrength,
     };
     if (needsMask) {
       config.maskMode = 'asset-mask';
@@ -1872,6 +1969,7 @@ function isObjectInsertStep(step: GenerationJob['step'], config: Record<string, 
 }
 
 type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview';
+type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
 
 function readObjectInsertDebugMode(config: Record<string, unknown>): ObjectInsertDebugMode {
   const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
@@ -1886,6 +1984,16 @@ function readObjectInsertDebugMode(config: Record<string, unknown>): ObjectInser
     || value === 'source_object_preview'
     ? value
     : 'full';
+}
+
+function readObjectInsertPositionConstraintStrength(config: Record<string, unknown>): ObjectInsertPositionConstraintStrength {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.positionConstraintStrength === 'string'
+    ? nested.positionConstraintStrength
+    : typeof config.positionConstraintStrength === 'string'
+      ? config.positionConstraintStrength
+      : '';
+  return value === 'low' || value === 'medium' || value === 'high' ? value : 'high';
 }
 
 function objectInsertIncludesObject(mode: ObjectInsertDebugMode): boolean {

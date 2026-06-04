@@ -459,10 +459,17 @@ function buildPrompt(input: GenerateImageInput): string {
     return [
       input.prompt,
       buildObjectInsertProviderInputPrompt(input),
-      'Use the second image only for general form, material, color, and proportion guidance when it is provided.',
-      'Use the placement guide or mask only for location, scale, direction, and local target area when provided.',
-      'Generate a similar unbranded furniture/object in the designated area of the first interior/architectural scene.',
-      'Match perspective, scale, lighting, shadows, materials, occlusion, depth, and scene atmosphere. Keep unrelated areas unchanged.',
+      readObjectInsertLocalEditPrompt(input.config),
+      buildObjectInsertPositionConstraintPrompt(input.config),
+      'Insert one similar upholstered chair according to the placement guide and selected position constraint strength.',
+      'Use the masked / guided area as the placement authority.',
+      'Keep the chair aligned with the guide box center, size, and rotation according to the selected position constraint strength.',
+      'Place it behind the long sofa if spatially applicable.',
+      'Respect occlusion: if the sofa blocks the chair, the chair should be partially occluded.',
+      'Use image 2 only for general chair form, upholstery material, color, and proportion guidance when it is provided.',
+      'Use image 3 placement guide and image 4 mask for location, scale, direction, outline, and local edit area according to the selected position constraint strength when provided.',
+      'Match perspective, scale, lighting, shadows, materials, depth of field, and scene atmosphere. Keep all unmasked regions unchanged.',
+      'Do not freely change composition, camera framing, room layout, sofa position, wall/floor/ceiling structure, or unrelated furniture.',
       'Produce one natural photorealistic architectural rendering. Do not generate brand Logo, trademarks, watermarks, text, people, sensitive content, labels, borders, collage, or split-screen.',
     ].filter(isNonEmptyString).join('\n');
   }
@@ -541,19 +548,52 @@ function isObjectInsertInput(input: GenerateImageInput): boolean {
 
 function buildObjectInsertProviderInputPrompt(input: GenerateImageInput): string {
   const mode = readObjectInsertDebugMode(input.config);
+  const sceneLabel = readObjectInsertLocalEdit(input.config)
+    ? 'a local crop from the original interior/architectural scene around the target placement area'
+    : 'the original interior/architectural scene';
   if (mode === 'source_prompt') {
-    return 'Input order: image 1 is the original interior/architectural scene. This debug request sends only the source image and prompt.';
+    return `Input order: image 1 is ${sceneLabel}. This debug request sends only the source image and prompt.`;
   }
   if (mode === 'source_object') {
-    return 'Input order: image 1 is the original interior/architectural scene; image 2 is a furniture/object reference. No placement guide or mask is provided in this debug request.';
+    return `Input order: image 1 is ${sceneLabel}; image 2 is a furniture/object reference. No placement guide or mask is provided in this debug request.`;
   }
   if (mode === 'source_object_mask') {
-    return 'Input order: image 1 is the original interior/architectural scene; image 2 is a furniture/object reference; image 3 is the placement mask. No placement guide is provided in this debug request.';
+    return `Input order: image 1 is ${sceneLabel}; image 2 is a furniture/object reference; image 3 is the placement mask. No placement guide is provided in this debug request.`;
   }
   if (mode === 'source_object_preview') {
-    return 'Input order: image 1 is the original interior/architectural scene; image 2 is a furniture/object reference; image 3 is a placement guide. No mask is provided in this debug request.';
+    return `Input order: image 1 is ${sceneLabel}; image 2 is a furniture/object reference; image 3 is a placement guide with translucent object placement and outline. No mask is provided in this debug request.`;
   }
-  return 'Input order: image 1 is the original interior/architectural scene; image 2 is a furniture/object reference; image 3 is a placement guide; image 4 is the placement mask.';
+  return `Input order: image 1 is ${sceneLabel}; image 2 is a furniture/object reference; image 3 is a placement guide with translucent object placement and outline; image 4 is the precise placement mask.`;
+}
+
+function readObjectInsertLocalEditPrompt(config: Record<string, unknown>): string {
+  if (!readObjectInsertLocalEdit(config)) return '';
+  return 'Local edit mode: edit only this crop region. The system will composite the edited crop back into the full original image, so keep crop boundaries and mask-outside areas visually stable.';
+}
+
+function readObjectInsertLocalEdit(config: Record<string, unknown>): boolean {
+  return config.objectInsertLocalEdit === true;
+}
+
+function buildObjectInsertPositionConstraintPrompt(config: Record<string, unknown>): string {
+  const strength = readObjectInsertPositionConstraintStrength(config);
+  if (strength === 'low') {
+    return 'Position constraint strength: low. The chair may be naturally adjusted near the guided area when needed for perspective, floor contact, or occlusion, but it should remain close to the placement guide.';
+  }
+  if (strength === 'medium') {
+    return 'Position constraint strength: medium. Keep the chair close to the placement guide center, size, and rotation, allowing only small natural corrections for perspective, floor contact, or occlusion.';
+  }
+  return 'Position constraint strength: high. The chair must stay inside the guide / mask area and must not visibly drift away from the guide box center, size, or rotation.';
+}
+
+function readObjectInsertPositionConstraintStrength(config: Record<string, unknown>): string {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.positionConstraintStrength === 'string'
+    ? nested.positionConstraintStrength
+    : typeof config.positionConstraintStrength === 'string'
+      ? config.positionConstraintStrength
+      : '';
+  return value === 'low' || value === 'medium' || value === 'high' ? value : 'high';
 }
 
 function readObjectInsertDebugMode(config: Record<string, unknown>): string {

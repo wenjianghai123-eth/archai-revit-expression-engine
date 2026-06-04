@@ -27,6 +27,7 @@ export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request'
 export type QualityMode = 'draft' | 'fast' | 'balanced' | 'high';
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
 export type DesignVariantBatchCount = 2 | 4 | 8;
+export type PlanColorizeBatchCount = 1 | 2 | 3 | 4 | 5 | 6;
 export type VariantStyleKey =
   | 'modern-minimal'
   | 'wabi-sabi'
@@ -42,6 +43,7 @@ export type VariantStyleKey =
 export type MaterialReplaceStrength = 'subtle' | 'balanced' | 'strong';
 export type SecondaryEditAction = 'regenerate' | 'similar' | 'realism' | 'lighting' | 'style' | 'continue-edit';
 export type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview';
+export type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
 export type PlanDrawingType = 'residential' | 'commercial' | 'office' | 'hotel' | 'landscape' | 'site-plan' | 'custom';
 export type PlanExpressionTemplate = 'zoning-color' | 'colored-plan' | 'landscape-plan' | 'furniture-enhance' | 'annotation-plan' | 'circulation-analysis';
 export type MaterialReplaceEditMode = 'smart-type' | 'mask';
@@ -115,6 +117,15 @@ export interface GenerationJobDiagnostics {
     inputWidthAfter?: number;
     inputHeightAfter?: number;
     referenceCount?: number;
+    localInpaintEnabled?: boolean;
+    localEditMode?: 'masked_crop' | 'object_insert_crop';
+    localCropScale?: number;
+    originalWidth?: number;
+    originalHeight?: number;
+    maskWidth?: number;
+    maskHeight?: number;
+    furnitureReferenceCount?: number;
+    maskBbox?: { x: number; y: number; width: number; height: number };
   };
 }
 
@@ -244,12 +255,20 @@ export interface GenerationConfig {
   preserveStructure?: boolean;
   preserveCamera?: boolean;
   feather?: number;
-  batchCount?: 1 | DesignVariantBatchCount;
+  batchCount?: PlanColorizeBatchCount | DesignVariantBatchCount;
   variantStrategy?: VariantGenerationStrategy;
   stylePackId?: string;
   variantStyles?: VariantStyleKey[];
   variantNames?: string[];
   customStyleLabel?: string;
+  planColorizeBatchEnabled?: boolean;
+  planColorizeStyleIds?: string[];
+  planColorizeStyleNames?: string[];
+  planColorizeStylePromptHints?: string[];
+  selectedStyleId?: string;
+  selectedStyleName?: string;
+  selectedStylePromptHint?: string;
+  batchGroupId?: string;
   maskMode?: 'asset-mask' | 'full-image';
   maskAssetId?: string;
   editMode?: MaterialReplaceEditMode;
@@ -277,11 +296,13 @@ export interface GenerationConfig {
   panoramaReferenceMode?: 'reference_guided';
   panoramaReferenceStrength?: 'low' | 'medium' | 'high';
   objectReferenceAssetId?: string;
+  placementGuideAssetId?: string;
   placementPreviewAssetId?: string;
   placementMaskAssetId?: string;
   objectPlacement?: ObjectPlacement;
   objectInsert?: ObjectInsertConfig;
   objectInsertDebugMode?: ObjectInsertDebugMode;
+  positionConstraintStrength?: ObjectInsertPositionConstraintStrength;
   objectInsertExtraPrompt?: string;
   inputSource?: 'model-capture' | 'uploaded-snapshot';
   modelSnapshotMetadata?: ModelSnapshotMetadata;
@@ -313,11 +334,13 @@ export interface ObjectPlacement {
 export interface ObjectInsertConfig {
   sourceImageAssetId?: string;
   objectReferenceAssetId?: string;
+  guideAssetId?: string;
   previewAssetId?: string;
   maskAssetId?: string;
   placement: ObjectPlacement;
   extraPrompt?: string;
   debugMode?: ObjectInsertDebugMode;
+  positionConstraintStrength?: ObjectInsertPositionConstraintStrength;
 }
 
 export interface GenerationResultOption {

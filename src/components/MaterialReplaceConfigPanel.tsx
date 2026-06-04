@@ -1,4 +1,5 @@
-import { GenerationConfig } from '../types';
+import { GenerationConfig, GenerationStep } from '../types';
+import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 
 interface MaterialReplaceConfigPanelProps {
@@ -169,6 +170,12 @@ export function MaterialReplaceConfigPanel({
 
       <div className="space-y-2">
         <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">额外补充要求</label>
+        <PromptVoiceAssistant
+          generationStep={GenerationStep.MaterialReplace}
+          currentPrompt={config.customMaterialPrompt || ''}
+          context={config as unknown as Record<string, unknown>}
+          onApplyPrompt={prompt => onUpdateConfig({ customMaterialPrompt: prompt })}
+        />
         <textarea
           value={config.customMaterialPrompt || ''}
           onChange={event => onUpdateConfig({ customMaterialPrompt: event.target.value })}

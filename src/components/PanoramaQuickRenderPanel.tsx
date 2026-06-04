@@ -25,6 +25,7 @@ import {
   resolvePreferredModelSource,
 } from './modelAssetUtils';
 import { PanoramaViewer } from './PanoramaViewer';
+import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 
 interface PanoramaQuickRenderPanelProps {
@@ -1240,6 +1241,14 @@ export function PanoramaQuickRenderPanel({
               />
               <label className="block text-xs font-bold text-slate-600">
                 额外补充要求
+                <div className="mt-2">
+                  <PromptVoiceAssistant
+                    generationStep={GenerationStep.PanoramaQuickRender}
+                    currentPrompt={config.customPrompt || ''}
+                    context={config as unknown as Record<string, unknown>}
+                    onApplyPrompt={prompt => onUpdateConfig({ customPrompt: prompt })}
+                  />
+                </div>
                 <textarea
                   value={config.customPrompt || ''}
                   onChange={event => onUpdateConfig({ customPrompt: event.target.value })}

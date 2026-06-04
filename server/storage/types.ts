@@ -172,6 +172,8 @@ export interface GenerationJobDiagnostics {
     referenceBytesAfter?: number;
     payloadBytesApprox?: number;
     localInpaintEnabled?: boolean;
+    localEditMode?: 'masked_crop' | 'object_insert_crop';
+    localCropScale?: number;
     originalWidth?: number;
     originalHeight?: number;
     maskWidth?: number;

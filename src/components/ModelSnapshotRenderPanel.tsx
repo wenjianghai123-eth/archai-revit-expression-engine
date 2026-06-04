@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Box, Camera, CheckCircle2, RefreshCw, Upload } from 'lucide-react';
-import { AssetModel, GenerationConfig, ModelSnapshotMetadata, StepState, UploadedImage } from '../types';
+import { AssetModel, GenerationConfig, GenerationStep, ModelSnapshotMetadata, StepState, UploadedImage } from '../types';
 import { getModelAsset, listModelAssets, ModelAssetRecord, optimizeModelAsset, uploadImageAsset, uploadModelAsset } from '../lib/api';
 import { ModelViewer, ModelViewerHandle } from './ModelViewer';
 import { mapModelAssetRecordToAssetModel, mapModelToOriginalSource } from './modelAssetUtils';
+import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 
 interface ModelSnapshotRenderPanelProps {
@@ -436,6 +437,14 @@ export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputI
               <SmartPromptAssistant mode="model-render" config={state.config} compact onUpdateConfig={onUpdateConfig} />
               <label className="block">
                 <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">额外补充要求</span>
+                <div className="mt-2">
+                  <PromptVoiceAssistant
+                    generationStep={GenerationStep.ModelSnapshotRender}
+                    currentPrompt={state.config.customPrompt || state.config.prompt || ''}
+                    context={state.config as unknown as Record<string, unknown>}
+                    onApplyPrompt={prompt => onUpdateConfig({ customPrompt: prompt })}
+                  />
+                </div>
                 <textarea
                   value={state.config.customPrompt || state.config.prompt}
                   onChange={event => onUpdateConfig({ customPrompt: event.target.value })}

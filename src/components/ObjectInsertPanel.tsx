@@ -1,9 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Crosshair, Download, ImagePlus, Move, RotateCcw, RotateCw, Trash2, Upload } from 'lucide-react';
-import { GenerationConfig, GenerationRunStateOverride, ObjectInsertDebugMode, ObjectPlacement, StepState, UploadedImage } from '../types';
+import {
+  GenerationConfig,
+  GenerationRunStateOverride,
+  GenerationStep,
+  ObjectInsertDebugMode,
+  ObjectInsertPositionConstraintStrength,
+  ObjectPlacement,
+  StepState,
+  UploadedImage,
+} from '../types';
 import { uploadImageAsset } from '../lib/api';
 import { createUploadedImage, validateImageFile } from '../utils/file';
 import { buildImageSafetyNotice, precheckGenerationExtraPrompt } from '../safety/generationSafety';
+import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 
 type UploadKind = 'source' | 'object';
 type InteractionMode = 'move' | 'resize' | 'rotate';
@@ -42,11 +52,20 @@ const acceptedImageTypes = 'image/png,image/jpeg,image/webp';
 const minObjectSize = 24;
 const emptyPlacement: ObjectPlacement = { x: 0, y: 0, width: 0, height: 0, rotation: 0 };
 const objectInsertDebugModeOptions: Array<{ value: ObjectInsertDebugMode; label: string }> = [
-  { value: 'full', label: '完整输入：原图 + 物体 + preview + mask' },
+  { value: 'full', label: '完整输入：原图 + 物体 + guide + mask' },
   { value: 'source_prompt', label: '只提交原图 + prompt' },
   { value: 'source_object', label: '原图 + 物体参考图' },
   { value: 'source_object_mask', label: '原图 + 物体参考图 + mask' },
-  { value: 'source_object_preview', label: '原图 + 物体参考图 + placement preview' },
+  { value: 'source_object_preview', label: '原图 + 物体参考图 + placement guide' },
+];
+const objectInsertPositionConstraintOptions: Array<{
+  value: ObjectInsertPositionConstraintStrength;
+  label: string;
+  description: string;
+}> = [
+  { value: 'low', label: '低', description: '允许 AI 在附近做自然微调，优先保证透视、遮挡和落地关系。' },
+  { value: 'medium', label: '中', description: '尽量贴近用户放置的位置、尺度和角度，同时保留少量自然修正空间。' },
+  { value: 'high', label: '高', description: '必须贴近 guide / mask 指定区域，不得出现明显偏移。' },
 ];
 
 interface DebugSubmitPreviewItem {
@@ -101,6 +120,9 @@ export function ObjectInsertPanel({
   }), [placement, sourceHeight, sourceWidth]);
   const canShowSafetyDebug = isAdmin || import.meta.env.DEV;
   const activeDebugMode: ObjectInsertDebugMode = canShowSafetyDebug && isSafetyDebugEnabled ? debugInputMode : 'full';
+  const positionConstraintStrength = readObjectInsertPositionConstraintStrength(state.config);
+  const positionConstraintOption = objectInsertPositionConstraintOptions.find(option => option.value === positionConstraintStrength)
+    || objectInsertPositionConstraintOptions[2];
   const submitPreview = useMemo(() => buildObjectInsertSubmitPreview({
     mode: activeDebugMode,
     sourceImage,
@@ -127,10 +149,19 @@ export function ObjectInsertPanel({
       sourceImageAssetId: sourceImage?.assetId,
       objectReferenceAssetId: objectImage?.assetId,
       objectPlacement: next,
+      positionConstraintStrength,
+      objectInsert: {
+        ...(state.config.objectInsert || {}),
+        sourceImageAssetId: sourceImage?.assetId,
+        objectReferenceAssetId: objectImage?.assetId,
+        placement: next,
+        extraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
+        positionConstraintStrength,
+      },
       objectInsertExtraPrompt: state.config.objectInsertExtraPrompt || '',
       customPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
     });
-  }, [objectImage?.assetId, onUpdateConfig, sourceHeight, sourceImage?.assetId, sourceWidth, state.config.customPrompt, state.config.objectInsertExtraPrompt]);
+  }, [objectImage?.assetId, onUpdateConfig, positionConstraintStrength, sourceHeight, sourceImage?.assetId, sourceWidth, state.config.customPrompt, state.config.objectInsert, state.config.objectInsertExtraPrompt]);
 
   const createPlacementForImages = useCallback((source: UploadedImage | null, object: UploadedImage | null) => {
     if (!source || !object) return emptyPlacement;
@@ -159,6 +190,15 @@ export function ObjectInsertPanel({
       sourceImageAssetId: sourceImage.assetId,
       objectReferenceAssetId: objectImage.assetId,
       objectPlacement: nextPlacement,
+      positionConstraintStrength,
+      objectInsert: {
+        ...(state.config.objectInsert || {}),
+        sourceImageAssetId: sourceImage.assetId,
+        objectReferenceAssetId: objectImage.assetId,
+        placement: nextPlacement,
+        extraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
+        positionConstraintStrength,
+      },
       objectInsertExtraPrompt: state.config.objectInsertExtraPrompt || '',
     });
   }, [
@@ -167,6 +207,9 @@ export function ObjectInsertPanel({
     sourceHeight,
     sourceImage,
     sourceWidth,
+    positionConstraintStrength,
+    state.config.customPrompt,
+    state.config.objectInsert,
     state.config.objectInsertExtraPrompt,
     state.config.objectPlacement,
   ]);
@@ -338,8 +381,28 @@ export function ObjectInsertPanel({
 
   const handleExtraPromptChange = (value: string) => {
     onUpdateConfig({
+      objectInsert: {
+        ...(state.config.objectInsert || {}),
+        placement,
+        extraPrompt: value,
+        positionConstraintStrength,
+      },
       objectInsertExtraPrompt: value,
       customPrompt: value,
+    });
+  };
+
+  const handlePositionConstraintStrengthChange = (value: ObjectInsertPositionConstraintStrength) => {
+    onUpdateConfig({
+      positionConstraintStrength: value,
+      objectInsert: {
+        ...(state.config.objectInsert || {}),
+        sourceImageAssetId: sourceImage?.assetId || state.config.objectInsert?.sourceImageAssetId,
+        objectReferenceAssetId: objectImage?.assetId || state.config.objectInsert?.objectReferenceAssetId,
+        placement,
+        extraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
+        positionConstraintStrength: value,
+      },
     });
   };
 
@@ -351,14 +414,24 @@ export function ObjectInsertPanel({
 
     setIsExporting(true);
     try {
-      const preview = await exportPlacementPreview(sourceImage, objectImage, placement);
-      const mask = await exportPlacementMask(sourceImage, placement);
-      const nextResult = { preview, mask, placement };
+      const guide = await exportPlacementGuide(sourceImage, objectImage, placement);
+      const mask = await exportPlacementMask(sourceImage, objectImage, placement);
+      const nextResult = { preview: guide, mask, placement };
       setExportResult(nextResult);
       onUpdateConfig({
         sourceImageAssetId: sourceImage.assetId,
         objectReferenceAssetId: objectImage.assetId,
         objectPlacement: placement,
+        positionConstraintStrength,
+        objectInsert: {
+          ...(state.config.objectInsert || {}),
+          sourceImageAssetId: sourceImage.assetId,
+          objectReferenceAssetId: objectImage.assetId,
+          placement,
+          extraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
+          positionConstraintStrength,
+        },
+        placementGuideAssetId: undefined,
         placementPreviewAssetId: undefined,
         placementMaskAssetId: undefined,
       });
@@ -366,10 +439,11 @@ export function ObjectInsertPanel({
         sourceImage: readImageDebugInfo(sourceImage),
         objectImage: readImageDebugInfo(objectImage),
         placement,
-        preview: omitDataUrl(preview),
+        positionConstraintStrength,
+        guide: omitDataUrl(guide),
         mask: omitDataUrl(mask),
       });
-      setMessage('已导出 placement preview 和 mask，详细信息已输出到控制台。');
+      setMessage('已导出 placement guide 和精确 mask，详细信息已输出到控制台。');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '导出失败，请重试。');
     } finally {
@@ -418,18 +492,18 @@ export function ObjectInsertPanel({
     }
 
     setIsPreparingGeneration(true);
-    setMessage('正在导出 placement preview / mask，并上传生成素材...');
+    setMessage('正在导出 placement guide / 精确 mask，并上传生成素材...');
     try {
-      const preview = await exportPlacementPreview(sourceImage, objectImage, placement);
-      const mask = await exportPlacementMask(sourceImage, placement);
-      setExportResult({ preview, mask, placement });
+      const guide = await exportPlacementGuide(sourceImage, objectImage, placement);
+      const mask = await exportPlacementMask(sourceImage, objectImage, placement);
+      setExportResult({ preview: guide, mask, placement });
 
       const [{ image: sourceWithAsset, assetId: sourceAssetId }, { image: objectWithAsset, assetId: objectAssetId }] = await Promise.all([
         ensureUploadedImageAsset(sourceImage, 'object-insert-source'),
         ensureUploadedImageAsset(objectImage, 'object-insert-reference'),
       ]);
       const [previewAsset, maskAsset] = await Promise.all([
-        uploadDataUrlAsset(preview.dataUrl, `object-insert-preview-${Date.now()}`),
+        uploadDataUrlAsset(guide.dataUrl, `object-insert-placement-guide-${Date.now()}`),
         uploadDataUrlAsset(mask.dataUrl, `object-insert-mask-${Date.now()}`),
       ]);
       const includeObject = objectInsertIncludesObject(activeDebugMode);
@@ -453,17 +527,21 @@ export function ObjectInsertPanel({
         sourceImageAssetId: sourceAssetId,
         objectReferenceAssetId: includeObject ? objectAssetId : undefined,
         placementPreviewAssetId: includePreview ? previewAsset.id : undefined,
+        placementGuideAssetId: includePreview ? previewAsset.id : undefined,
         placementMaskAssetId: includeMask ? maskAsset.id : undefined,
         objectPlacement: placement,
         objectInsertDebugMode: activeDebugMode,
+        positionConstraintStrength,
         objectInsert: {
           sourceImageAssetId: sourceAssetId,
           objectReferenceAssetId: includeObject ? objectAssetId : undefined,
           previewAssetId: includePreview ? previewAsset.id : undefined,
+          guideAssetId: includePreview ? previewAsset.id : undefined,
           maskAssetId: includeMask ? maskAsset.id : undefined,
           placement,
           extraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
           debugMode: activeDebugMode,
+          positionConstraintStrength,
         },
         objectInsertExtraPrompt: state.config.objectInsertExtraPrompt || '',
         customPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
@@ -486,9 +564,11 @@ export function ObjectInsertPanel({
         ].filter(Boolean),
         placement,
         objectInsertDebugMode: activeDebugMode,
+        positionConstraintStrength,
         sourceAssetId,
         objectAssetId,
         placementPreviewAssetId: previewAsset.id,
+        placementGuideAssetId: previewAsset.id,
         placementMaskAssetId: maskAsset.id,
       });
       setMessage('素材已准备完成，正在创建 AI 生成任务...');
@@ -515,7 +595,7 @@ export function ObjectInsertPanel({
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-blue-600">Object Insert</p>
           <h2 className="mt-1 text-xl font-black text-slate-950">元素植入</h2>
-          <p className="mt-1 text-xs leading-5 text-slate-500">上传原图和物体参考图，先完成可视化摆放、preview 与 mask 导出。</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">上传原图和物体参考图，先完成可视化摆放、placement guide 与 mask 导出。</p>
         </div>
 
         <UploadCard
@@ -542,6 +622,14 @@ export function ObjectInsertPanel({
 
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
           <label className="text-xs font-bold text-slate-800" htmlFor="object-insert-prompt">补充提示词</label>
+          <div className="mt-2">
+            <PromptVoiceAssistant
+              generationStep={GenerationStep.ObjectInsert}
+              currentPrompt={state.config.objectInsertExtraPrompt || state.config.customPrompt || ''}
+              context={state.config as unknown as Record<string, unknown>}
+              onApplyPrompt={handleExtraPromptChange}
+            />
+          </div>
           <textarea
             id="object-insert-prompt"
             value={state.config.objectInsertExtraPrompt || ''}
@@ -549,6 +637,30 @@ export function ObjectInsertPanel({
             placeholder="例如：让椅子自然融入餐厅区域，材质与原图暖色灯光一致。"
             className="mt-2 min-h-24 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
           />
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-bold text-slate-800">位置约束</p>
+            <p className="text-[11px] font-bold text-blue-600">{positionConstraintOption.label}</p>
+          </div>
+          <div className="mt-2 grid grid-cols-3 gap-1.5 rounded-xl bg-white p-1">
+            {objectInsertPositionConstraintOptions.map(option => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => handlePositionConstraintStrengthChange(option.value)}
+                className={`rounded-lg px-2 py-1.5 text-xs font-black transition ${
+                  positionConstraintStrength === option.value
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-xs leading-5 text-slate-500">{positionConstraintOption.description}</p>
         </div>
 
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
@@ -620,7 +732,7 @@ export function ObjectInsertPanel({
               className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
             >
               <Download className="h-4 w-4" />
-              {isExporting ? '正在导出' : '导出 preview + mask'}
+              {isExporting ? '正在导出' : '导出 guide + mask'}
             </button>
             <button
               type="button"
@@ -749,12 +861,12 @@ export function ObjectInsertPanel({
 
         {exportResult ? (
           <div className="space-y-3">
-            <ExportPreview title="Placement preview" info={exportResult.preview} />
+            <ExportPreview title="Placement guide" info={exportResult.preview} />
             <ExportPreview title="Placement mask" info={exportResult.mask} />
           </div>
         ) : (
           <div className="rounded-2xl border border-dashed border-slate-200 p-4 text-center text-xs leading-5 text-slate-500">
-            导出后这里会显示 preview 和 mask 缩略图。
+            导出后这里会显示 placement guide 和 mask 缩略图。
           </div>
         )}
       </aside>
@@ -862,7 +974,7 @@ function buildObjectInsertSubmitPreview(input: {
       },
       {
         id: 'preview',
-        label: 'placement preview',
+        label: 'placement guide',
         included: previewIncluded,
         imageUrl: input.exportResult?.preview.dataUrl,
         detail: input.exportResult ? `${input.exportResult.preview.width} x ${input.exportResult.preview.height}` : '生成时会自动导出',
@@ -876,6 +988,11 @@ function buildObjectInsertSubmitPreview(input: {
       },
     ],
   };
+}
+
+function readObjectInsertPositionConstraintStrength(config: GenerationConfig): ObjectInsertPositionConstraintStrength {
+  const value = config.objectInsert?.positionConstraintStrength || config.positionConstraintStrength;
+  return value === 'low' || value === 'medium' || value === 'high' ? value : 'high';
 }
 
 function objectInsertIncludesObject(mode: ObjectInsertDebugMode): boolean {
@@ -993,7 +1110,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-async function exportPlacementPreview(sourceImage: UploadedImage, objectImage: UploadedImage, placement: ObjectPlacement): Promise<ExportedImageInfo> {
+async function exportPlacementGuide(sourceImage: UploadedImage, objectImage: UploadedImage, placement: ObjectPlacement): Promise<ExportedImageInfo> {
   const [source, object] = await Promise.all([
     loadCanvasImage(readImageSrc(sourceImage)),
     loadCanvasImage(readImageSrc(objectImage)),
@@ -1007,13 +1124,14 @@ async function exportPlacementPreview(sourceImage: UploadedImage, objectImage: U
   if (!context) throw new Error('浏览器不支持 Canvas 导出。');
 
   context.drawImage(source, 0, 0, width, height);
-  drawPlacedImage(context, object, placement);
+  drawPlacementGuide(context, object, placement);
 
   const dataUrl = canvas.toDataURL('image/png');
   return { dataUrl, width, height, bytesApprox: estimateDataUrlBytes(dataUrl) };
 }
 
-async function exportPlacementMask(sourceImage: UploadedImage, placement: ObjectPlacement): Promise<ExportedImageInfo> {
+async function exportPlacementMask(sourceImage: UploadedImage, objectImage: UploadedImage, placement: ObjectPlacement): Promise<ExportedImageInfo> {
+  const object = await loadCanvasImage(readImageSrc(objectImage));
   const width = sourceImage.width || 1200;
   const height = sourceImage.height || 800;
   const canvas = document.createElement('canvas');
@@ -1024,23 +1142,164 @@ async function exportPlacementMask(sourceImage: UploadedImage, placement: Object
 
   context.fillStyle = '#000000';
   context.fillRect(0, 0, width, height);
-  context.save();
-  context.translate(placement.x + placement.width / 2, placement.y + placement.height / 2);
-  context.rotate(placement.rotation * Math.PI / 180);
-  context.fillStyle = '#ffffff';
-  context.fillRect(-placement.width / 2, -placement.height / 2, placement.width, placement.height);
-  context.restore();
+  drawPrecisePlacementMask(context, object, placement);
 
   const dataUrl = canvas.toDataURL('image/png');
   return { dataUrl, width, height, bytesApprox: estimateDataUrlBytes(dataUrl) };
 }
 
-function drawPlacedImage(context: CanvasRenderingContext2D, object: HTMLImageElement, placement: ObjectPlacement) {
+function drawPlacementGuide(context: CanvasRenderingContext2D, object: HTMLImageElement, placement: ObjectPlacement) {
+  const lineWidth = Math.max(3, Math.min(10, Math.max(placement.width, placement.height) * 0.015));
+  drawPlacedSilhouette(context, object, placement, 'rgba(14, 165, 233, 0.34)');
+
   context.save();
   context.translate(placement.x + placement.width / 2, placement.y + placement.height / 2);
   context.rotate(placement.rotation * Math.PI / 180);
+  context.globalAlpha = 0.52;
   context.drawImage(object, -placement.width / 2, -placement.height / 2, placement.width, placement.height);
+  context.globalAlpha = 1;
+  context.strokeStyle = '#0ea5e9';
+  context.lineWidth = lineWidth;
+  context.setLineDash([lineWidth * 3, lineWidth * 1.6]);
+  context.strokeRect(-placement.width / 2, -placement.height / 2, placement.width, placement.height);
+  context.setLineDash([]);
+  context.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+  context.lineWidth = Math.max(1, lineWidth * 0.35);
+  context.strokeRect(-placement.width / 2, -placement.height / 2, placement.width, placement.height);
+  drawGuideCrosshair(context, placement.width, placement.height, lineWidth);
   context.restore();
+}
+
+function drawGuideCrosshair(context: CanvasRenderingContext2D, width: number, height: number, lineWidth: number) {
+  const radius = Math.max(8, Math.min(width, height) * 0.08);
+  context.strokeStyle = '#0ea5e9';
+  context.fillStyle = 'rgba(14, 165, 233, 0.18)';
+  context.lineWidth = Math.max(2, lineWidth * 0.6);
+  context.beginPath();
+  context.arc(0, 0, radius, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+  context.beginPath();
+  context.moveTo(-Math.min(width * 0.32, radius * 3), 0);
+  context.lineTo(Math.min(width * 0.32, radius * 3), 0);
+  context.moveTo(0, -Math.min(height * 0.32, radius * 3));
+  context.lineTo(0, Math.min(height * 0.32, radius * 3));
+  context.stroke();
+}
+
+function drawPlacedSilhouette(context: CanvasRenderingContext2D, object: HTMLImageElement, placement: ObjectPlacement, color: string) {
+  const silhouette = createTintedObjectMaskCanvas(object, color);
+  if (!silhouette) return;
+  context.save();
+  context.translate(placement.x + placement.width / 2, placement.y + placement.height / 2);
+  context.rotate(placement.rotation * Math.PI / 180);
+  context.drawImage(silhouette, -placement.width / 2, -placement.height / 2, placement.width, placement.height);
+  context.restore();
+}
+
+function drawPrecisePlacementMask(context: CanvasRenderingContext2D, object: HTMLImageElement, placement: ObjectPlacement) {
+  const alphaMask = createObjectAlphaMaskCanvas(object);
+  if (alphaMask) {
+    context.save();
+    context.translate(placement.x + placement.width / 2, placement.y + placement.height / 2);
+    context.rotate(placement.rotation * Math.PI / 180);
+    context.filter = 'blur(2px)';
+    context.drawImage(alphaMask, -placement.width / 2, -placement.height / 2, placement.width, placement.height);
+    context.filter = 'none';
+    context.drawImage(alphaMask, -placement.width / 2, -placement.height / 2, placement.width, placement.height);
+    context.restore();
+    return;
+  }
+
+  const padding = Math.max(2, Math.min(placement.width, placement.height) * 0.025);
+  const radius = Math.max(8, Math.min(placement.width, placement.height) * 0.08);
+  context.save();
+  context.translate(placement.x + placement.width / 2, placement.y + placement.height / 2);
+  context.rotate(placement.rotation * Math.PI / 180);
+  context.fillStyle = '#ffffff';
+  context.filter = 'blur(1px)';
+  drawRoundedRectPath(
+    context,
+    -placement.width / 2 - padding,
+    -placement.height / 2 - padding,
+    placement.width + padding * 2,
+    placement.height + padding * 2,
+    radius,
+  );
+  context.fill();
+  context.filter = 'none';
+  context.restore();
+}
+
+function createObjectAlphaMaskCanvas(object: HTMLImageElement): HTMLCanvasElement | null {
+  const width = object.naturalWidth || object.width;
+  const height = object.naturalHeight || object.height;
+  if (!width || !height) return null;
+
+  const sourceCanvas = document.createElement('canvas');
+  sourceCanvas.width = width;
+  sourceCanvas.height = height;
+  const sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
+  if (!sourceContext) return null;
+  sourceContext.drawImage(object, 0, 0, width, height);
+
+  let imageData: ImageData;
+  try {
+    imageData = sourceContext.getImageData(0, 0, width, height);
+  } catch {
+    return null;
+  }
+
+  const pixels = imageData.data;
+  let transparentPixels = 0;
+  let solidPixels = 0;
+  for (let index = 3; index < pixels.length; index += 4) {
+    const alpha = pixels[index];
+    if (alpha < 245) transparentPixels += 1;
+    if (alpha > 24) solidPixels += 1;
+  }
+  const totalPixels = width * height;
+  if (transparentPixels / totalPixels < 0.01 || solidPixels / totalPixels < 0.05) return null;
+
+  for (let index = 0; index < pixels.length; index += 4) {
+    const alpha = pixels[index + 3];
+    pixels[index] = 255;
+    pixels[index + 1] = 255;
+    pixels[index + 2] = 255;
+    pixels[index + 3] = alpha > 18 ? 255 : 0;
+  }
+  sourceContext.putImageData(imageData, 0, 0);
+  return sourceCanvas;
+}
+
+function createTintedObjectMaskCanvas(object: HTMLImageElement, color: string): HTMLCanvasElement | null {
+  const alphaMask = createObjectAlphaMaskCanvas(object);
+  if (!alphaMask) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = alphaMask.width;
+  canvas.height = alphaMask.height;
+  const context = canvas.getContext('2d');
+  if (!context) return null;
+  context.drawImage(alphaMask, 0, 0);
+  context.globalCompositeOperation = 'source-in';
+  context.fillStyle = color;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+function drawRoundedRectPath(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
+  const safeRadius = Math.min(radius, width / 2, height / 2);
+  context.beginPath();
+  context.moveTo(x + safeRadius, y);
+  context.lineTo(x + width - safeRadius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+  context.lineTo(x + width, y + height - safeRadius);
+  context.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+  context.lineTo(x + safeRadius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+  context.lineTo(x, y + safeRadius);
+  context.quadraticCurveTo(x, y, x + safeRadius, y);
+  context.closePath();
 }
 
 function loadCanvasImage(src: string): Promise<HTMLImageElement> {
@@ -1052,7 +1311,7 @@ function loadCanvasImage(src: string): Promise<HTMLImageElement> {
     const image = new Image();
     image.crossOrigin = 'anonymous';
     image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error('图片加载失败，无法导出 preview/mask。'));
+    image.onerror = () => reject(new Error('图片加载失败，无法导出 guide/mask。'));
     image.src = src;
   });
 }

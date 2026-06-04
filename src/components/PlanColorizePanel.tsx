@@ -1,6 +1,14 @@
 import { ArrowRight, ImagePlus, Map, Sparkles } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { GenerationConfig, PlanDrawingType, PlanExpressionTemplate, StepState, UploadedImage } from '../types';
+import {
+  findPlanColorizeStyle,
+  maxPlanColorizeBatchCount,
+  planColorizeStyleOptions,
+  resolvePlanColorizeStyles,
+  type PlanColorizeStyleOption,
+} from '../constants/planColorizeStyles';
+import { GenerationConfig, GenerationStep, PlanDrawingType, PlanExpressionTemplate, StepState, UploadedImage } from '../types';
+import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 
 interface PlanColorizePanelProps {
@@ -52,6 +60,67 @@ export function PlanColorizePanel({
   onGenerate,
 }: PlanColorizePanelProps) {
   const sourceImage = state.inputImage?.dataUrl || state.inputImage?.url;
+  const batchEnabled = state.config.planColorizeBatchEnabled === true;
+  const selectedStyleIds = readPlanColorizeStyleIds(state.config);
+  const activeStyles = batchEnabled
+    ? resolvePlanColorizeStyles(selectedStyleIds, state.config.selectedStyleId)
+    : resolvePlanColorizeStyles(state.config.selectedStyleId || selectedStyleIds[0]);
+  const outputCount = batchEnabled ? Math.min(Math.max(selectedStyleIds.length || 1, 1), maxPlanColorizeBatchCount) : 1;
+  const generateButtonLabel = outputCount > 1 ? `批量生成 ${outputCount} 张彩平` : '生成彩平';
+
+  const applySingleStyle = (style: PlanColorizeStyleOption) => {
+    onUpdateConfig({
+      planColorizeBatchEnabled: false,
+      planColorizeStyleIds: [style.id],
+      planColorizeStyleNames: [style.name],
+      planColorizeStylePromptHints: [style.promptHint],
+      selectedStyleId: style.id,
+      selectedStyleName: style.name,
+      selectedStylePromptHint: style.promptHint,
+      batchCount: 1,
+    });
+  };
+
+  const toggleBatchStyle = (style: PlanColorizeStyleOption) => {
+    const exists = selectedStyleIds.includes(style.id);
+    const nextIds = exists
+      ? selectedStyleIds.filter(id => id !== style.id)
+      : [...selectedStyleIds, style.id].slice(0, maxPlanColorizeBatchCount);
+    const nextStyles = nextIds
+      .map(id => findPlanColorizeStyle(id))
+      .filter((item): item is PlanColorizeStyleOption => Boolean(item));
+    const primaryStyle = nextStyles[0] || activeStyles[0] || planColorizeStyleOptions[0];
+
+    onUpdateConfig({
+      planColorizeBatchEnabled: true,
+      planColorizeStyleIds: nextIds,
+      planColorizeStyleNames: nextStyles.map(item => item.name),
+      planColorizeStylePromptHints: nextStyles.map(item => item.promptHint),
+      selectedStyleId: primaryStyle.id,
+      selectedStyleName: primaryStyle.name,
+      selectedStylePromptHint: primaryStyle.promptHint,
+      batchCount: Math.min(Math.max(nextIds.length || 1, 1), maxPlanColorizeBatchCount) as GenerationConfig['batchCount'],
+    });
+  };
+
+  const switchBatchMode = (enabled: boolean) => {
+    const firstStyle = activeStyles[0] || planColorizeStyleOptions[0];
+    if (!enabled) {
+      applySingleStyle(firstStyle);
+      return;
+    }
+    const nextStyles = selectedStyleIds.length > 0 ? activeStyles : [firstStyle];
+    onUpdateConfig({
+      planColorizeBatchEnabled: true,
+      planColorizeStyleIds: nextStyles.map(style => style.id),
+      planColorizeStyleNames: nextStyles.map(style => style.name),
+      planColorizeStylePromptHints: nextStyles.map(style => style.promptHint),
+      selectedStyleId: firstStyle.id,
+      selectedStyleName: firstStyle.name,
+      selectedStylePromptHint: firstStyle.promptHint,
+      batchCount: Math.min(Math.max(nextStyles.length || 1, 1), maxPlanColorizeBatchCount) as GenerationConfig['batchCount'],
+    });
+  };
 
   return (
     <section className="min-w-0 flex-1 overflow-y-auto bg-slate-100 p-4 custom-scrollbar">
@@ -122,6 +191,62 @@ export function PlanColorizePanel({
             </div>
           </OptionGroup>
 
+          <OptionGroup title="彩平风格">
+            <div className="mb-3 grid grid-cols-2 rounded-lg bg-slate-100 p-1 text-xs font-bold text-slate-600">
+              <button
+                type="button"
+                onClick={() => switchBatchMode(false)}
+                className={`rounded-md px-3 py-2 ${!batchEnabled ? 'bg-white text-slate-950 shadow-sm' : 'hover:text-slate-900'}`}
+              >
+                单选模式
+              </button>
+              <button
+                type="button"
+                onClick={() => switchBatchMode(true)}
+                className={`rounded-md px-3 py-2 ${batchEnabled ? 'bg-white text-slate-950 shadow-sm' : 'hover:text-slate-900'}`}
+              >
+                多选模式
+              </button>
+            </div>
+
+            <div className="grid gap-2">
+              {planColorizeStyleOptions.map(style => {
+                const checked = batchEnabled
+                  ? selectedStyleIds.includes(style.id)
+                  : activeStyles[0]?.id === style.id;
+                const disabled = batchEnabled && !checked && selectedStyleIds.length >= maxPlanColorizeBatchCount;
+                return (
+                  <button
+                    key={style.id}
+                    type="button"
+                    onClick={() => (batchEnabled ? toggleBatchStyle(style) : applySingleStyle(style))}
+                    disabled={disabled}
+                    className={`rounded-lg border px-3 py-2 text-left transition ${
+                      checked
+                        ? 'border-slate-900 bg-slate-900 text-white'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-200 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-bold">{style.name}</span>
+                      {batchEnabled ? (
+                        <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${checked ? 'border-white bg-white text-slate-900' : 'border-slate-300 bg-white'}`}>
+                          {checked ? <span className="h-2 w-2 rounded-sm bg-slate-900" /> : null}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className={`mt-1 text-xs leading-5 ${checked ? 'text-slate-200' : 'text-slate-500'}`}>{style.description}</p>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700">
+              预计生成 {outputCount} 张，预计消耗 {outputCount} 点
+              {batchEnabled && selectedStyleIds.length === 0 ? '；未选择风格时将使用默认风格生成 1 张。' : null}
+            </div>
+          </OptionGroup>
+
           <SmartPromptAssistant mode="plan-colorize" config={state.config} compact onUpdateConfig={onUpdateConfig} />
 
           <OptionGroup title="增强项">
@@ -142,6 +267,14 @@ export function PlanColorizePanel({
 
           <label className="block rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <span className="text-xs font-bold text-slate-500">额外补充要求</span>
+            <div className="mt-3">
+              <PromptVoiceAssistant
+                generationStep={GenerationStep.PlanColorize}
+                currentPrompt={state.config.customPrompt || ''}
+                context={state.config as unknown as Record<string, unknown>}
+                onApplyPrompt={prompt => onUpdateConfig({ customPrompt: prompt })}
+              />
+            </div>
             <textarea
               value={state.config.customPrompt || ''}
               onChange={event => onUpdateConfig({ customPrompt: event.currentTarget.value })}
@@ -157,7 +290,7 @@ export function PlanColorizePanel({
             className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-3 text-sm font-bold text-white disabled:opacity-50"
           >
             <Sparkles className="h-4 w-4" />
-            生成图纸表达
+            {generateButtonLabel}
           </button>
         </aside>
 
@@ -177,6 +310,15 @@ function OptionGroup({ title, children }: { title: string; children: ReactNode }
       {children}
     </div>
   );
+}
+
+function readPlanColorizeStyleIds(config: GenerationConfig): string[] {
+  if (Array.isArray(config.planColorizeStyleIds)) {
+    return config.planColorizeStyleIds.filter(id => typeof id === 'string' && id.trim().length > 0);
+  }
+  return typeof config.selectedStyleId === 'string' && config.selectedStyleId.trim().length > 0
+    ? [config.selectedStyleId]
+    : [];
 }
 
 function PreviewCard({ title, image, empty }: { title: string; image?: string | null; empty: string }) {

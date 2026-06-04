@@ -3,6 +3,7 @@ import { GenerationConfig, GenerationStep } from '../../types';
 import { type SmartPromptMode } from '../../promptTemplates/intelligentPromptTemplates';
 import { SmartPromptAssistant } from './SmartPromptAssistant';
 import { isLocalInpaintingStep } from './workspaceUtils';
+import { PromptVoiceAssistant } from '../PromptVoiceAssistant';
 
 interface PromptConfigPanelProps {
   step: GenerationStep;
@@ -32,6 +33,12 @@ export function PromptConfigPanel({
           <BookOpen className="h-3.5 w-3.5" />
           提示词模板
         </button>
+        <PromptVoiceAssistant
+          generationStep={step}
+          currentPrompt={config.prompt}
+          context={config as unknown as Record<string, unknown>}
+          onApplyPrompt={prompt => onUpdateConfig({ prompt })}
+        />
         <textarea
           value={config.prompt}
           onChange={event => onUpdateConfig({ prompt: event.target.value })}

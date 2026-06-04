@@ -1,6 +1,7 @@
 import { useCallback, type Dispatch, type SetStateAction } from 'react';
 import { generateFloorplanTo3D, generateInpainting, generateStyleRender } from '../api/generation';
 import { buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode } from '../promptTemplates/intelligentPromptTemplates';
+import { resolvePlanColorizeStyles } from '../constants/planColorizeStyles';
 import { saveGenerationRecord } from '../storage/history';
 import {
   createGenerationJob,
@@ -10,7 +11,7 @@ import {
   uploadImageAsset,
   type CreditBalance,
 } from '../lib/api';
-import { GenerationConfig, GenerationHistoryItem, GenerationJobStep, GenerationMode, GenerationProvider, GenerationRunStateOverride, GenerationStep, ObjectInsertDebugMode, StepState, UploadedImage, VariantStyleKey } from '../types';
+import { GenerationConfig, GenerationHistoryItem, GenerationJobStep, GenerationMode, GenerationProvider, GenerationRunStateOverride, GenerationStep, ObjectInsertDebugMode, ObjectInsertPositionConstraintStrength, StepState, UploadedImage, VariantStyleKey } from '../types';
 import { getGenerationCreditCost } from '../utils/generationCredits';
 import { formatSafetyRejectedMessage, isSafetyRejectedText, precheckGenerationExtraPrompt } from '../safety/generationSafety';
 
@@ -124,7 +125,7 @@ export function useGenerationRunner({
         : needsObject && !objectReferenceAssetId
           ? '物体参考图尚未上传为素材，请重新上传物体图。'
         : needsPreview && !placementPreviewAssetId
-          ? 'placement preview 尚未上传，请先点击生成融合效果图重新准备任务。'
+          ? 'placement guide 尚未上传，请先点击生成融合效果图重新准备任务。'
         : needsMask && !placementMaskAssetId
           ? 'placement mask 尚未上传，请先点击生成融合效果图重新准备任务。'
         : needsPlacement && !hasPlacement
@@ -246,10 +247,23 @@ export function useGenerationRunner({
         const targetSizeConfig = buildTargetSizeConfig(stateAtStart.inputImage);
         const isPanoramaQuickRender = currentStep === GenerationStep.PanoramaQuickRender;
         const isObjectInsert = currentStep === GenerationStep.ObjectInsert;
+        const isPlanColorize = currentStep === GenerationStep.PlanColorize;
+        const planColorizeStyles = isPlanColorize
+          ? resolvePlanColorizeStyles(
+              stateAtStart.config.planColorizeBatchEnabled
+                ? stateAtStart.config.planColorizeStyleIds
+                : stateAtStart.config.selectedStyleId || stateAtStart.config.planColorizeStyleIds?.[0],
+              stateAtStart.config.selectedStyleId,
+            )
+          : [];
+        const planColorizeBatchGroupId = isPlanColorize
+          ? stateAtStart.config.batchGroupId || createBatchGroupId('plan-colorize')
+          : undefined;
         const objectInsertDebugMode = isObjectInsert ? readObjectInsertDebugMode(stateAtStart.config) : 'full';
         const objectInsertNeedsObject = objectInsertIncludesObject(objectInsertDebugMode);
         const objectInsertNeedsPreview = objectInsertIncludesPreview(objectInsertDebugMode);
         const objectInsertNeedsMask = objectInsertIncludesMask(objectInsertDebugMode);
+        const objectInsertPositionConstraintStrength = isObjectInsert ? readObjectInsertPositionConstraintStrength(stateAtStart.config) : 'high';
         const panoramaReferenceAssetIds = isPanoramaQuickRender
           ? readConfigStringArray(stateAtStart.config.panoramaReferenceAssetIds).slice(0, 6)
           : [];
@@ -263,11 +277,13 @@ export function useGenerationRunner({
           ? {
               sourceImageAssetId: stateAtStart.inputImage.assetId,
               objectReferenceAssetId: objectInsertNeedsObject ? objectReferenceAssetId : undefined,
+              guideAssetId: objectInsertNeedsPreview ? placementPreviewAssetId : undefined,
               previewAssetId: objectInsertNeedsPreview ? placementPreviewAssetId : undefined,
               maskAssetId: objectInsertNeedsMask ? placementMaskAssetId : undefined,
               placement: objectPlacement,
               extraPrompt: stateAtStart.config.objectInsertExtraPrompt || stateAtStart.config.customPrompt || '',
               debugMode: objectInsertDebugMode,
+              positionConstraintStrength: objectInsertPositionConstraintStrength,
             }
           : undefined;
         const furnitureReferenceAssetIds = stateAtStart.furnitureReferences
@@ -332,6 +348,7 @@ export function useGenerationRunner({
               placementPreviewAssetId,
               placementMaskAssetId,
               placement: objectPlacement,
+              positionConstraintStrength: objectInsertPositionConstraintStrength,
             } : undefined,
             willCreateGenerationJob: true,
           });
@@ -349,12 +366,22 @@ export function useGenerationRunner({
             qualityMode: stateAtStart.config.qualityMode || 'balanced',
             batchCount: currentStep === GenerationStep.DesignVariants && (stateAtStart.config.batchCount === 2 || stateAtStart.config.batchCount === 4 || stateAtStart.config.batchCount === 8)
               ? stateAtStart.config.batchCount
-              : 1,
+              : isPlanColorize
+                ? Math.min(Math.max(planColorizeStyles.length || 1, 1), 6) as GenerationConfig['batchCount']
+                : 1,
             variantStrategy: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.variantStrategy || 'style-matrix' : undefined,
             stylePackId: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.stylePackId || 'interior-common' : undefined,
             variantStyles: currentStep === GenerationStep.DesignVariants ? resolveVariantStyles(stateAtStart.config) : undefined,
             variantNames: currentStep === GenerationStep.DesignVariants ? resolveVariantNames(stateAtStart.config) : undefined,
             customStyleLabel: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.customStyleLabel : undefined,
+            planColorizeBatchEnabled: isPlanColorize ? planColorizeStyles.length > 1 || stateAtStart.config.planColorizeBatchEnabled === true : undefined,
+            planColorizeStyleIds: isPlanColorize ? planColorizeStyles.map(style => style.id) : undefined,
+            planColorizeStyleNames: isPlanColorize ? planColorizeStyles.map(style => style.name) : undefined,
+            planColorizeStylePromptHints: isPlanColorize ? planColorizeStyles.map(style => style.promptHint) : undefined,
+            selectedStyleId: isPlanColorize ? planColorizeStyles[0]?.id : undefined,
+            selectedStyleName: isPlanColorize ? planColorizeStyles[0]?.name : undefined,
+            selectedStylePromptHint: isPlanColorize ? planColorizeStyles[0]?.promptHint : undefined,
+            batchGroupId: isPlanColorize ? planColorizeBatchGroupId : undefined,
             userPrompt: userSupplementPrompt,
             editTarget: currentStep === GenerationStep.MaterialReplace
               ? 'material'
@@ -382,11 +409,13 @@ export function useGenerationRunner({
             panoramaReferenceMode: isPanoramaQuickRender && panoramaReferenceAssetIds.length > 0 ? 'reference_guided' : undefined,
             panoramaReferenceStrength: isPanoramaQuickRender ? stateAtStart.config.panoramaReferenceStrength || 'medium' : undefined,
             objectReferenceAssetId: isObjectInsert && objectInsertNeedsObject ? objectReferenceAssetId : undefined,
+            placementGuideAssetId: isObjectInsert && objectInsertNeedsPreview ? placementPreviewAssetId : undefined,
             placementPreviewAssetId: isObjectInsert && objectInsertNeedsPreview ? placementPreviewAssetId : undefined,
             placementMaskAssetId: isObjectInsert && objectInsertNeedsMask ? placementMaskAssetId : undefined,
             objectPlacement: isObjectInsert ? objectPlacement : undefined,
             objectInsert: objectInsertConfig,
             objectInsertDebugMode: isObjectInsert ? objectInsertDebugMode : undefined,
+            positionConstraintStrength: isObjectInsert ? objectInsertPositionConstraintStrength : undefined,
             objectInsertExtraPrompt: isObjectInsert ? stateAtStart.config.objectInsertExtraPrompt || stateAtStart.config.customPrompt : undefined,
             inputSource: currentStep === GenerationStep.ModelSnapshotRender ? stateAtStart.config.inputSource : currentStep === GenerationStep.PanoramaQuickRender ? 'panorama-capture' : undefined,
             modelSnapshotMetadata: stateAtStart.config.modelSnapshotMetadata,
@@ -489,13 +518,37 @@ export function useGenerationRunner({
                 isFavorite: result.isFavorite,
                 createdAt: result.createdAt,
                 metadata: result.metadata,
-                variantIndex: currentStep === GenerationStep.DesignVariants ? readMetadataNumber(result.metadata, 'variantIndex') ?? index : undefined,
-                variantCode: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'variantCode') || readVariantCode(index) : undefined,
-                variantName: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'variantName') || resolveVariantNames(stateAtStart.config)[index] : undefined,
-                variantLabel: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'variantName') || readVariantLabel(index) : undefined,
+                variantIndex: currentStep === GenerationStep.DesignVariants
+                  ? readMetadataNumber(result.metadata, 'variantIndex') ?? index
+                  : currentStep === GenerationStep.PlanColorize
+                    ? readMetadataNumber(result.metadata, 'planColorizeStyleIndex') ?? index
+                    : undefined,
+                variantCode: currentStep === GenerationStep.DesignVariants
+                  ? readMetadataString(result.metadata, 'variantCode') || readVariantCode(index)
+                  : currentStep === GenerationStep.PlanColorize
+                    ? readMetadataString(result.metadata, 'selectedStyleId')
+                    : undefined,
+                variantName: currentStep === GenerationStep.DesignVariants
+                  ? readMetadataString(result.metadata, 'variantName') || resolveVariantNames(stateAtStart.config)[index]
+                  : currentStep === GenerationStep.PlanColorize
+                    ? readMetadataString(result.metadata, 'selectedStyleName') || readMetadataString(result.metadata, 'variantName')
+                    : undefined,
+                variantLabel: currentStep === GenerationStep.DesignVariants
+                  ? readMetadataString(result.metadata, 'variantName') || readVariantLabel(index)
+                  : currentStep === GenerationStep.PlanColorize
+                    ? readMetadataString(result.metadata, 'selectedStyleName') || `彩平 ${index + 1}`
+                    : undefined,
                 variantStyle: currentStep === GenerationStep.DesignVariants ? readVariantStyle(readMetadataString(result.metadata, 'variantStyle') || resolveVariantStyles(stateAtStart.config)[index]) : undefined,
-                variantStyleLabel: currentStep === GenerationStep.DesignVariants ? readVariantStyleLabel(readMetadataString(result.metadata, 'variantStyle') || resolveVariantStyles(stateAtStart.config)[index]) : undefined,
-                stylePackId: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'stylePackId') || stateAtStart.config.stylePackId || 'interior-common' : undefined,
+                variantStyleLabel: currentStep === GenerationStep.DesignVariants
+                  ? readVariantStyleLabel(readMetadataString(result.metadata, 'variantStyle') || resolveVariantStyles(stateAtStart.config)[index])
+                  : currentStep === GenerationStep.PlanColorize
+                    ? readMetadataString(result.metadata, 'selectedStyleName')
+                    : undefined,
+                stylePackId: currentStep === GenerationStep.DesignVariants
+                  ? readMetadataString(result.metadata, 'stylePackId') || stateAtStart.config.stylePackId || 'interior-common'
+                  : currentStep === GenerationStep.PlanColorize
+                    ? readMetadataString(result.metadata, 'batchGroupId')
+                    : undefined,
               }))
             : [{
                 id: latestJob.id,
@@ -876,7 +929,7 @@ function readObjectReferenceAssetId(state: StepState): string | undefined {
 }
 
 function readObjectInsertPreviewAssetId(config: GenerationConfig): string | undefined {
-  return config.objectInsert?.previewAssetId || config.placementPreviewAssetId;
+  return config.objectInsert?.guideAssetId || config.objectInsert?.previewAssetId || config.placementGuideAssetId || config.placementPreviewAssetId;
 }
 
 function readObjectInsertMaskAssetId(config: GenerationConfig): string | undefined {
@@ -895,6 +948,11 @@ function readObjectInsertDebugMode(config: GenerationConfig): ObjectInsertDebugM
     || mode === 'source_object_preview'
     ? mode
     : 'full';
+}
+
+function readObjectInsertPositionConstraintStrength(config: GenerationConfig): ObjectInsertPositionConstraintStrength {
+  const value = config.objectInsert?.positionConstraintStrength || config.positionConstraintStrength;
+  return value === 'low' || value === 'medium' || value === 'high' ? value : 'high';
 }
 
 function objectInsertIncludesObject(mode: ObjectInsertDebugMode): boolean {
@@ -992,6 +1050,13 @@ function readVariantLabel(index: number): string {
 
 function readVariantCode(index: number): string {
   return String.fromCharCode(65 + index);
+}
+
+function createBatchGroupId(prefix: string): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function readVariantStyle(style: string | undefined): VariantStyleKey | undefined {

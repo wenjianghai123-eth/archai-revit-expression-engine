@@ -327,6 +327,18 @@ export interface AdminDashboard {
   recentErrorJobs: GenerationJob[];
 }
 
+export interface PromptPolishInput {
+  rawText: string;
+  generationStep: GenerationJobStep | string;
+  context?: Record<string, unknown>;
+}
+
+export interface PromptPolishResult {
+  polishedPrompt: string;
+  negativePrompt?: string;
+  notes?: string[];
+}
+
 export async function updateGenerationResult(
   id: string,
   input: Partial<Pick<GenerationResult, 'isSelected' | 'isFavorite' | 'metadata'>>,
@@ -346,6 +358,13 @@ interface ApiErrorResponse {
   provider?: string;
   statusCode?: number;
   rawSnippet?: string;
+}
+
+export async function polishPrompt(input: PromptPolishInput): Promise<PromptPolishResult> {
+  return request<PromptPolishResult>('/api/prompts/polish', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
 }
 
 export async function getCurrentUser(): Promise<AuthUser> {
