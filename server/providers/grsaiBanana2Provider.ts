@@ -383,7 +383,7 @@ function createHttpError(message: string, status: number, rawBody?: unknown): Er
   error.providerError = isSafetyRejectedProviderPayload(message, rawBody) ? 'PROVIDER_SAFETY_REJECTED' : 'http_error';
   error.providerStatus = 'failed';
   if (error.providerError === 'PROVIDER_SAFETY_REJECTED') {
-    error.userMessage = 'AI 平台安全策略拒绝了本次生成。建议更换无水印、无 Logo、无人物、无品牌标识的参考图，或改用文字描述家具；也可以删减高风险提示词后重试。';
+    error.userMessage = 'AI 平台安全策略拒绝了本次生成。请根据平台返回原因调整输入图片或描述后重试。';
   }
   if (rawBody !== undefined) {
     error.rawSnippet = createRawSnippet(rawBody);

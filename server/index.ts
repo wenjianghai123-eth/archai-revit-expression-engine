@@ -194,11 +194,6 @@ app.post('/api/prompts/polish', requireAuth, async (
   try {
     res.json(apiOk(await polishPromptText(body.value)));
   } catch (error) {
-    const code = error instanceof Error ? (error as Error & { code?: string }).code : undefined;
-    if (code === 'PROMPT_POLISH_SAFETY_BLOCKED') {
-      res.status(400).json(apiError(error instanceof Error ? error.message : '提示词包含高风险内容。', code));
-      return;
-    }
     next(error);
   }
 });

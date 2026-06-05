@@ -1334,7 +1334,7 @@ function normalizeProviderFailure(error: unknown): {
     || (isProviderMaintenanceError(error) ? 'model maintenance' : undefined);
   const providerStatus = readErrorStringField(error, 'providerStatus') || (providerError ? 'failed' : undefined);
   const userMessage = readErrorStringField(error, 'userMessage')
-    || (safetyRejected ? 'AI 平台安全策略拒绝了本次生成。建议更换无水印、无 Logo、无人物、无品牌标识的参考图，或改用文字描述家具；也可以删减高风险提示词后重试。' : undefined)
+    || (safetyRejected ? 'AI 平台安全策略拒绝了本次生成。请根据平台返回原因调整输入图片或描述后重试。' : undefined)
     || (isProviderMaintenanceError(error) ? providerMaintenanceUserMessage : undefined);
   const statusCode = error instanceof Error ? readErrorStatus(error) : undefined;
   const rawSnippet = readErrorStringField(error, 'rawSnippet');

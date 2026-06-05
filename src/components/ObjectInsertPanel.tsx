@@ -12,7 +12,6 @@ import {
 } from '../types';
 import { uploadImageAsset } from '../lib/api';
 import { createUploadedImage, validateImageFile } from '../utils/file';
-import { buildImageSafetyNotice, precheckGenerationExtraPrompt } from '../safety/generationSafety';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 
 type UploadKind = 'source' | 'object';
@@ -310,11 +309,7 @@ export function ObjectInsertPanel({
       }
 
       const baseMessage = kind === 'source' ? '原始场景图已载入。' : '物体参考图已载入，可在画布中拖拽摆放。';
-      const safetyNotice = buildImageSafetyNotice({
-        imageName: file.name,
-        role: kind === 'object' ? 'object_reference' : 'source_scene',
-      });
-      setMessage([baseMessage, safetyNotice?.message].filter(Boolean).join('\n'));
+      setMessage(baseMessage);
     } catch (error) {
       setUploadErrors(prev => ({
         ...prev,
@@ -459,35 +454,6 @@ export function ObjectInsertPanel({
     }
     if (!sourceImage || !objectImage) {
       setMessage('请先上传原始场景图和物体参考图。');
-      return;
-    }
-
-    const safetyPrecheck = precheckGenerationExtraPrompt({
-      extraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
-    });
-    if (safetyPrecheck.blocked) {
-      setMessage(safetyPrecheck.message);
-      if (typeof window !== 'undefined') {
-        window.alert(safetyPrecheck.message);
-      }
-      return;
-    }
-
-    const submittedImageNotices = [
-      buildImageSafetyNotice({ imageName: sourceImage.name, role: 'source_scene' }),
-      objectInsertIncludesObject(activeDebugMode)
-        ? buildImageSafetyNotice({ imageName: objectImage.name, role: 'object_reference' })
-        : null,
-    ].filter((notice): notice is NonNullable<ReturnType<typeof buildImageSafetyNotice>> => Boolean(notice && notice.warningLevel === 'caution'));
-    if (submittedImageNotices.length > 0) {
-      const warningMessage = [
-        ...submittedImageNotices.map(notice => notice.message),
-        '建议更换无水印、无 Logo、无人物、无品牌标识的参考图，或改用文字描述家具。',
-      ].join('\n');
-      setMessage(warningMessage);
-      if (typeof window !== 'undefined') {
-        window.alert(warningMessage);
-      }
       return;
     }
 
@@ -664,7 +630,7 @@ export function ObjectInsertPanel({
         </div>
 
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
-          请确保原图和物体参考图内容合规且有使用权；如参考图含明显 logo、水印、人像或敏感内容，请更换为无水印、无人物、无敏感内容的图片。
+          请确保原图和物体参考图为可使用素材，并在生成前确认你拥有相应使用权。
         </div>
 
         {canShowSafetyDebug ? (

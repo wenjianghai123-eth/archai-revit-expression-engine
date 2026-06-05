@@ -1,5 +1,4 @@
 import { GoogleGenAI } from '@google/genai';
-import { checkPromptPolishSafety } from '../src/safety/promptPolishSafety';
 
 export interface PromptPolishRequest {
   rawText: string;
@@ -107,14 +106,6 @@ const stepProfiles: Record<string, StepPolishProfile> = {
 
 export async function polishPromptText(input: PromptPolishRequest): Promise<PromptPolishResult> {
   const rawText = input.rawText.trim();
-  const safety = checkPromptPolishSafety(rawText);
-  if (safety.blocked) {
-    const error = new Error(safety.message) as Error & { code?: string; matchedTerms?: string[] };
-    error.code = 'PROMPT_POLISH_SAFETY_BLOCKED';
-    error.matchedTerms = safety.matchedTerms;
-    throw error;
-  }
-
   const canonicalStep = normalizeGenerationStep(input.generationStep);
   const profile = stepProfiles[canonicalStep] || stepProfiles.style_render;
   const fallback = buildRuleBasedPrompt(rawText, canonicalStep, profile, input.context);

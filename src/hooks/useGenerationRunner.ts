@@ -13,7 +13,6 @@ import {
 } from '../lib/api';
 import { GenerationConfig, GenerationHistoryItem, GenerationJobStep, GenerationMode, GenerationProvider, GenerationRunStateOverride, GenerationStep, ObjectInsertDebugMode, ObjectInsertPositionConstraintStrength, StepState, UploadedImage, VariantStyleKey } from '../types';
 import { getGenerationCreditCost } from '../utils/generationCredits';
-import { formatSafetyRejectedMessage, isSafetyRejectedText, precheckGenerationExtraPrompt } from '../safety/generationSafety';
 
 interface UseGenerationRunnerOptions {
   currentStep: GenerationStep;
@@ -49,25 +48,6 @@ export function useGenerationRunner({
           },
       }
       : baseState;
-    const safetyPrecheck = precheckGenerationExtraPrompt({
-      extraPrompt: readSupplementalPromptForGeneration(currentStep, stateAtStart.config, stateAtStart.config.prompt),
-      step: currentStep,
-    });
-    if (safetyPrecheck.blocked) {
-      if (typeof window !== 'undefined') {
-        window.alert(safetyPrecheck.message);
-      }
-      setStepStates(prev => ({
-        ...prev,
-        [currentStep]: {
-          ...prev[currentStep],
-          generationStatus: 'error',
-          generationError: safetyPrecheck.message,
-          generationLogs: [...prev[currentStep].generationLogs, `safety-precheck: ${safetyPrecheck.matchedTerms.join(', ')}`].slice(-8),
-        },
-      }));
-      return;
-    }
     const requiredCredits = getGenerationCreditCost(getGenerationRecordMode(currentStep), stateAtStart.config);
     if (creditBalance && creditBalance.balance < requiredCredits) {
       setStepStates(prev => ({
@@ -874,14 +854,6 @@ function getGenerationJobStep(step: GenerationStep): GenerationJobStep {
 function formatGenerationJobError(job: Awaited<ReturnType<typeof getGenerationJob>>): string {
   if (job.status === 'cancelled') return '生成任务已取消。';
   const provider = job.diagnostics?.provider;
-  const safetyRejected = [
-    provider?.providerError,
-    provider?.providerStatus,
-    provider?.userMessage,
-    provider?.rawSnippet,
-    job.errorMessage,
-    job.failureReason,
-  ].some(isSafetyRejectedText);
   const details = [
     provider?.name ? `provider=${provider.name}` : job.provider ? `provider=${job.provider}` : undefined,
     typeof (provider?.statusCode ?? provider?.httpStatus) === 'number' ? `statusCode=${provider?.statusCode ?? provider?.httpStatus}` : undefined,
@@ -889,9 +861,7 @@ function formatGenerationJobError(job: Awaited<ReturnType<typeof getGenerationJo
     provider?.providerError ? `providerError=${provider.providerError}` : undefined,
     provider?.rawSnippet ? `raw=${provider.rawSnippet}` : undefined,
   ].filter((item): item is string => Boolean(item));
-  const message = safetyRejected
-    ? formatSafetyRejectedMessage()
-    : provider?.userMessage || job.errorMessage || '生成任务失败。';
+  const message = provider?.userMessage || job.errorMessage || job.failureReason || '生成任务失败。';
   const refundMessage = job.creditRefunded ? '已退还算力点。' : '';
   return [message, refundMessage, details.length > 0 ? details.join('\n') : '']
     .filter(part => part.trim().length > 0)
