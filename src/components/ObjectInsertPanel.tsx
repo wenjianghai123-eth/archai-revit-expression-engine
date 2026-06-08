@@ -19,7 +19,6 @@ type InteractionMode = 'move' | 'resize' | 'rotate';
 
 interface ObjectInsertPanelProps {
   state: StepState;
-  selectedProjectId?: string | null;
   onUpdateInputImage: (image: UploadedImage | null) => void;
   onUpdateMaterialImage: (image: UploadedImage | null) => void;
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
@@ -77,7 +76,6 @@ interface DebugSubmitPreviewItem {
 
 export function ObjectInsertPanel({
   state,
-  selectedProjectId,
   onUpdateInputImage,
   onUpdateMaterialImage,
   onUpdateConfig,
@@ -448,10 +446,6 @@ export function ObjectInsertPanel({
 
   const handleGenerateClick = async () => {
     if (state.isGenerating || isPreparingGeneration) return;
-    if (!selectedProjectId) {
-      setMessage('请先选择项目，再创建元素植入生成任务。');
-      return;
-    }
     if (!sourceImage || !objectImage) {
       setMessage('请先上传原始场景图和物体参考图。');
       return;

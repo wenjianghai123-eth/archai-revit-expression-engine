@@ -107,7 +107,7 @@ export function ProjectList({ onOpenProject, onDeleteProject }: ProjectListProps
                 <Plus className="h-5 w-5" />
               </div>
               <h2 className="mt-3 text-base font-bold text-slate-900">创建项目</h2>
-              <p className="mt-1 text-xs leading-5 text-slate-500">先建立项目，再进入 AI 生成工作台开始方案表达。</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">可手动建立项目；直接生成时系统也会自动创建默认项目。</p>
             </div>
             <label className="space-y-2">
               <span className="text-xs font-bold text-slate-600">项目名称</span>

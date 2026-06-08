@@ -484,7 +484,6 @@ export function MainWorkspace({
       <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">
         <ObjectInsertPanel
           state={state}
-          selectedProjectId={selectedProjectId}
           onUpdateInputImage={onUpdateInputImage}
           onUpdateMaterialImage={onUpdateMaterialImage}
           onUpdateConfig={onUpdateConfig}

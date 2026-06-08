@@ -447,6 +447,14 @@ export async function createProject(input: ProjectInput): Promise<Project> {
   return response.project;
 }
 
+export async function createAutoProject(): Promise<Project> {
+  const response = await request<{ project: Project }>('/api/projects/auto', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+  return response.project;
+}
+
 export async function getProject(id: string): Promise<Project> {
   const response = await request<{ project: Project }>(`/api/projects/${encodeURIComponent(id)}`);
   return response.project;

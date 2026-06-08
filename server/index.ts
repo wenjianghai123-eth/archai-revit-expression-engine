@@ -101,6 +101,7 @@ const generationJobRateLimitPerMinute = Number(process.env.GENERATION_JOB_RATE_L
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(serverDir, '..', 'dist');
 const distIndexPath = path.join(distDir, 'index.html');
+const autoProjectCreateLocks = new Map<string, Promise<Project>>();
 
 const modelConversionConfig = getModelConversionConfig();
 const modelOptimizationConfig = getModelOptimizationConfig();
@@ -650,6 +651,15 @@ app.post('/api/projects', requireAuth, async (req: Request, res: Response<ApiRes
   }
 });
 
+app.post('/api/projects/auto', requireAuth, async (req: Request, res: Response<ApiResponse<{ project: Project }>>, next: NextFunction) => {
+  try {
+    const project = await createNextAutoProject(getRequiredCurrentUser(req).id);
+    res.status(201).json(apiOk({ project }));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/projects/:id', requireAuth, async (req: Request, res: Response<ApiResponse<{ project: Project }>>, next: NextFunction) => {
   try {
     const project = await getProject(req.params.id, getRequiredCurrentUser(req).id);
@@ -1024,6 +1034,68 @@ function validateProjectCreateBody(
       coverImageUrl: validCoverImageUrl,
     },
   };
+}
+
+async function createNextAutoProject(userId: string): Promise<Project> {
+  const previous = autoProjectCreateLocks.get(userId);
+  const next = (previous ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(() => createNextAutoProjectUnlocked(userId));
+  autoProjectCreateLocks.set(userId, next);
+
+  try {
+    return await next;
+  } finally {
+    if (autoProjectCreateLocks.get(userId) === next) {
+      autoProjectCreateLocks.delete(userId);
+    }
+  }
+}
+
+async function createNextAutoProjectUnlocked(userId: string): Promise<Project> {
+  let nextNumber = readNextAutoProjectNumber(await listProjects(userId));
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const name = formatAutoProjectName(nextNumber);
+    const existing = await listProjects(userId);
+    if (existing.some(project => project.name === name)) {
+      nextNumber += 1;
+      continue;
+    }
+
+    try {
+      return await createProject({
+        userId,
+        name,
+        description: '',
+        status: 'active',
+        coverImageUrl: null,
+      });
+    } catch (error) {
+      const refreshed = await listProjects(userId);
+      if (refreshed.some(project => project.name === name)) {
+        nextNumber += 1;
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw new Error('Unable to create an automatic project name.');
+}
+
+function readNextAutoProjectNumber(projects: Project[]): number {
+  const maxNumber = projects.reduce((max, project) => {
+    const match = /^gt-(\d+)$/u.exec(project.name.trim());
+    if (!match) return max;
+    const value = Number.parseInt(match[1], 10);
+    return Number.isFinite(value) ? Math.max(max, value) : max;
+  }, 0);
+  return maxNumber + 1;
+}
+
+function formatAutoProjectName(value: number): string {
+  return `gt-${String(value).padStart(3, '0')}`;
 }
 
 function validateProjectUpdateBody(

@@ -16,7 +16,7 @@ import { getGenerationCreditCost } from '../utils/generationCredits';
 
 interface UseGenerationRunnerOptions {
   currentStep: GenerationStep;
-  selectedProjectId: string | null;
+  ensureActiveProject: () => Promise<EnsureActiveProjectResult>;
   stepStates: Record<GenerationStep, StepState>;
   setStepStates: Dispatch<SetStateAction<Record<GenerationStep, StepState>>>;
   creditBalance: CreditBalance | null;
@@ -24,9 +24,15 @@ interface UseGenerationRunnerOptions {
   setHistoryItems: Dispatch<SetStateAction<GenerationHistoryItem[]>>;
 }
 
+interface EnsureActiveProjectResult {
+  projectId: string;
+  projectName?: string;
+  wasCreated: boolean;
+}
+
 export function useGenerationRunner({
   currentStep,
-  selectedProjectId,
+  ensureActiveProject,
   stepStates,
   setStepStates,
   creditBalance,
@@ -96,9 +102,7 @@ export function useGenerationRunner({
       const placementMaskAssetId = readObjectInsertMaskAssetId(stateAtStart.config);
       const objectPlacement = readObjectInsertPlacement(stateAtStart.config);
       const hasPlacement = Boolean(objectPlacement?.width && objectPlacement.height);
-      const missingMessage = !selectedProjectId
-        ? '请先选择项目，再创建元素植入生成任务。'
-        : !stateAtStart.inputImage.assetId
+      const missingMessage = !stateAtStart.inputImage.assetId
           ? '原始场景图尚未上传为素材，请重新上传原图。'
         : needsObject && !stateAtStart.materialImage
           ? '请先上传物体参考图。'
@@ -202,13 +206,48 @@ export function useGenerationRunner({
       }
     }));
 
+    let activeProject: EnsureActiveProjectResult;
+    try {
+      activeProject = await ensureActiveProject();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '自动创建项目失败，请稍后重试或手动创建项目。';
+      setStepStates(prev => ({
+        ...prev,
+        [currentStep]: {
+          ...prev[currentStep],
+          isGenerating: false,
+          generationStatus: 'error',
+          generationError: message,
+          generationJobStatus: 'failed',
+          generationProgress: 100,
+          generationLogs: [...prev[currentStep].generationLogs, `error: ${message}`].slice(-8),
+        },
+      }));
+      return;
+    }
+
+    const activeProjectId = activeProject.projectId;
+    const autoProjectNotice = activeProject.wasCreated && activeProject.projectName
+      ? `已自动创建项目 ${activeProject.projectName}`
+      : null;
+    if (autoProjectNotice) {
+      setStepStates(prev => ({
+        ...prev,
+        [currentStep]: {
+          ...prev[currentStep],
+          generationWarnings: [...prev[currentStep].generationWarnings, autoProjectNotice],
+          generationLogs: [...prev[currentStep].generationLogs, `project: ${autoProjectNotice}`].slice(-8),
+        },
+      }));
+    }
+
     const canUseAsyncJob = Boolean(
-      selectedProjectId &&
+      activeProjectId &&
       stateAtStart.inputImage.assetId,
     );
     if (import.meta.env.DEV && currentStep === GenerationStep.PanoramaQuickRender) {
       console.debug('[PanoramaQuickRender] generation runner preflight', {
-        selectedProjectId,
+        selectedProjectId: activeProjectId,
         inputImageAssetId: stateAtStart.inputImage.assetId,
         inputImageId: stateAtStart.inputImage.id,
         configPanoramaAssetId: stateAtStart.config.panoramaAssetId,
@@ -217,7 +256,7 @@ export function useGenerationRunner({
       });
     }
 
-    if (canUseAsyncJob && selectedProjectId && stateAtStart.inputImage.assetId) {
+    if (canUseAsyncJob && activeProjectId && stateAtStart.inputImage.assetId) {
       try {
         const generationMode = getGenerationRecordMode(currentStep);
         const generationStep = getGenerationJobStep(currentStep);
@@ -318,7 +357,7 @@ export function useGenerationRunner({
             mode: generationMode,
             step: generationStep,
             currentStep,
-            projectId: selectedProjectId,
+            projectId: activeProjectId,
             inputAssetIds,
             panoramaAssetId: isPanoramaQuickRender ? stateAtStart.inputImage.assetId : undefined,
             panoramaReferenceAssetIds: isPanoramaQuickRender ? panoramaReferenceAssetIds : undefined,
@@ -334,7 +373,7 @@ export function useGenerationRunner({
           });
         }
         const job = await createGenerationJob({
-          projectId: selectedProjectId,
+          projectId: activeProjectId,
           mode: generationMode,
           step: generationStep,
           prompt: promptForRequest,
@@ -542,7 +581,7 @@ export function useGenerationRunner({
           const providerWarnings: string[] = [];
           const record = saveGenerationRecord({
             id: latestJob.id,
-            projectId: selectedProjectId,
+            projectId: activeProjectId,
             step: currentStep,
             prompt: userSupplementPrompt,
             style: currentStep === GenerationStep.PanoramaQuickRender
@@ -579,7 +618,11 @@ export function useGenerationRunner({
               isGenerating: false,
               generationStatus: 'success',
               generationError: null,
-              generationWarnings: [...providerWarnings, ...(record.storageWarning ? [record.storageWarning] : [])],
+              generationWarnings: [
+                ...(autoProjectNotice ? [autoProjectNotice] : []),
+                ...providerWarnings,
+                ...(record.storageWarning ? [record.storageWarning] : []),
+              ],
               generationProvider: providerName,
               generationResultId: latestJob.id,
               generationCreatedAt: latestJob.finishedAt || latestJob.updatedAt,
@@ -662,7 +705,7 @@ export function useGenerationRunner({
           ...prev[currentStep],
           isGenerating: false,
           generationStatus: 'error',
-          generationError: '当前环境已禁用旧生成接口。请先选择项目并上传输入图，以便通过任务系统生成。',
+          generationError: '当前环境已禁用旧生成接口。请确认输入图已成功上传为素材，以便通过任务系统生成。',
           generationLogs: [...prev[currentStep].generationLogs, 'error: 旧生成接口 fallback 已禁用。'].slice(-8),
         },
       }));
@@ -704,13 +747,13 @@ export function useGenerationRunner({
         case GenerationStep.PanoramaQuickRender:
         case GenerationStep.DesignVariants:
         case GenerationStep.ObjectInsert:
-          throw new Error('白模快渲需要通过项目任务系统生成，请先选择项目并截取模型视角。');
+          throw new Error('该功能需要通过项目任务系统生成，请确认输入图已成功上传为素材。');
       }
 
       let projectSaveWarning: string | null = null;
       const backendOutputImageUrl = response.outputImageUrl || response.imageUrl || null;
       const displayOutputImage = backendOutputImageUrl || response.imageDataUrl;
-      if (selectedProjectId) {
+      if (activeProjectId) {
         let outputImageUrl: string | null = backendOutputImageUrl;
 
         if (!outputImageUrl) {
@@ -725,7 +768,7 @@ export function useGenerationRunner({
         }
 
         try {
-          await createProjectGeneration(selectedProjectId, {
+          await createProjectGeneration(activeProjectId, {
             mode: getGenerationRecordMode(currentStep),
             step: getGenerationJobStep(currentStep),
             prompt: readSupplementalPromptForGeneration(currentStep, stateAtStart.config),
@@ -748,7 +791,7 @@ export function useGenerationRunner({
       const currentState = prev[currentStep];
       const record = saveGenerationRecord({
           id: response.id,
-          projectId: selectedProjectId,
+          projectId: activeProjectId,
           step: currentStep,
           prompt: readSupplementalPromptForGeneration(currentStep, currentState.config),
           style: readHistoryStyle(currentStep, currentState.config),
@@ -772,6 +815,7 @@ export function useGenerationRunner({
         });
       setHistoryItems(items => [record, ...items.filter(item => item.id !== record.id)]);
       const warnings = [
+        ...(autoProjectNotice ? [autoProjectNotice] : []),
         ...response.warnings,
         ...(record.storageWarning ? [record.storageWarning] : []),
         ...(projectSaveWarning ? [projectSaveWarning] : []),
@@ -818,7 +862,15 @@ export function useGenerationRunner({
         }
       }));
     }
-  }, [currentStep, selectedProjectId, stepStates]);
+  }, [
+    creditBalance,
+    currentStep,
+    ensureActiveProject,
+    refreshCreditBalance,
+    setHistoryItems,
+    setStepStates,
+    stepStates,
+  ]);
 
   return {
     estimatedCreditCost,

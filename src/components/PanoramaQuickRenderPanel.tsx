@@ -1478,7 +1478,6 @@ function getRenderButtonDisabledReason(input: {
   isBatchRendering: boolean;
   isPreparing: boolean;
 }): string {
-  if (!input.projectId) return '请先选择项目';
   if (!input.slot) return '请先生成 360 全景截图';
   if (!input.slot.rawImage) return '当前槽位没有原始全景图';
   if (!getSlotRawAssetId(input.slot)) return '全景图尚未上传为素材，请重新生成全景截图';
@@ -1495,7 +1494,6 @@ function getBatchRenderButtonDisabledReason(input: {
   isBatchRendering: boolean;
   isPreparing: boolean;
 }): string {
-  if (!input.projectId) return '请先选择项目';
   if (input.slots.length === 0) return '请先生成 360 全景截图';
   const invalidSlot = input.slots.find(slot => !slot.rawImage || !getSlotRawAssetId(slot));
   if (invalidSlot && !invalidSlot.rawImage) return `槽位 ${invalidSlot.slotIndex} 没有原始全景图`;

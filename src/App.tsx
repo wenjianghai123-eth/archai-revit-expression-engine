@@ -14,6 +14,7 @@ import { GenerationStep, GenerationHistoryItem, StepState, UploadedImage, Second
 import { PROMPT_TEMPLATES } from './constants';
 import {
   cancelGenerationJob,
+  createAutoProject,
   deleteProject,
   updateGenerationResult,
 } from './lib/api';
@@ -156,9 +157,23 @@ export default function App() {
     }
   }, [resetWorkflow, setActiveTab, setSelectedProjectId, signOut]);
 
+  const ensureActiveProject = useCallback(async () => {
+    if (selectedProjectId) {
+      return { projectId: selectedProjectId, wasCreated: false };
+    }
+
+    try {
+      const project = await createAutoProject();
+      setSelectedProjectId(project.id);
+      return { projectId: project.id, projectName: project.name, wasCreated: true };
+    } catch {
+      throw new Error('自动创建项目失败，请稍后重试或手动创建项目。');
+    }
+  }, [selectedProjectId, setSelectedProjectId]);
+
   const { estimatedCreditCost, isCreditsInsufficient, handleGenerate } = useGenerationRunner({
     currentStep,
-    selectedProjectId,
+    ensureActiveProject,
     stepStates,
     setStepStates,
     creditBalance,
