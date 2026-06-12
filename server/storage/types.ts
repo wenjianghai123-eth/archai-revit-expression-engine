@@ -20,7 +20,8 @@ export type GenerationJobStep =
   | 'material_replace'
   | 'plan_colorize'
   | 'panorama_quick_render'
-  | 'object_insert';
+  | 'object_insert'
+  | 'free_reference_image';
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
 export type VariantStyleKey =
   | 'modern-minimal'

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Box, Camera, CheckCircle2, ImageIcon, QrCode, Sparkles, Trash2, Upload } from 'lucide-react';
+import { AlertCircle, Box, Camera, CheckCircle2, Download, ExternalLink, ImageIcon, QrCode, Sparkles, Trash2, Upload } from 'lucide-react';
 import {
   AssetModel,
   GenerationConfig,
@@ -15,6 +15,8 @@ import {
 import { listModelAssets, uploadImageAsset, uploadModelAsset } from '../lib/api';
 import { saveGenerationRecord } from '../storage/history';
 import { savePanoramaRecord } from '../storage/panoramas';
+import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
+import { getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { ModelViewer, ModelViewerHandle } from './ModelViewer';
 import {
   isLargeOriginalModel,
@@ -32,6 +34,7 @@ interface PanoramaQuickRenderPanelProps {
   state: StepState;
   config: GenerationConfig;
   projectId?: string | null;
+  projectName?: string | null;
   provider?: GenerationProvider | null;
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
   onUpdateInputImage: (image: UploadedImage | null) => void;
@@ -106,6 +109,7 @@ export function PanoramaQuickRenderPanel({
   state,
   config,
   projectId = null,
+  projectName = null,
   provider = null,
   onUpdateConfig,
   onUpdateInputImage,
@@ -142,8 +146,9 @@ export function PanoramaQuickRenderPanel({
 
   const activeSlot = slots.find(slot => slot.slotIndex === activeSlotIndex) || null;
   const activeRenderSlot = activeSlot || slots.find(item => item.slotIndex === captureSlotIndex) || null;
+  const selectedGenerationResult = state.generationResults.find(result => result.isSelected) || state.generationResults[0];
   const currentRawPanoramaUrl = activeSlot?.rawImage.url || activeSlot?.rawImage.dataUrl || panoramaRecord?.panoramaUrl || state.inputImage?.url || state.inputImage?.dataUrl || '';
-  const currentRenderedPanoramaUrl = activeSlot?.renderResult?.imageUrl || panoramaRecord?.renderedPanoramaUrl || '';
+  const currentRenderedPanoramaUrl = getOriginalResultImageUrl(selectedGenerationResult, activeSlot?.renderResult?.imageUrl || panoramaRecord?.renderedPanoramaUrl) || '';
   const panoramaUrl = panoramaPreviewKind === 'rendered' ? currentRenderedPanoramaUrl : currentRawPanoramaUrl;
   const canShowRenderedPanorama = Boolean(currentRenderedPanoramaUrl);
   const renderableSelectedSlots = slots.filter(slot => selectedSlotIndices.includes(slot.slotIndex));
@@ -1120,6 +1125,10 @@ export function PanoramaQuickRenderPanel({
               imageUrl={panoramaUrl}
               previewKind={panoramaPreviewKind}
               canShowRendered={canShowRenderedPanorama}
+              projectName={projectName || projectId || 'archai-project'}
+              assetId={panoramaPreviewKind === 'rendered'
+                ? getOriginalResultAssetId(selectedGenerationResult)
+                : config.panoramaAssetId}
               onPreviewKindChange={setPanoramaPreviewKind}
               previewMode={previewMode}
               onPreviewModeChange={setPreviewMode}
@@ -1364,6 +1373,8 @@ function ResultPreview({
   imageUrl,
   previewKind,
   canShowRendered,
+  projectName,
+  assetId,
   onPreviewKindChange,
   previewMode,
   onPreviewModeChange,
@@ -1371,10 +1382,38 @@ function ResultPreview({
   imageUrl: string;
   previewKind: 'raw' | 'rendered';
   canShowRendered: boolean;
+  projectName?: string | null;
+  assetId?: string | null;
   onPreviewKindChange: (kind: 'raw' | 'rendered') => void;
   previewMode: 'image' | '360';
   onPreviewModeChange: (mode: 'image' | '360') => void;
 }) {
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  const handleDownload = async () => {
+    if (!imageUrl || isDownloading) return;
+    setIsDownloading(true);
+    setDownloadMessage(null);
+    setDownloadError(null);
+    try {
+      await downloadAsset({
+        url: imageUrl,
+        assetId,
+      }, buildResultImageFilename({
+        projectName,
+        featureLabel: previewKind === 'rendered' ? '全景快渲' : '全景截图',
+      }));
+      setDownloadMessage('已开始下载');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      setDownloadError(message === downloadFallbackMessage ? downloadFallbackMessage : '下载失败，请稍后重试');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   if (!imageUrl) {
     return (
       <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-xs font-bold text-slate-400">
@@ -1388,6 +1427,23 @@ function ResultPreview({
       <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
         <p className="text-sm font-bold text-slate-900">{previewKind === 'rendered' ? 'AI 渲染后全景图' : '渲染前原始全景图'}</p>
         <div className="flex flex-wrap justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => window.open(imageUrl, '_blank', 'noopener,noreferrer')}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1 text-xs font-bold text-slate-700 shadow-sm hover:text-blue-700"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            查看原图
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleDownload()}
+            disabled={isDownloading}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1 text-xs font-bold text-slate-700 shadow-sm hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Download className={`h-3.5 w-3.5 ${isDownloading ? 'animate-pulse' : ''}`} />
+            {isDownloading ? '正在下载...' : '保存到本地'}
+          </button>
           <div className="inline-flex rounded-lg bg-white p-1 text-xs font-bold shadow-sm">
             <button type="button" onClick={() => onPreviewKindChange('raw')} className={`rounded-md px-2 py-1 ${previewKind === 'raw' ? 'bg-slate-950 text-white' : 'text-slate-500'}`}>
               原图
@@ -1406,6 +1462,12 @@ function ResultPreview({
           </div>
         </div>
       </div>
+      {downloadMessage || downloadError ? (
+        <div className="border-b border-slate-200 px-3 py-2 text-xs font-semibold">
+          {downloadMessage ? <span className="text-emerald-700">{downloadMessage}</span> : null}
+          {downloadError ? <span className="text-amber-700">{downloadError}</span> : null}
+        </div>
+      ) : null}
       {previewMode === '360' ? (
         <PanoramaViewer imageUrl={imageUrl} className="h-64" minHeight={256} />
       ) : (

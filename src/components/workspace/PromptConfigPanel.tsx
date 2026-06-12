@@ -1,5 +1,14 @@
 import { BookOpen } from 'lucide-react';
 import { GenerationConfig, GenerationStep } from '../../types';
+import {
+  floorplanLayoutTemplates,
+  floorplanStyleTemplates,
+  resolveFloorplanBatchCount,
+  resolveFloorplanVariantPlans,
+  type FloorplanMultiPlanBatchCount,
+  type FloorplanVariantFocus,
+  type FloorplanVariantType,
+} from '../../constants/floorplanVariants';
 import { type SmartPromptMode } from '../../promptTemplates/intelligentPromptTemplates';
 import { SmartPromptAssistant } from './SmartPromptAssistant';
 import { isLocalInpaintingStep } from './workspaceUtils';
@@ -56,10 +65,114 @@ export function PromptConfigPanel({
 
       <QualityModeControls config={config} onUpdateConfig={onUpdateConfig} />
 
+      {step === GenerationStep.FloorplanTo3D ? (
+        <FloorplanMultiPlanControls config={config} onUpdateConfig={onUpdateConfig} />
+      ) : null}
+
       {step === GenerationStep.LocalInpainting ? (
         <InpaintConfigControls config={config} onUpdateConfig={onUpdateConfig} />
       ) : null}
     </>
+  );
+}
+
+interface FloorplanMultiPlanControlsProps {
+  config: GenerationConfig;
+  onUpdateConfig: (config: Partial<GenerationConfig>) => void;
+}
+
+function FloorplanMultiPlanControls({ config, onUpdateConfig }: FloorplanMultiPlanControlsProps) {
+  const outputMode = config.floorplanOutputMode || 'single';
+  const variantType = config.floorplanVariantType || 'material_style';
+  const variantFocus = config.floorplanVariantFocus || (variantType === 'mixed' ? 'both' : variantType);
+  const batchCount = resolveFloorplanBatchCount(config.batchCount);
+  const count = outputMode === 'multi' ? batchCount : 1;
+
+  const updateMultiPlan = (patch: Partial<GenerationConfig>) => {
+    const nextConfig = {
+      ...config,
+      ...patch,
+    };
+    const nextMode = nextConfig.floorplanOutputMode || 'single';
+    const nextBatchCount = nextMode === 'multi' ? resolveFloorplanBatchCount(nextConfig.batchCount) : 1;
+    const plans = resolveFloorplanVariantPlans(nextConfig, nextBatchCount);
+    onUpdateConfig({
+      ...patch,
+      batchCount: nextBatchCount,
+      floorplanStyleTemplateIds: plans.map(plan => plan.selectedStyleId).filter((id): id is string => Boolean(id)),
+      floorplanStyleTemplateNames: plans.map(plan => plan.selectedStyleName).filter((name): name is string => Boolean(name)),
+      floorplanLayoutVariantIds: plans.map(plan => plan.layoutVariantId).filter((id): id is string => Boolean(id)),
+      floorplanLayoutVariantNames: plans.map(plan => plan.layoutVariantName).filter((name): name is string => Boolean(name)),
+      variantNames: plans.map(plan => plan.variantName),
+    });
+  };
+
+  return (
+    <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-black text-slate-900">三维彩平输出</p>
+          <p className="mt-0.5 text-[11px] font-semibold text-slate-500">预计生成 {count} 张，消耗 {count} 点</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <MiniOption active={outputMode !== 'multi'} label="单方案" onClick={() => updateMultiPlan({ floorplanOutputMode: 'single', batchCount: 1 })} />
+        <MiniOption active={outputMode === 'multi'} label="多方案" onClick={() => updateMultiPlan({ floorplanOutputMode: 'multi', batchCount: config.batchCount === 2 || config.batchCount === 6 ? config.batchCount : 4 })} />
+      </div>
+
+      {outputMode === 'multi' ? (
+        <>
+          <div className="space-y-2">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">方案类型</p>
+            <div className="grid grid-cols-1 gap-2">
+              <MiniOption active={variantType === 'material_style'} label="材质/风格方案" onClick={() => updateMultiPlan({ floorplanVariantType: 'material_style', floorplanVariantFocus: 'material_style' })} />
+              <MiniOption active={variantType === 'furniture_layout'} label="家具摆放方案" onClick={() => updateMultiPlan({ floorplanVariantType: 'furniture_layout', floorplanVariantFocus: 'furniture_layout' })} />
+              <MiniOption active={variantType === 'mixed'} label="混合方案" onClick={() => updateMultiPlan({ floorplanVariantType: 'mixed', floorplanVariantFocus: 'both' })} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            {([2, 4, 6] as FloorplanMultiPlanBatchCount[]).map(value => (
+              <MiniOption key={value} active={batchCount === value} label={`${value} 张`} onClick={() => updateMultiPlan({ batchCount: value })} />
+            ))}
+          </div>
+
+          <label className="block">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">方案差异重点</span>
+            <select
+              value={variantFocus}
+              onChange={event => updateMultiPlan({ floorplanVariantFocus: event.currentTarget.value as FloorplanVariantFocus })}
+              className="mt-2 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 outline-none focus:border-blue-300"
+            >
+              <option value="material_style">以材质风格为主</option>
+              <option value="furniture_layout">以家具摆放为主</option>
+              <option value="both">材质与摆放同时变化</option>
+            </select>
+          </label>
+
+          <p className="text-[11px] leading-5 text-slate-500">
+            默认模板包含 {floorplanStyleTemplates.length} 个材质风格和 {floorplanLayoutTemplates.length} 个家具布局方向。家具摆放方案会改变同类型家具组合、朝向和软装关系，但保持原始平面图墙体、门窗、功能分区和比例不变。
+          </p>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function MiniOption({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-lg border px-3 py-2 text-xs font-bold ${
+        active
+          ? 'border-blue-600 bg-blue-50 text-blue-700'
+          : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-blue-200'
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 

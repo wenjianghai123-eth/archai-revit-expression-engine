@@ -1,19 +1,21 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { GenerationConfig, GenerationHistoryItem, GenerationProvider, GenerationRunStateOverride, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, SecondaryEditAction, StepState, UploadedImage } from '../types';
 import { createUploadedImage, validateImageFile } from '../utils/file';
-import { uploadImageAsset } from '../lib/api';
+import { getProject, uploadImageAsset } from '../lib/api';
 import { GenerationStatusPanel } from './workspace/GenerationStatusPanel';
 import { InputImagePanel } from './workspace/InputImagePanel';
 import { InpaintMaskPanel } from './workspace/InpaintMaskPanel';
 import { PromptConfigPanel } from './workspace/PromptConfigPanel';
 import { MaterialTexturesPanel, StyleSelectorPanel } from './workspace/ReferenceImagesPanel';
 import { ResultPreviewPanel } from './workspace/ResultPreviewPanel';
+import { getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { ModelSnapshotRenderPanel } from './ModelSnapshotRenderPanel';
 import { PanoramaQuickRenderPanel } from './PanoramaQuickRenderPanel';
 import { DesignVariantsPanel } from './DesignVariantsPanel';
 import { PlanColorizePanel } from './PlanColorizePanel';
 import { MaterialReplaceConfigPanel } from './MaterialReplaceConfigPanel';
 import { ObjectInsertPanel } from './ObjectInsertPanel';
+import { FreeReferenceImagePanel } from './FreeReferenceImagePanel';
 import { UploadErrors, UploadTarget, ViewModeOption } from './workspace/workspaceTypes';
 import { getUploadedImageSrc, isLocalInpaintingStep, maxFurnitureReferences, maxMaterialTextures, readGenerationStatusLabel } from './workspace/workspaceUtils';
 
@@ -83,6 +85,7 @@ export function MainWorkspace({
   const [isMaterialLibraryOpen, setIsMaterialLibraryOpen] = useState(false);
   const [isPromptTemplatePanelOpen, setIsPromptTemplatePanelOpen] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [projectName, setProjectName] = useState<string | null>(null);
 
   const isFloorplanStep = step === GenerationStep.FloorplanTo3D;
   const isStyleRenderStep = step === GenerationStep.StyleRender;
@@ -92,6 +95,7 @@ export function MainWorkspace({
   const isMaterialReplaceStep = step === GenerationStep.MaterialReplace;
   const isPanoramaQuickRenderStep = step === GenerationStep.PanoramaQuickRender;
   const isObjectInsertStep = step === GenerationStep.ObjectInsert;
+  const isFreeReferenceImageStep = step === GenerationStep.FreeReferenceImage;
   const materialReplaceEditMode = state.config.editMode === 'mask' ? 'mask' : 'smart-type';
   const hasMaterialReplaceTarget = Boolean(state.config.targetMaterial || state.materialTextures.length > 0 || (state.config.customMaterialPrompt || '').trim());
   const hasMaskSelection = Boolean(state.maskImage?.dataUrl || state.useFullImageMask);
@@ -114,7 +118,7 @@ export function MainWorkspace({
     || resultOptions.find(result => result.isSelected)
     || resultOptions[0]
     || null;
-  const previewImage = selectedResult?.imageUrl || state.outputImage;
+  const previewImage = getOriginalResultImageUrl(selectedResult, state.outputImage);
   const generationStartedAt = state.generationJobDiagnostics?.timing?.jobStartedAt || state.generationCreatedAt;
   const statusLabel = readGenerationStatusLabel(state.generationJobDiagnostics?.phase, state.generationJobStatus, state.generationStatus);
   const resultPanelTitle = isModelSnapshotStep ? '白模快渲结果' : isFloorplanStep ? '材质设置与结果' : isStyleRenderStep ? '渲染设置与结果' : '输出 / 状态';
@@ -138,6 +142,28 @@ export function MainWorkspace({
     const timer = window.setInterval(updateElapsed, 1000);
     return () => window.clearInterval(timer);
   }, [generationStartedAt, state.isGenerating]);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (!selectedProjectId) {
+      setProjectName(null);
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    void getProject(selectedProjectId)
+      .then(project => {
+        if (isMounted) setProjectName(project.name);
+      })
+      .catch(() => {
+        if (isMounted) setProjectName(null);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedProjectId]);
 
   const handleUploadClick = (target: UploadTarget) => {
     if (target === 'input') inputFileRef.current?.click();
@@ -346,6 +372,7 @@ export function MainWorkspace({
           previewImage={previewImage}
           uploadError={uploadErrors.input}
           estimatedCreditCost={estimatedCreditCost}
+          projectName={projectName || selectedProjectId || 'archai-project'}
           onUploadInput={() => handleUploadClick('input')}
           onUpdateInputImage={onUpdateInputImage}
           onUpdateConfig={onUpdateConfig}
@@ -369,6 +396,7 @@ export function MainWorkspace({
           viewModeOptions={viewModeOptions}
           topPanels={null}
           estimatedCreditCost={estimatedCreditCost}
+          projectName={projectName || selectedProjectId || 'archai-project'}
           onGenerate={onGenerate}
           onRegenerate={onRegenerate}
           onCancelGeneration={onCancelGeneration}
@@ -410,6 +438,7 @@ export function MainWorkspace({
           viewModeOptions={viewModeOptions}
           topPanels={null}
           estimatedCreditCost={estimatedCreditCost}
+          projectName={projectName || selectedProjectId || 'archai-project'}
           onGenerate={onGenerate}
           onRegenerate={onRegenerate}
           onCancelGeneration={onCancelGeneration}
@@ -447,6 +476,7 @@ export function MainWorkspace({
           viewModeOptions={viewModeOptions}
           topPanels={null}
           estimatedCreditCost={estimatedCreditCost}
+          projectName={projectName || selectedProjectId || 'archai-project'}
           onGenerate={onGenerate}
           onRegenerate={onRegenerate}
           onCancelGeneration={onCancelGeneration}
@@ -468,6 +498,7 @@ export function MainWorkspace({
           state={state}
           config={state.config}
           projectId={selectedProjectId}
+          projectName={projectName || selectedProjectId || 'archai-project'}
           provider={providerForStatus}
           onUpdateConfig={onUpdateConfig}
           onUpdateInputImage={onUpdateInputImage}
@@ -488,9 +519,23 @@ export function MainWorkspace({
           onUpdateMaterialImage={onUpdateMaterialImage}
           onUpdateConfig={onUpdateConfig}
           onGenerate={onGenerate}
+          projectName={projectName || selectedProjectId || 'archai-project'}
           isAdmin={isAdmin}
         />
       </div>
+    );
+  }
+
+  if (isFreeReferenceImageStep) {
+    return (
+      <FreeReferenceImagePanel
+        state={state}
+        projectName={projectName || selectedProjectId || 'archai-project'}
+        onUpdateInputImage={onUpdateInputImage}
+        onUpdateMaterialImage={onUpdateMaterialImage}
+        onUpdateConfig={onUpdateConfig}
+        onGenerate={onGenerate}
+      />
     );
   }
 
@@ -550,6 +595,9 @@ export function MainWorkspace({
           originalImageUrl={originalImageUrl}
           previewImage={previewImage}
           providerLabel={providerForStatus || 'provider 待连接'}
+          step={step}
+          projectName={projectName || selectedProjectId || 'archai-project'}
+          resultAssetId={getOriginalResultAssetId(selectedResult)}
           viewModeOptions={viewModeOptions}
           onSetViewMode={onSetViewMode}
           showToolbar
@@ -575,12 +623,14 @@ export function MainWorkspace({
           </>
         )}
         estimatedCreditCost={estimatedCreditCost}
+        projectName={projectName || selectedProjectId || 'archai-project'}
         onGenerate={onGenerate}
         onRegenerate={onRegenerate}
         onCancelGeneration={onCancelGeneration}
         onSelectGenerationResult={onSelectGenerationResult}
         onToggleGenerationFavorite={onToggleGenerationFavorite}
         onSecondaryEditResult={onSecondaryEditResult}
+        onRetryBatchItem={variantIndex => onGenerate({ config: { ...state.config, floorplanRetryVariantIndex: variantIndex } })}
         onSetViewMode={onSetViewMode}
         onNextStep={onNextStep}
         onReset={onReset}

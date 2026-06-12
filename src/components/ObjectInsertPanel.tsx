@@ -1,21 +1,37 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Crosshair, Download, ImagePlus, Move, RotateCcw, RotateCw, Trash2, Upload } from 'lucide-react';
+import { Crosshair, Download, ExternalLink, ImagePlus, Move, RotateCcw, RotateCw, Trash2, Upload, X } from 'lucide-react';
 import {
   GenerationConfig,
   GenerationRunStateOverride,
   GenerationStep,
+  ObjectInsertItemConfig,
   ObjectInsertDebugMode,
+  ObjectInsertHarmonyPriority,
+  ObjectInsertPlacementMode,
   ObjectInsertPositionConstraintStrength,
   ObjectPlacement,
   StepState,
   UploadedImage,
 } from '../types';
 import { uploadImageAsset } from '../lib/api';
+import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
 import { createUploadedImage, validateImageFile } from '../utils/file';
+import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 
 type UploadKind = 'source' | 'object';
 type InteractionMode = 'move' | 'resize' | 'rotate';
+
+interface ObjectInsertDraftItem {
+  id: string;
+  objectType: string;
+  objectLabel: string;
+  referenceImages: UploadedImage[];
+  placement: ObjectPlacement;
+  placementMode: ObjectInsertPlacementMode;
+  placementIntent: string;
+  extraPrompt: string;
+}
 
 interface ObjectInsertPanelProps {
   state: StepState;
@@ -23,14 +39,17 @@ interface ObjectInsertPanelProps {
   onUpdateMaterialImage: (image: UploadedImage | null) => void;
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
   onGenerate: (stateOverride?: GenerationRunStateOverride) => void;
+  projectName?: string | null;
   isAdmin?: boolean;
 }
 
 interface InteractionState {
   mode: InteractionMode;
+  itemId: string;
   startClientX: number;
   startClientY: number;
   startPlacement: ObjectPlacement;
+  startAspect: number;
 }
 
 interface ExportedImageInfo {
@@ -45,6 +64,8 @@ interface ExportResult {
   mask: ExportedImageInfo;
   placement: ObjectPlacement;
 }
+
+type ObjectInsertConfigPatch = Partial<NonNullable<GenerationConfig['objectInsert']>>;
 
 const acceptedImageTypes = 'image/png,image/jpeg,image/webp';
 const minObjectSize = 24;
@@ -65,6 +86,35 @@ const objectInsertPositionConstraintOptions: Array<{
   { value: 'medium', label: '中', description: '尽量贴近用户放置的位置、尺度和角度，同时保留少量自然修正空间。' },
   { value: 'high', label: '高', description: '必须贴近 guide / mask 指定区域，不得出现明显偏移。' },
 ];
+const objectInsertPlacementModeOptions: Array<{
+  value: ObjectInsertPlacementMode;
+  label: string;
+  description: string;
+}> = [
+  { value: 'natural', label: '自然摆放', description: '该框表示建议区域，不是绝对位置。AI 会优先参考原图空间布局，自动优化家具位置、朝向和比例。' },
+  { value: 'strict', label: '精确摆放', description: 'AI 将尽量按照当前框的位置、大小和角度生成。' },
+];
+const objectInsertHarmonyPriorityOptions: Array<{ value: ObjectInsertHarmonyPriority; label: string }> = [
+  { value: 'layout', label: '布局关系' },
+  { value: 'style', label: '风格材质' },
+  { value: 'balance', label: '视觉平衡' },
+];
+
+const objectTypeOptions: Array<{ value: string; label: string }> = [
+  { value: 'furniture', label: '家具' },
+  { value: 'chair', label: '椅子' },
+  { value: 'table', label: '桌子' },
+  { value: 'sofa', label: '沙发' },
+  { value: 'ceiling_light', label: '吊顶灯' },
+  { value: 'coffee_table', label: '茶几' },
+  { value: 'bed', label: '床' },
+  { value: 'cabinet', label: '边柜' },
+  { value: 'rug', label: '地毯' },
+  { value: 'decorative_painting', label: '装饰画' },
+  { value: 'custom', label: '自定义' },
+];
+const maxObjectItems = 8;
+const maxReferencesPerObject = 6;
 
 interface DebugSubmitPreviewItem {
   id: string;
@@ -80,6 +130,7 @@ export function ObjectInsertPanel({
   onUpdateMaterialImage,
   onUpdateConfig,
   onGenerate,
+  projectName,
   isAdmin = false,
 }: ObjectInsertPanelProps) {
   const sourceInputRef = useRef<HTMLInputElement>(null);
@@ -89,37 +140,52 @@ export function ObjectInsertPanel({
   const initializedPairRef = useRef<string>('');
 
   const sourceImage = state.inputImage;
-  const objectImage = state.materialImage;
-  const [placement, setPlacement] = useState<ObjectPlacement>(() => sanitizePlacement(state.config.objectPlacement || emptyPlacement));
+  const [objectItems, setObjectItems] = useState<ObjectInsertDraftItem[]>(() => createInitialObjectItems(state.config, state.materialImage));
+  const [activeItemId, setActiveItemId] = useState(() => objectItems[0]?.id || createObjectItemId());
+  const activeObjectItem = objectItems.find(item => item.id === activeItemId) || objectItems[0] || null;
+  const objectImage = activeObjectItem?.referenceImages[0] || state.materialImage;
+  const [placement, setPlacement] = useState<ObjectPlacement>(() => sanitizePlacement(activeObjectItem?.placement || state.config.objectPlacement || emptyPlacement));
   const [uploadErrors, setUploadErrors] = useState<Record<UploadKind, string | null>>({ source: null, object: null });
   const [message, setMessage] = useState<string | null>(null);
   const [isSelected, setIsSelected] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [isPreparingGeneration, setIsPreparingGeneration] = useState(false);
+  const [isDownloadingResult, setIsDownloadingResult] = useState(false);
+  const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [isSafetyDebugEnabled, setIsSafetyDebugEnabled] = useState(false);
   const [debugInputMode, setDebugInputMode] = useState<ObjectInsertDebugMode>('full');
 
   const sourceWidth = sourceImage?.width || 1200;
   const sourceHeight = sourceImage?.height || 800;
-  const objectAspect = useMemo(() => {
-    if (!objectImage?.width || !objectImage.height) return 1;
-    return objectImage.width / objectImage.height;
-  }, [objectImage?.height, objectImage?.width]);
+  const configObjectItems = useMemo(() => toObjectInsertConfigItems(objectItems), [objectItems]);
 
-  const objectStyle = useMemo<React.CSSProperties>(() => ({
-    left: `${(placement.x / sourceWidth) * 100}%`,
-    top: `${(placement.y / sourceHeight) * 100}%`,
-    width: `${(placement.width / sourceWidth) * 100}%`,
-    height: `${(placement.height / sourceHeight) * 100}%`,
-    transform: `rotate(${placement.rotation}deg)`,
+  const getObjectPlacementStyle = useCallback((itemPlacement: ObjectPlacement): React.CSSProperties => ({
+    left: `${(itemPlacement.x / sourceWidth) * 100}%`,
+    top: `${(itemPlacement.y / sourceHeight) * 100}%`,
+    width: `${(itemPlacement.width / sourceWidth) * 100}%`,
+    height: `${(itemPlacement.height / sourceHeight) * 100}%`,
+    transform: `rotate(${itemPlacement.rotation}deg)`,
     transformOrigin: 'center center',
-  }), [placement, sourceHeight, sourceWidth]);
+  }), [sourceHeight, sourceWidth]);
   const canShowSafetyDebug = isAdmin || import.meta.env.DEV;
   const activeDebugMode: ObjectInsertDebugMode = canShowSafetyDebug && isSafetyDebugEnabled ? debugInputMode : 'full';
   const positionConstraintStrength = readObjectInsertPositionConstraintStrength(state.config);
   const positionConstraintOption = objectInsertPositionConstraintOptions.find(option => option.value === positionConstraintStrength)
     || objectInsertPositionConstraintOptions[2];
+  const placementMode = activeObjectItem?.placementMode || readObjectInsertPlacementMode(state.config);
+  const placementModeOption = objectInsertPlacementModeOptions.find(option => option.value === placementMode)
+    || objectInsertPlacementModeOptions[0];
+  const selectedResult = state.generationResults.find(result => result.isSelected) || state.generationResults[0];
+  const originalResultImage = getOriginalResultImageUrl(selectedResult, state.outputImage);
+  const originalResultAssetId = getOriginalResultAssetId(selectedResult);
+  const resultDimensionsText = formatResultDimensions(selectedResult);
+  const placementIntent = activeObjectItem?.placementIntent || readObjectInsertPlacementIntent(state.config);
+  const harmonyPriority = readObjectInsertHarmonyPriority(state.config);
+  const allowAutoAdjustPosition = readObjectInsertAutoAdjust(state.config, 'allowAutoAdjustPosition');
+  const allowAutoAdjustRotation = readObjectInsertAutoAdjust(state.config, 'allowAutoAdjustRotation');
+  const allowAutoAdjustScale = readObjectInsertAutoAdjust(state.config, 'allowAutoAdjustScale');
   const submitPreview = useMemo(() => buildObjectInsertSubmitPreview({
     mode: activeDebugMode,
     sourceImage,
@@ -139,33 +205,148 @@ export function ObjectInsertPanel({
     };
   }, [sourceHeight, sourceImage, sourceWidth]);
 
-  const updatePlacement = useCallback((nextPlacement: ObjectPlacement) => {
-    const next = sanitizePlacement(nextPlacement, sourceWidth, sourceHeight);
-    setPlacement(next);
-    onUpdateConfig({
-      sourceImageAssetId: sourceImage?.assetId,
-      objectReferenceAssetId: objectImage?.assetId,
-      objectPlacement: next,
-      positionConstraintStrength,
+  const buildObjectInsertConfigPatch = useCallback((patch: Partial<GenerationConfig> = {}): Partial<GenerationConfig> => {
+    const nextPlacementMode = patch.placementMode || placementMode;
+    const nextPlacementIntent = patch.placementIntent ?? placementIntent;
+    const nextHarmonyPriority = patch.harmonyPriority || harmonyPriority;
+    const nextAllowPosition = patch.allowAutoAdjustPosition ?? allowAutoAdjustPosition;
+    const nextAllowRotation = patch.allowAutoAdjustRotation ?? allowAutoAdjustRotation;
+    const nextAllowScale = patch.allowAutoAdjustScale ?? allowAutoAdjustScale;
+    const nextPositionConstraint = patch.positionConstraintStrength || positionConstraintStrength;
+    const nextPlacement = patch.objectPlacement || placement;
+    const nestedPatch: ObjectInsertConfigPatch = patch.objectInsert || {};
+
+    return {
+      ...patch,
+      placementMode: nextPlacementMode,
+      placementIntent: nextPlacementIntent,
+      harmonyPriority: nextHarmonyPriority,
+      allowAutoAdjustPosition: nextAllowPosition,
+      allowAutoAdjustRotation: nextAllowRotation,
+      allowAutoAdjustScale: nextAllowScale,
+      positionConstraintStrength: nextPositionConstraint,
+      objectPlacement: nextPlacement,
       objectInsert: {
         ...(state.config.objectInsert || {}),
-        sourceImageAssetId: sourceImage?.assetId,
-        objectReferenceAssetId: objectImage?.assetId,
-        placement: next,
-        extraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
-        positionConstraintStrength,
+        ...nestedPatch,
+        sourceImageAssetId: nestedPatch.sourceImageAssetId || sourceImage?.assetId || state.config.objectInsert?.sourceImageAssetId,
+        objectItems: nestedPatch.objectItems || configObjectItems,
+        globalExtraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
+        objectReferenceAssetId: nestedPatch.objectReferenceAssetId || objectImage?.assetId || state.config.objectInsert?.objectReferenceAssetId,
+        objectReferenceAssetIds: activeObjectItem?.referenceImages.map(image => image.assetId).filter((assetId): assetId is string => Boolean(assetId)),
+        placement: nextPlacement,
+        extraPrompt: nestedPatch.extraPrompt ?? state.config.objectInsertExtraPrompt ?? state.config.customPrompt ?? '',
+        positionConstraintStrength: nextPositionConstraint,
+        placementMode: nextPlacementMode,
+        placementIntent: nextPlacementIntent,
+        harmonyPriority: nextHarmonyPriority,
+        allowAutoAdjustPosition: nextAllowPosition,
+        allowAutoAdjustRotation: nextAllowRotation,
+        allowAutoAdjustScale: nextAllowScale,
+      },
+    };
+  }, [
+    activeObjectItem?.referenceImages,
+    allowAutoAdjustPosition,
+    allowAutoAdjustRotation,
+    allowAutoAdjustScale,
+    configObjectItems,
+    harmonyPriority,
+    objectImage?.assetId,
+    placement,
+    placementIntent,
+    placementMode,
+    positionConstraintStrength,
+    sourceImage?.assetId,
+    state.config.customPrompt,
+    state.config.objectInsert,
+    state.config.objectInsertExtraPrompt,
+  ]);
+
+  const updatePlacement = useCallback((nextPlacement: ObjectPlacement, itemId = activeObjectItem?.id) => {
+    if (!itemId) return;
+    const targetItem = objectItems.find(item => item.id === itemId);
+    if (!targetItem) return;
+    const next = sanitizePlacement(nextPlacement, sourceWidth, sourceHeight);
+    const nextItems = objectItems.map(item => item.id === itemId ? { ...item, placement: next } : item);
+    setPlacement(next);
+    setObjectItems(nextItems);
+    onUpdateConfig(buildObjectInsertConfigPatch({
+      sourceImageAssetId: sourceImage?.assetId,
+      objectReferenceAssetId: targetItem.referenceImages[0]?.assetId,
+      objectPlacement: next,
+      objectInsert: {
+        ...(state.config.objectInsert || {}),
+        objectItems: toObjectInsertConfigItems(nextItems),
       },
       objectInsertExtraPrompt: state.config.objectInsertExtraPrompt || '',
       customPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
-    });
-  }, [objectImage?.assetId, onUpdateConfig, positionConstraintStrength, sourceHeight, sourceImage?.assetId, sourceWidth, state.config.customPrompt, state.config.objectInsert, state.config.objectInsertExtraPrompt]);
+    }));
+  }, [activeObjectItem?.id, buildObjectInsertConfigPatch, objectItems, onUpdateConfig, sourceHeight, sourceImage?.assetId, sourceWidth, state.config.customPrompt, state.config.objectInsert, state.config.objectInsertExtraPrompt]);
 
   const createPlacementForImages = useCallback((source: UploadedImage | null, object: UploadedImage | null) => {
     if (!source || !object) return emptyPlacement;
     return createInitialPlacement(source, object);
   }, []);
 
+  const applyObjectItems = useCallback((nextItems: ObjectInsertDraftItem[], nextActiveId = activeItemId) => {
+    const safeItems = nextItems.slice(0, maxObjectItems);
+    const nextActiveItem = safeItems.find(item => item.id === nextActiveId) || safeItems[0] || null;
+    setObjectItems(safeItems);
+    setActiveItemId(nextActiveItem?.id || '');
+    onUpdateMaterialImage(nextActiveItem?.referenceImages[0] || null);
+    setPlacement(nextActiveItem?.placement || emptyPlacement);
+    onUpdateConfig(buildObjectInsertConfigPatch({
+      objectReferenceAssetId: nextActiveItem?.referenceImages[0]?.assetId,
+      objectPlacement: nextActiveItem?.placement || emptyPlacement,
+      placementMode: nextActiveItem?.placementMode || placementMode,
+      placementIntent: nextActiveItem?.placementIntent || placementIntent,
+      objectInsert: {
+        ...(state.config.objectInsert || {}),
+        objectItems: toObjectInsertConfigItems(safeItems),
+      },
+    }));
+  }, [activeItemId, buildObjectInsertConfigPatch, onUpdateConfig, onUpdateMaterialImage, placementIntent, placementMode, state.config.objectInsert]);
+
+  const handleAddObjectItem = useCallback(() => {
+    if (objectItems.length >= maxObjectItems) {
+      setMessage(`一次任务最多添加 ${maxObjectItems} 个对象。`);
+      return;
+    }
+    const nextItem = createDefaultObjectItem(objectItems.length);
+    applyObjectItems([...objectItems, nextItem], nextItem.id);
+  }, [applyObjectItems, objectItems]);
+
+  const handleUpdateObjectItem = useCallback((itemId: string, patch: Partial<ObjectInsertDraftItem>) => {
+    const nextItems = objectItems.map(item => item.id === itemId ? { ...item, ...patch } : item);
+    applyObjectItems(nextItems, itemId);
+  }, [applyObjectItems, objectItems]);
+
+  const handleRemoveObjectItem = useCallback((itemId: string) => {
+    const nextItems = objectItems.filter(item => item.id !== itemId);
+    applyObjectItems(nextItems, nextItems[0]?.id);
+  }, [applyObjectItems, objectItems]);
+
+  const handleRemoveObjectReference = useCallback((itemId: string, imageId: string) => {
+    const nextItems = objectItems.map(item => item.id === itemId
+      ? { ...item, referenceImages: item.referenceImages.filter(image => image.id !== imageId) }
+      : item);
+    applyObjectItems(nextItems, itemId);
+  }, [applyObjectItems, objectItems]);
+
   useEffect(() => {
+    if (!activeObjectItem) return;
+    const nextPlacement = activeObjectItem.placement?.width && activeObjectItem.placement.height
+      ? sanitizePlacement(activeObjectItem.placement, sourceWidth, sourceHeight)
+      : createPlacementForImages(sourceImage, activeObjectItem.referenceImages[0]);
+    setPlacement(nextPlacement);
+    if (activeObjectItem.referenceImages[0]) {
+      onUpdateMaterialImage(activeObjectItem.referenceImages[0]);
+    }
+  }, [activeItemId, activeObjectItem, createPlacementForImages, onUpdateMaterialImage, sourceHeight, sourceImage, sourceWidth]);
+
+  useEffect(() => {
+    if (objectItems.some(item => item.referenceImages.length > 0)) return;
     if (!sourceImage || !objectImage) {
       if (!objectImage) {
         setPlacement(emptyPlacement);
@@ -183,30 +364,21 @@ export function ObjectInsertPanel({
       : createInitialPlacement(sourceImage, objectImage);
 
     setPlacement(nextPlacement);
-    onUpdateConfig({
+    onUpdateConfig(buildObjectInsertConfigPatch({
       sourceImageAssetId: sourceImage.assetId,
       objectReferenceAssetId: objectImage.assetId,
       objectPlacement: nextPlacement,
-      positionConstraintStrength,
-      objectInsert: {
-        ...(state.config.objectInsert || {}),
-        sourceImageAssetId: sourceImage.assetId,
-        objectReferenceAssetId: objectImage.assetId,
-        placement: nextPlacement,
-        extraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
-        positionConstraintStrength,
-      },
       objectInsertExtraPrompt: state.config.objectInsertExtraPrompt || '',
-    });
+    }));
   }, [
+    buildObjectInsertConfigPatch,
     objectImage,
+    objectItems,
     onUpdateConfig,
     sourceHeight,
     sourceImage,
     sourceWidth,
-    positionConstraintStrength,
     state.config.customPrompt,
-    state.config.objectInsert,
     state.config.objectInsertExtraPrompt,
     state.config.objectPlacement,
   ]);
@@ -226,7 +398,7 @@ export function ObjectInsertPanel({
           ...interaction.startPlacement,
           x: interaction.startPlacement.x + dx,
           y: interaction.startPlacement.y + dy,
-        });
+        }, interaction.itemId);
         return;
       }
 
@@ -236,8 +408,8 @@ export function ObjectInsertPanel({
         updatePlacement({
           ...interaction.startPlacement,
           width,
-          height: Math.max(minObjectSize, width / objectAspect),
-        });
+          height: Math.max(minObjectSize, width / interaction.startAspect),
+        }, interaction.itemId);
         return;
       }
 
@@ -247,7 +419,7 @@ export function ObjectInsertPanel({
       updatePlacement({
         ...interaction.startPlacement,
         rotation,
-      });
+      }, interaction.itemId);
     };
 
     const handlePointerUp = () => {
@@ -260,7 +432,7 @@ export function ObjectInsertPanel({
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
     };
-  }, [getStageMetrics, objectAspect, updatePlacement]);
+  }, [getStageMetrics, updatePlacement]);
 
   const handleUploadImage = useCallback(async (kind: UploadKind, fileList: FileList | null) => {
     const file = fileList?.[0];
@@ -288,12 +460,26 @@ export function ObjectInsertPanel({
 
       if (kind === 'source') {
         onUpdateInputImage(image);
-        const nextPlacement = createPlacementForImages(image, objectImage);
-        if (objectImage) setPlacement(nextPlacement);
+        const nextItems = objectItems.map((item, index) => {
+          const itemImage = item.referenceImages[0];
+          if (!itemImage) return item;
+          const shouldInitialize = !item.placement.width || !item.placement.height || item.placement === emptyPlacement;
+          return shouldInitialize
+            ? { ...item, placement: offsetPlacement(createPlacementForImages(image, itemImage), image.width || sourceWidth, image.height || sourceHeight, index) }
+            : { ...item, placement: sanitizePlacement(item.placement, image.width || sourceWidth, image.height || sourceHeight) };
+        });
+        const nextActiveItem = nextItems.find(item => item.id === activeItemId) || nextItems[0];
+        if (nextItems.length > 0) setObjectItems(nextItems);
+        if (nextActiveItem) setPlacement(nextActiveItem.placement);
         onUpdateConfig({
           sourceImageAssetId: image.assetId,
-          objectReferenceAssetId: objectImage?.assetId,
-          objectPlacement: objectImage ? nextPlacement : emptyPlacement,
+          objectReferenceAssetId: nextActiveItem?.referenceImages[0]?.assetId,
+          objectPlacement: nextActiveItem?.placement || emptyPlacement,
+          objectInsert: {
+            ...(state.config.objectInsert || {}),
+            sourceImageAssetId: image.assetId,
+            objectItems: toObjectInsertConfigItems(nextItems),
+          },
         });
       } else {
         onUpdateMaterialImage(image);
@@ -315,24 +501,115 @@ export function ObjectInsertPanel({
       }));
     }
   }, [
+    activeItemId,
     createPlacementForImages,
     objectImage,
+    objectItems,
     onUpdateConfig,
     onUpdateInputImage,
     onUpdateMaterialImage,
     sourceImage,
+    sourceHeight,
+    sourceWidth,
+    state.config.objectInsert,
   ]);
 
-  const startInteraction = (mode: InteractionMode, event: React.PointerEvent<HTMLElement>) => {
-    if (!sourceImage || !objectImage) return;
+  const handleUploadObjectReferences = useCallback(async (fileList: FileList | null) => {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+
+    const baseItems = objectItems.filter(item => item.referenceImages.length > 0);
+    const availableSlots = Math.max(0, maxObjectItems - baseItems.length);
+    const selectedFiles = files.slice(0, availableSlots);
+    if (selectedFiles.length === 0) {
+      setUploadErrors(prev => ({ ...prev, object: `一次任务最多添加 ${maxObjectItems} 个对象。` }));
+      return;
+    }
+
+    try {
+      const newItems: ObjectInsertDraftItem[] = [];
+      for (const file of selectedFiles) {
+        const validationError = validateImageFile(file);
+        if (validationError) {
+          setUploadErrors(prev => ({ ...prev, object: validationError }));
+          return;
+        }
+        const localImage = await createUploadedImage(file);
+        let image = localImage;
+        try {
+          const asset = await uploadImageAsset(file, file.name);
+          image = { ...localImage, assetId: asset.id, url: asset.url };
+        } catch {
+          setMessage('图片已用于本地预览，素材上传暂不可用。');
+        }
+        const itemIndex = baseItems.length + newItems.length;
+        const basePlacement = sourceImage ? createPlacementForImages(sourceImage, image) : emptyPlacement;
+        const nextItem = {
+          ...createDefaultObjectItem(itemIndex),
+          objectType: 'furniture',
+          objectLabel: `家具 ${itemIndex + 1}`,
+          referenceImages: [image],
+          placement: sourceImage ? offsetPlacement(basePlacement, sourceWidth, sourceHeight, itemIndex) : basePlacement,
+          placementMode,
+          placementIntent,
+        };
+        newItems.push(nextItem);
+      }
+
+      const nextItems = [...baseItems, ...newItems].slice(0, maxObjectItems);
+      const nextActiveItem = newItems[0] || nextItems[0];
+      setObjectItems(nextItems);
+      setActiveItemId(nextActiveItem.id);
+      if (nextActiveItem.referenceImages[0]) onUpdateMaterialImage(nextActiveItem.referenceImages[0]);
+      if (nextActiveItem.placement) setPlacement(nextActiveItem.placement);
+      setUploadErrors(prev => ({ ...prev, object: null }));
+      setExportResult(null);
+      onUpdateConfig(buildObjectInsertConfigPatch({
+        objectReferenceAssetId: nextActiveItem.referenceImages[0]?.assetId,
+        objectPlacement: nextActiveItem.placement,
+        objectInsert: {
+          ...(state.config.objectInsert || {}),
+          objectItems: toObjectInsertConfigItems(nextItems),
+        },
+      }));
+      setMessage(`已新增 ${newItems.length} 个家具对象。`);
+    } catch (error) {
+      setUploadErrors(prev => ({
+        ...prev,
+        object: error instanceof Error ? error.message : '图片读取失败，请重试。',
+      }));
+    }
+  }, [
+    buildObjectInsertConfigPatch,
+    createPlacementForImages,
+    objectItems,
+    onUpdateConfig,
+    onUpdateMaterialImage,
+    placementIntent,
+    placementMode,
+    sourceImage,
+    sourceHeight,
+    sourceWidth,
+    state.config.objectInsert,
+  ]);
+
+  const startInteraction = (itemId: string, mode: InteractionMode, event: React.PointerEvent<HTMLElement>) => {
+    const item = objectItems.find(candidate => candidate.id === itemId);
+    const itemImage = item?.referenceImages[0];
+    if (!sourceImage || !item || !itemImage) return;
     event.preventDefault();
     event.stopPropagation();
+    setActiveItemId(itemId);
+    setPlacement(item.placement);
+    onUpdateMaterialImage(itemImage);
     setIsSelected(true);
     interactionRef.current = {
       mode,
+      itemId,
       startClientX: event.clientX,
       startClientY: event.clientY,
-      startPlacement: placement,
+      startPlacement: item.placement,
+      startAspect: itemImage.width && itemImage.height ? itemImage.width / itemImage.height : 1,
     };
   };
 
@@ -373,30 +650,56 @@ export function ObjectInsertPanel({
   };
 
   const handleExtraPromptChange = (value: string) => {
-    onUpdateConfig({
+    onUpdateConfig(buildObjectInsertConfigPatch({
       objectInsert: {
         ...(state.config.objectInsert || {}),
-        placement,
         extraPrompt: value,
-        positionConstraintStrength,
-      },
+      } as GenerationConfig['objectInsert'],
       objectInsertExtraPrompt: value,
       customPrompt: value,
-    });
+    }));
   };
 
   const handlePositionConstraintStrengthChange = (value: ObjectInsertPositionConstraintStrength) => {
-    onUpdateConfig({
+    onUpdateConfig(buildObjectInsertConfigPatch({
       positionConstraintStrength: value,
-      objectInsert: {
-        ...(state.config.objectInsert || {}),
-        sourceImageAssetId: sourceImage?.assetId || state.config.objectInsert?.sourceImageAssetId,
-        objectReferenceAssetId: objectImage?.assetId || state.config.objectInsert?.objectReferenceAssetId,
-        placement,
-        extraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
-        positionConstraintStrength: value,
-      },
-    });
+    }));
+  };
+
+  const handlePlacementModeChange = (value: ObjectInsertPlacementMode) => {
+    if (activeObjectItem) {
+      handleUpdateObjectItem(activeObjectItem.id, { placementMode: value });
+    }
+    onUpdateConfig(buildObjectInsertConfigPatch({
+      placementMode: value,
+      allowAutoAdjustPosition: value === 'natural' ? true : allowAutoAdjustPosition,
+      allowAutoAdjustRotation: value === 'natural' ? true : allowAutoAdjustRotation,
+      allowAutoAdjustScale: value === 'natural' ? true : allowAutoAdjustScale,
+    }));
+  };
+
+  const handlePlacementIntentChange = (value: string) => {
+    if (activeObjectItem) {
+      handleUpdateObjectItem(activeObjectItem.id, { placementIntent: value });
+    }
+    onUpdateConfig(buildObjectInsertConfigPatch({
+      placementIntent: value,
+    }));
+  };
+
+  const handleHarmonyPriorityChange = (value: ObjectInsertHarmonyPriority) => {
+    onUpdateConfig(buildObjectInsertConfigPatch({
+      harmonyPriority: value,
+    }));
+  };
+
+  const handleAutoAdjustChange = (
+    key: 'allowAutoAdjustPosition' | 'allowAutoAdjustRotation' | 'allowAutoAdjustScale',
+    value: boolean,
+  ) => {
+    onUpdateConfig(buildObjectInsertConfigPatch({
+      [key]: value,
+    }));
   };
 
   const handleExport = async () => {
@@ -411,27 +714,20 @@ export function ObjectInsertPanel({
       const mask = await exportPlacementMask(sourceImage, objectImage, placement);
       const nextResult = { preview: guide, mask, placement };
       setExportResult(nextResult);
-      onUpdateConfig({
+      onUpdateConfig(buildObjectInsertConfigPatch({
         sourceImageAssetId: sourceImage.assetId,
         objectReferenceAssetId: objectImage.assetId,
         objectPlacement: placement,
-        positionConstraintStrength,
-        objectInsert: {
-          ...(state.config.objectInsert || {}),
-          sourceImageAssetId: sourceImage.assetId,
-          objectReferenceAssetId: objectImage.assetId,
-          placement,
-          extraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
-          positionConstraintStrength,
-        },
         placementGuideAssetId: undefined,
         placementPreviewAssetId: undefined,
         placementMaskAssetId: undefined,
-      });
+      }));
       console.info('[ObjectInsert] placement export', {
         sourceImage: readImageDebugInfo(sourceImage),
         objectImage: readImageDebugInfo(objectImage),
         placement,
+        placementMode,
+        placementIntent,
         positionConstraintStrength,
         guide: omitDataUrl(guide),
         mask: omitDataUrl(mask),
@@ -444,7 +740,7 @@ export function ObjectInsertPanel({
     }
   };
 
-  const handleGenerateClick = async () => {
+  const handleGenerateClick = async (configOverride: Partial<GenerationConfig> = {}) => {
     if (state.isGenerating || isPreparingGeneration) return;
     if (!sourceImage || !objectImage) {
       setMessage('请先上传原始场景图和物体参考图。');
@@ -469,6 +765,20 @@ export function ObjectInsertPanel({
       const includeObject = objectInsertIncludesObject(activeDebugMode);
       const includePreview = objectInsertIncludesPreview(activeDebugMode);
       const includeMask = objectInsertIncludesMask(activeDebugMode);
+      const effectiveConfig = {
+        ...state.config,
+        ...configOverride,
+        objectInsert: {
+          ...(state.config.objectInsert || {}),
+          ...(configOverride.objectInsert || {}),
+        },
+      } as GenerationConfig;
+      const nextPlacementMode = readObjectInsertPlacementMode(effectiveConfig);
+      const nextPlacementIntent = readObjectInsertPlacementIntent(effectiveConfig);
+      const nextHarmonyPriority = readObjectInsertHarmonyPriority(effectiveConfig);
+      const nextAllowAutoAdjustPosition = readObjectInsertAutoAdjust(effectiveConfig, 'allowAutoAdjustPosition');
+      const nextAllowAutoAdjustRotation = readObjectInsertAutoAdjust(effectiveConfig, 'allowAutoAdjustRotation');
+      const nextAllowAutoAdjustScale = readObjectInsertAutoAdjust(effectiveConfig, 'allowAutoAdjustScale');
 
       const maskImage: UploadedImage = {
         id: `object-insert-mask-${maskAsset.id}`,
@@ -482,7 +792,7 @@ export function ObjectInsertPanel({
         height: mask.height,
       };
       const configPatch: GenerationConfig = {
-        ...state.config,
+        ...effectiveConfig,
         step: 'object_insert',
         sourceImageAssetId: sourceAssetId,
         objectReferenceAssetId: includeObject ? objectAssetId : undefined,
@@ -492,6 +802,12 @@ export function ObjectInsertPanel({
         objectPlacement: placement,
         objectInsertDebugMode: activeDebugMode,
         positionConstraintStrength,
+        placementMode: nextPlacementMode,
+        placementIntent: nextPlacementIntent,
+        harmonyPriority: nextHarmonyPriority,
+        allowAutoAdjustPosition: nextAllowAutoAdjustPosition,
+        allowAutoAdjustRotation: nextAllowAutoAdjustRotation,
+        allowAutoAdjustScale: nextAllowAutoAdjustScale,
         objectInsert: {
           sourceImageAssetId: sourceAssetId,
           objectReferenceAssetId: includeObject ? objectAssetId : undefined,
@@ -502,6 +818,12 @@ export function ObjectInsertPanel({
           extraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
           debugMode: activeDebugMode,
           positionConstraintStrength,
+          placementMode: nextPlacementMode,
+          placementIntent: nextPlacementIntent,
+          harmonyPriority: nextHarmonyPriority,
+          allowAutoAdjustPosition: nextAllowAutoAdjustPosition,
+          allowAutoAdjustRotation: nextAllowAutoAdjustRotation,
+          allowAutoAdjustScale: nextAllowAutoAdjustScale,
         },
         objectInsertExtraPrompt: state.config.objectInsertExtraPrompt || '',
         customPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
@@ -524,6 +846,12 @@ export function ObjectInsertPanel({
         ].filter(Boolean),
         placement,
         objectInsertDebugMode: activeDebugMode,
+        placementMode: nextPlacementMode,
+        placementIntent: nextPlacementIntent,
+        harmonyPriority: nextHarmonyPriority,
+        allowAutoAdjustPosition: nextAllowAutoAdjustPosition,
+        allowAutoAdjustRotation: nextAllowAutoAdjustRotation,
+        allowAutoAdjustScale: nextAllowAutoAdjustScale,
         positionConstraintStrength,
         sourceAssetId,
         objectAssetId,
@@ -546,10 +874,221 @@ export function ObjectInsertPanel({
     }
   };
 
+  const handleGenerateMultiClick = async (configOverride: Partial<GenerationConfig> = {}) => {
+    if (state.isGenerating || isPreparingGeneration) return;
+    if (!sourceImage) {
+      setMessage('请先上传原始场景图。');
+      return;
+    }
+    const candidateItems = objectItems.filter(item => item.referenceImages.length > 0).slice(0, maxObjectItems);
+    if (candidateItems.length === 0) {
+      setMessage('请至少添加 1 个植入对象，并上传参考图。');
+      return;
+    }
+
+    setIsPreparingGeneration(true);
+    setMessage('正在准备多元素植入素材...');
+    try {
+      const includeObject = objectInsertIncludesObject(activeDebugMode);
+      const includePreview = objectInsertIncludesPreview(activeDebugMode);
+      const includeMask = objectInsertIncludesMask(activeDebugMode);
+      const [{ image: sourceWithAsset, assetId: sourceAssetId }] = await Promise.all([
+        ensureUploadedImageAsset(sourceImage, 'multi-object-insert-source'),
+      ]);
+
+      const preparedItems = [];
+      for (const [index, item] of candidateItems.entries()) {
+        const referenceUploads = await Promise.all(item.referenceImages.slice(0, maxReferencesPerObject).map((image, referenceIndex) => (
+          ensureUploadedImageAsset(image, `multi-object-${index + 1}-reference-${referenceIndex + 1}`)
+        )));
+        const primaryReference = referenceUploads[0]?.image;
+        if (!primaryReference) continue;
+        const itemPlacement = item.id === activeObjectItem?.id ? placement : item.placement;
+        const guide = includePreview ? await exportPlacementGuide(sourceWithAsset, primaryReference, itemPlacement) : null;
+        const mask = includeMask ? await exportPlacementMask(sourceWithAsset, primaryReference, itemPlacement) : null;
+        const [previewAsset, maskAsset] = await Promise.all([
+          guide ? uploadDataUrlAsset(guide.dataUrl, `multi-object-placement-guide-${item.id}-${Date.now()}`) : Promise.resolve(null),
+          mask ? uploadDataUrlAsset(mask.dataUrl, `multi-object-mask-${item.id}-${Date.now()}`) : Promise.resolve(null),
+        ]);
+        preparedItems.push({
+          ...item,
+          placement: itemPlacement,
+          referenceImages: referenceUploads.map(upload => upload.image),
+          referenceAssetIds: referenceUploads.map(upload => upload.assetId),
+          placementPreviewAssetId: previewAsset?.id,
+          placementMaskAssetId: maskAsset?.id,
+          guide,
+          mask,
+        });
+      }
+
+      if (preparedItems.length === 0) {
+        setMessage('对象参考图上传失败，请重试。');
+        return;
+      }
+
+      const firstItem = preparedItems[0];
+      const firstReferenceImage = firstItem.referenceImages[0];
+      const firstMask = firstItem.mask;
+      const firstMaskAssetId = firstItem.placementMaskAssetId;
+      if (firstItem.guide && firstMask) {
+        setExportResult({ preview: firstItem.guide, mask: firstMask, placement: firstItem.placement });
+      }
+
+      const effectiveConfig = {
+        ...state.config,
+        ...configOverride,
+        objectInsert: {
+          ...(state.config.objectInsert || {}),
+          ...(configOverride.objectInsert || {}),
+        },
+      } as GenerationConfig;
+      const nextPlacementMode = readObjectInsertPlacementMode(effectiveConfig);
+      const nextPlacementIntent = readObjectInsertPlacementIntent(effectiveConfig);
+      const nextHarmonyPriority = readObjectInsertHarmonyPriority(effectiveConfig);
+      const nextAllowAutoAdjustPosition = readObjectInsertAutoAdjust(effectiveConfig, 'allowAutoAdjustPosition');
+      const nextAllowAutoAdjustRotation = readObjectInsertAutoAdjust(effectiveConfig, 'allowAutoAdjustRotation');
+      const nextAllowAutoAdjustScale = readObjectInsertAutoAdjust(effectiveConfig, 'allowAutoAdjustScale');
+      const objectItemConfigs: ObjectInsertItemConfig[] = preparedItems.map(item => ({
+        id: item.id,
+        objectType: item.objectType || 'custom',
+        objectLabel: item.objectLabel || undefined,
+        referenceAssetIds: includeObject ? item.referenceAssetIds : [],
+        placement: item.placement,
+        placementPreviewAssetId: includePreview ? item.placementPreviewAssetId : undefined,
+        placementMaskAssetId: includeMask ? item.placementMaskAssetId : undefined,
+        placementMode: item.placementMode || nextPlacementMode,
+        placementIntent: item.placementIntent || undefined,
+        extraPrompt: item.extraPrompt || undefined,
+      }));
+      const multiObject = objectItemConfigs.length > 1;
+      const maskImage: UploadedImage | null = firstMask && firstMaskAssetId && !multiObject ? {
+        id: `object-insert-mask-${firstMaskAssetId}`,
+        name: 'object-insert-mask.png',
+        type: 'image/png',
+        size: firstMask.bytesApprox,
+        dataUrl: firstMask.dataUrl,
+        assetId: firstMaskAssetId,
+        width: firstMask.width,
+        height: firstMask.height,
+      } : null;
+      const configPatch: GenerationConfig = {
+        ...effectiveConfig,
+        step: 'object_insert',
+        sourceImageAssetId: sourceAssetId,
+        objectReferenceAssetId: includeObject ? firstItem.referenceAssetIds[0] : undefined,
+        placementPreviewAssetId: includePreview ? firstItem.placementPreviewAssetId : undefined,
+        placementGuideAssetId: includePreview ? firstItem.placementPreviewAssetId : undefined,
+        placementMaskAssetId: includeMask ? firstItem.placementMaskAssetId : undefined,
+        objectPlacement: firstItem.placement,
+        objectInsertDebugMode: activeDebugMode,
+        positionConstraintStrength,
+        placementMode: nextPlacementMode,
+        placementIntent: nextPlacementIntent,
+        harmonyPriority: nextHarmonyPriority,
+        allowAutoAdjustPosition: nextAllowAutoAdjustPosition,
+        allowAutoAdjustRotation: nextAllowAutoAdjustRotation,
+        allowAutoAdjustScale: nextAllowAutoAdjustScale,
+        objectInsert: {
+          sourceImageAssetId: sourceAssetId,
+          objectItems: objectItemConfigs,
+          globalExtraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
+          objectReferenceAssetId: includeObject ? firstItem.referenceAssetIds[0] : undefined,
+          objectReferenceAssetIds: includeObject ? firstItem.referenceAssetIds : undefined,
+          previewAssetId: includePreview ? firstItem.placementPreviewAssetId : undefined,
+          guideAssetId: includePreview ? firstItem.placementPreviewAssetId : undefined,
+          maskAssetId: includeMask ? firstItem.placementMaskAssetId : undefined,
+          placement: firstItem.placement,
+          extraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
+          debugMode: activeDebugMode,
+          positionConstraintStrength,
+          placementMode: nextPlacementMode,
+          placementIntent: nextPlacementIntent,
+          harmonyPriority: nextHarmonyPriority,
+          allowAutoAdjustPosition: nextAllowAutoAdjustPosition,
+          allowAutoAdjustRotation: nextAllowAutoAdjustRotation,
+          allowAutoAdjustScale: nextAllowAutoAdjustScale,
+        },
+        objectInsertExtraPrompt: state.config.objectInsertExtraPrompt || '',
+        customPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
+        maskMode: !multiObject && includeMask ? 'asset-mask' : undefined,
+        maskAssetId: !multiObject && includeMask ? firstItem.placementMaskAssetId : undefined,
+        editTarget: 'furniture',
+        preserveStructure: true,
+        preserveCamera: true,
+      };
+      const nextItems = objectItems.map(item => {
+        const prepared = preparedItems.find(preparedItem => preparedItem.id === item.id);
+        return prepared ? { ...item, referenceImages: prepared.referenceImages, placement: prepared.placement } : item;
+      });
+      setObjectItems(nextItems);
+      onUpdateInputImage(sourceWithAsset);
+      onUpdateMaterialImage(firstReferenceImage);
+      onUpdateConfig(configPatch);
+      console.info('[ObjectInsert] multi-object generation job payload prepared', {
+        sourceAssetId,
+        totalObjectItems: objectItemConfigs.length,
+        objectItems: objectItemConfigs,
+      });
+      setMessage(buildObjectInsertSummary(objectItemConfigs));
+      onGenerate({
+        inputImage: sourceWithAsset,
+        materialImage: firstReferenceImage,
+        maskImage,
+        useFullImageMask: false,
+        config: configPatch,
+      });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '多元素植入任务准备失败，请重试。');
+    } finally {
+      setIsPreparingGeneration(false);
+    }
+  };
+
+  const handleRetryNatural = () => {
+    const naturalPatch = buildObjectInsertConfigPatch({
+      placementMode: 'natural',
+      allowAutoAdjustPosition: true,
+      allowAutoAdjustRotation: true,
+      allowAutoAdjustScale: true,
+      harmonyPriority: harmonyPriority || 'layout',
+    });
+    onUpdateConfig(naturalPatch);
+    setMessage('将以自然摆放模式重新生成，当前拖放框会作为建议区域。');
+    void handleGenerateMultiClick(naturalPatch);
+  };
+
+  const handleContinueTuning = () => {
+    setIsSelected(true);
+    setMessage('已回到摆放编辑。可继续调整建议区域、摆放意图或模式后再次生成。');
+  };
+
+  const handleDownloadResult = async () => {
+    if (!originalResultImage || isDownloadingResult) return;
+    setIsDownloadingResult(true);
+    setDownloadMessage(null);
+    setDownloadError(null);
+    try {
+      await downloadAsset({
+        url: originalResultImage,
+        assetId: originalResultAssetId,
+      }, buildResultImageFilename({
+        projectName,
+        featureLabel: '元素植入',
+      }));
+      setDownloadMessage('已开始下载');
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '';
+      setDownloadError(errorMessage === downloadFallbackMessage ? downloadFallbackMessage : '下载失败，请稍后重试');
+    } finally {
+      setIsDownloadingResult(false);
+    }
+  };
+
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">
       <input ref={sourceInputRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleUploadImage('source', event.currentTarget.files); event.currentTarget.value = ''; }} />
-      <input ref={objectInputRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleUploadImage('object', event.currentTarget.files); event.currentTarget.value = ''; }} />
+      <input ref={objectInputRef} type="file" accept={acceptedImageTypes} multiple className="hidden" onChange={event => { void handleUploadObjectReferences(event.currentTarget.files); event.currentTarget.value = ''; }} />
 
       <aside className="flex w-80 shrink-0 flex-col gap-3 overflow-y-auto border-r border-slate-200 bg-white p-4 custom-scrollbar">
         <div>
@@ -571,14 +1110,40 @@ export function ObjectInsertPanel({
           }}
         />
 
-        <UploadCard
-          title="物体参考图"
-          description="先支持 1 张，透明背景会直接保留。"
-          image={objectImage}
-          error={uploadErrors.object}
-          onUpload={() => objectInputRef.current?.click()}
-          onRemove={handleRemoveObject}
+        <ObjectItemsPanel
+          items={objectItems}
+          activeItemId={activeObjectItem?.id || ''}
+          canAdd={objectItems.length < maxObjectItems}
+          onSelect={itemId => {
+            setActiveItemId(itemId);
+            setIsSelected(true);
+          }}
+          onAdd={handleAddObjectItem}
+          onRemove={handleRemoveObjectItem}
+          onUpdate={handleUpdateObjectItem}
+          onUploadReferences={itemId => {
+            setActiveItemId(itemId);
+            objectInputRef.current?.click();
+          }}
+          onRemoveReference={handleRemoveObjectReference}
         />
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
+          <p className="font-black text-slate-900">生成摘要</p>
+          <div className="mt-2 space-y-1.5">
+            <p>原图：{sourceImage ? '1 张' : '未上传'}</p>
+            <p>对象数量：{objectItems.length}</p>
+            {objectItems.map((item, index) => {
+              const typeLabel = objectTypeOptions.find(option => option.value === item.objectType)?.label || item.objectType;
+              return (
+                <p key={item.id} className="truncate">
+                  {item.objectLabel || `${typeLabel} ${index + 1}`}：参考图 {item.referenceImages.length} 张
+                </p>
+              );
+            })}
+          </div>
+          {uploadErrors.object ? <p className="mt-2 text-xs leading-5 text-rose-600">{uploadErrors.object}</p> : null}
+        </div>
 
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
           <label className="text-xs font-bold text-slate-800" htmlFor="object-insert-prompt">补充提示词</label>
@@ -597,6 +1162,77 @@ export function ObjectInsertPanel({
             placeholder="例如：让椅子自然融入餐厅区域，材质与原图暖色灯光一致。"
             className="mt-2 min-h-24 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
           />
+        </div>
+
+        <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-bold text-slate-800">放置模式</p>
+            <p className="text-[11px] font-bold text-blue-700">{placementModeOption.label}</p>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-1.5 rounded-xl bg-white p-1">
+            {objectInsertPlacementModeOptions.map(option => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => handlePlacementModeChange(option.value)}
+                className={`rounded-lg px-2 py-1.5 text-xs font-black transition ${
+                  placementMode === option.value
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-xs leading-5 text-slate-600">{placementModeOption.description}</p>
+
+          <label className="mt-3 block text-xs font-bold text-slate-800" htmlFor="object-insert-placement-intent">摆放意图（可选）</label>
+          <textarea
+            id="object-insert-placement-intent"
+            value={placementIntent}
+            onChange={event => handlePlacementIntentChange(event.currentTarget.value)}
+            placeholder="例如：放在长条沙发后侧作为辅助单椅，保持动线和空间协调。"
+            className="mt-2 min-h-20 w-full resize-none rounded-xl border border-blue-100 bg-white px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+          />
+
+          <div className="mt-3">
+            <p className="text-xs font-bold text-slate-800">自然摆放优先项</p>
+            <div className="mt-2 grid grid-cols-3 gap-1.5 rounded-xl bg-white p-1">
+              {objectInsertHarmonyPriorityOptions.map(option => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => handleHarmonyPriorityChange(option.value)}
+                  disabled={placementMode !== 'natural'}
+                  className={`rounded-lg px-2 py-1.5 text-xs font-black transition disabled:cursor-not-allowed disabled:text-slate-300 ${
+                    harmonyPriority === option.value && placementMode === 'natural'
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {placementMode === 'natural' ? (
+            <div className="mt-3 grid gap-2 text-xs text-slate-700">
+              <label className="inline-flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
+                <span className="font-bold">自动微调位置</span>
+                <input type="checkbox" checked={allowAutoAdjustPosition} onChange={event => handleAutoAdjustChange('allowAutoAdjustPosition', event.currentTarget.checked)} className="h-4 w-4 rounded border-blue-200 text-blue-600" />
+              </label>
+              <label className="inline-flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
+                <span className="font-bold">自动微调朝向</span>
+                <input type="checkbox" checked={allowAutoAdjustRotation} onChange={event => handleAutoAdjustChange('allowAutoAdjustRotation', event.currentTarget.checked)} className="h-4 w-4 rounded border-blue-200 text-blue-600" />
+              </label>
+              <label className="inline-flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
+                <span className="font-bold">自动微调比例</span>
+                <input type="checkbox" checked={allowAutoAdjustScale} onChange={event => handleAutoAdjustChange('allowAutoAdjustScale', event.currentTarget.checked)} className="h-4 w-4 rounded border-blue-200 text-blue-600" />
+              </label>
+            </div>
+          ) : null}
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
@@ -696,8 +1332,8 @@ export function ObjectInsertPanel({
             </button>
             <button
               type="button"
-              onClick={handleGenerateClick}
-              disabled={!sourceImage || !objectImage || state.isGenerating || isPreparingGeneration}
+              onClick={() => void handleGenerateMultiClick()}
+              disabled={!sourceImage || objectItems.every(item => item.referenceImages.length === 0) || state.isGenerating || isPreparingGeneration}
               className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-lg shadow-blue-100 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
             >
               <ImagePlus className="h-4 w-4" />
@@ -716,38 +1352,48 @@ export function ObjectInsertPanel({
                 onPointerDown={() => setIsSelected(false)}
               >
                 <img src={readImageSrc(sourceImage)} alt="原始场景图" className="absolute inset-0 h-full w-full select-none object-contain" draggable={false} />
-                {objectImage ? (
-                  <div
-                    className={`absolute touch-none select-none ${isSelected ? 'ring-2 ring-blue-400' : 'ring-1 ring-white/70'} cursor-move`}
-                    style={objectStyle}
-                    onPointerDown={event => startInteraction('move', event)}
-                  >
-                    <img src={readImageSrc(objectImage)} alt="物体参考图" className="h-full w-full select-none object-fill" draggable={false} />
-                    {isSelected ? (
-                      <>
-                        <button
-                          type="button"
-                          aria-label="旋转物体"
-                          className="absolute left-1/2 top-0 flex h-8 w-8 -translate-x-1/2 -translate-y-11 items-center justify-center rounded-full border border-blue-200 bg-white text-blue-600 shadow-lg"
-                          onPointerDown={event => startInteraction('rotate', event)}
-                        >
-                          <RotateCw className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label="缩放物体"
-                          className="absolute bottom-0 right-0 flex h-8 w-8 translate-x-1/2 translate-y-1/2 items-center justify-center rounded-full border border-blue-200 bg-white text-blue-600 shadow-lg"
-                          onPointerDown={event => startInteraction('resize', event)}
-                        >
-                          <Move className="h-4 w-4 rotate-45" />
-                        </button>
-                      </>
-                    ) : null}
-                  </div>
+                {objectItems.some(item => item.referenceImages[0]) ? (
+                  objectItems.map((item, index) => {
+                    const itemImage = item.referenceImages[0];
+                    if (!itemImage) return null;
+                    const isActive = item.id === activeObjectItem?.id;
+                    return (
+                      <div
+                        key={item.id}
+                        className={`absolute touch-none select-none cursor-move ${
+                          isActive && isSelected ? 'ring-2 ring-blue-400' : 'ring-1 ring-white/70'
+                        }`}
+                        style={{ ...getObjectPlacementStyle(item.placement), zIndex: 10 + index }}
+                        onPointerDown={event => startInteraction(item.id, 'move', event)}
+                      >
+                        <img src={readImageSrc(itemImage)} alt={item.objectLabel || `家具 ${index + 1}`} className="h-full w-full select-none object-fill" draggable={false} />
+                        {isActive && isSelected ? (
+                          <>
+                            <button
+                              type="button"
+                              aria-label="旋转物体"
+                              className="absolute left-1/2 top-0 flex h-8 w-8 -translate-x-1/2 -translate-y-11 items-center justify-center rounded-full border border-blue-200 bg-white text-blue-600 shadow-lg"
+                              onPointerDown={event => startInteraction(item.id, 'rotate', event)}
+                            >
+                              <RotateCw className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label="缩放物体"
+                              className="absolute bottom-0 right-0 flex h-8 w-8 translate-x-1/2 translate-y-1/2 items-center justify-center rounded-full border border-blue-200 bg-white text-blue-600 shadow-lg"
+                              onPointerDown={event => startInteraction(item.id, 'resize', event)}
+                            >
+                              <Move className="h-4 w-4 rotate-45" />
+                            </button>
+                          </>
+                        ) : null}
+                      </div>
+                    );
+                  })
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <div className="rounded-2xl border border-dashed border-white/30 bg-slate-950/60 px-4 py-3 text-center text-sm font-bold text-white">
-                      请上传物体参考图
+                      请上传家具参考图
                     </div>
                   </div>
                 )}
@@ -785,7 +1431,7 @@ export function ObjectInsertPanel({
         <div className="flex flex-wrap gap-2">
           <ToolButton icon={Crosshair} label="居中" onClick={handleCenterObject} disabled={!sourceImage || !objectImage} />
           <ToolButton icon={RotateCcw} label="重置" onClick={handleResetPlacement} disabled={!sourceImage || !objectImage} />
-          <ToolButton icon={Trash2} label="删除" onClick={handleRemoveObject} disabled={!objectImage} danger />
+          <ToolButton icon={Trash2} label="删除对象" onClick={() => activeObjectItem && handleRemoveObjectItem(activeObjectItem.id)} disabled={!activeObjectItem} danger />
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
@@ -813,8 +1459,52 @@ export function ObjectInsertPanel({
                 ))}
               </div>
             ) : null}
-            {state.outputImage ? (
-              <img src={state.outputImage} alt="元素植入生成结果" className="mt-3 h-32 w-full rounded-xl border border-slate-100 object-cover" />
+            {originalResultImage ? (
+              <div className="mt-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="rounded-full bg-white px-2 py-1 text-[11px] font-black text-slate-700">
+                    {placementMode === 'strict' ? '精确摆放' : '自然摆放'}
+                  </span>
+                  {resultDimensionsText ? <span className="text-[11px] font-bold text-slate-500">{resultDimensionsText}</span> : null}
+                </div>
+                <img src={originalResultImage} alt="元素植入生成结果" className="h-32 w-full rounded-xl border border-slate-100 object-cover" />
+                <button
+                  type="button"
+                  onClick={() => window.open(originalResultImage, '_blank', 'noopener,noreferrer')}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:border-blue-200 hover:text-blue-700"
+                >
+                  <ExternalLink className="mr-1 inline h-3.5 w-3.5" />
+                  查看原图
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDownloadResult()}
+                  disabled={isDownloadingResult}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Download className={`mr-1 inline h-3.5 w-3.5 ${isDownloadingResult ? 'animate-pulse' : ''}`} />
+                  {isDownloadingResult ? '正在下载...' : '保存到本地'}
+                </button>
+                {downloadMessage ? <p className="text-xs font-semibold text-emerald-700">{downloadMessage}</p> : null}
+                {downloadError ? <p className="text-xs font-semibold text-amber-700">{downloadError}</p> : null}
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleRetryNatural}
+                    disabled={!sourceImage || !objectImage || state.isGenerating || isPreparingGeneration}
+                    className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-black text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    再试一次（更自然）
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleContinueTuning}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:border-blue-200 hover:text-blue-700"
+                  >
+                    继续微调
+                  </button>
+                </div>
+              </div>
             ) : null}
           </div>
         ) : null}
@@ -880,6 +1570,94 @@ function UploadCard({
         </div>
       </button>
       {error ? <p className="mt-2 text-xs leading-5 text-rose-600">{error}</p> : null}
+    </div>
+  );
+}
+
+function ObjectItemsPanel({
+  items,
+  activeItemId,
+  canAdd,
+  onSelect,
+  onAdd,
+  onRemove,
+  onUpdate,
+  onUploadReferences,
+  onRemoveReference,
+}: {
+  items: ObjectInsertDraftItem[];
+  activeItemId: string;
+  canAdd: boolean;
+  onSelect: (itemId: string) => void;
+  onAdd: () => void;
+  onRemove: (itemId: string) => void;
+  onUpdate: (itemId: string, patch: Partial<ObjectInsertDraftItem>) => void;
+  onUploadReferences: (itemId: string) => void;
+  onRemoveReference: (itemId: string, imageId: string) => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-black text-slate-900">植入对象</p>
+          <p className="mt-0.5 text-[11px] font-semibold text-slate-500">对象数量：{items.length} / {maxObjectItems}</p>
+        </div>
+        <button type="button" onClick={onAdd} disabled={!canAdd} className="rounded-lg bg-blue-600 px-2.5 py-1.5 text-[11px] font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">
+          添加
+        </button>
+      </div>
+
+      <div className="mt-3 space-y-2">
+        {items.map((item, index) => {
+          const isActive = item.id === activeItemId;
+          const typeLabel = objectTypeOptions.find(option => option.value === item.objectType)?.label || item.objectType;
+          const hasPlacement = Boolean(item.placement.width && item.placement.height);
+          return (
+            <div key={item.id} className={`rounded-xl border bg-white p-2 ${isActive ? 'border-blue-400 ring-2 ring-blue-100' : 'border-slate-200'}`}>
+              <button type="button" onClick={() => onSelect(item.id)} className="flex w-full items-center justify-between gap-2 text-left">
+                <span className="text-xs font-black text-slate-900">{item.objectLabel || `${typeLabel} ${index + 1}`}</span>
+                <span className="text-[10px] font-bold text-slate-500">{item.placementMode === 'strict' ? '精确' : '自然'}</span>
+              </button>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <select value={item.objectType} onChange={event => onUpdate(item.id, { objectType: event.currentTarget.value })} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-700">
+                  {objectTypeOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <input value={item.objectLabel} onChange={event => onUpdate(item.id, { objectLabel: event.currentTarget.value })} placeholder="对象名称" className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-700" />
+              </div>
+              <textarea
+                value={item.extraPrompt}
+                onChange={event => onUpdate(item.id, { extraPrompt: event.currentTarget.value })}
+                placeholder="附加说明，可选"
+                className="mt-2 min-h-14 w-full resize-none rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none focus:border-blue-300"
+              />
+              <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-bold">
+                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">参考图 {item.referenceImages.length} / {maxReferencesPerObject}</span>
+                <span className={`rounded-full px-2 py-1 ${hasPlacement ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{hasPlacement ? '已设置区域' : '未设置区域'}</span>
+              </div>
+              {item.referenceImages.length > 0 ? (
+                <div className="mt-2 grid grid-cols-3 gap-1.5">
+                  {item.referenceImages.map(image => (
+                    <div key={image.id} className="group relative aspect-square overflow-hidden rounded-lg border border-slate-100 bg-slate-100">
+                      <img src={readImageSrc(image)} alt={image.name} className="h-full w-full object-cover" />
+                      <button type="button" onClick={() => onRemoveReference(item.id, image.id)} className="absolute right-1 top-1 hidden rounded bg-white/90 p-1 text-rose-600 shadow group-hover:block" aria-label="删除参考图">
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <div className="mt-2 grid grid-cols-2 gap-1.5">
+                <button type="button" onClick={() => onUploadReferences(item.id)} className="rounded-lg bg-slate-100 px-2 py-1.5 text-[11px] font-black text-slate-700 hover:text-blue-700">
+                  上传为新对象
+                </button>
+                <button type="button" onClick={() => onRemove(item.id)} className="rounded-lg bg-rose-50 px-2 py-1.5 text-[11px] font-black text-rose-600 hover:bg-rose-100">
+                  删除对象
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -953,6 +1731,29 @@ function buildObjectInsertSubmitPreview(input: {
 function readObjectInsertPositionConstraintStrength(config: GenerationConfig): ObjectInsertPositionConstraintStrength {
   const value = config.objectInsert?.positionConstraintStrength || config.positionConstraintStrength;
   return value === 'low' || value === 'medium' || value === 'high' ? value : 'high';
+}
+
+function readObjectInsertPlacementMode(config: GenerationConfig): ObjectInsertPlacementMode {
+  const value = config.objectInsert?.placementMode || config.placementMode;
+  return value === 'strict' || value === 'natural' ? value : 'natural';
+}
+
+function readObjectInsertPlacementIntent(config: GenerationConfig): string {
+  return (config.objectInsert?.placementIntent || config.placementIntent || '').trim();
+}
+
+function readObjectInsertHarmonyPriority(config: GenerationConfig): ObjectInsertHarmonyPriority {
+  const value = config.objectInsert?.harmonyPriority || config.harmonyPriority;
+  return value === 'style' || value === 'balance' || value === 'layout' ? value : 'layout';
+}
+
+function readObjectInsertAutoAdjust(
+  config: GenerationConfig,
+  key: 'allowAutoAdjustPosition' | 'allowAutoAdjustRotation' | 'allowAutoAdjustScale',
+): boolean {
+  const nested = config.objectInsert?.[key];
+  const value = nested ?? config[key];
+  return value === undefined ? true : value !== false;
 }
 
 function objectInsertIncludesObject(mode: ObjectInsertDebugMode): boolean {
@@ -1039,15 +1840,87 @@ function readImageSrc(image: UploadedImage): string {
   return image.dataUrl || image.url || '';
 }
 
-function sanitizePlacement(placement: ObjectPlacement, sourceWidth = 1200, sourceHeight = 800): ObjectPlacement {
-  const width = Math.max(minObjectSize, Number.isFinite(placement.width) ? placement.width : minObjectSize);
-  const height = Math.max(minObjectSize, Number.isFinite(placement.height) ? placement.height : minObjectSize);
+function createObjectItemId(): string {
+  return `object-item-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createDefaultObjectItem(index = 0): ObjectInsertDraftItem {
   return {
-    x: clamp(Number.isFinite(placement.x) ? placement.x : 0, -width * 0.5, sourceWidth - width * 0.5),
-    y: clamp(Number.isFinite(placement.y) ? placement.y : 0, -height * 0.5, sourceHeight - height * 0.5),
+    id: createObjectItemId(),
+    objectType: 'furniture',
+    objectLabel: `家具 ${index + 1}`,
+    referenceImages: [],
+    placement: emptyPlacement,
+    placementMode: 'natural',
+    placementIntent: '',
+    extraPrompt: '',
+  };
+}
+
+function createInitialObjectItems(config: GenerationConfig, legacyObjectImage: UploadedImage | null): ObjectInsertDraftItem[] {
+  const items = config.objectInsert?.objectItems;
+  if (items && items.length > 0) {
+    return items.slice(0, maxObjectItems).map((item, index) => ({
+      id: item.id || createObjectItemId(),
+      objectType: item.objectType || 'custom',
+      objectLabel: item.objectLabel || `对象 ${index + 1}`,
+      referenceImages: [],
+      placement: sanitizePlacement(item.placement || (index === 0 ? config.objectPlacement : undefined) || emptyPlacement),
+      placementMode: item.placementMode === 'strict' ? 'strict' : 'natural',
+      placementIntent: item.placementIntent || '',
+      extraPrompt: item.extraPrompt || '',
+    }));
+  }
+
+  const legacyItem = createDefaultObjectItem(0);
+  return [{
+    ...legacyItem,
+    referenceImages: legacyObjectImage ? [legacyObjectImage] : [],
+    placement: sanitizePlacement(config.objectPlacement || config.objectInsert?.placement || emptyPlacement),
+    placementMode: readObjectInsertPlacementMode(config),
+    placementIntent: readObjectInsertPlacementIntent(config),
+    extraPrompt: config.objectInsertExtraPrompt || config.objectInsert?.extraPrompt || config.customPrompt || '',
+  }];
+}
+
+function toObjectInsertConfigItems(items: ObjectInsertDraftItem[]): ObjectInsertItemConfig[] {
+  return items.slice(0, maxObjectItems).map(item => ({
+    id: item.id,
+    objectType: item.objectType || 'custom',
+    objectLabel: item.objectLabel || undefined,
+    referenceAssetIds: item.referenceImages
+      .map(image => image.assetId)
+      .filter((assetId): assetId is string => Boolean(assetId))
+      .slice(0, maxReferencesPerObject),
+    placement: item.placement,
+    placementMode: item.placementMode,
+    placementIntent: item.placementIntent || undefined,
+    extraPrompt: item.extraPrompt || undefined,
+  }));
+}
+
+function buildObjectInsertSummary(items: ObjectInsertItemConfig[]): string {
+  return [
+    '正在创建多元素植入任务...',
+    `原图：1 张`,
+    `对象数量：${items.length}`,
+    ...items.map((item, index) => {
+      const typeLabel = objectTypeOptions.find(option => option.value === item.objectType)?.label || item.objectLabel || item.objectType || `对象 ${index + 1}`;
+      return `${item.objectLabel || typeLabel}参考图：${item.referenceAssetIds.length} 张`;
+    }),
+  ].join('\n');
+}
+
+function sanitizePlacement(placement: ObjectPlacement | undefined, sourceWidth = 1200, sourceHeight = 800): ObjectPlacement {
+  const input = placement || emptyPlacement;
+  const width = Math.max(minObjectSize, Number.isFinite(input.width) ? input.width : minObjectSize);
+  const height = Math.max(minObjectSize, Number.isFinite(input.height) ? input.height : minObjectSize);
+  return {
+    x: clamp(Number.isFinite(input.x) ? input.x : 0, -width * 0.5, sourceWidth - width * 0.5),
+    y: clamp(Number.isFinite(input.y) ? input.y : 0, -height * 0.5, sourceHeight - height * 0.5),
     width,
     height,
-    rotation: Number.isFinite(placement.rotation) ? Number(placement.rotation.toFixed(1)) : 0,
+    rotation: Number.isFinite(input.rotation) ? Number(input.rotation.toFixed(1)) : 0,
   };
 }
 
@@ -1063,6 +1936,16 @@ function createInitialPlacement(source: UploadedImage, object: UploadedImage): O
     width: targetWidth,
     height: targetHeight,
     rotation: 0,
+  }, sourceWidth, sourceHeight);
+}
+
+function offsetPlacement(placement: ObjectPlacement, sourceWidth: number, sourceHeight: number, index: number): ObjectPlacement {
+  const offset = (index % 4) * 36;
+  const rowOffset = Math.floor(index / 4) * 28;
+  return sanitizePlacement({
+    ...placement,
+    x: placement.x + offset - rowOffset,
+    y: placement.y + offset + rowOffset,
   }, sourceWidth, sourceHeight);
 }
 

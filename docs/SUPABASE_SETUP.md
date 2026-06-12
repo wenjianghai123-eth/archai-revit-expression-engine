@@ -82,9 +82,9 @@ Use Supabase Auth when `AUTH_MODE=supabase`. Production must use `AUTH_MODE=supa
 
 For local mock development, keep `AUTH_MODE=dev`; no Supabase project is required.
 
-## Tables
+## New Project Schema SQL
 
-Run this SQL in the Supabase SQL editor.
+For a new Supabase project, run this SQL in the Supabase SQL editor. For an existing project, skip this section and run the dedicated upgrade SQL in `docs/migrations/20260609_supabase_schema_alignment.sql`.
 
 ```sql
 create extension if not exists pgcrypto;
@@ -130,7 +130,7 @@ create table if not exists public.model_assets (
   thumbnail_url text,
   filename text not null,
   original_filename text not null,
-  file_type text not null check (file_type in ('glb', 'gltf', 'obj', 'dae', 'stl')),
+  file_type text not null check (file_type in ('glb', 'gltf', 'obj', 'dae', 'stl', 'zip')),
   mime_type text not null,
   size integer not null,
   metadata jsonb,
@@ -143,13 +143,20 @@ create table if not exists public.generation_jobs (
   user_id uuid not null references auth.users(id) on delete cascade,
   project_id text not null references public.projects(id) on delete cascade,
   mode text not null check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render')),
-  step text check (step is null or step in ('floorplan_to_3d', 'style_render', 'local_inpainting', 'model_snapshot_render', 'design_variants', 'material_replace', 'plan_colorize', 'panorama_quick_render', 'object_insert')),
+  step text,
+  batch_group_id text,
   prompt text not null,
   config jsonb not null default '{}'::jsonb,
   input_asset_ids text[] not null default '{}'::text[],
   status text not null default 'queued' check (status in ('queued', 'running', 'succeeded', 'failed', 'cancelled', 'timeout')),
   progress integer not null default 0,
   provider text not null,
+  model text,
+  provider_job_id text,
+  source_job_id text,
+  source_image_asset_id text,
+  source_model_asset_id text,
+  snapshot_asset_id text,
   output_asset_id text references public.image_assets(id) on delete set null,
   output_asset_ids text[] not null default '{}'::text[],
   error_message text,
@@ -168,13 +175,23 @@ create table if not exists public.generation_records (
   project_id text not null references public.projects(id) on delete cascade,
   job_id text references public.generation_jobs(id) on delete set null,
   mode text not null check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render')),
-  step text check (step is null or step in ('floorplan_to_3d', 'style_render', 'local_inpainting', 'model_snapshot_render', 'design_variants', 'material_replace', 'plan_colorize', 'panorama_quick_render', 'object_insert')),
+  step text,
+  batch_group_id text,
   prompt text not null,
+  config jsonb not null default '{}'::jsonb,
+  input_asset_ids text[] not null default '{}'::text[],
+  output_asset_ids text[] not null default '{}'::text[],
   input_image_url text,
   input_image_data_preview text,
   output_image_url text,
   output_image_data_preview text,
   provider text not null,
+  model text,
+  source_job_id text,
+  source_image_asset_id text,
+  source_model_asset_id text,
+  snapshot_asset_id text,
+  model_snapshot_metadata jsonb,
   status text not null default 'succeeded' check (status in ('succeeded', 'failed')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -217,162 +234,15 @@ create table if not exists public.credit_transactions (
   amount integer not null,
   balance_after integer not null,
   reason text not null,
-  reference_type text check (reference_type in ('generation_job', 'system')),
+  reference_type text check (reference_type in ('generation_job', 'video_job', 'system')),
   reference_id text,
   created_at timestamptz not null default now()
 );
 ```
 
-If you are updating an older database, verify the code-to-SQL checklist at the end of this document. In particular, newer code requires `generation_results`, `generation_records.job_id`, and `generation_jobs.output_asset_ids`. `credit_transactions` must contain a single `id text primary key` column; do not duplicate the `id` column when merging older SQL snippets.
+## Old Project Upgrade SQL
 
-### Upgrade SQL for Older Databases
-
-Run this migration if your Supabase project was created from an older copy of this document. It widens generation mode checks, adds model asset metadata/preview columns, adds async job/result fields, creates missing credit tables, and points you to rerun the credits RPC definition below.
-
-```sql
-alter table public.model_assets
-  add column if not exists preview_url text,
-  add column if not exists optimized_url text,
-  add column if not exists thumbnail_url text,
-  add column if not exists metadata jsonb;
-
-alter table public.generation_jobs
-  add column if not exists output_asset_ids text[] not null default '{}'::text[],
-  add column if not exists started_at timestamptz,
-  add column if not exists finished_at timestamptz,
-  add column if not exists credit_cost integer not null default 0,
-  add column if not exists credit_refunded boolean not null default false,
-  add column if not exists failure_reason text,
-  add column if not exists step text;
-
-alter table public.generation_records
-  add column if not exists job_id text references public.generation_jobs(id) on delete set null,
-  add column if not exists step text;
-
-create table if not exists public.generation_results (
-  id text primary key,
-  user_id uuid not null references auth.users(id) on delete cascade,
-  project_id text not null references public.projects(id) on delete cascade,
-  job_id text not null references public.generation_jobs(id) on delete cascade,
-  asset_id text not null references public.image_assets(id) on delete cascade,
-  image_url text not null,
-  is_selected boolean not null default false,
-  is_favorite boolean not null default false,
-  metadata jsonb,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-create table if not exists public.credit_balances (
-  user_id uuid primary key references auth.users(id) on delete cascade,
-  balance integer not null default 0,
-  updated_at timestamptz not null default now()
-);
-
-create table if not exists public.credit_transactions (
-  id text primary key,
-  user_id uuid not null references auth.users(id) on delete cascade,
-  type text not null check (type in ('admin_grant', 'generate_charge', 'generate_refund', 'grant', 'debit', 'refund')),
-  amount integer not null,
-  balance_after integer not null,
-  reason text not null,
-  reference_type text check (reference_type in ('generation_job', 'system')),
-  reference_id text,
-  created_at timestamptz not null default now()
-);
-
-do $$
-declare
-  constraint_name text;
-begin
-  for constraint_name in
-    select conname
-    from pg_constraint
-    where conrelid = 'public.generation_jobs'::regclass
-      and contype = 'c'
-      and pg_get_constraintdef(oid) like '%mode%'
-  loop
-    execute format('alter table public.generation_jobs drop constraint %I', constraint_name);
-  end loop;
-
-  alter table public.generation_jobs
-    add constraint generation_jobs_mode_check
-    check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render'));
-end $$;
-
-alter table public.generation_jobs
-  drop constraint if exists generation_jobs_step_check;
-alter table public.generation_jobs
-  add constraint generation_jobs_step_check
-  check (step is null or step in ('floorplan_to_3d', 'style_render', 'local_inpainting', 'model_snapshot_render', 'design_variants', 'material_replace', 'plan_colorize', 'panorama_quick_render', 'object_insert'));
-
-do $$
-declare
-  constraint_name text;
-begin
-  for constraint_name in
-    select conname
-    from pg_constraint
-    where conrelid = 'public.generation_jobs'::regclass
-      and contype = 'c'
-      and pg_get_constraintdef(oid) like '%status%'
-  loop
-    execute format('alter table public.generation_jobs drop constraint %I', constraint_name);
-  end loop;
-
-  alter table public.generation_jobs
-    add constraint generation_jobs_status_check
-    check (status in ('queued', 'running', 'succeeded', 'failed', 'cancelled', 'timeout'));
-end $$;
-
-do $$
-declare
-  constraint_name text;
-begin
-  for constraint_name in
-    select conname
-    from pg_constraint
-    where conrelid = 'public.generation_records'::regclass
-      and contype = 'c'
-      and pg_get_constraintdef(oid) like '%mode%'
-  loop
-    execute format('alter table public.generation_records drop constraint %I', constraint_name);
-  end loop;
-
-  alter table public.generation_records
-    add constraint generation_records_mode_check
-    check (mode in ('floorplan', 'style-render', 'inpaint', 'model-render', 'design-variants', 'material-replace', 'plan-colorize', 'panorama-roam-render'));
-end $$;
-
-alter table public.generation_records
-  drop constraint if exists generation_records_step_check;
-alter table public.generation_records
-  add constraint generation_records_step_check
-  check (step is null or step in ('floorplan_to_3d', 'style_render', 'local_inpainting', 'model_snapshot_render', 'design_variants', 'material_replace', 'plan_colorize', 'panorama_quick_render', 'object_insert'));
-
-do $$
-declare
-  constraint_name text;
-begin
-  for constraint_name in
-    select conname
-    from pg_constraint
-    where conrelid = 'public.model_assets'::regclass
-      and contype = 'c'
-      and pg_get_constraintdef(oid) like '%file_type%'
-  loop
-    execute format('alter table public.model_assets drop constraint %I', constraint_name);
-  end loop;
-
-  alter table public.model_assets
-    add constraint model_assets_file_type_check
-    check (file_type in ('glb', 'gltf', 'obj', 'dae', 'stl'));
-end $$;
-
--- Re-run the "Credits RPC" SQL section below after this migration so
--- public.adjust_credits_atomic(uuid, text, integer, text, text, text)
--- is present and returns the fields expected by SupabaseStorageAdapter.
-```
+For an existing Supabase project, run the repeatable migration in [20260609_supabase_schema_alignment.sql](migrations/20260609_supabase_schema_alignment.sql). It creates missing tables, adds missing columns with `add column if not exists`, refreshes indexes, replaces `adjust_credits_atomic`, removes strict `step` checks, and ends with `select pg_notify('pgrst', 'reload schema');`.
 
 ## Indexes
 
@@ -400,11 +270,19 @@ create index if not exists generation_jobs_user_id_created_at_idx
 create index if not exists generation_jobs_project_user_created_at_idx
   on public.generation_jobs (project_id, user_id, created_at desc);
 
+create index if not exists generation_jobs_batch_group_id_idx
+  on public.generation_jobs (batch_group_id)
+  where batch_group_id is not null;
+
 create index if not exists generation_records_project_user_created_at_idx
   on public.generation_records (project_id, user_id, created_at desc);
 
 create index if not exists generation_records_job_id_idx
   on public.generation_records (job_id);
+
+create index if not exists generation_records_batch_group_id_idx
+  on public.generation_records (batch_group_id)
+  where batch_group_id is not null;
 
 create index if not exists generation_results_job_user_created_at_idx
   on public.generation_results (job_id, user_id, created_at asc);
@@ -469,11 +347,11 @@ declare
   v_next_balance integer;
   v_now timestamptz := now();
 begin
-  if p_type not in ('admin_grant', 'generate_charge', 'generate_refund', 'grant', 'debit', 'refund') then
+  if p_type not in ('grant', 'debit', 'refund', 'generate_charge', 'generate_refund', 'admin_grant') then
     raise exception 'Invalid credit transaction type: %', p_type;
   end if;
 
-  if p_reference_type is not null and p_reference_type not in ('generation_job', 'system') then
+  if p_reference_type is not null and p_reference_type not in ('generation_job', 'video_job', 'system') then
     raise exception 'Invalid credit reference type: %', p_reference_type;
   end if;
 
@@ -481,11 +359,11 @@ begin
     raise exception 'Credit adjustment amount cannot be zero.';
   end if;
 
-  if p_type = 'debit' and p_amount >= 0 then
+  if p_type in ('debit', 'generate_charge') and p_amount >= 0 then
     raise exception 'Debit amount must be negative.';
   end if;
 
-  if p_type in ('grant', 'refund') and p_amount <= 0 then
+  if p_type in ('grant', 'refund', 'generate_refund', 'admin_grant') and p_amount <= 0 then
     raise exception 'Grant and refund amounts must be positive.';
   end if;
 
@@ -762,12 +640,14 @@ Supabase's service role bypasses RLS for server-side operations. Do not put the 
 - `profiles`: `id`, `email`, `name`, `role`, `status`, `created_at`, `updated_at`
 - `image_assets`: `id`, `user_id`, `url`, `filename`, `mime_type`, `size`, `created_at`
 - `model_assets`: `id`, `user_id`, `url`, `preview_url`, `optimized_url`, `thumbnail_url`, `filename`, `original_filename`, `file_type`, `mime_type`, `size`, `metadata`, `created_at`, `deleted_at`
-- `generation_jobs`: `id`, `user_id`, `project_id`, `mode`, `step`, `prompt`, `config`, `input_asset_ids`, `status`, `progress`, `provider`, `output_asset_id`, `output_asset_ids`, `error_message`, `created_at`, `updated_at`, `started_at`, `finished_at`, `credit_cost`, `credit_refunded`, `failure_reason`
-- `generation_records`: `id`, `user_id`, `project_id`, `job_id`, `mode`, `step`, `prompt`, `input_image_url`, `input_image_data_preview`, `output_image_url`, `output_image_data_preview`, `provider`, `status`, `created_at`, `updated_at`
+- `generation_jobs`: `id`, `user_id`, `project_id`, `mode`, `step`, `batch_group_id`, `prompt`, `config`, `input_asset_ids`, `status`, `progress`, `provider`, `model`, `provider_job_id`, `source_job_id`, `source_image_asset_id`, `source_model_asset_id`, `snapshot_asset_id`, `output_asset_id`, `output_asset_ids`, `error_message`, `created_at`, `updated_at`, `started_at`, `finished_at`, `credit_cost`, `credit_refunded`, `failure_reason`
+- `generation_records`: `id`, `user_id`, `project_id`, `job_id`, `mode`, `step`, `batch_group_id`, `prompt`, `config`, `input_asset_ids`, `output_asset_ids`, `input_image_url`, `input_image_data_preview`, `output_image_url`, `output_image_data_preview`, `provider`, `model`, `source_job_id`, `source_image_asset_id`, `source_model_asset_id`, `snapshot_asset_id`, `model_snapshot_metadata`, `status`, `created_at`, `updated_at`
 - `generation_results`: `id`, `user_id`, `project_id`, `job_id`, `asset_id`, `image_url`, `is_selected`, `is_favorite`, `metadata`, `created_at`, `updated_at`
 - `share_links`: `id`, `project_id`, `token`, `permission`, `expires_at`, `created_at`, `revoked_at`
 - `credit_balances`: `user_id`, `balance`, `updated_at`
 - `credit_transactions`: `id`, `user_id`, `type`, `amount`, `balance_after`, `reason`, `reference_type`, `reference_id`, `created_at`
+
+The current Supabase adapter uses `image_assets` and `model_assets`; there is no generic `assets` table in active code.
 
 Generation job diagnostics are persisted inside `generation_jobs.config.__diagnostics` by the current adapter. A separate `diagnostics` column is not required for the SQL in this document.
 

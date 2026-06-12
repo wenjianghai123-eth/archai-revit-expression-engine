@@ -456,21 +456,20 @@ function buildReferenceUrls(input: GenerateImageInput): string[] {
 
 function buildPrompt(input: GenerateImageInput): string {
   if (isObjectInsertInput(input)) {
+    return buildObjectInsertPrompt(input);
+  }
+
+  if (isFreeReferenceImageInput(input)) {
     return [
-      input.prompt,
-      buildObjectInsertProviderInputPrompt(input),
-      readObjectInsertLocalEditPrompt(input.config),
-      buildObjectInsertPositionConstraintPrompt(input.config),
-      'Insert one similar upholstered chair according to the placement guide and selected position constraint strength.',
-      'Use the masked / guided area as the placement authority.',
-      'Keep the chair aligned with the guide box center, size, and rotation according to the selected position constraint strength.',
-      'Place it behind the long sofa if spatially applicable.',
-      'Respect occlusion: if the sofa blocks the chair, the chair should be partially occluded.',
-      'Use image 2 only for general chair form, upholstery material, color, and proportion guidance when it is provided.',
-      'Use image 3 placement guide and image 4 mask for location, scale, direction, outline, and local edit area according to the selected position constraint strength when provided.',
-      'Match perspective, scale, lighting, shadows, materials, depth of field, and scene atmosphere. Keep all unmasked regions unchanged.',
-      'Do not freely change composition, camera framing, room layout, sofa position, wall/floor/ceiling structure, or unrelated furniture.',
-      'Produce one natural photorealistic architectural rendering. Do not generate brand Logo, trademarks, watermarks, text, people, sensitive content, labels, borders, collage, or split-screen.',
+      'Free reference image generation.',
+      'The first image is the source image and must be the main base.',
+      'If following images are provided, they are optional reference images.',
+      'Use any provided reference images for style, material, color, mood, furniture language, detailing, and design guidance.',
+      'Generate one coherent, natural final image according to the user prompt.',
+      'Do not create a collage, split image, comparison layout, or mechanical paste-up of the reference images.',
+      'Keep the result visually unified, complete, and coordinated with the source image.',
+      'Do not add text, watermarks, labels, borders, or UI.',
+      `User prompt: ${input.prompt}`,
     ].filter(isNonEmptyString).join('\n');
   }
 
@@ -509,9 +508,13 @@ function buildPrompt(input: GenerateImageInput): string {
   }
 
   if (input.mode === 'floorplan') {
+    pieces.push('Convert the input image into a professional interior colored floor plan with clear, realistic, and clean material rendering.');
+    if (isFloorplanLayoutVariantInput(input)) {
+      pieces.push('Strictly preserve the original architectural layout, room boundaries, walls, doors, windows, openings, columns, functional zoning, proportions, and top-down plan representation. Same-type furniture may be arranged differently inside the original room boundaries when requested, but circulation and scale must remain reasonable.');
+    } else {
+      pieces.push('Strictly preserve the original floor plan layout, room boundaries, walls, doors, windows, openings, columns, furniture positions, furniture outlines, and proportions.');
+    }
     pieces.push(
-      'Convert the input image into a professional interior colored floor plan with clear, realistic, and clean material rendering.',
-      'Strictly preserve the original floor plan layout, room boundaries, walls, doors, windows, openings, columns, furniture positions, furniture outlines, and proportions.',
       'Use light marble, white marble, light stone, or light tile for living rooms, dining rooms, corridors, and public areas; dark tiles, anti-slip tiles, or durable stain-resistant materials for kitchens, bathrooms, balconies, and wet areas; white oak flooring, light wood flooring, or warm wood materials for bedrooms and studies.',
       'Keep walls, windows, and door openings in their original style and outline. Preserve the top-down plan representation. Do not generate a perspective rendering, elevation, 3D bird-eye view, or change the architectural layout.',
     );
@@ -540,10 +543,143 @@ function buildPrompt(input: GenerateImageInput): string {
   return pieces.filter(Boolean).join('\n');
 }
 
+function buildObjectInsertPrompt(input: GenerateImageInput): string {
+  const objectItems = readObjectInsertItemsForPrompt(input.config);
+  if (objectItems.length > 0) {
+    return buildMultiObjectInsertPrompt(input, objectItems);
+  }
+
+  const placementMode = readObjectInsertPlacementMode(input.config);
+  const common = [
+    input.prompt,
+    buildObjectInsertProviderInputPrompt(input),
+    readObjectInsertLocalEditPrompt(input.config),
+    buildObjectInsertPlacementControlPrompt(input.config),
+    buildObjectInsertSpatialRelationPrompt(input),
+  ];
+
+  const strictPrompt = [
+    'Object insert placement mode: strict / precise placement.',
+    'Image 1 is the original interior or architectural scene.',
+    'Image 2 is the furniture or object reference image when provided.',
+    'Image 3 is the placement guide when provided.',
+    'Image 4 is the edit-area mask when provided.',
+    'Insert one similar furniture/object based on image 2 into the area specified by the guide.',
+    'Fit the guide center, size, angle, and position as closely as possible.',
+    'Match perspective, scale, lighting, shadows, material integration, floor contact, and occlusion.',
+    'Keep all unrelated regions unchanged, especially camera framing, room layout, fixed structure, and existing furniture outside the edit area.',
+  ];
+
+  const naturalPrompt = [
+    'Object insert placement mode: natural / intelligent furnishing placement.',
+    'Image 1 is the original interior or architectural scene.',
+    'Image 2 is the furniture or object reference image when provided.',
+    'Image 3 is a suggested placement area guide when provided.',
+    'Image 4 is the edit-area mask when provided.',
+    'Use image 2 mainly for furniture type, material, color, proportion, and design language.',
+    'Add one coordinated similar furniture/object near the suggested area from image 3.',
+    'Treat the guide and placement metadata as a soft constraint: the final position, orientation, and scale may be optimized according to the original scene layout, existing furniture relationships, circulation path, perspective, occlusion, and overall composition.',
+    'Prioritize harmonious interior design, functional reasonableness, visual balance, realistic floor contact, and scale consistency with existing furniture.',
+    'Do not mechanically copy the reference image direction. If the reference angle is unsuitable for the original scene, rotate or reposition the object into a more natural orientation.',
+    'Preserve the overall style and design order of the original image. Avoid damaging the existing room structure, camera framing, or unrelated furniture.',
+  ];
+
+  return [
+    ...common,
+    ...(placementMode === 'strict' ? strictPrompt : naturalPrompt),
+    'Produce one natural photorealistic architectural rendering. Do not generate brand Logo, trademarks, watermarks, text, people, sensitive content, labels, borders, collage, or split-screen.',
+  ].filter(isNonEmptyString).join('\n');
+}
+
+interface ObjectInsertPromptItem {
+  index: number;
+  objectType: string;
+  objectLabel?: string;
+  referenceImageIndexes: number[];
+  placementGuideImageIndex?: number;
+  placementMaskImageIndex?: number;
+  placementMode: string;
+  placementIntent?: string;
+  extraPrompt?: string;
+}
+
+function buildMultiObjectInsertPrompt(input: GenerateImageInput, items: ObjectInsertPromptItem[]): string {
+  const itemLines = items.map(item => {
+    const name = item.objectLabel || item.objectType || `object ${item.index + 1}`;
+    const refs = item.referenceImageIndexes.length > 0 ? item.referenceImageIndexes.map(index => `image ${index}`).join(', ') : 'provided reference images';
+    const guide = item.placementGuideImageIndex ? ` guide: image ${item.placementGuideImageIndex};` : '';
+    const mask = item.placementMaskImageIndex ? ` mask: image ${item.placementMaskImageIndex};` : '';
+    const intent = item.placementIntent ? ` intent: ${item.placementIntent};` : '';
+    const extra = item.extraPrompt ? ` extra: ${item.extraPrompt};` : '';
+    return `Object ${item.index + 1}: ${name}; references: ${refs}; mode: ${item.placementMode};${guide}${mask}${intent}${extra}`;
+  });
+
+  return [
+    input.prompt,
+    'Multi-object insert / intelligent furnishing composition.',
+    'Image 1 is the original interior or architectural scene and must remain the main base.',
+    'All following images are grouped object references, placement guides, and optional masks according to the object list below.',
+    'For each object, use its reference images to understand type, form, material, color, proportion, details, and design language. Do not copy reference image backgrounds.',
+    'Insert all listed objects into the original scene at the same time and produce one coherent final image.',
+    'For strict objects, fit their placement guide position, scale, direction, and target area as closely as possible.',
+    'For natural objects, treat placement guides as soft target areas and optimize final position, orientation, scale, occlusion, and floor/ceiling contact according to the scene layout, existing furniture, circulation, perspective, and overall composition.',
+    'Coordinate all new objects with each other and with the existing interior style. Preserve functional reasonableness, circulation, visual balance, lighting, shadows, material integration, and realistic occlusion.',
+    'If objects form a natural set, such as table with chairs, sofa with coffee table, or ceiling light above a table, arrange them as a coherent furniture group.',
+    'Do not insert only the first object. Do not create a collage, split image, comparison sheet, text, labels, borders, brand Logo, trademarks, or watermarks.',
+    'Object list:',
+    ...itemLines,
+    buildObjectInsertSpatialRelationPrompt(input),
+    readObjectInsertExtraPrompt(input.config) ? `Global extra prompt: ${readObjectInsertExtraPrompt(input.config)}` : '',
+    `Generation config JSON: ${JSON.stringify(input.config)}`,
+  ].filter(isNonEmptyString).join('\n');
+}
+
+function readObjectInsertItemsForPrompt(config: Record<string, unknown>): ObjectInsertPromptItem[] {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const rawItems = Array.isArray(nested.objectItems) ? nested.objectItems.filter(isRecord) : [];
+  const rawOrder = Array.isArray(config.objectInsertInputOrder) ? config.objectInsertInputOrder.filter(isRecord) : [];
+  return rawItems.slice(0, 8).map((item, index) => {
+    const order = rawOrder[index] || {};
+    const placementMode = item.placementMode === 'strict' || item.placementMode === 'natural'
+      ? item.placementMode
+      : readObjectInsertPlacementMode(config);
+    return {
+      index,
+      objectType: typeof item.objectType === 'string' && item.objectType.trim() ? item.objectType.trim() : 'custom object',
+      objectLabel: typeof item.objectLabel === 'string' && item.objectLabel.trim() ? item.objectLabel.trim() : undefined,
+      referenceImageIndexes: readNumberArray(order.referenceImageIndexes),
+      placementGuideImageIndex: readPositiveNumber(order.placementGuideImageIndex),
+      placementMaskImageIndex: readPositiveNumber(order.placementMaskImageIndex),
+      placementMode,
+      placementIntent: typeof item.placementIntent === 'string' && item.placementIntent.trim() ? item.placementIntent.trim() : undefined,
+      extraPrompt: typeof item.extraPrompt === 'string' && item.extraPrompt.trim() ? item.extraPrompt.trim() : undefined,
+    };
+  }).filter(item => item.referenceImageIndexes.length > 0 || item.placementGuideImageIndex || item.placementMaskImageIndex);
+}
+
+function readNumberArray(value: unknown): number[] {
+  return Array.isArray(value) ? value.map(readPositiveNumber).filter((item): item is number => typeof item === 'number') : [];
+}
+
+function readPositiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
+}
+
 function isObjectInsertInput(input: GenerateImageInput): boolean {
   return input.step === 'object_insert'
     || input.config.step === 'object_insert'
     || isRecord(input.config.objectInsert);
+}
+
+function isFreeReferenceImageInput(input: GenerateImageInput): boolean {
+  return input.step === 'free_reference_image'
+    || input.config.step === 'free_reference_image';
+}
+
+function isFloorplanLayoutVariantInput(input: GenerateImageInput): boolean {
+  return input.mode === 'floorplan'
+    && input.config.floorplanOutputMode === 'multi'
+    && (input.config.floorplanVariantType === 'furniture_layout' || input.config.floorplanVariantType === 'mixed' || input.config.floorplanVariantFocus === 'furniture_layout' || input.config.floorplanVariantFocus === 'both');
 }
 
 function buildObjectInsertProviderInputPrompt(input: GenerateImageInput): string {
@@ -575,7 +711,53 @@ function readObjectInsertLocalEdit(config: Record<string, unknown>): boolean {
   return config.objectInsertLocalEdit === true;
 }
 
+function buildObjectInsertPlacementControlPrompt(config: Record<string, unknown>): string {
+  const placementMode = readObjectInsertPlacementMode(config);
+  const intent = readObjectInsertPlacementIntent(config);
+  const harmonyPriority = readObjectInsertHarmonyPriority(config);
+  const autoAdjust = [
+    readObjectInsertAutoAdjust(config, 'allowAutoAdjustPosition') ? 'position' : '',
+    readObjectInsertAutoAdjust(config, 'allowAutoAdjustRotation') ? 'orientation' : '',
+    readObjectInsertAutoAdjust(config, 'allowAutoAdjustScale') ? 'scale' : '',
+  ].filter(Boolean);
+
+  return [
+    `Placement mode: ${placementMode}.`,
+    `Harmony priority: ${harmonyPriority}.`,
+    intent ? `User placement intent: ${intent}. Give this intent strong priority when choosing the natural placement relationship.` : undefined,
+    placementMode === 'natural'
+      ? `Auto-adjust allowed for: ${autoAdjust.length > 0 ? autoAdjust.join(', ') : 'none'}. In natural mode, the guide means suggested area and approximate size, not a rigid transform.`
+      : 'Strict mode: use the guide and placement metadata as precise placement instructions.',
+    buildObjectInsertPositionConstraintPrompt(config),
+  ].filter(isNonEmptyString).join('\n');
+}
+
+function buildObjectInsertSpatialRelationPrompt(input: GenerateImageInput): string {
+  const text = [
+    input.prompt,
+    readObjectInsertPlacementIntent(input.config),
+    readObjectInsertExtraPrompt(input.config),
+  ].join('\n');
+  const relations = [
+    { pattern: /放在.{0,8}沙发后|沙发后面|沙发后侧|behind.{0,12}sofa/iu, label: 'Place it behind or to the rear side of the sofa when scene geometry allows; respect sofa occlusion and circulation.' },
+    { pattern: /靠墙|贴墙|against.{0,8}wall|near.{0,8}wall/iu, label: 'Place it close to a wall when suitable, with believable floor contact and spacing.' },
+    { pattern: /餐桌旁|餐桌边|餐桌附近|beside.{0,12}dining|near.{0,12}dining/iu, label: 'Place it beside or near the dining table in a functional relationship.' },
+    { pattern: /窗边|窗旁|near.{0,8}window|by.{0,8}window/iu, label: 'Place it near the window while preserving light direction and visual balance.' },
+    { pattern: /角落|墙角|corner/iu, label: 'Place it into a suitable corner without blocking circulation.' },
+    { pattern: /玄关处|玄关|entryway|foyer/iu, label: 'Place it near the entryway or foyer area when visible and spatially plausible.' },
+  ].filter(item => item.pattern.test(text)).map(item => item.label);
+
+  if (relations.length === 0) return '';
+  return [
+    'Detected spatial relationship intent:',
+    ...relations.map(relation => `- ${relation}`),
+  ].join('\n');
+}
+
 function buildObjectInsertPositionConstraintPrompt(config: Record<string, unknown>): string {
+  if (readObjectInsertPlacementMode(config) === 'natural') {
+    return 'Position constraint strength is secondary in natural mode. Use the guide as a soft target area and optimize placement for layout harmony, existing furniture relationships, circulation, perspective, and composition.';
+  }
   const strength = readObjectInsertPositionConstraintStrength(config);
   if (strength === 'low') {
     return 'Position constraint strength: low. The chair may be naturally adjusted near the guided area when needed for perspective, floor contact, or occlusion, but it should remain close to the placement guide.';
@@ -584,6 +766,57 @@ function buildObjectInsertPositionConstraintPrompt(config: Record<string, unknow
     return 'Position constraint strength: medium. Keep the chair close to the placement guide center, size, and rotation, allowing only small natural corrections for perspective, floor contact, or occlusion.';
   }
   return 'Position constraint strength: high. The chair must stay inside the guide / mask area and must not visibly drift away from the guide box center, size, or rotation.';
+}
+
+function readObjectInsertPlacementMode(config: Record<string, unknown>): string {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.placementMode === 'string'
+    ? nested.placementMode
+    : typeof config.placementMode === 'string'
+      ? config.placementMode
+      : '';
+  return value === 'strict' || value === 'natural' ? value : 'natural';
+}
+
+function readObjectInsertHarmonyPriority(config: Record<string, unknown>): string {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.harmonyPriority === 'string'
+    ? nested.harmonyPriority
+    : typeof config.harmonyPriority === 'string'
+      ? config.harmonyPriority
+      : '';
+  return value === 'style' || value === 'balance' || value === 'layout' ? value : 'layout';
+}
+
+function readObjectInsertPlacementIntent(config: Record<string, unknown>): string {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.placementIntent === 'string'
+    ? nested.placementIntent
+    : typeof config.placementIntent === 'string'
+      ? config.placementIntent
+      : '';
+  return value.trim();
+}
+
+function readObjectInsertExtraPrompt(config: Record<string, unknown>): string {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.extraPrompt === 'string'
+    ? nested.extraPrompt
+    : typeof config.objectInsertExtraPrompt === 'string'
+      ? config.objectInsertExtraPrompt
+      : typeof config.customPrompt === 'string'
+        ? config.customPrompt
+        : '';
+  return value.trim();
+}
+
+function readObjectInsertAutoAdjust(
+  config: Record<string, unknown>,
+  key: 'allowAutoAdjustPosition' | 'allowAutoAdjustRotation' | 'allowAutoAdjustScale',
+): boolean {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested[key] === 'boolean' ? nested[key] : typeof config[key] === 'boolean' ? config[key] : undefined;
+  return value === undefined ? true : value !== false;
 }
 
 function readObjectInsertPositionConstraintStrength(config: Record<string, unknown>): string {

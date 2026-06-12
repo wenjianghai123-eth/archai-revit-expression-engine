@@ -8,6 +8,7 @@ export enum GenerationStep {
   PlanColorize = 7,
   PanoramaQuickRender = 8,
   ObjectInsert = 9,
+  FreeReferenceImage = 10,
 }
 
 export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
@@ -20,7 +21,8 @@ export type GenerationJobStep =
   | 'material_replace'
   | 'plan_colorize'
   | 'panorama_quick_render'
-  | 'object_insert';
+  | 'object_insert'
+  | 'free_reference_image';
 export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
 export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
@@ -28,6 +30,10 @@ export type QualityMode = 'draft' | 'fast' | 'balanced' | 'high';
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
 export type DesignVariantBatchCount = 2 | 4 | 8;
 export type PlanColorizeBatchCount = 1 | 2 | 3 | 4 | 5 | 6;
+export type FloorplanMultiPlanBatchCount = 2 | 4 | 6;
+export type FloorplanMultiPlanMode = 'single' | 'multi';
+export type FloorplanVariantType = 'material_style' | 'furniture_layout' | 'mixed';
+export type FloorplanVariantFocus = 'material_style' | 'furniture_layout' | 'both';
 export type VariantStyleKey =
   | 'modern-minimal'
   | 'wabi-sabi'
@@ -44,6 +50,8 @@ export type MaterialReplaceStrength = 'subtle' | 'balanced' | 'strong';
 export type SecondaryEditAction = 'regenerate' | 'similar' | 'realism' | 'lighting' | 'style' | 'continue-edit';
 export type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview';
 export type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
+export type ObjectInsertPlacementMode = 'strict' | 'natural';
+export type ObjectInsertHarmonyPriority = 'layout' | 'style' | 'balance';
 export type PlanDrawingType = 'residential' | 'commercial' | 'office' | 'hotel' | 'landscape' | 'site-plan' | 'custom';
 export type PlanExpressionTemplate = 'zoning-color' | 'colored-plan' | 'landscape-plan' | 'furniture-enhance' | 'annotation-plan' | 'circulation-analysis';
 export type MaterialReplaceEditMode = 'smart-type' | 'mask';
@@ -255,7 +263,14 @@ export interface GenerationConfig {
   preserveStructure?: boolean;
   preserveCamera?: boolean;
   feather?: number;
-  batchCount?: PlanColorizeBatchCount | DesignVariantBatchCount;
+  batchCount?: PlanColorizeBatchCount | DesignVariantBatchCount | FloorplanMultiPlanBatchCount;
+  floorplanOutputMode?: FloorplanMultiPlanMode;
+  floorplanVariantType?: FloorplanVariantType;
+  floorplanVariantFocus?: FloorplanVariantFocus;
+  floorplanStyleTemplateIds?: string[];
+  floorplanStyleTemplateNames?: string[];
+  floorplanLayoutVariantIds?: string[];
+  floorplanLayoutVariantNames?: string[];
   variantStrategy?: VariantGenerationStrategy;
   stylePackId?: string;
   variantStyles?: VariantStyleKey[];
@@ -296,6 +311,10 @@ export interface GenerationConfig {
   panoramaReferenceMode?: 'reference_guided';
   panoramaReferenceStrength?: 'low' | 'medium' | 'high';
   objectReferenceAssetId?: string;
+  referenceImageAssetId?: string;
+  referenceImageAssetIds?: string[];
+  freeReferenceResolution?: 1024 | 1536 | 2048;
+  freeReferenceAspectRatio?: '1:1' | '4:3' | '3:4' | '16:9' | '9:16';
   placementGuideAssetId?: string;
   placementPreviewAssetId?: string;
   placementMaskAssetId?: string;
@@ -303,6 +322,12 @@ export interface GenerationConfig {
   objectInsert?: ObjectInsertConfig;
   objectInsertDebugMode?: ObjectInsertDebugMode;
   positionConstraintStrength?: ObjectInsertPositionConstraintStrength;
+  placementMode?: ObjectInsertPlacementMode;
+  placementIntent?: string;
+  harmonyPriority?: ObjectInsertHarmonyPriority;
+  allowAutoAdjustPosition?: boolean;
+  allowAutoAdjustRotation?: boolean;
+  allowAutoAdjustScale?: boolean;
   objectInsertExtraPrompt?: string;
   inputSource?: 'model-capture' | 'uploaded-snapshot';
   modelSnapshotMetadata?: ModelSnapshotMetadata;
@@ -321,6 +346,7 @@ export interface GenerationConfig {
   parentJobId?: string | null;
   parentRecordId?: string | null;
   secondaryEditAction?: SecondaryEditAction;
+  floorplanRetryVariantIndex?: number;
 }
 
 export interface ObjectPlacement {
@@ -331,16 +357,38 @@ export interface ObjectPlacement {
   rotation: number;
 }
 
+export interface ObjectInsertItemConfig {
+  id: string;
+  objectType: string;
+  objectLabel?: string;
+  referenceAssetIds: string[];
+  placement?: ObjectPlacement;
+  placementPreviewAssetId?: string;
+  placementMaskAssetId?: string;
+  placementMode?: ObjectInsertPlacementMode;
+  placementIntent?: string;
+  extraPrompt?: string;
+}
+
 export interface ObjectInsertConfig {
   sourceImageAssetId?: string;
+  objectItems?: ObjectInsertItemConfig[];
+  globalExtraPrompt?: string;
   objectReferenceAssetId?: string;
+  objectReferenceAssetIds?: string[];
   guideAssetId?: string;
   previewAssetId?: string;
   maskAssetId?: string;
-  placement: ObjectPlacement;
+  placement?: ObjectPlacement;
   extraPrompt?: string;
   debugMode?: ObjectInsertDebugMode;
   positionConstraintStrength?: ObjectInsertPositionConstraintStrength;
+  placementMode?: ObjectInsertPlacementMode;
+  placementIntent?: string;
+  harmonyPriority?: ObjectInsertHarmonyPriority;
+  allowAutoAdjustPosition?: boolean;
+  allowAutoAdjustRotation?: boolean;
+  allowAutoAdjustScale?: boolean;
 }
 
 export interface GenerationResultOption {
@@ -360,6 +408,24 @@ export interface GenerationResultOption {
   variantStyle?: VariantStyleKey;
   variantStyleLabel?: string;
   stylePackId?: string;
+}
+
+export type GenerationBatchItemStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+
+export interface GenerationBatchItem {
+  variantIndex: number;
+  variantName: string;
+  selectedStyleId?: string;
+  selectedStyleName?: string;
+  layoutVariantId?: string;
+  layoutVariantName?: string;
+  batchGroupId?: string;
+  jobId?: string;
+  status: GenerationBatchItemStatus;
+  imageUrl?: string;
+  assetId?: string;
+  errorMessage?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ContinuationSource {
@@ -383,6 +449,7 @@ export interface StepState {
   useFullImageMask: boolean;
   outputImage: string | null;
   generationResults: GenerationResultOption[];
+  generationBatchItems?: GenerationBatchItem[];
   selectedGenerationResultId: string | null;
   isGenerating: boolean;
   generationStatus: 'ready' | 'uploading' | 'generating' | 'success' | 'error';
@@ -469,6 +536,7 @@ export interface PromptTemplate {
 export interface GenerationHistoryItem {
   id: string;
   projectId?: string | null;
+  projectName?: string | null;
   step: GenerationStep;
   prompt: string;
   style: string;

@@ -42,6 +42,15 @@ const toolCards = [
     image: 'https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?auto=format&fit=crop&q=80&w=900',
   },
   {
+    step: GenerationStep.FreeReferenceImage,
+    title: '自由参考生图',
+    desc: '上传原图和参考图，选择尺寸比例，直接按提示词生成效果图。',
+    input: '输入：原图 + 参考图',
+    output: '输出：效果图',
+    icon: FileImage,
+    image: 'https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&q=80&w=900',
+  },
+  {
     step: GenerationStep.LocalInpainting,
     title: '局部重绘修饰',
     desc: '用画笔、矩形或套索选择局部区域，精修材质、家具和光影。',
@@ -313,5 +322,6 @@ function stepLabel(step: GenerationStep): string {
   if (step === GenerationStep.ModelSnapshotRender) return '白模快渲';
   if (step === GenerationStep.PanoramaQuickRender) return '漫游全景快渲';
   if (step === GenerationStep.ObjectInsert) return '元素植入';
+  if (step === GenerationStep.FreeReferenceImage) return '自由参考生图';
   return '局部修饰';
 }

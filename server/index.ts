@@ -83,6 +83,7 @@ import {
   restorePendingGenerationJobs,
 } from './generationService';
 import { defaultPlanColorizeStyleId, maxPlanColorizeBatchCount, resolvePlanColorizeStyles } from '../src/constants/planColorizeStyles';
+import { resolveFloorplanBatchCount, resolveFloorplanVariantPlans, readFloorplanVariantFocus, readFloorplanVariantType } from '../src/constants/floorplanVariants';
 import { getGenerationCreditCost, getGenerationOutputCount } from '../src/utils/generationCredits';
 import { createAssetsRouter } from './routes/assets';
 import { createSupabaseAuthUser, resetSupabaseAuthUserPassword, updateSupabaseAuthUserMetadata } from './supabaseAdmin';
@@ -1394,6 +1395,9 @@ function normalizeDesignVariantConfig(
   mode: GenerationRecord['mode'],
   config: Record<string, unknown>,
 ): { ok: true } | { ok: false; error: ApiError } {
+  if (mode === 'floorplan') {
+    return { ok: true };
+  }
   if (mode !== 'design-variants') {
     config.batchCount = 1;
     delete config.variantStrategy;
@@ -1530,6 +1534,9 @@ function normalizePlanColorizeConfig(
   mode: GenerationRecord['mode'],
   config: Record<string, unknown>,
 ): { ok: true } | { ok: false; error: ApiError } {
+  if (mode === 'floorplan') {
+    return { ok: true };
+  }
   if (mode !== 'plan-colorize') {
     delete config.drawingType;
     delete config.template;
@@ -1580,6 +1587,75 @@ function normalizePlanColorizeConfig(
   config.batchGroupId = typeof config.batchGroupId === 'string' && config.batchGroupId.trim().length > 0
     ? config.batchGroupId.trim().slice(0, 120)
     : `plan-colorize-${Date.now()}-${randomBytes(4).toString('hex')}`;
+  if (typeof config.customPrompt !== 'string' || config.customPrompt.trim().length === 0) delete config.customPrompt;
+  else config.customPrompt = config.customPrompt.trim();
+  return { ok: true };
+}
+
+function normalizeFloorplanConfig(
+  mode: GenerationRecord['mode'],
+  config: Record<string, unknown>,
+): { ok: true } | { ok: false; error: ApiError } {
+  if (mode !== 'floorplan') {
+    delete config.floorplanOutputMode;
+    delete config.floorplanVariantType;
+    delete config.floorplanVariantFocus;
+    delete config.floorplanStyleTemplateIds;
+    delete config.floorplanStyleTemplateNames;
+    delete config.floorplanLayoutVariantIds;
+    delete config.floorplanLayoutVariantNames;
+    return { ok: true };
+  }
+
+  const outputMode = config.floorplanOutputMode === 'multi' ? 'multi' : 'single';
+  config.floorplanOutputMode = outputMode;
+  if (outputMode !== 'multi') {
+    config.batchCount = 1;
+    delete config.floorplanVariantType;
+    delete config.floorplanVariantFocus;
+    delete config.floorplanStyleTemplateIds;
+    delete config.floorplanStyleTemplateNames;
+    delete config.floorplanLayoutVariantIds;
+    delete config.floorplanLayoutVariantNames;
+    delete config.variantNames;
+    delete config.batchGroupId;
+    return { ok: true };
+  }
+
+  const variantIndex = typeof config.variantIndex === 'number' && Number.isInteger(config.variantIndex)
+    ? config.variantIndex
+    : null;
+  const isSingleVariantJob = variantIndex !== null && config.batchCount === 1;
+  const batchCount = isSingleVariantJob ? 1 : resolveFloorplanBatchCount(config.batchCount);
+  config.batchCount = batchCount;
+  config.floorplanVariantType = readFloorplanVariantType(config.floorplanVariantType);
+  config.floorplanVariantFocus = readFloorplanVariantFocus(config.floorplanVariantFocus);
+  const plans = resolveFloorplanVariantPlans(config, batchCount);
+  const primaryPlan = plans[0];
+  config.floorplanStyleTemplateIds = plans.map(plan => plan.selectedStyleId).filter(isNonEmptyString);
+  config.floorplanStyleTemplateNames = plans.map(plan => plan.selectedStyleName).filter(isNonEmptyString);
+  config.floorplanLayoutVariantIds = plans.map(plan => plan.layoutVariantId).filter(isNonEmptyString);
+  config.floorplanLayoutVariantNames = plans.map(plan => plan.layoutVariantName).filter(isNonEmptyString);
+  config.variantNames = plans.map(plan => plan.variantName);
+  if (isSingleVariantJob) {
+    config.variantIndex = variantIndex;
+    config.schemeName = typeof config.schemeName === 'string' && config.schemeName.trim().length > 0
+      ? config.schemeName.trim().slice(0, 120)
+      : primaryPlan?.variantName;
+    config.selectedStyleId = typeof config.selectedStyleId === 'string' && config.selectedStyleId.trim().length > 0 ? config.selectedStyleId.trim() : primaryPlan?.selectedStyleId;
+    config.selectedStyleName = typeof config.selectedStyleName === 'string' && config.selectedStyleName.trim().length > 0 ? config.selectedStyleName.trim() : primaryPlan?.selectedStyleName;
+    config.layoutVariantId = typeof config.layoutVariantId === 'string' && config.layoutVariantId.trim().length > 0 ? config.layoutVariantId.trim() : primaryPlan?.layoutVariantId;
+    config.layoutVariantName = typeof config.layoutVariantName === 'string' && config.layoutVariantName.trim().length > 0 ? config.layoutVariantName.trim() : primaryPlan?.layoutVariantName;
+    config.variantFocus = config.floorplanVariantType === 'mixed'
+      ? 'mixed'
+      : config.floorplanVariantFocus === 'furniture_layout'
+        ? 'layout'
+        : 'material';
+  }
+  config.batchGroupId = typeof config.batchGroupId === 'string' && config.batchGroupId.trim().length > 0
+    ? config.batchGroupId.trim().slice(0, 120)
+    : `floorplan-multi-${Date.now()}-${randomBytes(4).toString('hex')}`;
+  config.preserveStructure = true;
   if (typeof config.customPrompt !== 'string' || config.customPrompt.trim().length === 0) delete config.customPrompt;
   else config.customPrompt = config.customPrompt.trim();
   return { ok: true };
@@ -1669,6 +1745,15 @@ function validateGenerationJobCreateBody(
       },
     };
   }
+  if (generationStep === 'free_reference_image' && body.mode !== 'style-render') {
+    return {
+      ok: false,
+      error: {
+        message: '自由参考生图应使用 mode=style-render，并通过 step=free_reference_image 标识业务功能。',
+        code: 'GENERATION_JOB_FREE_REFERENCE_MODE_INVALID',
+      },
+    };
+  }
   if (config.sourceImageAssetId === undefined && isNonEmptyString(body.sourceImageAssetId)) {
     config.sourceImageAssetId = body.sourceImageAssetId.trim();
   }
@@ -1684,6 +1769,31 @@ function validateGenerationJobCreateBody(
   if (config.materialReferenceAssetIds === undefined && Array.isArray(body.materialReferenceAssetIds)) {
     config.materialReferenceAssetIds = body.materialReferenceAssetIds;
   }
+  if (generationStep === 'free_reference_image') {
+    const inputAssetIds = body.inputAssetIds.map(item => item.trim());
+    const sourceImageAssetId = isNonEmptyString(config.sourceImageAssetId) ? config.sourceImageAssetId.trim() : inputAssetIds[0] || '';
+    const referenceImageAssetIds = Array.from(new Set([
+      ...readStringArray(config.referenceImageAssetIds),
+      ...(isNonEmptyString(config.referenceImageAssetId) ? [config.referenceImageAssetId.trim()] : []),
+      ...inputAssetIds.slice(1),
+    ]))
+      .filter(assetId => assetId !== sourceImageAssetId && inputAssetIds.includes(assetId))
+      .slice(0, 6);
+    if (!sourceImageAssetId || !inputAssetIds.includes(sourceImageAssetId)) {
+      return { ok: false, error: { message: '自由参考生图需要原图素材。', code: 'GENERATION_JOB_FREE_REFERENCE_SOURCE_REQUIRED' } };
+    }
+    config.sourceImageAssetId = sourceImageAssetId;
+    if (referenceImageAssetIds.length > 0) {
+      config.referenceImageAssetIds = referenceImageAssetIds;
+      config.referenceImageAssetId = referenceImageAssetIds[0];
+    }
+    config.batchCount = 1;
+    config.targetAspectRatio = typeof config.freeReferenceAspectRatio === 'string'
+      ? config.freeReferenceAspectRatio
+      : typeof config.targetAspectRatio === 'string'
+        ? config.targetAspectRatio
+        : '1:1';
+  }
   if (body.mode === 'material-replace') {
     const sourceImageAssetId = typeof config.sourceImageAssetId === 'string' ? config.sourceImageAssetId.trim() : '';
     if (!sourceImageAssetId || !body.inputAssetIds.includes(sourceImageAssetId)) {
@@ -1694,6 +1804,10 @@ function validateGenerationJobCreateBody(
   const variantConfig = normalizeDesignVariantConfig(body.mode, config);
   if (variantConfig.ok === false) {
     return { ok: false, error: variantConfig.error };
+  }
+  const floorplanConfig = normalizeFloorplanConfig(body.mode, config);
+  if (floorplanConfig.ok === false) {
+    return { ok: false, error: floorplanConfig.error };
   }
   const materialReplaceConfig = normalizeMaterialReplaceConfig(body.mode, config);
   if (materialReplaceConfig.ok === false) {
@@ -1734,10 +1848,21 @@ function validateGenerationJobCreateBody(
     const objectInsertConfig = isRecord(config.objectInsert) ? { ...config.objectInsert } : {};
     const debugMode = readObjectInsertDebugMode(config);
     const positionConstraintStrength = readObjectInsertPositionConstraintStrength(config);
+    const placementMode = readObjectInsertPlacementMode(config);
+    const placementIntent = readObjectInsertPlacementIntent(config);
+    const harmonyPriority = readObjectInsertHarmonyPriority(config);
+    const allowAutoAdjustPosition = readObjectInsertAutoAdjust(config, 'allowAutoAdjustPosition');
+    const allowAutoAdjustRotation = readObjectInsertAutoAdjust(config, 'allowAutoAdjustRotation');
+    const allowAutoAdjustScale = readObjectInsertAutoAdjust(config, 'allowAutoAdjustScale');
     const needsObject = objectInsertIncludesObject(debugMode);
     const needsPreview = objectInsertIncludesPreview(debugMode);
     const needsMask = objectInsertIncludesMask(debugMode);
     const needsPlacement = needsPreview || needsMask;
+    const objectItems = normalizeObjectInsertItemsForRequest(objectInsertConfig.objectItems, {
+      defaultPlacementMode: placementMode,
+      inputAssetIds,
+    });
+    const firstObjectItem = objectItems[0];
     const sourceImageAssetId = isNonEmptyString(config.sourceImageAssetId)
       ? config.sourceImageAssetId.trim()
       : isNonEmptyString(objectInsertConfig.sourceImageAssetId)
@@ -1747,11 +1872,15 @@ function validateGenerationJobCreateBody(
       ? objectInsertConfig.objectReferenceAssetId.trim()
       : isNonEmptyString(config.objectReferenceAssetId)
         ? config.objectReferenceAssetId.trim()
+      : firstObjectItem?.referenceAssetIds[0]
+        ? firstObjectItem.referenceAssetIds[0]
       : inputAssetIds[1] || '';
     const placementPreviewAssetId = isNonEmptyString(objectInsertConfig.guideAssetId)
       ? objectInsertConfig.guideAssetId.trim()
       : isNonEmptyString(objectInsertConfig.previewAssetId)
       ? objectInsertConfig.previewAssetId.trim()
+      : isNonEmptyString(firstObjectItem?.placementPreviewAssetId)
+      ? firstObjectItem.placementPreviewAssetId
       : isNonEmptyString(config.placementGuideAssetId)
       ? config.placementGuideAssetId.trim()
       : isNonEmptyString(config.placementPreviewAssetId)
@@ -1759,27 +1888,40 @@ function validateGenerationJobCreateBody(
       : inputAssetIds[2] || '';
     const placementMaskAssetId = isNonEmptyString(objectInsertConfig.maskAssetId)
       ? objectInsertConfig.maskAssetId.trim()
+      : isNonEmptyString(firstObjectItem?.placementMaskAssetId)
+        ? firstObjectItem.placementMaskAssetId
       : isNonEmptyString(config.placementMaskAssetId)
         ? config.placementMaskAssetId.trim()
       : isNonEmptyString(config.maskAssetId)
         ? config.maskAssetId.trim()
         : inputAssetIds[3] || '';
 
+    const objectItemsMissingReferences = objectItems.some(item => item.referenceAssetIds.length === 0 || item.referenceAssetIds.some(assetId => !inputAssetIds.includes(assetId)));
+    const objectItemsMissingGuides = objectItems.some(item => !item.placementPreviewAssetId || !inputAssetIds.includes(item.placementPreviewAssetId));
+    const objectItemsMissingMasks = objectItems.some(item => !item.placementMaskAssetId || !inputAssetIds.includes(item.placementMaskAssetId));
+    const hasObjectItems = objectItems.length > 0;
     const missingAssetMessage = !sourceImageAssetId || !inputAssetIds.includes(sourceImageAssetId)
       ? '元素植入需要原始场景图素材。'
-      : needsObject && (!objectReferenceAssetId || !inputAssetIds.includes(objectReferenceAssetId))
+      : needsObject && hasObjectItems && objectItemsMissingReferences
+        ? '元素植入需要每个对象的参考图素材。'
+      : needsObject && !hasObjectItems && (!objectReferenceAssetId || !inputAssetIds.includes(objectReferenceAssetId))
         ? '元素植入需要物体参考图素材。'
-      : needsPreview && (!placementPreviewAssetId || !inputAssetIds.includes(placementPreviewAssetId))
+      : needsPreview && hasObjectItems && objectItemsMissingGuides
+        ? '元素植入需要每个对象的 placement guide 素材。'
+      : needsPreview && !hasObjectItems && (!placementPreviewAssetId || !inputAssetIds.includes(placementPreviewAssetId))
         ? '元素植入需要 placement guide 素材。'
-      : needsMask && (!placementMaskAssetId || !inputAssetIds.includes(placementMaskAssetId))
+      : needsMask && hasObjectItems && objectItemsMissingMasks
+        ? '元素植入需要每个对象的 placement mask 素材。'
+      : needsMask && !hasObjectItems && (!placementMaskAssetId || !inputAssetIds.includes(placementMaskAssetId))
         ? '元素植入需要 placement mask 素材。'
       : '';
     if (missingAssetMessage) {
       return { ok: false, error: { message: missingAssetMessage, code: 'GENERATION_JOB_OBJECT_INSERT_INPUTS_REQUIRED' } };
     }
 
-    const placement = normalizeObjectPlacement(objectInsertConfig.placement ?? config.objectPlacement);
-    if (needsPlacement && !placement) {
+    const placement = normalizeObjectPlacement(objectInsertConfig.placement ?? firstObjectItem?.placement ?? config.objectPlacement);
+    const objectItemsMissingPlacement = hasObjectItems && objectItems.some(item => !normalizeObjectPlacement(item.placement));
+    if (needsPlacement && (!placement && (!hasObjectItems || objectItemsMissingPlacement))) {
       return { ok: false, error: { message: '元素植入需要有效的 placement 信息。', code: 'GENERATION_JOB_OBJECT_PLACEMENT_INVALID' } };
     }
 
@@ -1792,6 +1934,12 @@ function validateGenerationJobCreateBody(
     config.sourceImageAssetId = sourceImageAssetId;
     config.objectInsertDebugMode = debugMode;
     config.positionConstraintStrength = positionConstraintStrength;
+    config.placementMode = placementMode;
+    config.placementIntent = placementIntent;
+    config.harmonyPriority = harmonyPriority;
+    config.allowAutoAdjustPosition = allowAutoAdjustPosition;
+    config.allowAutoAdjustRotation = allowAutoAdjustRotation;
+    config.allowAutoAdjustScale = allowAutoAdjustScale;
     if (needsObject) config.objectReferenceAssetId = objectReferenceAssetId;
     else delete config.objectReferenceAssetId;
     if (needsPreview) config.placementPreviewAssetId = placementPreviewAssetId;
@@ -1803,7 +1951,9 @@ function validateGenerationJobCreateBody(
     if (placement) config.objectPlacement = placement;
     else delete config.objectPlacement;
     config.objectInsert = {
+      ...objectInsertConfig,
       sourceImageAssetId,
+      objectItems: hasObjectItems ? objectItems : objectInsertConfig.objectItems,
       objectReferenceAssetId: needsObject ? objectReferenceAssetId : undefined,
       guideAssetId: needsPreview ? placementPreviewAssetId : undefined,
       previewAssetId: needsPreview ? placementPreviewAssetId : undefined,
@@ -1812,6 +1962,12 @@ function validateGenerationJobCreateBody(
       extraPrompt,
       debugMode,
       positionConstraintStrength,
+      placementMode,
+      placementIntent,
+      harmonyPriority,
+      allowAutoAdjustPosition,
+      allowAutoAdjustRotation,
+      allowAutoAdjustScale,
     };
     if (needsMask) {
       config.maskMode = 'asset-mask';
@@ -2021,6 +2177,7 @@ const allowedGenerationSteps: Array<NonNullable<GenerationJob['step']>> = [
   'plan_colorize',
   'panorama_quick_render',
   'object_insert',
+  'free_reference_image',
 ];
 
 function isGenerationMode(value: unknown): value is GenerationRecord['mode'] {
@@ -2037,6 +2194,21 @@ function isObjectInsertStep(step: GenerationJob['step'], config: Record<string, 
 
 type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview';
 type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
+type ObjectInsertPlacementMode = 'strict' | 'natural';
+type ObjectInsertHarmonyPriority = 'layout' | 'style' | 'balance';
+
+interface ObjectInsertRequestItem {
+  id: string;
+  objectType: string;
+  objectLabel?: string;
+  referenceAssetIds: string[];
+  placement?: { x: number; y: number; width: number; height: number; rotation: number };
+  placementPreviewAssetId?: string;
+  placementMaskAssetId?: string;
+  placementMode: ObjectInsertPlacementMode;
+  placementIntent?: string;
+  extraPrompt?: string;
+}
 
 function readObjectInsertDebugMode(config: Record<string, unknown>): ObjectInsertDebugMode {
   const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
@@ -2063,6 +2235,45 @@ function readObjectInsertPositionConstraintStrength(config: Record<string, unkno
   return value === 'low' || value === 'medium' || value === 'high' ? value : 'high';
 }
 
+function readObjectInsertPlacementMode(config: Record<string, unknown>): ObjectInsertPlacementMode {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.placementMode === 'string'
+    ? nested.placementMode
+    : typeof config.placementMode === 'string'
+      ? config.placementMode
+      : '';
+  return value === 'strict' || value === 'natural' ? value : 'natural';
+}
+
+function readObjectInsertHarmonyPriority(config: Record<string, unknown>): ObjectInsertHarmonyPriority {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.harmonyPriority === 'string'
+    ? nested.harmonyPriority
+    : typeof config.harmonyPriority === 'string'
+      ? config.harmonyPriority
+      : '';
+  return value === 'style' || value === 'balance' || value === 'layout' ? value : 'layout';
+}
+
+function readObjectInsertPlacementIntent(config: Record<string, unknown>): string {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.placementIntent === 'string'
+    ? nested.placementIntent
+    : typeof config.placementIntent === 'string'
+      ? config.placementIntent
+      : '';
+  return value.trim();
+}
+
+function readObjectInsertAutoAdjust(
+  config: Record<string, unknown>,
+  key: 'allowAutoAdjustPosition' | 'allowAutoAdjustRotation' | 'allowAutoAdjustScale',
+): boolean {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested[key] === 'boolean' ? nested[key] : typeof config[key] === 'boolean' ? config[key] : undefined;
+  return value === undefined ? true : value !== false;
+}
+
 function objectInsertIncludesObject(mode: ObjectInsertDebugMode): boolean {
   return mode !== 'source_prompt';
 }
@@ -2073,6 +2284,39 @@ function objectInsertIncludesPreview(mode: ObjectInsertDebugMode): boolean {
 
 function objectInsertIncludesMask(mode: ObjectInsertDebugMode): boolean {
   return mode === 'full' || mode === 'source_object_mask';
+}
+
+function normalizeObjectInsertItemsForRequest(
+  value: unknown,
+  input: { defaultPlacementMode: ObjectInsertPlacementMode; inputAssetIds: string[] },
+): ObjectInsertRequestItem[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isRecord)
+    .map((item, index): ObjectInsertRequestItem => {
+      const referenceAssetIds = readStringArray(item.referenceAssetIds)
+        .map(assetId => assetId.trim())
+        .filter(assetId => input.inputAssetIds.includes(assetId))
+        .slice(0, 6);
+      const placement = normalizeObjectPlacement(item.placement);
+      const placementMode = item.placementMode === 'strict' || item.placementMode === 'natural'
+        ? item.placementMode
+        : input.defaultPlacementMode;
+      return {
+        id: isNonEmptyString(item.id) ? item.id.trim() : `object-item-${index + 1}`,
+        objectType: isNonEmptyString(item.objectType) ? item.objectType.trim() : 'custom',
+        objectLabel: isNonEmptyString(item.objectLabel) ? item.objectLabel.trim() : undefined,
+        referenceAssetIds,
+        placement: placement || undefined,
+        placementPreviewAssetId: isNonEmptyString(item.placementPreviewAssetId) ? item.placementPreviewAssetId.trim() : undefined,
+        placementMaskAssetId: isNonEmptyString(item.placementMaskAssetId) ? item.placementMaskAssetId.trim() : undefined,
+        placementMode,
+        placementIntent: isNonEmptyString(item.placementIntent) ? item.placementIntent.trim() : undefined,
+        extraPrompt: isNonEmptyString(item.extraPrompt) ? item.extraPrompt.trim() : undefined,
+      };
+    })
+    .filter(item => item.referenceAssetIds.length > 0 || item.placementPreviewAssetId || item.placementMaskAssetId)
+    .slice(0, 8);
 }
 
 function logGenerationJobModeStepDebug(stage: string, fields: { mode?: unknown; step?: unknown } = {}): void {

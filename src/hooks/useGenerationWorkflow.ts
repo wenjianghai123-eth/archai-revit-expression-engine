@@ -44,6 +44,7 @@ function createInitialStepStates(): Record<GenerationStep, StepState> {
     [GenerationStep.MaterialReplace]: createInitialStepState(GenerationStep.MaterialReplace),
     [GenerationStep.PanoramaQuickRender]: createInitialStepState(GenerationStep.PanoramaQuickRender),
     [GenerationStep.ObjectInsert]: createInitialStepState(GenerationStep.ObjectInsert),
+    [GenerationStep.FreeReferenceImage]: createInitialStepState(GenerationStep.FreeReferenceImage),
   };
 }
 

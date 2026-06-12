@@ -270,6 +270,13 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
       image: 'https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?auto=format&fit=crop&q=80&w=600',
     },
     {
+      id: GenerationStep.FreeReferenceImage,
+      title: '自由参考生图',
+      desc: '上传原图和参考图，直接按提示词生成',
+      icon: FileImage,
+      image: 'https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&q=80&w=600',
+    },
+    {
       id: GenerationStep.LocalInpainting,
       title: '局部修饰',
       desc: '画 mask 精修材质、家具与光影',
@@ -337,7 +344,7 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
         </div>
       </div>
 
-      <div className="grid gap-3 px-4 pb-3 md:grid-cols-3 xl:grid-cols-9 md:px-5">
+      <div className="grid gap-3 px-4 pb-3 md:grid-cols-3 xl:grid-cols-10 md:px-5">
         {steps.map((step) => {
           const isActive = currentStep === step.id;
           const Icon = step.icon;

@@ -294,6 +294,9 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
     renderStyle: "写实彩平",
     smartMaterial: "自动判断",
     changeStrength: 'medium',
+    floorplanOutputMode: 'single',
+    floorplanVariantType: 'material_style',
+    floorplanVariantFocus: 'material_style',
   },
   [GenerationStep.StyleRender]: {
     prompt: "",
@@ -443,6 +446,18 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
       height: 0,
       rotation: 0,
     },
+  },
+  [GenerationStep.FreeReferenceImage]: {
+    prompt: "",
+    qualityMode: 'balanced',
+    style: "自由参考生图",
+    lighting: "匹配原图",
+    materialStrength: 0.8,
+    batchCount: 1,
+    preserveStructure: true,
+    preserveCamera: true,
+    freeReferenceResolution: 1024,
+    freeReferenceAspectRatio: '1:1',
   },
 };
 

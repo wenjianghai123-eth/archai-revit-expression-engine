@@ -1,10 +1,11 @@
-import { Download, FileJson, Heart, RefreshCw, Settings2, Zap } from 'lucide-react';
-import { type ReactNode } from 'react';
-import { GenerationResultOption, GenerationStep, SecondaryEditAction, StepState } from '../../types';
-import { downloadDataUrl, downloadJson } from '../../utils/download';
+import { Download, ExternalLink, FileJson, Heart, RefreshCw, Settings2, Zap } from 'lucide-react';
+import { type ReactNode, useState } from 'react';
+import { GenerationBatchItem, GenerationResultOption, GenerationStep, SecondaryEditAction, StepState } from '../../types';
+import { buildResultImageFilename, downloadAsset, downloadJson, downloadFallbackMessage } from '../../utils/downloadAsset';
 import { secondaryEditActionLabels } from '../../utils/secondaryEdit';
+import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../../utils/resultImage';
 import { ViewModeOption } from './workspaceTypes';
-import { formatElapsed, getDataUrlExtension } from './workspaceUtils';
+import { formatElapsed } from './workspaceUtils';
 import { PreviewContent } from './ResultPreviewPanel';
 import { SecondaryEditActions } from './SecondaryEditActions';
 
@@ -22,12 +23,14 @@ interface GenerationStatusPanelProps {
   viewModeOptions: ViewModeOption[];
   topPanels: ReactNode;
   estimatedCreditCost: number;
+  projectName?: string | null;
   onGenerate: () => void;
   onRegenerate: () => void;
   onCancelGeneration: () => void;
   onSelectGenerationResult: (resultId: string) => void;
   onToggleGenerationFavorite: (resultId: string) => void;
   onSecondaryEditResult: (resultId: string, action: SecondaryEditAction) => void;
+  onRetryBatchItem?: (variantIndex: number) => void;
   onSetViewMode: (viewMode: StepState['viewMode']) => void;
   onNextStep: () => void;
   onReset: () => void;
@@ -47,12 +50,14 @@ export function GenerationStatusPanel({
   viewModeOptions,
   topPanels,
   estimatedCreditCost,
+  projectName,
   onGenerate,
   onRegenerate,
   onCancelGeneration,
   onSelectGenerationResult,
   onToggleGenerationFavorite,
   onSecondaryEditResult,
+  onRetryBatchItem,
   onSetViewMode,
   onNextStep,
   onReset,
@@ -79,10 +84,12 @@ export function GenerationStatusPanel({
           resultOptions={resultOptions}
           selectedResultId={selectedResultId}
           viewModeOptions={viewModeOptions}
+          projectName={projectName}
           onSetViewMode={onSetViewMode}
           onSelectGenerationResult={onSelectGenerationResult}
           onToggleGenerationFavorite={onToggleGenerationFavorite}
           onSecondaryEditResult={onSecondaryEditResult}
+          onRetryBatchItem={onRetryBatchItem}
         />
         <GenerationMessages state={state} onGenerate={onGenerate} />
       </div>
@@ -137,6 +144,7 @@ function GenerationProgress({ state, statusLabel, elapsedSeconds, onCancelGenera
       {state.isGenerating ? (
         <div className="mt-3 rounded-lg bg-white px-3 py-2 text-xs leading-5 text-slate-600">
           <p className="font-bold text-slate-800">{statusLabel}</p>
+          {readBatchProgressText(state) ? <p className="font-semibold text-blue-700">{readBatchProgressText(state)}</p> : null}
           <p>AI 生成中，复杂图片可能需要 1-3 分钟。</p>
           {elapsedSeconds > 60 ? (
             <p className="mt-1 font-semibold text-amber-700">生成时间较长，可能是第三方模型排队或图片较复杂，请不要重复点击。</p>
@@ -160,10 +168,12 @@ interface ResultActionsProps {
   resultOptions: GenerationResultOption[];
   selectedResultId: string | null;
   viewModeOptions: ViewModeOption[];
+  projectName?: string | null;
   onSetViewMode: (viewMode: StepState['viewMode']) => void;
   onSelectGenerationResult: (resultId: string) => void;
   onToggleGenerationFavorite: (resultId: string) => void;
   onSecondaryEditResult: (resultId: string, action: SecondaryEditAction) => void;
+  onRetryBatchItem?: (variantIndex: number) => void;
 }
 
 function ResultActions({
@@ -174,15 +184,45 @@ function ResultActions({
   resultOptions,
   selectedResultId,
   viewModeOptions,
+  projectName,
   onSetViewMode,
   onSelectGenerationResult,
   onToggleGenerationFavorite,
   onSecondaryEditResult,
+  onRetryBatchItem,
 }: ResultActionsProps) {
   const activeResult = resultOptions.find(result => result.id === selectedResultId)
     || resultOptions.find(result => result.isSelected)
     || resultOptions[0]
     || null;
+  const originalPreviewImage = getOriginalResultImageUrl(activeResult, previewImage);
+  const originalAssetId = getOriginalResultAssetId(activeResult);
+  const dimensionsText = formatResultDimensions(activeResult);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
+
+  const handleDownload = async () => {
+    if (!originalPreviewImage || isDownloading) return;
+    setIsDownloading(true);
+    setDownloadError(null);
+    setDownloadMessage(null);
+    try {
+      await downloadAsset({
+        url: originalPreviewImage,
+        assetId: originalAssetId,
+      }, buildResultImageFilename({
+        projectName,
+        featureLabel: getGenerationStepDownloadLabel(step),
+      }));
+      setDownloadMessage('已开始下载');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      setDownloadError(message === downloadFallbackMessage ? downloadFallbackMessage : '下载失败，请稍后重试');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
 
   return (
     <div className="space-y-3">
@@ -202,21 +242,28 @@ function ResultActions({
         ))}
       </div>
       <div className="h-48 overflow-hidden rounded-xl border border-slate-200 bg-white">
-        <PreviewContent state={state} originalImageUrl={originalImageUrl} previewImage={previewImage} />
+        <PreviewContent state={state} originalImageUrl={originalImageUrl} previewImage={originalPreviewImage} />
       </div>
-      {previewImage && activeResult ? (
+      {originalPreviewImage && activeResult ? (
         <div className="rounded-xl border border-slate-100 bg-slate-50 p-2">
           <div className="mb-2 flex items-center justify-between gap-2">
             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">二次编辑</p>
             <span className="truncate text-[10px] font-semibold text-slate-400">{readResultLabel(activeResult, resultOptions)}</span>
           </div>
+          {dimensionsText ? <p className="mb-2 text-[10px] font-bold text-slate-500">{dimensionsText}</p> : null}
           <SecondaryEditActions resultId={activeResult.id} onAction={onSecondaryEditResult} compact disabled={state.isGenerating} />
         </div>
       ) : null}
 
-      {previewImage ? (
+      {originalPreviewImage ? (
         <>
-          {resultOptions.length > 1 && (
+          {state.generationBatchItems && state.generationBatchItems.length > 0 ? (
+            <div className="grid grid-cols-2 gap-2">
+              {state.generationBatchItems.map(item => (
+                <BatchItemCard key={item.variantIndex} item={item} projectName={projectName} onRetry={() => onRetryBatchItem?.(item.variantIndex)} />
+              ))}
+            </div>
+          ) : resultOptions.length > 1 && (
             <div className="grid grid-cols-2 gap-2">
               {resultOptions.map((result, index) => (
                 <div
@@ -226,7 +273,7 @@ function ResultActions({
                   <button type="button" onClick={() => onSelectGenerationResult(result.id)} className="relative block w-full overflow-hidden">
                     <img src={result.imageUrl} alt={`方案 ${index + 1}`} className="h-20 w-full object-cover" referrerPolicy="no-referrer" />
                   </button>
-                  <span className="absolute left-1 top-1 rounded bg-white/90 px-1.5 py-0.5 text-[9px] font-bold text-slate-700">方案 {index + 1}</span>
+                  <span className="absolute left-1 top-1 max-w-[calc(100%-2rem)] truncate rounded bg-white/90 px-1.5 py-0.5 text-[9px] font-bold text-slate-700">{readResultLabel(result, resultOptions)}</span>
                   <button
                     type="button"
                     onClick={event => {
@@ -238,6 +285,9 @@ function ResultActions({
                   >
                     <Heart className={`h-3.5 w-3.5 ${result.isFavorite ? 'fill-current' : ''}`} />
                   </button>
+                  {result.variantStyleLabel ? (
+                    <p className="border-t border-slate-100 px-1.5 py-1 text-[9px] font-semibold leading-4 text-slate-500">{result.variantStyleLabel}</p>
+                  ) : null}
                   <div className="border-t border-slate-100 p-1.5">
                     <SecondaryEditActions resultId={result.id} onAction={onSecondaryEditResult} compact disabled={state.isGenerating} />
                   </div>
@@ -248,11 +298,20 @@ function ResultActions({
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
-              onClick={() => downloadDataUrl(previewImage, `archai-result-${Date.now()}.${getDataUrlExtension(previewImage)}`)}
+              onClick={() => window.open(originalPreviewImage, '_blank', 'noopener,noreferrer')}
               className="rounded-lg bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm ring-1 ring-slate-100 hover:text-blue-700"
             >
-              <Download className="mr-1 inline h-3.5 w-3.5" />
-              下载图片
+              <ExternalLink className="mr-1 inline h-3.5 w-3.5" />
+              查看原图
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleDownload()}
+              disabled={isDownloading}
+              className="rounded-lg bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm ring-1 ring-slate-100 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Download className={`mr-1 inline h-3.5 w-3.5 ${isDownloading ? 'animate-pulse' : ''}`} />
+              {isDownloading ? '正在下载...' : '保存到本地'}
             </button>
             <button
               type="button"
@@ -264,7 +323,7 @@ function ResultActions({
                 config: state.config,
                 result: {
                   id: state.generationResultId,
-                  imageDataUrl: previewImage,
+                  imageDataUrl: originalPreviewImage,
                   warnings: state.generationWarnings,
                 },
               }, `archai-project-${Date.now()}.json`)}
@@ -274,6 +333,8 @@ function ResultActions({
               导出 JSON
             </button>
           </div>
+          {downloadMessage ? <p className="text-xs font-semibold text-emerald-700">{downloadMessage}</p> : null}
+          {downloadError ? <p className="text-xs font-semibold text-amber-700">{downloadError}</p> : null}
         </>
       ) : null}
     </div>
@@ -298,9 +359,114 @@ function ContinuationSourceBanner({ state }: { state: StepState }) {
   );
 }
 
+function BatchItemCard({ item, projectName, onRetry }: { item: GenerationBatchItem; projectName?: string | null; onRetry: () => void }) {
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const originalImageUrl = getOriginalResultImageUrl(item, item.imageUrl);
+  const originalAssetId = getOriginalResultAssetId(item);
+  const dimensionsText = formatResultDimensions(item);
+
+  const handleDownload = async () => {
+    if (!originalImageUrl || isDownloading) return;
+    setIsDownloading(true);
+    setDownloadMessage(null);
+    setDownloadError(null);
+    try {
+      await downloadAsset({
+        url: originalImageUrl,
+        assetId: originalAssetId,
+      }, buildResultImageFilename({
+        projectName,
+        featureLabel: '平面生成',
+      }));
+      setDownloadMessage('已开始下载');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      setDownloadError(message === downloadFallbackMessage ? downloadFallbackMessage : '下载失败，请稍后重试');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <div className="relative flex h-24 items-center justify-center bg-slate-50">
+        {originalImageUrl ? (
+          <img src={originalImageUrl} alt={item.variantName} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+        ) : (
+          <span className="text-xs font-bold text-slate-400">{readBatchItemStatusLabel(item.status)}</span>
+        )}
+        <span className="absolute left-1 top-1 max-w-[calc(100%-0.5rem)] truncate rounded bg-white/90 px-1.5 py-0.5 text-[9px] font-bold text-slate-700">{item.variantName}</span>
+      </div>
+      <div className="space-y-1.5 border-t border-slate-100 p-2">
+        <p className="text-[10px] font-semibold text-slate-500">
+          {[item.selectedStyleName, item.layoutVariantName].filter(Boolean).join(' / ') || `方案 ${item.variantIndex + 1}`}
+        </p>
+        <p className={`text-[10px] font-bold ${item.status === 'failed' ? 'text-rose-600' : item.status === 'succeeded' ? 'text-emerald-700' : 'text-blue-700'}`}>
+          {readBatchItemStatusLabel(item.status)}
+        </p>
+        {dimensionsText ? <p className="text-[10px] font-bold text-slate-500">{dimensionsText}</p> : null}
+        {item.errorMessage ? <p className="line-clamp-2 text-[10px] leading-4 text-rose-600">{item.errorMessage}</p> : null}
+        <div className="grid grid-cols-2 gap-1.5">
+          <button type="button" onClick={() => originalImageUrl && window.open(originalImageUrl, '_blank', 'noopener,noreferrer')} disabled={!originalImageUrl} className="rounded bg-slate-100 px-2 py-1.5 text-[10px] font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50">
+            原图
+          </button>
+          <button type="button" onClick={() => void handleDownload()} disabled={!originalImageUrl || isDownloading} className="rounded bg-slate-100 px-2 py-1.5 text-[10px] font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50">
+            {isDownloading ? '下载中' : '保存'}
+          </button>
+        </div>
+        <div className="grid grid-cols-1 gap-1.5">
+          <button type="button" onClick={onRetry} disabled={item.status === 'running' || item.status === 'queued'} className="rounded bg-slate-100 px-2 py-1.5 text-[10px] font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50">
+            重试此方案
+          </button>
+        </div>
+        {downloadMessage ? <p className="text-[10px] font-semibold text-emerald-700">{downloadMessage}</p> : null}
+        {downloadError ? <p className="text-[10px] font-semibold text-amber-700">{downloadError}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function readBatchItemStatusLabel(status: GenerationBatchItem['status']): string {
+  if (status === 'queued') return 'queued';
+  if (status === 'running') return 'running';
+  if (status === 'succeeded') return 'succeeded';
+  return 'failed';
+}
+
 function readResultLabel(result: GenerationResultOption, resultOptions: GenerationResultOption[]): string {
   const index = resultOptions.findIndex(item => item.id === result.id);
   return result.variantName || result.variantLabel || (index >= 0 ? `方案 ${index + 1}` : '当前结果');
+}
+
+function readBatchProgressText(state: StepState): string | null {
+  if (state.generationBatchItems && state.generationBatchItems.length > 0) {
+    const completed = state.generationBatchItems.filter(item => item.status === 'succeeded' || item.status === 'failed').length;
+    return `已完成 ${completed} / ${state.generationBatchItems.length}`;
+  }
+  const batchCount = typeof state.config.batchCount === 'number' ? state.config.batchCount : 1;
+  const isBatch = batchCount > 1 && (
+    state.config.floorplanOutputMode === 'multi'
+    || state.config.planColorizeBatchEnabled === true
+    || state.config.variantStrategy !== undefined
+  );
+  if (!isBatch) return null;
+  return `已完成 ${Math.min(state.generationResults.length, batchCount)} / ${batchCount}`;
+}
+
+function getGenerationStepDownloadLabel(step: GenerationStep): string {
+  if (step === GenerationStep.FloorplanTo3D) return '平面生成';
+  if (step === GenerationStep.StyleRender) return '风格渲染';
+  if (step === GenerationStep.LocalInpainting) return '局部修饰';
+  if (step === GenerationStep.ModelSnapshotRender) return '白模快渲';
+  if (step === GenerationStep.DesignVariants) return '方案变体';
+  if (step === GenerationStep.MaterialReplace) return '材质软装替换';
+  if (step === GenerationStep.PlanColorize) return '图纸智能表达';
+  if (step === GenerationStep.PanoramaQuickRender) return '全景快渲';
+  if (step === GenerationStep.ObjectInsert) return '元素植入';
+  if (step === GenerationStep.FreeReferenceImage) return '自由参考生图';
+  return 'AI生成';
 }
 
 interface GenerationMessagesProps {
@@ -309,8 +475,15 @@ interface GenerationMessagesProps {
 }
 
 function GenerationMessages({ state, onGenerate }: GenerationMessagesProps) {
+  const batchSummary = readBatchSummaryText(state);
   return (
     <>
+      {batchSummary ? (
+        <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-xs font-semibold text-blue-800">
+          {batchSummary}
+        </div>
+      ) : null}
+
       {state.generationWarnings.length > 0 && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
           <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-amber-700">Provider 能力提示</p>
@@ -336,4 +509,23 @@ function GenerationMessages({ state, onGenerate }: GenerationMessagesProps) {
       )}
     </>
   );
+}
+
+function readBatchSummaryText(state: StepState): string | null {
+  if (state.generationBatchItems && state.generationBatchItems.length > 0 && !state.isGenerating) {
+    const successCount = state.generationBatchItems.filter(item => item.status === 'succeeded').length;
+    const failedCount = state.generationBatchItems.filter(item => item.status === 'failed').length;
+    const completed = successCount + failedCount;
+    return `批量进度：已完成 ${completed} / ${state.generationBatchItems.length}，成功 ${successCount}，失败 ${failedCount}`;
+  }
+  const batchCount = typeof state.config.batchCount === 'number' ? state.config.batchCount : 1;
+  const isBatch = batchCount > 1 && (
+    state.config.floorplanOutputMode === 'multi'
+    || state.config.planColorizeBatchEnabled === true
+    || state.config.variantStrategy !== undefined
+  );
+  if (!isBatch || state.isGenerating || state.generationStatus === 'ready') return null;
+  const successCount = Math.min(state.generationResults.length, batchCount);
+  const failedCount = state.generationStatus === 'success' ? Math.max(0, batchCount - successCount) : 0;
+  return `批量进度：已完成 ${successCount} / ${batchCount}，成功 ${successCount}${failedCount > 0 ? `，失败 ${failedCount}` : ''}`;
 }

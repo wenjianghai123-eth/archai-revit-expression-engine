@@ -5,6 +5,7 @@ import {
   CheckSquare,
   Clock,
   Copy,
+  Download,
   ExternalLink,
   FileDown,
   FolderKanban,
@@ -25,6 +26,8 @@ import {
   revokeShareLink,
   ShareLink,
 } from '../lib/api';
+import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
+import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { ResultImageTabs } from './ResultImageTabs';
 
 interface ProjectDetailProps {
@@ -253,6 +256,7 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate, onDeleteProje
                   <GenerationCard
                     key={generation.id}
                     generation={generation}
+                    projectName={project?.name || null}
                     selectedReportKeys={selectedReportKeys}
                     onToggleReportOption={handleToggleReportOption}
                   />
@@ -317,16 +321,46 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate, onDeleteProje
 
 function GenerationCard({
   generation,
+  projectName,
   selectedReportKeys,
   onToggleReportOption,
 }: {
   generation: GenerationRecord;
+  projectName?: string | null;
   selectedReportKeys: Record<string, boolean>;
   onToggleReportOption: (key: string) => void;
 }) {
   const resultImages = useMemo(() => getResultImages(generation), [generation]);
   const inputImage = generation.inputImageDataPreview || generation.inputImageUrl || null;
   const primaryResult = resultImages.find(result => result.isSelected) || resultImages[0] || null;
+  const placementModeLabel = readObjectInsertPlacementModeLabel(primaryResult?.metadata);
+  const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
+
+  const handleDownload = async (key: string, result: { imageUrl: string; assetId?: string; metadata?: Record<string, unknown> }) => {
+    if (downloadingKey) return;
+    setDownloadingKey(key);
+    setDownloadError(null);
+    setDownloadMessage(null);
+    try {
+      const originalImageUrl = getOriginalResultImageUrl(result, result.imageUrl);
+      const originalAssetId = getOriginalResultAssetId(result, result.assetId);
+      await downloadAsset({
+        url: originalImageUrl,
+        assetId: originalAssetId,
+      }, buildResultImageFilename({
+        projectName,
+        featureLabel: generation.step === 'object_insert' ? '元素植入' : modeLabel(generation.mode, generation.step),
+      }));
+      setDownloadMessage('已开始下载');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      setDownloadError(message === downloadFallbackMessage ? downloadFallbackMessage : '下载失败，请稍后重试');
+    } finally {
+      setDownloadingKey(null);
+    }
+  };
 
   return (
     <article className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
@@ -334,6 +368,9 @@ function GenerationCard({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap gap-2">
             <span className="arch-pill">{modeLabel(generation.mode, generation.step)}</span>
+            {generation.step === 'object_insert' && placementModeLabel ? (
+              <span className="arch-pill">{placementModeLabel}</span>
+            ) : null}
             <span className="arch-pill">{generation.provider}</span>
             <span className="arch-pill">{generation.status === 'succeeded' ? '成功' : '失败'}</span>
           </div>
@@ -341,7 +378,7 @@ function GenerationCard({
         </div>
 
         <ResultImageTabs
-          resultImageUrl={primaryResult?.imageUrl || generation.outputImageDataPreview || generation.outputImageUrl}
+          resultImageUrl={getOriginalResultImageUrl(primaryResult, generation.outputImageUrl || generation.outputImageDataPreview)}
           originalImageUrl={inputImage}
           className="h-[360px]"
           tabListClassName="mb-3 w-fit"
@@ -362,15 +399,37 @@ function GenerationCard({
                     {selectedReportKeys[reportKey] ? <CheckSquare className="h-3.5 w-3.5 text-blue-600" /> : <Square className="h-3.5 w-3.5" />}
                     导出
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => window.open(getOriginalResultImageUrl(result, result.imageUrl) || result.imageUrl, '_blank', 'noopener,noreferrer')}
+                    className="absolute right-28 top-2 z-10 flex items-center gap-1 rounded-full bg-white/95 px-2 py-1 text-[10px] font-bold text-slate-700 shadow-sm hover:text-blue-700"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    原图
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDownload(reportKey, result)}
+                    disabled={Boolean(downloadingKey)}
+                    className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-full bg-white/95 px-2 py-1 text-[10px] font-bold text-slate-700 shadow-sm hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <Download className={`h-3.5 w-3.5 ${downloadingKey === reportKey ? 'animate-pulse' : ''}`} />
+                    {downloadingKey === reportKey ? '正在下载...' : '保存到本地'}
+                  </button>
                   <PreviewImage
-                    src={result.imageUrl}
-                    label={result.isFavorite ? '已收藏方案' : result.isSelected ? '当前方案' : '备选方案'}
+                    src={getOriginalResultImageUrl(result, result.imageUrl) || result.imageUrl}
+                    label={[
+                      readObjectInsertPlacementModeLabel(result.metadata) || (result.isFavorite ? '已收藏方案' : result.isSelected ? '当前方案' : '备选方案'),
+                      formatResultDimensions(result),
+                    ].filter(Boolean).join(' · ')}
                   />
                 </div>
               );
             })}
           </div>
         ) : null}
+        {downloadMessage ? <p className="text-xs font-semibold text-emerald-700">{downloadMessage}</p> : null}
+        {downloadError ? <p className="text-xs font-semibold text-amber-700">{downloadError}</p> : null}
 
         <div>
           <p className="line-clamp-2 text-sm font-semibold leading-6 text-slate-800">
@@ -582,17 +641,19 @@ function mergeDefaultReportSelection(
   return nextSelection;
 }
 
-function getResultImages(generation: GenerationRecord): Array<{ id: string; imageUrl: string; isSelected: boolean; isFavorite: boolean }> {
+function getResultImages(generation: GenerationRecord): Array<{ id: string; imageUrl: string; assetId?: string; isSelected: boolean; isFavorite: boolean; metadata?: Record<string, unknown> }> {
   if (generation.results && generation.results.length > 0) {
     return generation.results.map(result => ({
       id: result.id,
-      imageUrl: result.imageUrl,
+      imageUrl: getOriginalResultImageUrl(result, result.imageUrl) || result.imageUrl,
+      assetId: getOriginalResultAssetId(result, result.assetId) || undefined,
       isSelected: result.isSelected,
       isFavorite: result.isFavorite,
+      metadata: result.metadata,
     }));
   }
 
-  const fallbackImage = generation.outputImageDataPreview || generation.outputImageUrl;
+  const fallbackImage = generation.outputImageUrl || generation.outputImageDataPreview;
   return fallbackImage
     ? [{
         id: generation.id,
@@ -603,12 +664,20 @@ function getResultImages(generation: GenerationRecord): Array<{ id: string; imag
     : [];
 }
 
+function readObjectInsertPlacementModeLabel(metadata: Record<string, unknown> | undefined): string | null {
+  const value = typeof metadata?.placementMode === 'string' ? metadata.placementMode : '';
+  if (value === 'strict') return '精确摆放';
+  if (value === 'natural') return '自然摆放';
+  return null;
+}
+
 function buildReportKey(generationId: string, resultId: string): string {
   return `${generationId}:${resultId}`;
 }
 
 function modeLabel(mode: GenerationRecord['mode'], step?: GenerationRecord['step']): string {
   if (step === 'object_insert') return '元素植入';
+  if (step === 'free_reference_image') return '自由参考生图';
   if (mode === 'floorplan') return '平面生成';
   if (mode === 'style-render') return '风格渲染';
   if (mode === 'design-variants') return '方案变体';

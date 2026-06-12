@@ -13,6 +13,7 @@ export function modeLabel(step: GenerationStep): string {
   if (step === GenerationStep.MaterialReplace) return '材质软装替换';
   if (step === GenerationStep.PanoramaQuickRender) return '漫游全景快渲';
   if (step === GenerationStep.ObjectInsert) return '元素植入';
+  if (step === GenerationStep.FreeReferenceImage) return '自由参考生图';
   return '局部重绘';
 }
 

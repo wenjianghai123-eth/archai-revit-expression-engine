@@ -8,12 +8,12 @@ import { createGrsaiBanana2Provider } from './providers/grsaiBanana2Provider';
 import { createGrsaiNanoBananaProvider } from './providers/grsaiNanoBananaProvider';
 import { createMockGeneration, mockProvider } from './providers/mockProvider';
 import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider, MaskMode, ProviderName, QualityMode } from './providers/types';
-import { getImageSizeFromDataUrl, isValidTargetDimension } from './image/imageMetadata';
-import { normalizeGeneratedImageDataUrl } from './image/normalizeImage';
+import { getImageSizeFromDataUrl, isValidTargetDimension, parseImageDataUrl as parseRawImageDataUrl } from './image/imageMetadata';
 import { prepareImageForProvider, prepareMaskForProvider, PreparedProviderImage } from './image/prepareProviderImage';
 import { composeLocalInpaintResult, createLocalInpaintContext, cropImageDataUrlToBox, LocalInpaintContext } from './image/localInpaint';
 import { buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode } from '../src/promptTemplates/intelligentPromptTemplates';
 import { findPlanColorizeStyle, maxPlanColorizeBatchCount, planColorizeStyleOptions, resolvePlanColorizeStyles, type PlanColorizeStyleOption } from '../src/constants/planColorizeStyles';
+import { resolveFloorplanBatchCount, resolveFloorplanVariantPlans, type FloorplanVariantPlan } from '../src/constants/floorplanVariants';
 import { getGenerationOutputCount } from '../src/utils/generationCredits';
 import {
   adjustCredits,
@@ -97,6 +97,7 @@ interface ProviderBatchSuccess {
   index: number;
   variantStyle: string;
   planStyle: PlanColorizeStyleOption;
+  floorplanPlan?: FloorplanVariantPlan;
   providerOutput: GenerateImageOutput;
 }
 
@@ -104,6 +105,7 @@ interface ProviderBatchFailure {
   index: number;
   variantStyle: string;
   planStyle: PlanColorizeStyleOption;
+  floorplanPlan?: FloorplanVariantPlan;
   error: unknown;
 }
 
@@ -149,9 +151,9 @@ export async function refundGenerationJobCredits(jobId: string): Promise<void> {
   }
 }
 
-async function refundPartialPlanColorizeCredits(job: GenerationJob, failedCount: number): Promise<void> {
-  if (job.mode !== 'plan-colorize' || failedCount <= 0) return;
-  const referenceId = `${job.id}:partial-plan-colorize:${failedCount}`;
+async function refundPartialBatchCredits(job: GenerationJob, failedCount: number): Promise<void> {
+  if ((job.mode !== 'plan-colorize' && job.mode !== 'floorplan') || failedCount <= 0) return;
+  const referenceId = `${job.id}:partial-${job.mode}:${failedCount}`;
   const existingRefund = await getCreditTransactionByReference(job.userId, 'generate_refund', referenceId)
     || await getCreditTransactionByReference(job.userId, 'refund', referenceId);
   if (existingRefund) return;
@@ -160,7 +162,7 @@ async function refundPartialPlanColorizeCredits(job: GenerationJob, failedCount:
     userId: job.userId,
     type: 'generate_refund',
     amount: failedCount,
-    reason: `Refund ${failedCount} failed plan colorize batch output(s) for job ${job.id}`,
+    reason: `Refund ${failedCount} failed ${job.mode} batch output(s) for job ${job.id}`,
     referenceType: 'generation_job',
     referenceId,
   });
@@ -289,6 +291,9 @@ async function processGenerationJob(jobId: string): Promise<void> {
     const batchCount = resolveBatchCountForJob(job);
     const variantStyles = job.mode === 'design-variants' ? resolveVariantStyles(job.config, batchCount) : ['modern-minimal'];
     const planColorizeStyles = resolvePlanColorizeStylesForJob(job.config, batchCount);
+    const floorplanVariantPlans = isFloorplanMultiPlanJob(job)
+      ? resolveFloorplanVariantPlans(job.config, batchCount)
+      : [];
     const outputAssetIds: string[] = [];
     let firstOutput: GenerateImageOutput | null = null;
     let firstOutputAsset: ImageAsset | null = null;
@@ -301,17 +306,18 @@ async function processGenerationJob(jobId: string): Promise<void> {
       async (index) => {
         const variantStyle = variantStyles[index] || 'modern-minimal';
         const planStyle = planColorizeStyles[index] || planColorizeStyles[0] || planColorizeStyleOptions[0];
+        const floorplanPlan = floorplanVariantPlans[index];
         try {
-          const providerInput = buildProviderInputForVariant(job, input, index, batchCount, variantStyle, planStyle);
+          const providerInput = buildProviderInputForVariant(job, input, index, batchCount, variantStyle, planStyle, floorplanPlan);
           const providerOutput = await generateWithFallback(providerInput);
           await updateGenerationJob(job.id, {
-            progress: job.mode === 'design-variants' || job.mode === 'plan-colorize' ? resolveVariantCompleteProgress(batchCount, index) : 75,
+            progress: job.mode === 'design-variants' || job.mode === 'plan-colorize' || isFloorplanMultiPlanJob(job) ? resolveVariantCompleteProgress(batchCount, index) : 75,
             diagnostics,
           });
-          return { index, variantStyle, planStyle, providerOutput };
+          return { index, variantStyle, planStyle, floorplanPlan, providerOutput };
         } catch (error) {
-          if (job.mode !== 'plan-colorize' || batchCount <= 1) throw error;
-          return { index, variantStyle, planStyle, error };
+          if ((job.mode !== 'plan-colorize' && !isFloorplanMultiPlanJob(job)) || batchCount <= 1) throw error;
+          return { index, variantStyle, planStyle, floorplanPlan, error };
         }
       },
     );
@@ -320,14 +326,14 @@ async function processGenerationJob(jobId: string): Promise<void> {
     if (failedProviderResults.length > 0) {
       diagnostics.provider = {
         ...diagnostics.provider,
-        providerError: `${failedProviderResults.length} plan colorize style output(s) failed.`,
+        providerError: `${failedProviderResults.length} batch output(s) failed.`,
         rawSnippet: failedProviderResults
-          .map(result => `${result.planStyle.name}: ${result.error instanceof Error ? result.error.message : String(result.error)}`)
+          .map(result => `${result.floorplanPlan?.variantName || result.planStyle.name}: ${result.error instanceof Error ? result.error.message : String(result.error)}`)
           .join('\n')
           .slice(0, 1200),
       };
       try {
-        await refundPartialPlanColorizeCredits(job, failedProviderResults.length);
+        await refundPartialBatchCredits(job, failedProviderResults.length);
       } catch (refundError) {
         console.warn('Failed to refund partial plan colorize credits', {
           jobId: job.id,
@@ -338,21 +344,17 @@ async function processGenerationJob(jobId: string): Promise<void> {
     }
     if (successfulProviderResults.length === 0) {
       const firstFailure = failedProviderResults[0]?.error;
-      throw firstFailure instanceof Error ? firstFailure : new Error('All plan colorize style outputs failed.');
+      throw firstFailure instanceof Error ? firstFailure : new Error('All batch outputs failed.');
     }
     markTiming(diagnostics, 'providerRequestFinishedAt');
     mergeProviderDiagnostics(diagnostics, successfulProviderResults.map(result => result.providerOutput));
-    await updateGenerationJob(job.id, { progress: job.mode === 'design-variants' || job.mode === 'plan-colorize' ? 75 : 75, diagnostics });
+    await updateGenerationJob(job.id, { progress: job.mode === 'design-variants' || job.mode === 'plan-colorize' || isFloorplanMultiPlanJob(job) ? 75 : 75, diagnostics });
 
-    for (const { index, variantStyle, planStyle, providerOutput } of successfulProviderResults) {
+    for (const { index, variantStyle, planStyle, floorplanPlan, providerOutput } of successfulProviderResults) {
 
       markTiming(diagnostics, 'postprocessStartedAt', 'postprocess');
-      let outputDataUrl = await normalizeGeneratedImageDataUrl({
-        dataUrl: providerOutput.dataUrl,
-        targetWidth: localInpaint ? localInpaint.bbox.width : input.targetWidth,
-        targetHeight: localInpaint ? localInpaint.bbox.height : input.targetHeight,
-        mode: job.mode,
-      });
+      const providerOriginalMetadata = await readImageDataUrlMetadata(providerOutput.dataUrl);
+      let outputDataUrl = providerOutput.dataUrl;
       if (localInpaint) {
         outputDataUrl = await composeLocalInpaintResult({
           originalImageDataUrl: localInpaint.originalImageDataUrl,
@@ -364,6 +366,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
             : readPositiveInteger(process.env.LOCAL_INPAINT_FEATHER_RADIUS, 2),
         });
       }
+      const savedOutputMetadata = await readImageDataUrlMetadata(outputDataUrl);
       const output = {
         ...providerOutput,
         dataUrl: outputDataUrl,
@@ -373,10 +376,24 @@ async function processGenerationJob(jobId: string): Promise<void> {
       await updateGenerationJob(job.id, { progress });
 
       markTiming(diagnostics, 'saveResultStartedAt', 'save-result');
-      await updateGenerationJob(job.id, { progress: job.mode === 'design-variants' ? progress : 88, diagnostics });
+      await updateGenerationJob(job.id, { progress: job.mode === 'design-variants' || isFloorplanMultiPlanJob(job) ? progress : 88, diagnostics });
       const outputAsset = await saveGeneratedDataUrl(job.userId, output.dataUrl, `generation-${job.id}-${index + 1}`);
+      console.info('Generation output saved', {
+        jobId: job.id,
+        resultIndex: index,
+        providerOriginalWidth: providerOriginalMetadata.width,
+        providerOriginalHeight: providerOriginalMetadata.height,
+        providerOriginalMimeType: providerOriginalMetadata.mimeType,
+        providerOriginalSizeBytes: providerOriginalMetadata.sizeBytes,
+        savedWidth: savedOutputMetadata.width,
+        savedHeight: savedOutputMetadata.height,
+        savedMimeType: savedOutputMetadata.mimeType,
+        savedSizeBytes: savedOutputMetadata.sizeBytes,
+        outputAssetId: outputAsset.id,
+      });
       if (!firstOutputAsset) firstOutputAsset = outputAsset;
       outputAssetIds.push(outputAsset.id);
+      const originalOutputMetadata = buildOriginalOutputMetadata(outputAsset, savedOutputMetadata, providerOriginalMetadata);
 
       await createGenerationResult({
         jobId: job.id,
@@ -389,6 +406,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
         metadata: job.mode === 'design-variants'
           ? {
               ...(providerOutput.metadata || {}),
+              ...originalOutputMetadata,
               variantIndex: index,
               variantCode: readVariantCode(index),
               variantName: resolveVariantName(job.config, index),
@@ -400,6 +418,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
           : job.mode === 'plan-colorize'
             ? {
                 ...(providerOutput.metadata || {}),
+                ...originalOutputMetadata,
                 mode: 'plan-colorize',
                 drawingType: typeof job.config.drawingType === 'string' ? job.config.drawingType : 'residential',
                 template: typeof job.config.template === 'string' ? job.config.template : 'colored-plan',
@@ -417,9 +436,32 @@ async function processGenerationJob(jobId: string): Promise<void> {
                 batchGroupId: typeof job.config.batchGroupId === 'string' ? job.config.batchGroupId : undefined,
                 batchCount,
               }
+          : isFloorplanMultiPlanJob(job)
+            ? {
+                ...(providerOutput.metadata || {}),
+                ...originalOutputMetadata,
+                mode: 'floorplan',
+                step: 'floorplan_to_3d',
+                floorplanOutputMode: 'multi',
+                floorplanVariantType: typeof job.config.floorplanVariantType === 'string' ? job.config.floorplanVariantType : 'material_style',
+                floorplanVariantFocus: typeof job.config.floorplanVariantFocus === 'string' ? job.config.floorplanVariantFocus : 'material_style',
+                variantIndex: index,
+                variantCode: readVariantCode(index),
+                variantName: floorplanPlan?.variantName || resolveVariantName(job.config, index),
+                variantLabel: readVariantLabel(index),
+                selectedStyleId: floorplanPlan?.selectedStyleId,
+                selectedStyleName: floorplanPlan?.selectedStyleName,
+                selectedStylePromptHint: floorplanPlan?.stylePromptHint,
+                layoutVariantId: floorplanPlan?.layoutVariantId,
+                layoutVariantName: floorplanPlan?.layoutVariantName,
+                layoutVariantPromptHint: floorplanPlan?.layoutPromptHint,
+                batchGroupId: typeof job.config.batchGroupId === 'string' ? job.config.batchGroupId : undefined,
+                batchCount,
+              }
           : job.mode === 'material-replace'
             ? {
                 ...(providerOutput.metadata || {}),
+                ...originalOutputMetadata,
                 mode: 'material-replace',
                 targetObjectType: typeof job.config.targetObjectType === 'string' ? job.config.targetObjectType : undefined,
                 targetMaterial: typeof job.config.targetMaterial === 'string' ? job.config.targetMaterial : undefined,
@@ -427,6 +469,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
           : job.mode === 'panorama-roam-render'
             ? {
                 ...(providerOutput.metadata || {}),
+                ...originalOutputMetadata,
                 mode: 'panorama-roam-render',
                 panoramaAssetId: typeof job.config.panoramaAssetId === 'string' ? job.config.panoramaAssetId : job.inputAssetIds[0],
                 sourceModelAssetId: typeof job.config.sourceModelAssetId === 'string' ? job.config.sourceModelAssetId : undefined,
@@ -435,19 +478,30 @@ async function processGenerationJob(jobId: string): Promise<void> {
           : isObjectInsert
             ? {
                 ...(providerOutput.metadata || {}),
+                ...originalOutputMetadata,
                 mode: job.mode,
                 step: 'object_insert',
                 businessFeature: 'object-insert',
                 objectInsertDebugMode: readObjectInsertDebugMode(job.config),
                 sourceImageAssetId: readObjectInsertJobConfig(job).sourceImageAssetId || job.inputAssetIds[0],
                 objectReferenceAssetId: readObjectInsertJobConfig(job).objectReferenceAssetId || job.inputAssetIds[1],
+                objectItems: readObjectInsertItemsFromJob(job),
                 placementGuideAssetId: readObjectInsertJobConfig(job).previewAssetId || job.inputAssetIds[2],
                 placementPreviewAssetId: readObjectInsertJobConfig(job).previewAssetId || job.inputAssetIds[2],
                 placementMaskAssetId: readObjectInsertJobConfig(job).maskAssetId || job.inputAssetIds[3],
                 objectPlacement: readObjectInsertJobConfig(job).placement,
                 positionConstraintStrength: readObjectInsertJobConfig(job).positionConstraintStrength,
+                placementMode: readObjectInsertJobConfig(job).placementMode,
+                placementIntent: readObjectInsertJobConfig(job).placementIntent,
+                harmonyPriority: readObjectInsertJobConfig(job).harmonyPriority,
+                allowAutoAdjustPosition: readObjectInsertJobConfig(job).allowAutoAdjustPosition,
+                allowAutoAdjustRotation: readObjectInsertJobConfig(job).allowAutoAdjustRotation,
+                allowAutoAdjustScale: readObjectInsertJobConfig(job).allowAutoAdjustScale,
               }
-          : undefined,
+          : {
+              ...(providerOutput.metadata || {}),
+              ...originalOutputMetadata,
+            },
       });
 
       if (!firstOutput) firstOutput = output;
@@ -536,32 +590,54 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
 }> {
   const isPanoramaReferenceMode = job.mode === 'panorama-roam-render';
   const isObjectInsertMode = isObjectInsertJob(job);
+  const isFreeReferenceImageMode = job.step === 'free_reference_image'
+    || readGenerationJobStep(job.config) === 'free_reference_image';
   const objectInsertConfig = readObjectInsertJobConfig(job);
   const objectInsertDebugMode = isObjectInsertMode ? readObjectInsertDebugMode(job.config) : 'full';
   const objectInsertNeedsObject = objectInsertIncludesObject(objectInsertDebugMode);
   const objectInsertNeedsPreview = objectInsertIncludesPreview(objectInsertDebugMode);
   const objectInsertNeedsMask = objectInsertIncludesMask(objectInsertDebugMode);
+  const objectInsertItems = isObjectInsertMode ? readObjectInsertItemsFromJob(job) : [];
   const objectReferenceAssetId = isObjectInsertMode ? objectInsertConfig.objectReferenceAssetId : '';
   const placementPreviewAssetId = isObjectInsertMode ? objectInsertConfig.previewAssetId : '';
   const placementMaskAssetId = isObjectInsertMode ? objectInsertConfig.maskAssetId : '';
-  const materialReferenceAssetIds = isPanoramaReferenceMode || isObjectInsertMode
+  const materialReferenceAssetIds = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode
     ? []
     : Array.from(new Set([
         ...readStringArray(job.config.materialTextureAssetIds),
         ...readStringArray(job.config.materialReferenceAssetIds),
       ]));
   const panoramaReferenceAssetIds = isPanoramaReferenceMode ? readStringArray(job.config.panoramaReferenceAssetIds).slice(0, 6) : [];
+  const freeReferenceAssetIds = isFreeReferenceImageMode
+    ? Array.from(new Set([
+        ...readStringArray(job.config.referenceImageAssetIds),
+        ...job.inputAssetIds.slice(1),
+      ].filter(isNonEmptyString))).slice(0, 6)
+    : [];
+  const objectInsertOrderedAssetIds = isObjectInsertMode
+    ? buildObjectInsertOrderedAssetIds({
+        sourceAssetId: readConfigStringValue(job.config.sourceImageAssetId) || objectInsertConfig.sourceImageAssetId || job.inputAssetIds[0],
+        items: objectInsertItems,
+        needsObject: objectInsertNeedsObject,
+        needsPreview: objectInsertNeedsPreview,
+        needsMask: objectInsertNeedsMask,
+        legacyObjectReferenceAssetId: objectReferenceAssetId || job.inputAssetIds[1],
+        legacyPreviewAssetId: placementPreviewAssetId || job.inputAssetIds[objectInsertNeedsObject ? 2 : 1],
+        legacyMaskAssetId: placementMaskAssetId || job.inputAssetIds[objectInsertNeedsObject && objectInsertNeedsPreview ? 3 : 2],
+      })
+    : [];
   const assetIds = isObjectInsertMode
-    ? [
-        readConfigStringValue(job.config.sourceImageAssetId) || job.inputAssetIds[0],
-        objectInsertNeedsObject ? objectReferenceAssetId || job.inputAssetIds[1] : '',
-        objectInsertNeedsPreview ? placementPreviewAssetId || job.inputAssetIds[objectInsertNeedsObject ? 2 : 1] : '',
-      ].filter(isNonEmptyString)
+    ? objectInsertOrderedAssetIds
     : isPanoramaReferenceMode
     ? Array.from(new Set([
         ...job.inputAssetIds,
         ...panoramaReferenceAssetIds,
       ].filter(isNonEmptyString))).slice(0, 1 + 6)
+    : isFreeReferenceImageMode
+    ? [
+        readConfigStringValue(job.config.sourceImageAssetId) || job.inputAssetIds[0],
+        ...freeReferenceAssetIds,
+      ].filter(isNonEmptyString)
     : Array.from(new Set([
         ...job.inputAssetIds,
         ...materialReferenceAssetIds,
@@ -572,30 +648,33 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     throw new Error('Input image asset was not found.');
   }
 
-  const ownedMaterialReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode
+  const ownedMaterialReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode
     ? []
     : await getOwnedAssetDataUrls(materialReferenceAssetIds, job.userId, 3, 'material reference');
-  const publicMaterialReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode
+  const publicMaterialReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode
     ? []
     : await getMaterialTextureSourceDataUrls(job.config);
   const materialReferenceImageDataUrls = [
     ...ownedMaterialReferenceImageDataUrls,
     ...publicMaterialReferenceImageDataUrls,
   ].slice(0, 3);
-  const furnitureReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode
+  const furnitureReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode
     ? []
     : await getOwnedAssetDataUrls(readStringArray(job.config.furnitureReferenceAssetIds), job.userId, 3, 'furniture reference');
   const additionalImageDataUrls = imageDataUrls.slice(1).filter(isNonEmptyString);
-  const objectReferenceImageDataUrl = isObjectInsertMode && objectInsertNeedsObject ? additionalImageDataUrls[0] : undefined;
-  const objectPlacementPreviewDataUrl = isObjectInsertMode && objectInsertNeedsPreview
-    ? additionalImageDataUrls[objectInsertNeedsObject ? 1 : 0]
-    : undefined;
+  const objectInputDataUrls = isObjectInsertMode
+    ? mapObjectInsertInputDataUrls(objectInsertItems, objectInsertOrderedAssetIds.slice(1), additionalImageDataUrls)
+    : [];
+  const objectReferenceImageDataUrl = isObjectInsertMode && objectInsertNeedsObject ? objectInputDataUrls[0] : undefined;
   const materialImageDataUrl = isObjectInsertMode
     ? objectReferenceImageDataUrl
+    : isFreeReferenceImageMode ? undefined
     : isPanoramaReferenceMode ? undefined : materialReferenceImageDataUrls[0] || additionalImageDataUrls[0];
   const floorplanTextureUrls = job.mode === 'floorplan' ? await getFloorplanTextureDataUrls(job.config) : [];
   const referenceImageDataUrls = isObjectInsertMode
-    ? [objectPlacementPreviewDataUrl].filter(isNonEmptyString)
+    ? objectInputDataUrls.slice(objectReferenceImageDataUrl ? 1 : 0)
+    : isFreeReferenceImageMode
+    ? additionalImageDataUrls.slice(0, 6)
     : isPanoramaReferenceMode
     ? additionalImageDataUrls.slice(0, 6)
     : [
@@ -604,7 +683,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
       ];
   const isMaskedEditMode = job.mode === 'inpaint' || job.mode === 'material-replace' || isObjectInsertMode;
   const maskMode = isObjectInsertMode
-    ? objectInsertNeedsMask && isMaskMode(job.config.maskMode) ? job.config.maskMode : undefined
+    ? objectInsertNeedsMask && objectInsertItems.length <= 1 && isMaskMode(job.config.maskMode) ? job.config.maskMode : undefined
     : isMaskedEditMode && isMaskMode(job.config.maskMode) ? job.config.maskMode : undefined;
   const maskAssetId = maskMode === 'asset-mask'
     ? readConfigStringValue(job.config.maskAssetId) || placementMaskAssetId || null
@@ -626,7 +705,12 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     maskImageDataUrl,
     maskMode,
     prompt: buildProviderPromptForJob(job, qualityMode),
-    config: removeInternalConfig(job.config),
+    config: isObjectInsertMode
+      ? {
+          ...removeInternalConfig(job.config),
+          objectInsertInputOrder: buildObjectInsertInputOrder(objectInsertItems, objectInsertNeedsObject, objectInsertNeedsPreview, objectInsertNeedsMask),
+        }
+      : removeInternalConfig(job.config),
     targetWidth: targetDimensions.targetWidth,
     targetHeight: targetDimensions.targetHeight,
     targetAspectRatio: targetDimensions.targetAspectRatio,
@@ -817,6 +901,10 @@ function isObjectInsertInput(input: GenerateImageInput): boolean {
     || isRecord(input.config.objectInsert);
 }
 
+function isFloorplanMultiPlanJob(job: GenerationJob): boolean {
+  return job.mode === 'floorplan' && job.config.floorplanOutputMode === 'multi';
+}
+
 export function resolveProviderImageSettings(qualityMode: QualityMode | undefined): ProviderImageSettings {
   const mode = qualityMode || readDefaultQualityMode();
   const defaults = providerImageDefaults[mode];
@@ -943,6 +1031,49 @@ async function saveGeneratedDataUrl(userId: string, dataUrl: string, basename: s
     mimeType: storedFile.mimeType,
     size: storedFile.size,
   });
+}
+
+interface OriginalOutputMetadata {
+  width: number;
+  height: number;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+async function readImageDataUrlMetadata(dataUrl: string): Promise<OriginalOutputMetadata> {
+  const parsed = parseRawImageDataUrl(dataUrl);
+  const size = await getImageSizeFromDataUrl(dataUrl);
+  return {
+    width: size.width,
+    height: size.height,
+    mimeType: parsed.mimeType,
+    sizeBytes: parsed.content.length,
+  };
+}
+
+function buildOriginalOutputMetadata(
+  outputAsset: ImageAsset,
+  saved: OriginalOutputMetadata,
+  providerOriginal: OriginalOutputMetadata,
+): Record<string, unknown> {
+  return {
+    width: saved.width,
+    height: saved.height,
+    mimeType: saved.mimeType,
+    sizeBytes: saved.sizeBytes,
+    outputAssetId: outputAsset.id,
+    originalAssetId: outputAsset.id,
+    outputUrl: outputAsset.url,
+    originalUrl: outputAsset.url,
+    originalWidth: saved.width,
+    originalHeight: saved.height,
+    originalMimeType: saved.mimeType,
+    originalSizeBytes: saved.sizeBytes,
+    providerOriginalWidth: providerOriginal.width,
+    providerOriginalHeight: providerOriginal.height,
+    providerOriginalMimeType: providerOriginal.mimeType,
+    providerOriginalSizeBytes: providerOriginal.sizeBytes,
+  };
 }
 
 function parseDataUrl(dataUrl: string): { mimeType: string; content: Buffer } {
@@ -1484,6 +1615,7 @@ function resolveBatchCountForJob(job: GenerationJob): number {
 
 function resolveBatchCountForJobConfig(mode: GenerationRecord['mode'], config: Record<string, unknown>): number {
   const outputCount = getGenerationOutputCount(mode, config);
+  if (mode === 'floorplan') return config.floorplanOutputMode === 'multi' ? resolveFloorplanBatchCount(outputCount) : 1;
   if (mode === 'design-variants') return outputCount === 2 || outputCount === 4 || outputCount === 8 ? outputCount : 1;
   if (mode === 'plan-colorize') return outputCount >= 1 && outputCount <= maxPlanColorizeBatchCount ? Math.floor(outputCount) : 1;
   return 1;
@@ -1532,7 +1664,34 @@ function buildProviderInputForVariant(
   batchCount: number,
   variantStyle: string,
   planStyle?: PlanColorizeStyleOption,
+  floorplanPlan?: FloorplanVariantPlan,
 ): GenerateImageInput {
+  if (isFloorplanMultiPlanJob(job)) {
+    const plan = floorplanPlan || resolveFloorplanVariantPlans(job.config, batchCount)[index];
+    return {
+      ...input,
+      prompt: buildFloorplanMultiPlanPrompt(job, index, batchCount, plan, input.qualityMode),
+      config: {
+        ...input.config,
+        floorplanOutputMode: 'multi',
+        floorplanVariantType: job.config.floorplanVariantType,
+        floorplanVariantFocus: job.config.floorplanVariantFocus,
+        variantIndex: index,
+        variantCode: readVariantCode(index),
+        variantLabel: readVariantLabel(index),
+        variantName: plan?.variantName || resolveVariantName(job.config, index),
+        selectedStyleId: plan?.selectedStyleId,
+        selectedStyleName: plan?.selectedStyleName,
+        selectedStylePromptHint: plan?.stylePromptHint,
+        layoutVariantId: plan?.layoutVariantId,
+        layoutVariantName: plan?.layoutVariantName,
+        layoutVariantPromptHint: plan?.layoutPromptHint,
+        batchGroupId: typeof job.config.batchGroupId === 'string' ? job.config.batchGroupId : undefined,
+        batchCount,
+      },
+    };
+  }
+
   if (job.mode === 'plan-colorize') {
     const style = planStyle || planColorizeStyleOptions[0];
     return {
@@ -1566,6 +1725,64 @@ function buildProviderInputForVariant(
       batchCount,
     },
   };
+}
+
+function buildFloorplanMultiPlanPrompt(
+  job: GenerationJob,
+  index: number,
+  batchCount: number,
+  plan: FloorplanVariantPlan | undefined,
+  qualityMode: QualityMode = resolveQualityModeForJob(job),
+): string {
+  const variantType = job.config.floorplanVariantType === 'furniture_layout' || job.config.floorplanVariantType === 'mixed'
+    ? job.config.floorplanVariantType
+    : 'material_style';
+  const focus = job.config.floorplanVariantFocus === 'furniture_layout' || job.config.floorplanVariantFocus === 'both'
+    ? job.config.floorplanVariantFocus
+    : 'material_style';
+  const pieces = [
+    buildSmartPromptForJob(job, qualityMode, {
+      config: {
+        ...job.config,
+        variantIndex: index,
+        variantName: plan?.variantName,
+        selectedStyleName: plan?.selectedStyleName,
+        layoutVariantName: plan?.layoutVariantName,
+      },
+    }),
+    `This is 3D colored floor plan option ${index + 1} of ${batchCount}: ${plan?.variantName || readVariantLabel(index)}.`,
+    'Common requirement: preserve the original floor plan structure, walls, doors, windows, openings, functional zoning, circulation logic, room proportions, and main spatial relationships. Do not change the basic architectural layout.',
+    'Convert the plan into a clear, complete, design-oriented 3D colored floor plan with realistic materials, furniture, soft furnishing, lighting, and spatial layering.',
+  ];
+
+  if (variantType === 'material_style') {
+    pieces.push(
+      'Variation focus: change the material system, color palette, atmosphere, lighting expression, and finish hierarchy while keeping same-type furniture positions and the original plan logic stable.',
+      plan?.stylePromptHint || '',
+    );
+  } else if (variantType === 'furniture_layout') {
+    pieces.push(
+      'Variation focus: create a different same-type furniture arrangement. Change furniture combination, orientation, relative position, and local soft furnishing configuration, while keeping functions reasonable, circulation smooth, proportions coordinated, and the original walls and room boundaries unchanged.',
+      plan?.layoutPromptHint || '',
+    );
+  } else {
+    pieces.push(
+      'Variation focus: vary both material style and same-type furniture arrangement, but keep one unified design language and do not break the original floor plan logic.',
+      plan?.stylePromptHint || '',
+      plan?.layoutPromptHint || '',
+    );
+  }
+
+  if (focus === 'furniture_layout') {
+    pieces.push('Priority: furniture placement difference, natural furniture orientation, smooth circulation, and functional reasonableness.');
+  } else if (focus === 'both') {
+    pieces.push('Priority: material system and furniture placement should both change visibly while remaining visually unified.');
+  } else {
+    pieces.push('Priority: material style, color system, lighting, and atmosphere should change visibly.');
+  }
+
+  pieces.push('Do not output a collage, comparison sheet, text, labels, watermark, dimensions, or UI elements.');
+  return pieces.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
 }
 
 async function mapWithConcurrency<T, R>(
@@ -1680,6 +1897,11 @@ function resolveVariantCompleteProgress(batchCount: number, index: number): numb
 }
 
 function buildProviderPromptForJob(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
+  if (isFloorplanMultiPlanJob(job)) {
+    const batchCount = resolveBatchCountForJob(job);
+    return buildFloorplanMultiPlanPrompt(job, 0, batchCount, resolveFloorplanVariantPlans(job.config, batchCount)[0], qualityMode);
+  }
+
   if (job.mode === 'design-variants') {
     return buildDesignVariantPrompt(job, 0, resolveBatchCountForJob(job), resolveVariantStyles(job.config, resolveBatchCountForJob(job))[0] || 'modern-minimal', qualityMode);
   }
@@ -1860,7 +2082,8 @@ function isGenerationJobStep(value: unknown): value is NonNullable<GenerationJob
     || value === 'material_replace'
     || value === 'plan_colorize'
     || value === 'panorama_quick_render'
-    || value === 'object_insert';
+    || value === 'object_insert'
+    || value === 'free_reference_image';
 }
 
 function isObjectInsertJob(job: GenerationJob): boolean {
@@ -1869,6 +2092,21 @@ function isObjectInsertJob(job: GenerationJob): boolean {
 
 type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview';
 type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
+type ObjectInsertPlacementMode = 'strict' | 'natural';
+type ObjectInsertHarmonyPriority = 'layout' | 'style' | 'balance';
+
+interface ObjectInsertItemForJob {
+  id: string;
+  objectType: string;
+  objectLabel?: string;
+  referenceAssetIds: string[];
+  placementPreviewAssetId?: string;
+  placementMaskAssetId?: string;
+  placementMode: ObjectInsertPlacementMode;
+  placementIntent: string;
+  extraPrompt: string;
+  placement?: Record<string, unknown>;
+}
 
 function readObjectInsertDebugMode(config: Record<string, unknown>): ObjectInsertDebugMode {
   const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
@@ -1895,6 +2133,45 @@ function readObjectInsertPositionConstraintStrength(config: Record<string, unkno
   return value === 'low' || value === 'medium' || value === 'high' ? value : 'high';
 }
 
+function readObjectInsertPlacementMode(config: Record<string, unknown>): ObjectInsertPlacementMode {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.placementMode === 'string'
+    ? nested.placementMode
+    : typeof config.placementMode === 'string'
+      ? config.placementMode
+      : '';
+  return value === 'strict' || value === 'natural' ? value : 'natural';
+}
+
+function readObjectInsertHarmonyPriority(config: Record<string, unknown>): ObjectInsertHarmonyPriority {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.harmonyPriority === 'string'
+    ? nested.harmonyPriority
+    : typeof config.harmonyPriority === 'string'
+      ? config.harmonyPriority
+      : '';
+  return value === 'style' || value === 'balance' || value === 'layout' ? value : 'layout';
+}
+
+function readObjectInsertPlacementIntent(config: Record<string, unknown>): string {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.placementIntent === 'string'
+    ? nested.placementIntent
+    : typeof config.placementIntent === 'string'
+      ? config.placementIntent
+      : '';
+  return value.trim();
+}
+
+function readObjectInsertAutoAdjust(
+  config: Record<string, unknown>,
+  key: 'allowAutoAdjustPosition' | 'allowAutoAdjustRotation' | 'allowAutoAdjustScale',
+): boolean {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested[key] === 'boolean' ? nested[key] : typeof config[key] === 'boolean' ? config[key] : undefined;
+  return value === undefined ? true : value !== false;
+}
+
 function objectInsertIncludesObject(mode: ObjectInsertDebugMode): boolean {
   return mode !== 'source_prompt';
 }
@@ -1913,6 +2190,12 @@ function readObjectInsertJobConfig(job: GenerationJob): {
   previewAssetId: string;
   maskAssetId: string;
   positionConstraintStrength: ObjectInsertPositionConstraintStrength;
+  placementMode: ObjectInsertPlacementMode;
+  placementIntent: string;
+  harmonyPriority: ObjectInsertHarmonyPriority;
+  allowAutoAdjustPosition: boolean;
+  allowAutoAdjustRotation: boolean;
+  allowAutoAdjustScale: boolean;
   placement?: Record<string, unknown>;
 } {
   const nested = isRecord(job.config.objectInsert) ? job.config.objectInsert : {};
@@ -1927,12 +2210,139 @@ function readObjectInsertJobConfig(job: GenerationJob): {
       || readConfigStringValue(job.config.placementMaskAssetId)
       || readConfigStringValue(job.config.maskAssetId),
     positionConstraintStrength: readObjectInsertPositionConstraintStrength(job.config),
+    placementMode: readObjectInsertPlacementMode(job.config),
+    placementIntent: readObjectInsertPlacementIntent(job.config),
+    harmonyPriority: readObjectInsertHarmonyPriority(job.config),
+    allowAutoAdjustPosition: readObjectInsertAutoAdjust(job.config, 'allowAutoAdjustPosition'),
+    allowAutoAdjustRotation: readObjectInsertAutoAdjust(job.config, 'allowAutoAdjustRotation'),
+    allowAutoAdjustScale: readObjectInsertAutoAdjust(job.config, 'allowAutoAdjustScale'),
     placement: isRecord(nested.placement)
       ? nested.placement
       : isRecord(job.config.objectPlacement)
         ? job.config.objectPlacement
         : undefined,
   };
+}
+
+function readObjectInsertItemsFromJob(job: GenerationJob): ObjectInsertItemForJob[] {
+  const nested = isRecord(job.config.objectInsert) ? job.config.objectInsert : {};
+  const rawItems = Array.isArray(nested.objectItems) ? nested.objectItems : [];
+  const items = rawItems
+    .filter(isRecord)
+    .map((item, index): ObjectInsertItemForJob => ({
+      id: readConfigStringValue(item.id) || `object-item-${index + 1}`,
+      objectType: readConfigStringValue(item.objectType) || 'custom',
+      objectLabel: readConfigStringValue(item.objectLabel) || undefined,
+      referenceAssetIds: readStringArray(item.referenceAssetIds).slice(0, 6),
+      placementPreviewAssetId: readConfigStringValue(item.placementPreviewAssetId),
+      placementMaskAssetId: readConfigStringValue(item.placementMaskAssetId),
+      placementMode: item.placementMode === 'strict' ? 'strict' : item.placementMode === 'natural' ? 'natural' : readObjectInsertPlacementMode(job.config),
+      placementIntent: readConfigStringValue(item.placementIntent),
+      extraPrompt: readConfigStringValue(item.extraPrompt),
+      placement: isRecord(item.placement) ? item.placement : undefined,
+    }))
+    .filter(item => item.referenceAssetIds.length > 0 || item.placementPreviewAssetId || item.placementMaskAssetId);
+
+  if (items.length > 0) return items.slice(0, 8);
+
+  const legacy = readObjectInsertJobConfig(job);
+  const referenceAssetIds = readStringArray(nested.objectReferenceAssetIds);
+  if (legacy.objectReferenceAssetId) referenceAssetIds.unshift(legacy.objectReferenceAssetId);
+  const uniqueReferenceAssetIds = Array.from(new Set(referenceAssetIds.filter(isNonEmptyString))).slice(0, 6);
+  if (uniqueReferenceAssetIds.length === 0 && !legacy.previewAssetId && !legacy.maskAssetId) return [];
+  return [{
+    id: 'legacy-object-1',
+    objectType: 'custom',
+    objectLabel: 'Object 1',
+    referenceAssetIds: uniqueReferenceAssetIds,
+    placementPreviewAssetId: legacy.previewAssetId,
+    placementMaskAssetId: legacy.maskAssetId,
+    placementMode: legacy.placementMode,
+    placementIntent: legacy.placementIntent,
+    extraPrompt: readConfigStringValue(nested.extraPrompt) || readConfigStringValue(job.config.objectInsertExtraPrompt) || readConfigStringValue(job.config.customPrompt),
+    placement: legacy.placement,
+  }];
+}
+
+function buildObjectInsertOrderedAssetIds(input: {
+  sourceAssetId: string;
+  items: ObjectInsertItemForJob[];
+  needsObject: boolean;
+  needsPreview: boolean;
+  needsMask: boolean;
+  legacyObjectReferenceAssetId: string;
+  legacyPreviewAssetId: string;
+  legacyMaskAssetId: string;
+}): string[] {
+  const ordered = [input.sourceAssetId];
+  if (input.items.length > 0) {
+    for (const item of input.items) {
+      if (input.needsObject) ordered.push(...item.referenceAssetIds);
+      if (input.needsPreview) ordered.push(item.placementPreviewAssetId || '');
+      if (input.needsMask && input.items.length > 1) ordered.push(item.placementMaskAssetId || '');
+    }
+  } else {
+    if (input.needsObject) ordered.push(input.legacyObjectReferenceAssetId);
+    if (input.needsPreview) ordered.push(input.legacyPreviewAssetId);
+    if (input.needsMask) ordered.push(input.legacyMaskAssetId);
+  }
+
+  return ordered.filter(isNonEmptyString);
+}
+
+function mapObjectInsertInputDataUrls(
+  items: ObjectInsertItemForJob[],
+  orderedAssetIds: string[],
+  dataUrls: string[],
+): string[] {
+  const byAssetId = new Map<string, string>();
+  orderedAssetIds.forEach((assetId, index) => {
+    const dataUrl = dataUrls[index];
+    if (isNonEmptyString(assetId) && isNonEmptyString(dataUrl) && !byAssetId.has(assetId)) {
+      byAssetId.set(assetId, dataUrl);
+    }
+  });
+
+  if (items.length === 0) return dataUrls;
+
+  const ordered: string[] = [];
+  for (const item of items) {
+    for (const assetId of item.referenceAssetIds) {
+      const dataUrl = byAssetId.get(assetId);
+      if (dataUrl) ordered.push(dataUrl);
+    }
+    const guideDataUrl = item.placementPreviewAssetId ? byAssetId.get(item.placementPreviewAssetId) : undefined;
+    if (guideDataUrl) ordered.push(guideDataUrl);
+    const maskDataUrl = item.placementMaskAssetId ? byAssetId.get(item.placementMaskAssetId) : undefined;
+    if (maskDataUrl) ordered.push(maskDataUrl);
+  }
+  return ordered;
+}
+
+function buildObjectInsertInputOrder(
+  items: ObjectInsertItemForJob[],
+  needsObject: boolean,
+  needsPreview: boolean,
+  needsMask: boolean,
+): Array<Record<string, unknown>> {
+  let imageIndex = 2;
+  return items.map((item, itemIndex) => {
+    const referenceImageIndexes = needsObject ? item.referenceAssetIds.map(() => imageIndex++) : [];
+    const placementGuideImageIndex = needsPreview && item.placementPreviewAssetId ? imageIndex++ : undefined;
+    const placementMaskImageIndex = needsMask && item.placementMaskAssetId ? imageIndex++ : undefined;
+    return {
+      itemIndex,
+      id: item.id,
+      objectType: item.objectType,
+      objectLabel: item.objectLabel,
+      referenceImageIndexes,
+      placementGuideImageIndex,
+      placementMaskImageIndex,
+      placementMode: item.placementMode,
+      placementIntent: item.placementIntent,
+      extraPrompt: item.extraPrompt,
+    };
+  });
 }
 
 function readMaterialTextureSourceNames(config: Record<string, unknown>): string[] {

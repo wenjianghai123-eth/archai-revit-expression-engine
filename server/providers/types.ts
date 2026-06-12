@@ -8,7 +8,8 @@ export type GenerationJobStep =
   | 'material_replace'
   | 'plan_colorize'
   | 'panorama_quick_render'
-  | 'object_insert';
+  | 'object_insert'
+  | 'free_reference_image';
 export type ProviderName = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
 export type MaskMode = 'asset-mask' | 'full-image';
 export type QualityMode = 'draft' | 'fast' | 'balanced' | 'high';

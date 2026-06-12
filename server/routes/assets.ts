@@ -1,6 +1,8 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { NextFunction, Request, Response, Router } from 'express';
 import { getRequiredCurrentUser, requireAuth } from '../auth';
-import { createStoredFilename, fileStorageProvider } from '../fileStorage';
+import { createStoredFilename, fileStorageProvider, uploadsDir } from '../fileStorage';
 import { ApiResponse, apiError, apiOk } from '../http';
 import {
   assertModelConversionAvailable,
@@ -215,6 +217,54 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
     }
   });
 
+  router.get('/:assetId/download', requireAuth, async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => {
+    try {
+      const asset = await getImageAsset(req.params.assetId, getRequiredCurrentUser(req).id);
+      if (!asset) {
+        res.status(404).json(apiError('Image asset not found.', 'IMAGE_ASSET_NOT_FOUND'));
+        return;
+      }
+
+      const filename = buildDownloadFilename(asset, req.query.filename);
+      res.setHeader('Content-Type', asset.mimeType || 'image/png');
+      res.setHeader('Content-Disposition', `attachment; filename="${escapeHeaderFilename(filename)}"`);
+
+      if (asset.url.startsWith('/uploads/')) {
+        const filePath = path.resolve(uploadsDir, asset.url.replace(/^\/uploads\//u, ''));
+        const relativePath = path.relative(uploadsDir, filePath);
+        if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+          res.status(400).json(apiError('Invalid image asset path.', 'IMAGE_ASSET_PATH_INVALID'));
+          return;
+        }
+        const buffer = await readFile(filePath);
+        res.setHeader('Content-Length', String(buffer.length));
+        res.send(buffer);
+        return;
+      }
+
+      const response = await fetch(asset.url);
+      if (!response.ok) {
+        res.status(502).json(apiError(`Image asset download failed: HTTP ${response.status}`, 'IMAGE_ASSET_DOWNLOAD_FAILED'));
+        return;
+      }
+      const contentType = response.headers.get('content-type') || asset.mimeType || 'image/png';
+      if (!contentType.toLowerCase().startsWith('image/')) {
+        res.status(502).json(apiError('Image asset download returned non-image content.', 'IMAGE_ASSET_DOWNLOAD_INVALID_CONTENT'));
+        return;
+      }
+      res.setHeader('Content-Type', contentType);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      res.setHeader('Content-Length', String(buffer.length));
+      res.send(buffer);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/models/:id', requireAuth, async (
     req: Request,
     res: Response<ApiResponse<{ asset: ModelAsset }>>,
@@ -388,6 +438,34 @@ export function createAssetsRouter(options: { maxImageMb: number; maxModelMb: nu
 
 function getConversionStatus(asset: ModelAsset): ModelAsset['conversionStatus'] {
   return asset.conversionStatus || asset.metadata?.conversionStatus || 'idle';
+}
+
+function buildDownloadFilename(asset: ImageAsset, requestedFilename: unknown): string {
+  const extension = getImageExtension(asset.mimeType || 'image/png');
+  if (typeof requestedFilename === 'string' && requestedFilename.trim()) {
+    return ensureFilenameExtension(sanitizeDownloadFilename(requestedFilename), extension);
+  }
+  const basename = path.basename(asset.filename || asset.id).replace(/\.[^.]+$/u, '') || asset.id;
+  return `${sanitizeDownloadFilename(basename)}.${extension}`;
+}
+
+function ensureFilenameExtension(filename: string, extension: string): string {
+  const currentExtension = path.extname(filename).replace(/^\./u, '').toLowerCase();
+  if (currentExtension) return filename;
+  return `${filename}.${extension}`;
+}
+
+function sanitizeDownloadFilename(value: string): string {
+  const sanitized = value
+    .replace(/[<>:"/\\|?*\u0000-\u001f]+/gu, '-')
+    .replace(/\s+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 120);
+  return sanitized || 'archai-image';
+}
+
+function escapeHeaderFilename(value: string): string {
+  return value.replace(/["\\]/gu, '_');
 }
 
 async function updateModelConversionState(

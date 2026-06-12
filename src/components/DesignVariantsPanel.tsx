@@ -2,10 +2,10 @@ import { Download, FileText, Heart, ImagePlus, LayoutGrid, Printer, Sparkles, St
 import { type ReactNode, useState } from 'react';
 import { designVariantPacks, getDesignVariantPack } from '../constants/designVariantPacks';
 import { DesignVariantBatchCount, GenerationConfig, GenerationResultOption, GenerationStep, SecondaryEditAction, StepState, UploadedImage, VariantStyleKey } from '../types';
-import { downloadDataUrl } from '../utils/download';
+import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
+import { getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
-import { getDataUrlExtension } from './workspace/workspaceUtils';
 
 interface DesignVariantsPanelProps {
   state: StepState;
@@ -14,6 +14,7 @@ interface DesignVariantsPanelProps {
   previewImage: string | null | undefined;
   uploadError: string | null;
   estimatedCreditCost: number;
+  projectName?: string | null;
   onUploadInput: () => void;
   onUpdateInputImage: (image: UploadedImage | null) => void;
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
@@ -65,6 +66,7 @@ export function DesignVariantsPanel({
   previewImage,
   uploadError,
   estimatedCreditCost,
+  projectName,
   onUploadInput,
   onUpdateInputImage,
   onUpdateConfig,
@@ -75,6 +77,9 @@ export function DesignVariantsPanel({
   onRenameGenerationResult,
 }: DesignVariantsPanelProps) {
   const [exportMode, setExportMode] = useState<'compare' | 'report' | null>(null);
+  const [previewDownloading, setPreviewDownloading] = useState(false);
+  const [previewDownloadMessage, setPreviewDownloadMessage] = useState<string | null>(null);
+  const [previewDownloadError, setPreviewDownloadError] = useState<string | null>(null);
   const batchCount = readBatchCount(state.config.batchCount);
   const variantStrategy = state.config.variantStrategy || 'style-matrix';
   const stylePackId = state.config.stylePackId || 'interior-common';
@@ -114,6 +119,30 @@ export function DesignVariantsPanel({
   const handleResultNameChange = (result: GenerationResultOption, index: number, name: string) => {
     handleConfigNameChange(index, name);
     onRenameGenerationResult(result.id, name || readVariantLabel(index));
+  };
+
+  const handlePreviewDownload = async () => {
+    const originalPreviewImage = getOriginalResultImageUrl(selectedResult, previewImage);
+    const originalAssetId = getOriginalResultAssetId(selectedResult);
+    if (!originalPreviewImage || previewDownloading) return;
+    setPreviewDownloading(true);
+    setPreviewDownloadMessage(null);
+    setPreviewDownloadError(null);
+    try {
+      await downloadAsset({
+        url: originalPreviewImage,
+        assetId: originalAssetId,
+      }, buildResultImageFilename({
+        projectName,
+        featureLabel: '方案变体',
+      }));
+      setPreviewDownloadMessage('已开始下载');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      setPreviewDownloadError(message === downloadFallbackMessage ? downloadFallbackMessage : '下载失败，请稍后重试');
+    } finally {
+      setPreviewDownloading(false);
+    }
   };
 
   const exportPayload = {
@@ -231,12 +260,18 @@ export function DesignVariantsPanel({
                   <p className="mt-0.5 text-xs text-slate-500">{selectedResult?.variantName || selectedResult?.variantLabel || selectedResult?.variantStyleLabel || '等待生成方案组'}</p>
                 </div>
                 {previewImage ? (
-                  <button type="button" onClick={() => downloadDataUrl(previewImage, `design-variant-${Date.now()}.${getDataUrlExtension(previewImage)}`)} className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700">
+                  <button type="button" onClick={() => void handlePreviewDownload()} disabled={previewDownloading} className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60">
                     <Download className="mr-1 inline h-3.5 w-3.5" />
-                    下载
+                    {previewDownloading ? '正在下载...' : '保存到本地'}
                   </button>
                 ) : null}
               </div>
+              {previewDownloadMessage || previewDownloadError ? (
+                <div className="border-b border-slate-100 px-4 py-2 text-xs font-semibold">
+                  {previewDownloadMessage ? <span className="text-emerald-700">{previewDownloadMessage}</span> : null}
+                  {previewDownloadError ? <span className="text-amber-700">{previewDownloadError}</span> : null}
+                </div>
+              ) : null}
               <div className="flex h-[360px] items-center justify-center bg-slate-50">
                 {previewImage ? <img src={previewImage} alt="当前方案" className="h-full w-full object-contain" /> : (
                   <div className="text-center text-sm font-bold text-slate-400">
@@ -249,7 +284,7 @@ export function DesignVariantsPanel({
 
             <div className={`grid gap-3 ${batchCount === 2 ? 'lg:grid-cols-2' : batchCount === 8 ? 'md:grid-cols-2 2xl:grid-cols-4' : 'lg:grid-cols-2'}`}>
               {resultOptions.length > 0 ? resultOptions.map((result, index) => (
-                <VariantCard key={result.id} result={result} index={index} active={result.id === selectedResultId || result.isSelected} style={selectedStyles[index]} fallbackName={variantNames[index]} onSelect={() => onSelectGenerationResult(result.id)} onFavorite={() => onToggleGenerationFavorite(result.id)} onContinueEdit={() => onSecondaryEditResult?.(result.id, 'continue-edit')} onRename={name => handleResultNameChange(result, index, name)} />
+                <VariantCard key={result.id} result={result} index={index} active={result.id === selectedResultId || result.isSelected} style={selectedStyles[index]} fallbackName={variantNames[index]} projectName={projectName} onSelect={() => onSelectGenerationResult(result.id)} onFavorite={() => onToggleGenerationFavorite(result.id)} onContinueEdit={() => onSecondaryEditResult?.(result.id, 'continue-edit')} onRename={name => handleResultNameChange(result, index, name)} />
               )) : Array.from({ length: batchCount }).map((_, index) => (
                 <PlaceholderCard key={index} index={index} style={selectedStyles[index]} name={variantNames[index]} onNameChange={name => handleConfigNameChange(index, name)} onStyleChange={style => handleStyleChange(index, style)} />
               ))}
@@ -274,14 +309,42 @@ function PlaceholderCard({ index, style, name, onNameChange, onStyleChange }: { 
   );
 }
 
-function VariantCard({ result, index, active, style, fallbackName, onSelect, onFavorite, onContinueEdit, onRename }: { result: GenerationResultOption; index: number; active: boolean; style: VariantStyleKey | undefined; fallbackName: string; onSelect: () => void; onFavorite: () => void; onContinueEdit: () => void; onRename: (name: string) => void }) {
+function VariantCard({ result, index, active, style, fallbackName, projectName, onSelect, onFavorite, onContinueEdit, onRename }: { result: GenerationResultOption; index: number; active: boolean; style: VariantStyleKey | undefined; fallbackName: string; projectName?: string | null; onSelect: () => void; onFavorite: () => void; onContinueEdit: () => void; onRename: (name: string) => void }) {
   const label = result.variantName || result.variantLabel || fallbackName || readVariantLabel(index);
   const styleLabel = result.variantStyleLabel || readVariantStyleLabel(result.variantStyle || style);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const originalImageUrl = getOriginalResultImageUrl(result, result.imageUrl);
+  const originalAssetId = getOriginalResultAssetId(result);
+
+  const handleDownload = async () => {
+    if (isDownloading) return;
+    setIsDownloading(true);
+    setDownloadMessage(null);
+    setDownloadError(null);
+    try {
+      await downloadAsset({
+        url: originalImageUrl,
+        assetId: originalAssetId,
+      }, buildResultImageFilename({
+        projectName,
+        featureLabel: '方案变体',
+      }));
+      setDownloadMessage('已开始下载');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      setDownloadError(message === downloadFallbackMessage ? downloadFallbackMessage : '下载失败，请稍后重试');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   return (
     <article className={`overflow-hidden rounded-lg border bg-white shadow-sm ${active ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200'}`}>
       <button type="button" onClick={onSelect} className="block w-full text-left">
         <div className="relative h-52 bg-slate-100">
-          <img src={result.imageUrl} alt={label} className="h-full w-full object-cover" />
+          <img src={originalImageUrl || result.imageUrl} alt={label} className="h-full w-full object-cover" />
           {result.isSelected ? <span className="absolute left-3 top-3 rounded-full bg-blue-600 px-2.5 py-1 text-[11px] font-bold text-white">已设为主方案</span> : null}
         </div>
       </button>
@@ -298,8 +361,10 @@ function VariantCard({ result, index, active, style, fallbackName, onSelect, onF
         <div className="grid grid-cols-3 gap-2">
           <button type="button" onClick={onSelect} className="rounded-md bg-slate-900 px-2 py-2 text-xs font-bold text-white">{result.isSelected ? '已设为主方案' : '设为主方案'}</button>
           <button type="button" onClick={onFavorite} className="rounded-md bg-slate-100 px-2 py-2 text-xs font-bold text-slate-700">收藏</button>
-          <button type="button" onClick={() => downloadDataUrl(result.imageUrl, `${label}-${Date.now()}.${getDataUrlExtension(result.imageUrl)}`)} className="rounded-md bg-slate-100 px-2 py-2 text-xs font-bold text-slate-700">下载</button>
+          <button type="button" onClick={() => void handleDownload()} disabled={isDownloading} className="rounded-md bg-slate-100 px-2 py-2 text-xs font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60">{isDownloading ? '正在下载...' : '保存到本地'}</button>
         </div>
+        {downloadMessage ? <p className="text-xs font-semibold text-emerald-700">{downloadMessage}</p> : null}
+        {downloadError ? <p className="text-xs font-semibold text-amber-700">{downloadError}</p> : null}
         <button type="button" onClick={onContinueEdit} className="inline-flex items-center gap-1 text-xs font-bold text-blue-700"><Star className="h-3.5 w-3.5" />继续编辑</button>
       </div>
     </article>

@@ -957,7 +957,8 @@ function isGenerationJobStep(value: unknown): value is NonNullable<GenerationJob
     || value === 'material_replace'
     || value === 'plan_colorize'
     || value === 'panorama_quick_render'
-    || value === 'object_insert';
+    || value === 'object_insert'
+    || value === 'free_reference_image';
 }
 
 async function writeDatabase(db: AppDatabase): Promise<void> {

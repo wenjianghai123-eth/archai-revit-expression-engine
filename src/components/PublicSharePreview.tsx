@@ -209,6 +209,7 @@ function getPublicResultImages(generation: PublicShareGeneration): Array<{ id: s
 
 function modeLabel(mode: PublicShareGeneration['mode'], step?: PublicShareGeneration['step']): string {
   if (step === 'object_insert') return '元素植入';
+  if (step === 'free_reference_image') return '自由参考生图';
   if (mode === 'floorplan') return '平面生成';
   if (mode === 'style-render') return '风格渲染';
   if (mode === 'plan-colorize') return '图纸智能表达';
