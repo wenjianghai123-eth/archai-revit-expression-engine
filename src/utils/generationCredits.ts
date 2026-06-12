@@ -23,6 +23,9 @@ export function getGenerationOutputCount(mode: GenerationMode, config: object = 
     }
     return isPlanColorizeBatchCount(batchCount) ? batchCount : 1;
   }
+  if (mode === 'inpaint' && isObjectInsertConfig(config)) {
+    return isObjectInsertCandidateCount(batchCount) ? batchCount : 1;
+  }
   return 1;
 }
 
@@ -36,4 +39,12 @@ function isPlanColorizeBatchCount(value: unknown): value is 1 | 2 | 3 | 4 | 5 | 
 
 function isFloorplanMultiPlanBatchCount(value: unknown): value is 2 | 4 | 6 {
   return value === 2 || value === 4 || value === 6;
+}
+
+function isObjectInsertCandidateCount(value: unknown): value is 1 | 2 | 3 {
+  return value === 1 || value === 2 || value === 3;
+}
+
+function isObjectInsertConfig(config: object): boolean {
+  return ('step' in config && config.step === 'object_insert') || ('objectInsert' in config && Boolean(config.objectInsert));
 }

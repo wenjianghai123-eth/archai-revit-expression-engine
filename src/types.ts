@@ -52,6 +52,7 @@ export type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' |
 export type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
 export type ObjectInsertPlacementMode = 'strict' | 'natural';
 export type ObjectInsertHarmonyPriority = 'layout' | 'style' | 'balance';
+export type ObjectInsertFusionPreference = 'conservative' | 'balanced' | 'design';
 export type PlanDrawingType = 'residential' | 'commercial' | 'office' | 'hotel' | 'landscape' | 'site-plan' | 'custom';
 export type PlanExpressionTemplate = 'zoning-color' | 'colored-plan' | 'landscape-plan' | 'furniture-enhance' | 'annotation-plan' | 'circulation-analysis';
 export type MaterialReplaceEditMode = 'smart-type' | 'mask';
@@ -320,11 +321,14 @@ export interface GenerationConfig {
   placementMaskAssetId?: string;
   objectPlacement?: ObjectPlacement;
   objectInsert?: ObjectInsertConfig;
+  objectInsertMode?: 'object_insert_preview_fusion' | 'legacy_object_insert';
+  objectInsertInputOrder?: Array<Record<string, unknown>>;
   objectInsertDebugMode?: ObjectInsertDebugMode;
   positionConstraintStrength?: ObjectInsertPositionConstraintStrength;
   placementMode?: ObjectInsertPlacementMode;
   placementIntent?: string;
   harmonyPriority?: ObjectInsertHarmonyPriority;
+  objectInsertFusionPreference?: ObjectInsertFusionPreference;
   allowAutoAdjustPosition?: boolean;
   allowAutoAdjustRotation?: boolean;
   allowAutoAdjustScale?: boolean;
@@ -371,6 +375,7 @@ export interface ObjectInsertItemConfig {
 }
 
 export interface ObjectInsertConfig {
+  mode?: 'object_insert_preview_fusion' | 'legacy_object_insert';
   sourceImageAssetId?: string;
   objectItems?: ObjectInsertItemConfig[];
   globalExtraPrompt?: string;
@@ -379,6 +384,8 @@ export interface ObjectInsertConfig {
   guideAssetId?: string;
   previewAssetId?: string;
   maskAssetId?: string;
+  compositePlacementGuideAssetId?: string;
+  compositePlacementMaskAssetId?: string;
   placement?: ObjectPlacement;
   extraPrompt?: string;
   debugMode?: ObjectInsertDebugMode;
@@ -386,6 +393,7 @@ export interface ObjectInsertConfig {
   placementMode?: ObjectInsertPlacementMode;
   placementIntent?: string;
   harmonyPriority?: ObjectInsertHarmonyPriority;
+  fusionPreference?: ObjectInsertFusionPreference;
   allowAutoAdjustPosition?: boolean;
   allowAutoAdjustRotation?: boolean;
   allowAutoAdjustScale?: boolean;

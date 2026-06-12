@@ -573,7 +573,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
     console.error('Generation job failed', { jobId: job.id, error: message });
     await updateGenerationJob(job.id, {
       status: terminalStatus,
-      progress: 100,
+      progress: 99,
       errorMessage: message,
       failureReason: message,
       finishedAt: diagnostics.timing?.jobFinishedAt,
@@ -590,13 +590,14 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
 }> {
   const isPanoramaReferenceMode = job.mode === 'panorama-roam-render';
   const isObjectInsertMode = isObjectInsertJob(job);
+  const isObjectInsertPreviewFusionMode = isObjectInsertMode && readObjectInsertPreviewFusionMode(job.config, job.mode);
   const isFreeReferenceImageMode = job.step === 'free_reference_image'
     || readGenerationJobStep(job.config) === 'free_reference_image';
   const objectInsertConfig = readObjectInsertJobConfig(job);
   const objectInsertDebugMode = isObjectInsertMode ? readObjectInsertDebugMode(job.config) : 'full';
-  const objectInsertNeedsObject = objectInsertIncludesObject(objectInsertDebugMode);
-  const objectInsertNeedsPreview = objectInsertIncludesPreview(objectInsertDebugMode);
-  const objectInsertNeedsMask = objectInsertIncludesMask(objectInsertDebugMode);
+  const objectInsertNeedsObject = isObjectInsertPreviewFusionMode ? false : objectInsertIncludesObject(objectInsertDebugMode);
+  const objectInsertNeedsPreview = isObjectInsertPreviewFusionMode ? true : objectInsertIncludesPreview(objectInsertDebugMode);
+  const objectInsertNeedsMask = isObjectInsertPreviewFusionMode ? false : objectInsertIncludesMask(objectInsertDebugMode);
   const objectInsertItems = isObjectInsertMode ? readObjectInsertItemsFromJob(job) : [];
   const objectReferenceAssetId = isObjectInsertMode ? objectInsertConfig.objectReferenceAssetId : '';
   const placementPreviewAssetId = isObjectInsertMode ? objectInsertConfig.previewAssetId : '';
@@ -626,7 +627,12 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
         legacyMaskAssetId: placementMaskAssetId || job.inputAssetIds[objectInsertNeedsObject && objectInsertNeedsPreview ? 3 : 2],
       })
     : [];
-  const assetIds = isObjectInsertMode
+  const assetIds = isObjectInsertPreviewFusionMode
+    ? [
+        readConfigStringValue(job.config.sourceImageAssetId) || objectInsertConfig.sourceImageAssetId || job.inputAssetIds[0],
+        placementPreviewAssetId || job.inputAssetIds[1],
+      ].filter(isNonEmptyString)
+    : isObjectInsertMode
     ? objectInsertOrderedAssetIds
     : isPanoramaReferenceMode
     ? Array.from(new Set([
@@ -662,7 +668,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     ? []
     : await getOwnedAssetDataUrls(readStringArray(job.config.furnitureReferenceAssetIds), job.userId, 3, 'furniture reference');
   const additionalImageDataUrls = imageDataUrls.slice(1).filter(isNonEmptyString);
-  const objectInputDataUrls = isObjectInsertMode
+  const objectInputDataUrls = isObjectInsertMode && !isObjectInsertPreviewFusionMode
     ? mapObjectInsertInputDataUrls(objectInsertItems, objectInsertOrderedAssetIds.slice(1), additionalImageDataUrls)
     : [];
   const objectReferenceImageDataUrl = isObjectInsertMode && objectInsertNeedsObject ? objectInputDataUrls[0] : undefined;
@@ -671,7 +677,9 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     : isFreeReferenceImageMode ? undefined
     : isPanoramaReferenceMode ? undefined : materialReferenceImageDataUrls[0] || additionalImageDataUrls[0];
   const floorplanTextureUrls = job.mode === 'floorplan' ? await getFloorplanTextureDataUrls(job.config) : [];
-  const referenceImageDataUrls = isObjectInsertMode
+  const referenceImageDataUrls = isObjectInsertPreviewFusionMode
+    ? additionalImageDataUrls.slice(0, 1)
+    : isObjectInsertMode
     ? objectInputDataUrls.slice(objectReferenceImageDataUrl ? 1 : 0)
     : isFreeReferenceImageMode
     ? additionalImageDataUrls.slice(0, 6)
@@ -681,9 +689,25 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
         ...additionalImageDataUrls.slice(1).filter(url => !materialReferenceImageDataUrls.includes(url) && !furnitureReferenceImageDataUrls.includes(url)),
         ...floorplanTextureUrls,
       ];
+  if (isObjectInsertPreviewFusionMode && process.env.NODE_ENV !== 'production') {
+    console.debug('[ObjectInsert] object_insert_preview_fusion provider inputs', {
+      jobId: job.id,
+      mode: job.mode,
+      step: job.step ?? readGenerationJobStep(job.config),
+      objectInsertMode: 'object_insert_preview_fusion',
+      inputAssetIds: assetIds,
+      sourceImageAssetId: assetIds[0],
+      placementPreviewAssetId: assetIds[1],
+      providerImageCount: 1 + referenceImageDataUrls.length,
+      materialImageIncluded: false,
+      maskImageIncluded: false,
+      furnitureReferencesIncluded: false,
+      objectItemsCount: objectInsertItems.length,
+    });
+  }
   const isMaskedEditMode = job.mode === 'inpaint' || job.mode === 'material-replace' || isObjectInsertMode;
   const maskMode = isObjectInsertMode
-    ? objectInsertNeedsMask && objectInsertItems.length <= 1 && isMaskMode(job.config.maskMode) ? job.config.maskMode : undefined
+    ? objectInsertNeedsMask && isMaskMode(job.config.maskMode) ? job.config.maskMode : undefined
     : isMaskedEditMode && isMaskMode(job.config.maskMode) ? job.config.maskMode : undefined;
   const maskAssetId = maskMode === 'asset-mask'
     ? readConfigStringValue(job.config.maskAssetId) || placementMaskAssetId || null
@@ -708,7 +732,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     config: isObjectInsertMode
       ? {
           ...removeInternalConfig(job.config),
-          objectInsertInputOrder: buildObjectInsertInputOrder(objectInsertItems, objectInsertNeedsObject, objectInsertNeedsPreview, objectInsertNeedsMask),
+          objectInsertInputOrder: isObjectInsertPreviewFusionMode ? undefined : buildObjectInsertInputOrder(objectInsertItems, objectInsertNeedsObject, objectInsertNeedsPreview, objectInsertNeedsMask),
         }
       : removeInternalConfig(job.config),
     targetWidth: targetDimensions.targetWidth,
@@ -720,7 +744,12 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
 
   const localInpaint = await maybeCreateLocalInpaintContext(rawInput);
   const localReferenceImageDataUrls = localInpaint && isObjectInsertMode
-    ? await Promise.all((rawInput.referenceImageDataUrls || []).map(dataUrl => cropImageDataUrlToBox(dataUrl, localInpaint.bbox)))
+    ? await Promise.all((rawInput.referenceImageDataUrls || []).map((dataUrl, offset) => {
+        const imageIndex = (rawInput.materialImageDataUrl ? 3 : 2) + offset;
+        return shouldCropObjectInsertReferenceImage(rawInput.config, imageIndex)
+          ? cropImageDataUrlToBox(dataUrl, localInpaint.bbox)
+          : dataUrl;
+      }))
     : rawInput.referenceImageDataUrls;
   const providerInput = localInpaint
     ? {
@@ -733,8 +762,11 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
         targetAspectRatio: getAspectRatioString(localInpaint.bbox.width, localInpaint.bbox.height),
         config: {
           ...rawInput.config,
+          targetWidth: localInpaint.bbox.width,
+          targetHeight: localInpaint.bbox.height,
+          targetAspectRatio: getAspectRatioString(localInpaint.bbox.width, localInpaint.bbox.height),
           objectInsertLocalEdit: isObjectInsertMode || undefined,
-          objectInsertLocalCropScale: isObjectInsertMode ? readObjectInsertLocalCropScale() : undefined,
+          objectInsertLocalCropScale: isObjectInsertMode ? readObjectInsertLocalCropScale(rawInput.config) : undefined,
           objectInsertCropBbox: isObjectInsertMode ? localInpaint.bbox : undefined,
         },
       }
@@ -749,7 +781,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     prepared.imageDiagnostics.maskHeight = localInpaint.maskHeight;
     prepared.imageDiagnostics.furnitureReferenceCount = rawInput.furnitureReferenceImageDataUrls?.length || 0;
     prepared.imageDiagnostics.localEditMode = isObjectInsertMode ? 'object_insert_crop' : 'masked_crop';
-    prepared.imageDiagnostics.localCropScale = isObjectInsertMode ? readObjectInsertLocalCropScale() : undefined;
+    prepared.imageDiagnostics.localCropScale = isObjectInsertMode ? readObjectInsertLocalCropScale(rawInput.config) : undefined;
   }
   return { ...prepared, localInpaint: localInpaint || undefined };
 }
@@ -882,17 +914,45 @@ async function maybeCreateLocalInpaintContext(input: GenerateImageInput): Promis
     inputImageDataUrl: input.inputImageDataUrl,
     maskImageDataUrl: input.maskImageDataUrl,
     paddingRatio: isObjectInsert ? undefined : Number(process.env.LOCAL_INPAINT_PADDING_RATIO || 0.15),
-    cropScale: isObjectInsert ? readObjectInsertLocalCropScale() : undefined,
+    cropScale: isObjectInsert ? readObjectInsertLocalCropScale(input.config) : undefined,
     maxAreaRatio: isObjectInsert
       ? Number(process.env.OBJECT_INSERT_LOCAL_CROP_MAX_AREA_RATIO || 0.85)
       : Number(process.env.LOCAL_INPAINT_MAX_AREA_RATIO || 0.65),
   });
 }
 
-function readObjectInsertLocalCropScale(): number {
-  const parsed = Number(process.env.OBJECT_INSERT_LOCAL_CROP_SCALE || 1.75);
-  if (!Number.isFinite(parsed)) return 1.75;
-  return Math.min(2, Math.max(1.5, parsed));
+function readObjectInsertLocalCropScale(config?: Record<string, unknown>): number {
+  const envValue = process.env.OBJECT_INSERT_LOCAL_CROP_SCALE;
+  const parsed = envValue ? Number(envValue) : Number.NaN;
+  if (Number.isFinite(parsed)) return Math.min(2.2, Math.max(1.6, parsed));
+  const preference = readObjectInsertFusionPreference(config || {});
+  const defaultScale = preference === 'conservative' ? 1.65 : preference === 'design' ? 2.15 : 1.9;
+  return Math.min(2.2, Math.max(1.6, defaultScale));
+}
+
+function shouldCropObjectInsertReferenceImage(config: Record<string, unknown>, imageIndex: number): boolean {
+  const rawOrder = Array.isArray(config.objectInsertInputOrder) ? config.objectInsertInputOrder.filter(isRecord) : [];
+  if (rawOrder.length === 0) return true;
+  const referenceIndexes = new Set<number>();
+  const controlIndexes = new Set<number>();
+  for (const order of rawOrder) {
+    for (const referenceIndex of readNumberArray(order.referenceImageIndexes)) referenceIndexes.add(referenceIndex);
+    const guideIndex = readPositiveNumber(order.placementGuideImageIndex);
+    if (guideIndex) controlIndexes.add(guideIndex);
+    const maskIndex = readPositiveNumber(order.placementMaskImageIndex);
+    if (maskIndex) controlIndexes.add(maskIndex);
+  }
+  if (controlIndexes.has(imageIndex)) return true;
+  if (referenceIndexes.has(imageIndex)) return false;
+  return true;
+}
+
+function readNumberArray(value: unknown): number[] {
+  return Array.isArray(value) ? value.map(readPositiveNumber).filter((item): item is number => typeof item === 'number') : [];
+}
+
+function readPositiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
 }
 
 function isObjectInsertInput(input: GenerateImageInput): boolean {
@@ -1618,6 +1678,7 @@ function resolveBatchCountForJobConfig(mode: GenerationRecord['mode'], config: R
   if (mode === 'floorplan') return config.floorplanOutputMode === 'multi' ? resolveFloorplanBatchCount(outputCount) : 1;
   if (mode === 'design-variants') return outputCount === 2 || outputCount === 4 || outputCount === 8 ? outputCount : 1;
   if (mode === 'plan-colorize') return outputCount >= 1 && outputCount <= maxPlanColorizeBatchCount ? Math.floor(outputCount) : 1;
+  if (isObjectInsertConfig(config)) return readObjectInsertCandidateCount(config);
   return 1;
 }
 
@@ -1897,6 +1958,10 @@ function resolveVariantCompleteProgress(batchCount: number, index: number): numb
 }
 
 function buildProviderPromptForJob(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
+  if (isObjectInsertJob(job) && readObjectInsertPreviewFusionMode(job.config, job.mode)) {
+    return readObjectInsertPreviewFusionUserPromptForJob(job);
+  }
+
   if (isFloorplanMultiPlanJob(job)) {
     const batchCount = resolveBatchCountForJob(job);
     return buildFloorplanMultiPlanPrompt(job, 0, batchCount, resolveFloorplanVariantPlans(job.config, batchCount)[0], qualityMode);
@@ -1928,6 +1993,23 @@ function buildSmartPromptForJob(job: GenerationJob, qualityMode: QualityMode = r
     qualityMode,
     ...overrides,
   });
+}
+
+function readObjectInsertPreviewFusionUserPromptForJob(job: GenerationJob): string {
+  const nested = isRecord(job.config.objectInsert) ? job.config.objectInsert : {};
+  const values = [
+    typeof nested.extraPrompt === 'string' ? nested.extraPrompt : '',
+    typeof job.config.objectInsertExtraPrompt === 'string' ? job.config.objectInsertExtraPrompt : '',
+    typeof job.config.userPrompt === 'string' ? job.config.userPrompt : '',
+    typeof job.config.customPrompt === 'string' ? job.config.customPrompt : '',
+    job.prompt,
+  ];
+  return values.map(value => value.trim()).find(value => value.length > 0 && !looksLikeLegacyObjectInsertPrompt(value))
+    || 'Naturally integrate the furniture arrangement shown in the placement preview.';
+}
+
+function looksLikeLegacyObjectInsertPrompt(value: string): boolean {
+  return /\bimage\s+[3-9]\b|Generation config JSON|Object list:|placement guide|edit-area mask|object_insert|object insert placement mode/iu.test(value);
 }
 
 interface BuildSmartPromptInputForJob {
@@ -2094,6 +2176,7 @@ type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'sourc
 type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
 type ObjectInsertPlacementMode = 'strict' | 'natural';
 type ObjectInsertHarmonyPriority = 'layout' | 'style' | 'balance';
+type ObjectInsertFusionPreference = 'conservative' | 'balanced' | 'design';
 
 interface ObjectInsertItemForJob {
   id: string;
@@ -2151,6 +2234,31 @@ function readObjectInsertHarmonyPriority(config: Record<string, unknown>): Objec
       ? config.harmonyPriority
       : '';
   return value === 'style' || value === 'balance' || value === 'layout' ? value : 'layout';
+}
+
+function readObjectInsertFusionPreference(config: Record<string, unknown>): ObjectInsertFusionPreference {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.fusionPreference === 'string'
+    ? nested.fusionPreference
+    : typeof config.objectInsertFusionPreference === 'string'
+      ? config.objectInsertFusionPreference
+      : '';
+  return value === 'conservative' || value === 'design' || value === 'balanced' ? value : 'balanced';
+}
+
+function readObjectInsertCandidateCount(config: Record<string, unknown>): 1 | 2 | 3 {
+  return config.batchCount === 2 || config.batchCount === 3 ? config.batchCount : 1;
+}
+
+function readObjectInsertPreviewFusionMode(config: Record<string, unknown>, requestMode?: unknown): boolean {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const values = [config.objectInsertMode, config.mode, nested.mode, nested.objectInsertMode, requestMode]
+    .filter((value): value is string => typeof value === 'string');
+  return !values.some(value => value === 'legacy_object_insert' || value === 'precise_inpaint');
+}
+
+function isObjectInsertConfig(config: Record<string, unknown>): boolean {
+  return config.step === 'object_insert' || isRecord(config.objectInsert);
 }
 
 function readObjectInsertPlacementIntent(config: Record<string, unknown>): string {
@@ -2276,11 +2384,15 @@ function buildObjectInsertOrderedAssetIds(input: {
 }): string[] {
   const ordered = [input.sourceAssetId];
   if (input.items.length > 0) {
-    for (const item of input.items) {
-      if (input.needsObject) ordered.push(...item.referenceAssetIds);
-      if (input.needsPreview) ordered.push(item.placementPreviewAssetId || '');
-      if (input.needsMask && input.items.length > 1) ordered.push(item.placementMaskAssetId || '');
+    if (input.needsObject) {
+      for (const item of input.items) ordered.push(...item.referenceAssetIds);
     }
+    const placementControlAssetIds: string[] = [];
+    for (const item of input.items) {
+      if (input.needsPreview) placementControlAssetIds.push(item.placementPreviewAssetId || '');
+      if (input.needsMask) placementControlAssetIds.push(item.placementMaskAssetId || '');
+    }
+    ordered.push(...Array.from(new Set(placementControlAssetIds.filter(isNonEmptyString))));
   } else {
     if (input.needsObject) ordered.push(input.legacyObjectReferenceAssetId);
     if (input.needsPreview) ordered.push(input.legacyPreviewAssetId);
@@ -2304,19 +2416,7 @@ function mapObjectInsertInputDataUrls(
   });
 
   if (items.length === 0) return dataUrls;
-
-  const ordered: string[] = [];
-  for (const item of items) {
-    for (const assetId of item.referenceAssetIds) {
-      const dataUrl = byAssetId.get(assetId);
-      if (dataUrl) ordered.push(dataUrl);
-    }
-    const guideDataUrl = item.placementPreviewAssetId ? byAssetId.get(item.placementPreviewAssetId) : undefined;
-    if (guideDataUrl) ordered.push(guideDataUrl);
-    const maskDataUrl = item.placementMaskAssetId ? byAssetId.get(item.placementMaskAssetId) : undefined;
-    if (maskDataUrl) ordered.push(maskDataUrl);
-  }
-  return ordered;
+  return orderedAssetIds.map(assetId => byAssetId.get(assetId)).filter(isNonEmptyString);
 }
 
 function buildObjectInsertInputOrder(
@@ -2326,21 +2426,31 @@ function buildObjectInsertInputOrder(
   needsMask: boolean,
 ): Array<Record<string, unknown>> {
   let imageIndex = 2;
-  return items.map((item, itemIndex) => {
-    const referenceImageIndexes = needsObject ? item.referenceAssetIds.map(() => imageIndex++) : [];
-    const placementGuideImageIndex = needsPreview && item.placementPreviewAssetId ? imageIndex++ : undefined;
-    const placementMaskImageIndex = needsMask && item.placementMaskAssetId ? imageIndex++ : undefined;
+  const orders = items.map((item, itemIndex) => ({
+    itemIndex,
+    id: item.id,
+    objectType: item.objectType,
+    objectLabel: item.objectLabel,
+    referenceImageIndexes: needsObject ? item.referenceAssetIds.map(() => imageIndex++) : [],
+    placementMode: item.placementMode,
+    placementIntent: item.placementIntent,
+    extraPrompt: item.extraPrompt,
+  }));
+  const controlIndexes = new Map<string, number>();
+  const readControlIndex = (assetId: string | undefined): number | undefined => {
+    if (!assetId) return undefined;
+    const existing = controlIndexes.get(assetId);
+    if (existing) return existing;
+    const next = imageIndex++;
+    controlIndexes.set(assetId, next);
+    return next;
+  };
+  return orders.map((order, itemIndex) => {
+    const item = items[itemIndex];
     return {
-      itemIndex,
-      id: item.id,
-      objectType: item.objectType,
-      objectLabel: item.objectLabel,
-      referenceImageIndexes,
-      placementGuideImageIndex,
-      placementMaskImageIndex,
-      placementMode: item.placementMode,
-      placementIntent: item.placementIntent,
-      extraPrompt: item.extraPrompt,
+      ...order,
+      placementGuideImageIndex: needsPreview ? readControlIndex(item.placementPreviewAssetId) : undefined,
+      placementMaskImageIndex: needsMask ? readControlIndex(item.placementMaskAssetId) : undefined,
     };
   });
 }

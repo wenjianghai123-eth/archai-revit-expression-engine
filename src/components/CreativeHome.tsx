@@ -1,5 +1,13 @@
-import React, { useMemo } from 'react';
-import { ArrowRight, Box, Camera, Clock, Database, FileImage, History, Layers, LayoutGrid, Paintbrush, ScanLine, Sparkles, Wand2 } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { ArrowRight, Box, Clock, Database, History, Layers, Plus, Sparkles, X } from 'lucide-react';
+import {
+  debugFeatureClick,
+  defaultFeatureIds,
+  getOptionalFeatures,
+  getVisibleFeatures,
+  readStoredVisibleFeatureIds,
+  writeStoredVisibleFeatureIds,
+} from '../featureRegistry';
 import { AssetModel, GenerationHistoryItem, GenerationStep, PromptTemplate } from '../types';
 
 interface CreativeHomeProps {
@@ -13,104 +21,35 @@ interface CreativeHomeProps {
 
 const ASSET_STORAGE_KEY = 'archai-model-assets-v1';
 
-const toolCards = [
-  {
-    step: GenerationStep.FloorplanTo3D,
-    title: '平面图生成三维彩平',
-    desc: '上传黑白平面图，快速生成可用于方案沟通的三维彩平效果。',
-    input: '输入：平面图',
-    output: '输出：三维彩平',
-    icon: ScanLine,
-    image: 'https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&q=80&w=900',
-  },
-  {
-    step: GenerationStep.PlanColorize,
-    title: '图纸智能表达',
-    desc: '上传 CAD 导出的黑白平面图，生成彩色分区、标注和表达图。',
-    input: '输入：黑白平面图',
-    output: '输出：彩色图纸表达',
-    icon: FileImage,
-    image: 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&q=80&w=900',
-  },
-  {
-    step: GenerationStep.StyleRender,
-    title: '参考图风格渲染',
-    desc: '基于参考图生成现代、侘寂、北欧、轻奢等建筑与室内效果。',
-    input: '输入：参考图',
-    output: '输出：风格效果图',
-    icon: Wand2,
-    image: 'https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?auto=format&fit=crop&q=80&w=900',
-  },
-  {
-    step: GenerationStep.FreeReferenceImage,
-    title: '自由参考生图',
-    desc: '上传原图和参考图，选择尺寸比例，直接按提示词生成效果图。',
-    input: '输入：原图 + 参考图',
-    output: '输出：效果图',
-    icon: FileImage,
-    image: 'https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&q=80&w=900',
-  },
-  {
-    step: GenerationStep.LocalInpainting,
-    title: '局部重绘修饰',
-    desc: '用画笔、矩形或套索选择局部区域，精修材质、家具和光影。',
-    input: '输入：效果图 + mask',
-    output: '输出：局部修饰图',
-    icon: Paintbrush,
-    image: 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&q=80&w=900',
-  },
-  {
-    step: GenerationStep.ObjectInsert,
-    title: '元素植入',
-    desc: '上传原始效果图和物体参考图，在画布中拖拽摆放后导出植入示意。',
-    input: '输入：效果图 + 物体图',
-    output: '输出：preview / mask',
-    icon: Layers,
-    image: 'https://images.unsplash.com/photo-1618220179428-22790b461013?auto=format&fit=crop&q=80&w=900',
-  },
-  {
-    step: GenerationStep.MaterialReplace,
-    title: '材质软装替换',
-    desc: '选择局部区域，替换地面、墙面、家具、灯光或材质。',
-    input: '输入：效果图 + mask + 材质',
-    output: '输出：局部替换效果图',
-    icon: Layers,
-    image: 'https://images.unsplash.com/photo-1600566752355-35792bedcfea?auto=format&fit=crop&q=80&w=900',
-  },
-  {
-    step: GenerationStep.DesignVariants,
-    title: '方案变体',
-    desc: '一次生成多种设计方向，快速对比方案',
-    input: '输入：原始空间图',
-    output: '输出：2 / 4 张方案矩阵',
-    icon: LayoutGrid,
-    image: 'https://images.unsplash.com/photo-1600607688969-a5bfcd646154?auto=format&fit=crop&q=80&w=900',
-  },
-  {
-    step: GenerationStep.ModelSnapshotRender,
-    title: '白模快渲',
-    desc: '上传 3D 白模，选好角度，一键生成效果图',
-    input: '输入：GLB / GLTF 白模',
-    output: '输出：建筑/室内效果图',
-    icon: Box,
-    image: 'https://images.unsplash.com/photo-1486718448742-163732cd1544?auto=format&fit=crop&q=80&w=900',
-  },
-  {
-    step: GenerationStep.PanoramaQuickRender,
-    title: '漫游全景快渲',
-    desc: '上传 GLB / GLTF 模型，漫游查看并捕捉当前全景视点。',
-    input: '输入：GLB / GLTF 模型',
-    output: '输出：全景视点 payload',
-    icon: Camera,
-    image: 'https://images.unsplash.com/photo-1518005020951-eccb494ad742?auto=format&fit=crop&q=80&w=900',
-  },
-];
-
 export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTemplates, onOpenAssets, onOpenHistory }: CreativeHomeProps) {
   const assets = useMemo(readStoredAssets, []);
   const recommendedTemplates = templates.slice(0, 4);
   const recentItems = historyItems.slice(0, 4);
   const modelAssets = assets.slice(0, 4);
+  const [addedFeatureIds, setAddedFeatureIds] = useState<string[]>(() => readStoredVisibleFeatureIds());
+  const [isFeaturePickerOpen, setIsFeaturePickerOpen] = useState(false);
+  const visibleTools = getVisibleFeatures(addedFeatureIds);
+  const optionalTools = getOptionalFeatures();
+  const visibleFeatureIdSet = new Set(visibleTools.map(feature => feature.id));
+
+  const handleAddFeature = (featureId: string) => {
+    if (defaultFeatureIds.includes(featureId as typeof defaultFeatureIds[number]) || addedFeatureIds.includes(featureId)) return;
+    const nextIds = [...addedFeatureIds, featureId];
+    setAddedFeatureIds(nextIds);
+    writeStoredVisibleFeatureIds(nextIds);
+  };
+
+  const handleRemoveFeature = (featureId: string) => {
+    if (defaultFeatureIds.includes(featureId as typeof defaultFeatureIds[number])) return;
+    const nextIds = addedFeatureIds.filter(id => id !== featureId);
+    setAddedFeatureIds(nextIds);
+    writeStoredVisibleFeatureIds(nextIds);
+  };
+
+  const handleStartFeature = (feature: typeof visibleTools[number]) => {
+    debugFeatureClick(feature);
+    onStartCreate(feature.step);
+  };
 
   return (
     <div className="arch-page custom-scrollbar" style={{ overflowY: 'auto', padding: 12 }}>
@@ -131,11 +70,11 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
               </div>
               <h1 className="max-w-3xl text-2xl font-bold leading-tight tracking-tight md:text-3xl">烛照AI 建筑空间智能表达工作台</h1>
               <p className="mt-2 max-w-2xl text-sm leading-5 text-slate-300">
-                面向深圳广田股份有限公司设计业务，支持彩平、白模快渲、风格渲染、局部修饰、材质替换、方案变体与全景表达。
+                面向广田设计业务，支持平面彩平、自由参考生图、材质软装替换、元素植入与方案变体等高频工作流。
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
-                  onClick={() => onStartCreate(GenerationStep.FloorplanTo3D)}
+                  onClick={() => handleStartFeature(visibleTools[0])}
                   className="arch-button-primary"
                 >
                   开始创作
@@ -159,28 +98,38 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
           </div>
         </section>
 
-        <section className="grid shrink-0 gap-3 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-          {toolCards.map((tool) => {
+        <section className="grid shrink-0 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {visibleTools.map((tool) => {
             const Icon = tool.icon;
+            const canRemove = !defaultFeatureIds.includes(tool.id as typeof defaultFeatureIds[number]);
             return (
-              <article key={tool.step} className="arch-card">
-                <div className="relative h-20">
+              <article key={tool.id} className="arch-card flex h-full min-h-[300px] flex-col overflow-hidden">
+                <div className="relative h-24 shrink-0">
                   <img src={tool.image} alt={tool.title} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
                   <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 to-transparent" />
                   <div className="absolute bottom-2 left-2 flex h-8 w-8 items-center justify-center rounded-lg bg-white text-blue-600 shadow-lg">
                     <Icon className="h-4 w-4" />
                   </div>
+                  {canRemove ? (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveFeature(tool.id)}
+                      className="absolute right-2 top-2 rounded-full bg-white/95 px-2 py-1 text-[10px] font-black text-slate-600 shadow-sm transition hover:bg-rose-50 hover:text-rose-600"
+                    >
+                      隐藏
+                    </button>
+                  ) : null}
                 </div>
-                <div className="p-3">
-                  <h2 className="text-base font-bold text-slate-900">{tool.title}</h2>
-                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{tool.desc}</p>
-                  <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px] font-bold text-slate-500">
-                    <span className="rounded-full bg-slate-50 px-2 py-1">{tool.input}</span>
-                    <span className="rounded-full bg-slate-50 px-2 py-1">{tool.output}</span>
+                <div className="flex min-h-0 flex-1 flex-col p-3">
+                  <h2 className="line-clamp-2 min-h-[40px] text-base font-bold leading-5 text-slate-900">{tool.title}</h2>
+                  <p className="mt-1 line-clamp-2 min-h-[40px] text-xs leading-5 text-slate-500">{tool.desc}</p>
+                  <div className="mt-2 grid h-9 grid-cols-2 gap-1.5 text-[11px] font-bold text-slate-500">
+                    <span className="flex min-w-0 items-center truncate rounded-full bg-slate-50 px-2 py-1" title={tool.input}>{tool.input}</span>
+                    <span className="flex min-w-0 items-center truncate rounded-full bg-slate-50 px-2 py-1" title={tool.output}>{tool.output}</span>
                   </div>
                   <button
-                    onClick={() => onStartCreate(tool.step)}
-                    className="arch-button-primary mt-2 w-full py-2 text-xs"
+                    onClick={() => handleStartFeature(tool)}
+                    className="arch-button-primary mt-auto h-11 w-full text-xs"
                   >
                     立即使用
                     <ArrowRight className="h-4 w-4" />
@@ -189,7 +138,34 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
               </article>
             );
           })}
+          <button
+            type="button"
+            onClick={() => setIsFeaturePickerOpen(true)}
+            className="flex h-full min-h-[300px] flex-col rounded-2xl border border-dashed border-blue-200 bg-blue-50/40 p-3 text-left transition hover:border-blue-300 hover:bg-blue-50"
+          >
+            <div className="flex h-24 shrink-0 items-center justify-center rounded-xl bg-white/80 text-blue-600">
+              <Plus className="h-8 w-8" />
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col pt-3">
+              <h2 className="text-base font-black text-slate-900">+ 添加功能</h2>
+              <p className="mt-1 line-clamp-2 min-h-[40px] text-xs leading-5 text-slate-500">从更多功能中选择要固定在首页的入口。</p>
+              <span className="mt-auto flex h-11 w-full items-center justify-center rounded-xl bg-white text-xs font-black text-blue-700 shadow-sm">
+                更多功能
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </span>
+            </div>
+          </button>
         </section>
+
+        {isFeaturePickerOpen ? (
+          <FeaturePicker
+            optionalTools={optionalTools}
+            visibleFeatureIdSet={visibleFeatureIdSet}
+            onAddFeature={handleAddFeature}
+            onRemoveFeature={handleRemoveFeature}
+            onClose={() => setIsFeaturePickerOpen(false)}
+          />
+        ) : null}
 
         <section className="grid shrink-0 gap-3 xl:grid-cols-3">
           <HomeModule title="推荐提示词模板" icon={Layers} action="查看全部" onAction={onOpenTemplates}>
@@ -222,6 +198,73 @@ export function CreativeHome({ templates, historyItems, onStartCreate, onOpenTem
             )}
           </HomeModule>
         </section>
+      </div>
+    </div>
+  );
+}
+
+function FeaturePicker({
+  optionalTools,
+  visibleFeatureIdSet,
+  onAddFeature,
+  onRemoveFeature,
+  onClose,
+}: {
+  optionalTools: ReturnType<typeof getOptionalFeatures>;
+  visibleFeatureIdSet: Set<string>;
+  onAddFeature: (featureId: string) => void;
+  onRemoveFeature: (featureId: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+      <div className="flex max-h-[82vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-4 py-3">
+          <div>
+            <h2 className="text-lg font-black text-slate-950">更多功能</h2>
+            <p className="mt-1 text-xs text-slate-500">默认核心功能会一直保留，其他功能可按需添加到首页。</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200 hover:text-slate-900"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="min-h-0 overflow-y-auto p-3">
+          <div className="grid gap-2">
+            {optionalTools.map(tool => {
+              const Icon = tool.icon;
+              const isAdded = visibleFeatureIdSet.has(tool.id);
+              return (
+                <div key={tool.id} className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-blue-600">
+                    <Icon className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-black text-slate-900">{tool.title}</p>
+                    <p className="mt-0.5 line-clamp-1 text-xs text-slate-500">{tool.desc}</p>
+                  </div>
+                  {isAdded ? (
+                    <span className="shrink-0 rounded-full bg-blue-50 px-2 py-1 text-[10px] font-black text-blue-600">已添加</span>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => isAdded ? onRemoveFeature(tool.id) : onAddFeature(tool.id)}
+                    className={`h-9 shrink-0 rounded-xl px-3 text-xs font-black transition ${
+                      isAdded
+                        ? 'bg-white text-slate-500 hover:bg-rose-50 hover:text-rose-600'
+                        : 'bg-blue-600 text-white hover:bg-blue-700'
+                    }`}
+                  >
+                    {isAdded ? '移除' : '添加'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -316,12 +359,14 @@ function readStoredAssets(): AssetModel[] {
 }
 
 function stepLabel(step: GenerationStep): string {
-  if (step === GenerationStep.FloorplanTo3D) return '平面-三维';
+  if (step === GenerationStep.FloorplanTo3D) return '平面彩平';
   if (step === GenerationStep.StyleRender) return '风格渲染';
   if (step === GenerationStep.PlanColorize) return '图纸智能表达';
   if (step === GenerationStep.ModelSnapshotRender) return '白模快渲';
   if (step === GenerationStep.PanoramaQuickRender) return '漫游全景快渲';
   if (step === GenerationStep.ObjectInsert) return '元素植入';
   if (step === GenerationStep.FreeReferenceImage) return '自由参考生图';
+  if (step === GenerationStep.MaterialReplace) return '材质软装替换';
+  if (step === GenerationStep.DesignVariants) return '方案变体';
   return '局部修饰';
 }

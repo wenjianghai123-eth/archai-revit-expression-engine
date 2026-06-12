@@ -226,7 +226,7 @@ export function useGenerationRunner({
           generationStatus: 'error',
           generationError: message,
           generationJobStatus: 'failed',
-          generationProgress: 100,
+          generationProgress: 99,
           generationLogs: [...prev[currentStep].generationLogs, `error: ${message}`].slice(-8),
         },
       }));
@@ -281,6 +281,7 @@ export function useGenerationRunner({
         const targetSizeConfig = buildTargetSizeConfig(stateAtStart.inputImage);
         const isPanoramaQuickRender = currentStep === GenerationStep.PanoramaQuickRender;
         const isObjectInsert = currentStep === GenerationStep.ObjectInsert;
+        const isObjectInsertPreviewFusion = isObjectInsert;
         const isFreeReferenceImage = currentStep === GenerationStep.FreeReferenceImage;
         const isPlanColorize = currentStep === GenerationStep.PlanColorize;
         const isFloorplanMultiPlan = currentStep === GenerationStep.FloorplanTo3D
@@ -310,13 +311,15 @@ export function useGenerationRunner({
           ? resolveFloorplanVariantPlans({ ...stateAtStart.config, batchCount: floorplanBatchCount }, floorplanBatchCount)
           : [];
         const objectInsertDebugMode = isObjectInsert ? readObjectInsertDebugMode(stateAtStart.config) : 'full';
-        const objectInsertNeedsObject = objectInsertIncludesObject(objectInsertDebugMode);
-        const objectInsertNeedsPreview = objectInsertIncludesPreview(objectInsertDebugMode);
-        const objectInsertNeedsMask = objectInsertIncludesMask(objectInsertDebugMode);
+        const objectInsertNeedsObject = isObjectInsertPreviewFusion ? false : objectInsertIncludesObject(objectInsertDebugMode);
+        const objectInsertNeedsPreview = isObjectInsertPreviewFusion ? true : objectInsertIncludesPreview(objectInsertDebugMode);
+        const objectInsertNeedsMask = isObjectInsertPreviewFusion ? false : objectInsertIncludesMask(objectInsertDebugMode);
         const objectInsertPositionConstraintStrength = isObjectInsert ? readObjectInsertPositionConstraintStrength(stateAtStart.config) : 'high';
         const objectInsertPlacementMode = isObjectInsert ? readObjectInsertPlacementMode(stateAtStart.config) : 'natural';
         const objectInsertPlacementIntent = isObjectInsert ? readObjectInsertPlacementIntent(stateAtStart.config) : '';
         const objectInsertHarmonyPriority = isObjectInsert ? readObjectInsertHarmonyPriority(stateAtStart.config) : 'layout';
+        const objectInsertFusionPreference = isObjectInsert ? readObjectInsertFusionPreference(stateAtStart.config) : 'balanced';
+        const objectInsertCandidateCount = isObjectInsert ? readObjectInsertCandidateCount(stateAtStart.config) : 1;
         const objectInsertAllowAutoAdjustPosition = isObjectInsert ? readObjectInsertAutoAdjust(stateAtStart.config, 'allowAutoAdjustPosition') : true;
         const objectInsertAllowAutoAdjustRotation = isObjectInsert ? readObjectInsertAutoAdjust(stateAtStart.config, 'allowAutoAdjustRotation') : true;
         const objectInsertAllowAutoAdjustScale = isObjectInsert ? readObjectInsertAutoAdjust(stateAtStart.config, 'allowAutoAdjustScale') : true;
@@ -330,8 +333,12 @@ export function useGenerationRunner({
         const placementMaskAssetId = isObjectInsert ? readObjectInsertMaskAssetId(stateAtStart.config) : undefined;
         const objectPlacement = isObjectInsert ? readObjectInsertPlacement(stateAtStart.config) : undefined;
         const objectInsertItems = isObjectInsert ? readObjectInsertItems(stateAtStart.config) : [];
+        const objectInsertInputOrder = isObjectInsert && !isObjectInsertPreviewFusion
+          ? buildObjectInsertInputOrder(objectInsertItems, objectInsertNeedsObject, objectInsertNeedsPreview, objectInsertNeedsMask)
+          : undefined;
         const objectInsertConfig = isObjectInsert && (objectPlacement || objectInsertItems.length > 0)
           ? {
+              mode: isObjectInsertPreviewFusion ? 'object_insert_preview_fusion' : 'legacy_object_insert',
               sourceImageAssetId: stateAtStart.inputImage.assetId,
               objectItems: objectInsertItems.length > 0 ? objectInsertItems : undefined,
               globalExtraPrompt: stateAtStart.config.objectInsertExtraPrompt || stateAtStart.config.customPrompt || '',
@@ -346,6 +353,7 @@ export function useGenerationRunner({
               placementMode: objectInsertPlacementMode,
               placementIntent: objectInsertPlacementIntent,
               harmonyPriority: objectInsertHarmonyPriority,
+              fusionPreference: objectInsertFusionPreference,
               allowAutoAdjustPosition: objectInsertAllowAutoAdjustPosition,
               allowAutoAdjustRotation: objectInsertAllowAutoAdjustRotation,
               allowAutoAdjustScale: objectInsertAllowAutoAdjustScale,
@@ -391,21 +399,31 @@ export function useGenerationRunner({
           ];
         }
         if (isObjectInsert) {
-          const multiObjectAssetIds = objectInsertItems.flatMap(item => [
-            ...(objectInsertNeedsObject ? item.referenceAssetIds : []),
-            objectInsertNeedsPreview ? item.placementPreviewAssetId : undefined,
-            objectInsertNeedsMask ? item.placementMaskAssetId : undefined,
-          ]).filter((assetId): assetId is string => Boolean(assetId));
-          inputAssetIds = [
-            stateAtStart.inputImage.assetId,
-            ...(multiObjectAssetIds.length > 0
-              ? multiObjectAssetIds
-              : [
-                  objectInsertNeedsObject ? objectReferenceAssetId : undefined,
-                  objectInsertNeedsPreview ? placementPreviewAssetId : undefined,
-                  objectInsertNeedsMask ? placementMaskAssetId : undefined,
-                ].filter((assetId): assetId is string => Boolean(assetId))),
-          ];
+          inputAssetIds = isObjectInsertPreviewFusion
+            ? [
+                stateAtStart.inputImage.assetId,
+                placementPreviewAssetId,
+              ].filter((assetId): assetId is string => Boolean(assetId))
+            : [
+                stateAtStart.inputImage.assetId,
+                ...(buildObjectInsertInputAssetIds(
+                  objectInsertItems,
+                  objectInsertNeedsObject,
+                  objectInsertNeedsPreview,
+                  objectInsertNeedsMask,
+                ).length > 0
+                  ? buildObjectInsertInputAssetIds(
+                      objectInsertItems,
+                      objectInsertNeedsObject,
+                      objectInsertNeedsPreview,
+                      objectInsertNeedsMask,
+                    )
+                  : [
+                      objectInsertNeedsObject ? objectReferenceAssetId : undefined,
+                      objectInsertNeedsPreview ? placementPreviewAssetId : undefined,
+                      objectInsertNeedsMask ? placementMaskAssetId : undefined,
+                    ].filter((assetId): assetId is string => Boolean(assetId))),
+              ];
         }
         if (isFreeReferenceImage) {
           inputAssetIds = [
@@ -451,10 +469,12 @@ export function useGenerationRunner({
               placementPreviewAssetId,
               placementMaskAssetId,
               placement: objectPlacement,
+              objectItems: objectInsertItems,
               positionConstraintStrength: objectInsertPositionConstraintStrength,
               placementMode: objectInsertPlacementMode,
               placementIntent: objectInsertPlacementIntent,
               harmonyPriority: objectInsertHarmonyPriority,
+              fusionPreference: objectInsertFusionPreference,
               allowAutoAdjustPosition: objectInsertAllowAutoAdjustPosition,
               allowAutoAdjustRotation: objectInsertAllowAutoAdjustRotation,
               allowAutoAdjustScale: objectInsertAllowAutoAdjustScale,
@@ -488,7 +508,9 @@ export function useGenerationRunner({
                 ? Math.min(Math.max(planColorizeStyles.length || 1, 1), 6) as GenerationConfig['batchCount']
                 : isFloorplanMultiPlan
                   ? floorplanBatchCount
-                : 1,
+                  : isObjectInsert
+                    ? objectInsertCandidateCount
+                    : 1,
             variantStrategy: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.variantStrategy || 'style-matrix' : undefined,
             stylePackId: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.stylePackId || 'interior-common' : undefined,
             variantStyles: currentStep === GenerationStep.DesignVariants ? resolveVariantStyles(stateAtStart.config) : undefined,
@@ -514,6 +536,7 @@ export function useGenerationRunner({
             floorplanLayoutVariantIds: isFloorplanMultiPlan ? floorplanVariantPlans.map(plan => plan.layoutVariantId).filter((id): id is string => Boolean(id)) : undefined,
             floorplanLayoutVariantNames: isFloorplanMultiPlan ? floorplanVariantPlans.map(plan => plan.layoutVariantName).filter((name): name is string => Boolean(name)) : undefined,
             userPrompt: userSupplementPrompt,
+            objectInsertMode: isObjectInsert ? 'object_insert_preview_fusion' : undefined,
             editTarget: currentStep === GenerationStep.MaterialReplace
               ? 'material'
               : currentStep === GenerationStep.ObjectInsert
@@ -539,17 +562,19 @@ export function useGenerationRunner({
             panoramaReferenceTypes: isPanoramaQuickRender ? stateAtStart.config.panoramaReferenceTypes : undefined,
             panoramaReferenceMode: isPanoramaQuickRender && panoramaReferenceAssetIds.length > 0 ? 'reference_guided' : undefined,
             panoramaReferenceStrength: isPanoramaQuickRender ? stateAtStart.config.panoramaReferenceStrength || 'medium' : undefined,
-            objectReferenceAssetId: isObjectInsert && objectInsertNeedsObject ? objectReferenceAssetId : undefined,
+            objectReferenceAssetId: isObjectInsert && objectInsertNeedsObject && !isObjectInsertPreviewFusion ? objectReferenceAssetId : undefined,
             placementGuideAssetId: isObjectInsert && objectInsertNeedsPreview ? placementPreviewAssetId : undefined,
             placementPreviewAssetId: isObjectInsert && objectInsertNeedsPreview ? placementPreviewAssetId : undefined,
-            placementMaskAssetId: isObjectInsert && objectInsertNeedsMask ? placementMaskAssetId : undefined,
+            placementMaskAssetId: isObjectInsert && objectInsertNeedsMask && !isObjectInsertPreviewFusion ? placementMaskAssetId : undefined,
             objectPlacement: isObjectInsert ? objectPlacement : undefined,
             objectInsert: objectInsertConfig,
+            objectInsertInputOrder: isObjectInsertPreviewFusion ? undefined : objectInsertInputOrder,
             objectInsertDebugMode: isObjectInsert ? objectInsertDebugMode : undefined,
             positionConstraintStrength: isObjectInsert ? objectInsertPositionConstraintStrength : undefined,
             placementMode: isObjectInsert ? objectInsertPlacementMode : undefined,
             placementIntent: isObjectInsert ? objectInsertPlacementIntent : undefined,
             harmonyPriority: isObjectInsert ? objectInsertHarmonyPriority : undefined,
+            objectInsertFusionPreference: isObjectInsert ? objectInsertFusionPreference : undefined,
             allowAutoAdjustPosition: isObjectInsert ? objectInsertAllowAutoAdjustPosition : undefined,
             allowAutoAdjustRotation: isObjectInsert ? objectInsertAllowAutoAdjustRotation : undefined,
             allowAutoAdjustScale: isObjectInsert ? objectInsertAllowAutoAdjustScale : undefined,
@@ -808,7 +833,7 @@ export function useGenerationRunner({
             generationError: readableJobError,
             generationJobStatus: toAsyncGenerationStatus(normalizedJob.status) || prev[currentStep].generationJobStatus,
             generationJobDiagnostics: latestJob.diagnostics || null,
-            generationProgress: latestJob.progress,
+            generationProgress: Math.min(latestJob.progress, 99),
             generationLogs: [...prev[currentStep].generationLogs, `${normalizedJob.status}: ${readableJobError}`].slice(-8),
           },
         }));
@@ -1021,7 +1046,7 @@ export function useGenerationRunner({
           generationError: error instanceof Error ? error.message : '生成失败，请稍后重试.',
           generationJobStatus: 'failed',
           generationJobDiagnostics: null,
-          generationProgress: 100,
+          generationProgress: 99,
           generationLogs: [...prev[currentStep].generationLogs, `error: ${error instanceof Error ? error.message : '生成失败。'}`].slice(-8),
         }
       }));
@@ -1607,6 +1632,15 @@ function readObjectInsertHarmonyPriority(config: GenerationConfig): ObjectInsert
   return value === 'style' || value === 'balance' || value === 'layout' ? value : 'layout';
 }
 
+function readObjectInsertFusionPreference(config: GenerationConfig): 'conservative' | 'balanced' | 'design' {
+  const value = config.objectInsert?.fusionPreference || config.objectInsertFusionPreference;
+  return value === 'conservative' || value === 'design' || value === 'balanced' ? value : 'balanced';
+}
+
+function readObjectInsertCandidateCount(config: GenerationConfig): 1 | 2 | 3 {
+  return config.batchCount === 2 || config.batchCount === 3 ? config.batchCount : 1;
+}
+
 function readObjectInsertAutoAdjust(
   config: GenerationConfig,
   key: 'allowAutoAdjustPosition' | 'allowAutoAdjustRotation' | 'allowAutoAdjustScale',
@@ -1625,6 +1659,61 @@ function objectInsertIncludesPreview(mode: ObjectInsertDebugMode): boolean {
 
 function objectInsertIncludesMask(mode: ObjectInsertDebugMode): boolean {
   return mode === 'full' || mode === 'source_object_mask';
+}
+
+function buildObjectInsertInputAssetIds(
+  items: ObjectInsertItemConfig[],
+  needsObject: boolean,
+  needsPreview: boolean,
+  needsMask: boolean,
+): string[] {
+  const references = needsObject
+    ? items.flatMap(item => item.referenceAssetIds)
+    : [];
+  const placementControls = items.flatMap(item => [
+    needsPreview ? item.placementPreviewAssetId : undefined,
+    needsMask ? item.placementMaskAssetId : undefined,
+  ]);
+  return [
+    ...references,
+    ...Array.from(new Set(placementControls.filter((assetId): assetId is string => Boolean(assetId)))),
+  ];
+}
+
+function buildObjectInsertInputOrder(
+  items: ObjectInsertItemConfig[],
+  needsObject: boolean,
+  needsPreview: boolean,
+  needsMask: boolean,
+): Array<Record<string, unknown>> {
+  let imageIndex = 2;
+  const orders = items.map((item, itemIndex) => ({
+    itemIndex,
+    id: item.id,
+    objectType: item.objectType,
+    objectLabel: item.objectLabel,
+    referenceImageIndexes: needsObject ? item.referenceAssetIds.map(() => imageIndex++) : [],
+    placementMode: item.placementMode,
+    placementIntent: item.placementIntent,
+    extraPrompt: item.extraPrompt,
+  }));
+  const controlIndexes = new Map<string, number>();
+  const readControlIndex = (assetId: string | undefined): number | undefined => {
+    if (!assetId) return undefined;
+    const existing = controlIndexes.get(assetId);
+    if (existing) return existing;
+    const next = imageIndex++;
+    controlIndexes.set(assetId, next);
+    return next;
+  };
+  return orders.map((order, itemIndex) => {
+    const item = items[itemIndex];
+    return {
+      ...order,
+      placementGuideImageIndex: needsPreview ? readControlIndex(item.placementPreviewAssetId) : undefined,
+      placementMaskImageIndex: needsMask ? readControlIndex(item.placementMaskAssetId) : undefined,
+    };
+  });
 }
 
 function buildTargetSizeConfig(image: UploadedImage): Pick<GenerationConfig, 'sourceImageWidth' | 'sourceImageHeight' | 'targetWidth' | 'targetHeight' | 'targetAspectRatio'> {

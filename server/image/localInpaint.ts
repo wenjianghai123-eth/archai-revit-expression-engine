@@ -135,7 +135,7 @@ function padBoundingBox(box: MaskBoundingBox, imageWidth: number, imageHeight: n
 }
 
 function scaleBoundingBox(box: MaskBoundingBox, imageWidth: number, imageHeight: number, scale: number): MaskBoundingBox {
-  const safeScale = Math.min(2, Math.max(1.1, scale));
+  const safeScale = Math.min(2.2, Math.max(1.1, scale));
   const targetWidth = Math.min(imageWidth, Math.max(box.width, Math.round(box.width * safeScale)));
   const targetHeight = Math.min(imageHeight, Math.max(box.height, Math.round(box.height * safeScale)));
   const centerX = box.x + box.width / 2;

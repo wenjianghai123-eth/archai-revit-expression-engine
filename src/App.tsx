@@ -348,6 +348,77 @@ export default function App() {
     setQueuedSecondaryGenerationId(`${result.id}:${action}:${Date.now()}`);
   }, [currentStep, setStepStates, stepStates]);
 
+  const handleContinueObjectInsertRefine = useCallback((image: UploadedImage, source: { resultId?: string; label: string }) => {
+    setCurrentStep(GenerationStep.ObjectInsert);
+    setActiveTab('generate');
+    setStepStates(prev => {
+      const previous = prev[GenerationStep.ObjectInsert];
+      return {
+        ...prev,
+        [GenerationStep.ObjectInsert]: {
+          ...previous,
+          inputImage: image,
+          materialImage: null,
+          materialTextures: [],
+          furnitureReferences: [],
+          maskImage: null,
+          useFullImageMask: false,
+          config: {
+            ...previous.config,
+            sourceImageAssetId: image.assetId,
+            objectReferenceAssetId: undefined,
+            placementPreviewAssetId: undefined,
+            placementGuideAssetId: undefined,
+            placementMaskAssetId: undefined,
+            objectPlacement: undefined,
+            objectInsertInputOrder: undefined,
+            maskMode: undefined,
+            maskAssetId: undefined,
+            objectInsertMode: 'object_insert_preview_fusion',
+            objectInsert: {
+              ...(previous.config.objectInsert || {}),
+              mode: 'object_insert_preview_fusion',
+              sourceImageAssetId: image.assetId,
+              objectItems: [],
+              previewAssetId: undefined,
+              guideAssetId: undefined,
+              maskAssetId: undefined,
+              objectReferenceAssetId: undefined,
+              objectReferenceAssetIds: undefined,
+              placement: undefined,
+            },
+          },
+          outputImage: null,
+          generationResults: [],
+          selectedGenerationResultId: null,
+          isGenerating: false,
+          generationStatus: 'ready',
+          generationError: null,
+          generationWarnings: [],
+          generationProvider: null,
+          generationResultId: null,
+          generationCreatedAt: null,
+          generationJobId: null,
+          generationJobStatus: null,
+          generationJobDiagnostics: null,
+          generationProgress: 0,
+          generationLogs: [`continue-refine: 已将「${source.label}」作为新的元素植入原图。`],
+          viewMode: 'original',
+          continuationSource: {
+            parentResultId: source.resultId || '',
+            parentJobId: previous.generationJobId,
+            parentRecordId: previous.generationResultId,
+            imageUrl: image.url || image.dataUrl,
+            assetId: image.assetId,
+            label: source.label,
+            action: 'continue-edit',
+            createdAt: new Date().toISOString(),
+          },
+        },
+      };
+    });
+  }, [setCurrentStep, setStepStates]);
+
   const handleSetViewMode = useCallback((viewMode: StepState['viewMode']) => {
     setStepStates(prev => ({
       ...prev,
@@ -547,6 +618,7 @@ export default function App() {
                         onSelectGenerationResult={handleSelectGenerationResult}
                         onToggleGenerationFavorite={handleToggleGenerationFavorite}
                         onSecondaryEditResult={handleSecondaryEditResult}
+                        onContinueObjectInsertRefine={handleContinueObjectInsertRefine}
                         onRenameGenerationResult={handleRenameGenerationResult}
                         onSetViewMode={handleSetViewMode}
                         onNextStep={handleNextStep}

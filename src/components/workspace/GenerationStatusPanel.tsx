@@ -136,10 +136,10 @@ function GenerationProgress({ state, statusLabel, elapsedSeconds, onCancelGenera
     <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
       <div className="mb-2 flex items-center justify-between text-[10px] font-bold text-slate-500">
         <span>{state.generationJobId || 'legacy fallback'}</span>
-        <span>{state.isGenerating ? formatElapsed(elapsedSeconds) : `${state.generationProgress}%`}</span>
+        <span>{state.isGenerating ? formatElapsed(elapsedSeconds) : state.generationStatus === 'error' ? '失败' : `${state.generationProgress}%`}</span>
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
-        <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${Math.min(100, Math.max(0, state.generationProgress))}%` }} />
+        <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${state.generationStatus === 'error' ? Math.min(99, Math.max(0, state.generationProgress)) : Math.min(100, Math.max(0, state.generationProgress))}%` }} />
       </div>
       {state.isGenerating ? (
         <div className="mt-3 rounded-lg bg-white px-3 py-2 text-xs leading-5 text-slate-600">

@@ -1399,7 +1399,7 @@ function normalizeDesignVariantConfig(
     return { ok: true };
   }
   if (mode !== 'design-variants') {
-    config.batchCount = 1;
+    config.batchCount = isObjectInsertRequestConfig(config) ? readObjectInsertCandidateCount(config) : 1;
     delete config.variantStrategy;
     delete config.variantStyles;
     delete config.variantNames;
@@ -1846,21 +1846,24 @@ function validateGenerationJobCreateBody(
   if (generationStep === 'object_insert') {
     const inputAssetIds = body.inputAssetIds.map(item => item.trim());
     const objectInsertConfig = isRecord(config.objectInsert) ? { ...config.objectInsert } : {};
+    const previewFusionMode = readObjectInsertPreviewFusionMode(config, body.mode);
     const debugMode = readObjectInsertDebugMode(config);
     const positionConstraintStrength = readObjectInsertPositionConstraintStrength(config);
     const placementMode = readObjectInsertPlacementMode(config);
     const placementIntent = readObjectInsertPlacementIntent(config);
     const harmonyPriority = readObjectInsertHarmonyPriority(config);
+    const fusionPreference = readObjectInsertFusionPreference(config);
     const allowAutoAdjustPosition = readObjectInsertAutoAdjust(config, 'allowAutoAdjustPosition');
     const allowAutoAdjustRotation = readObjectInsertAutoAdjust(config, 'allowAutoAdjustRotation');
     const allowAutoAdjustScale = readObjectInsertAutoAdjust(config, 'allowAutoAdjustScale');
-    const needsObject = objectInsertIncludesObject(debugMode);
-    const needsPreview = objectInsertIncludesPreview(debugMode);
-    const needsMask = objectInsertIncludesMask(debugMode);
-    const needsPlacement = needsPreview || needsMask;
+    const needsObject = previewFusionMode ? false : objectInsertIncludesObject(debugMode);
+    const needsPreview = previewFusionMode ? true : objectInsertIncludesPreview(debugMode);
+    const needsMask = previewFusionMode ? false : objectInsertIncludesMask(debugMode);
+    const needsPlacement = previewFusionMode ? false : needsPreview || needsMask;
     const objectItems = normalizeObjectInsertItemsForRequest(objectInsertConfig.objectItems, {
       defaultPlacementMode: placementMode,
       inputAssetIds,
+      allowUnlistedReferenceAssetIds: previewFusionMode,
     });
     const firstObjectItem = objectItems[0];
     const sourceImageAssetId = isNonEmptyString(config.sourceImageAssetId)
@@ -1885,6 +1888,8 @@ function validateGenerationJobCreateBody(
       ? config.placementGuideAssetId.trim()
       : isNonEmptyString(config.placementPreviewAssetId)
       ? config.placementPreviewAssetId.trim()
+      : previewFusionMode
+        ? inputAssetIds[1] || ''
       : inputAssetIds[2] || '';
     const placementMaskAssetId = isNonEmptyString(objectInsertConfig.maskAssetId)
       ? objectInsertConfig.maskAssetId.trim()
@@ -1896,11 +1901,33 @@ function validateGenerationJobCreateBody(
         ? config.maskAssetId.trim()
         : inputAssetIds[3] || '';
 
-    const objectItemsMissingReferences = objectItems.some(item => item.referenceAssetIds.length === 0 || item.referenceAssetIds.some(assetId => !inputAssetIds.includes(assetId)));
-    const objectItemsMissingGuides = objectItems.some(item => !item.placementPreviewAssetId || !inputAssetIds.includes(item.placementPreviewAssetId));
+    const objectItemsMissingReferences = !previewFusionMode && objectItems.some(item => item.referenceAssetIds.length === 0 || item.referenceAssetIds.some(assetId => !inputAssetIds.includes(assetId)));
+    const objectItemsMissingGuides = !previewFusionMode && objectItems.some(item => !item.placementPreviewAssetId || !inputAssetIds.includes(item.placementPreviewAssetId));
     const objectItemsMissingMasks = objectItems.some(item => !item.placementMaskAssetId || !inputAssetIds.includes(item.placementMaskAssetId));
     const hasObjectItems = objectItems.length > 0;
-    const missingAssetMessage = !sourceImageAssetId || !inputAssetIds.includes(sourceImageAssetId)
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug('[ObjectInsert] generation job validation', {
+        requestMode: body.mode,
+        configMode: typeof config.mode === 'string' ? config.mode : undefined,
+        objectInsertMode: previewFusionMode ? 'object_insert_preview_fusion' : 'legacy_object_insert',
+        inputAssetIds,
+        sourceImageAssetId,
+        placementPreviewAssetId,
+        objectItemsCount: objectItems.length,
+        objectItemsReferenceCount: objectItems.reduce((sum, item) => sum + item.referenceAssetIds.length, 0),
+        legacyObjectReferenceAssetId: objectReferenceAssetId || undefined,
+        requiresObjectReferences: needsObject,
+        requiresPlacementPreview: needsPreview,
+        requiresPlacementMask: needsMask,
+      });
+    }
+    const missingAssetMessage = previewFusionMode
+      ? !sourceImageAssetId || !inputAssetIds.includes(sourceImageAssetId)
+        ? '元素植入需要上传原图。'
+        : !placementPreviewAssetId || !inputAssetIds.includes(placementPreviewAssetId)
+          ? '元素植入需要先生成摆放示意图，请重新点击生成。'
+          : ''
+      : !sourceImageAssetId || !inputAssetIds.includes(sourceImageAssetId)
       ? '元素植入需要原始场景图素材。'
       : needsObject && hasObjectItems && objectItemsMissingReferences
         ? '元素植入需要每个对象的参考图素材。'
@@ -1930,13 +1957,16 @@ function validateGenerationJobCreateBody(
       : typeof config.objectInsertExtraPrompt === 'string'
         ? config.objectInsertExtraPrompt.trim()
         : '';
+    const objectInsertInputOrder = previewFusionMode ? [] : buildObjectInsertInputOrderForRequest(objectItems, needsObject, needsPreview, needsMask);
 
     config.sourceImageAssetId = sourceImageAssetId;
+    config.objectInsertMode = previewFusionMode ? 'object_insert_preview_fusion' : 'legacy_object_insert';
     config.objectInsertDebugMode = debugMode;
     config.positionConstraintStrength = positionConstraintStrength;
     config.placementMode = placementMode;
     config.placementIntent = placementIntent;
     config.harmonyPriority = harmonyPriority;
+    config.objectInsertFusionPreference = fusionPreference;
     config.allowAutoAdjustPosition = allowAutoAdjustPosition;
     config.allowAutoAdjustRotation = allowAutoAdjustRotation;
     config.allowAutoAdjustScale = allowAutoAdjustScale;
@@ -1950,6 +1980,8 @@ function validateGenerationJobCreateBody(
     else delete config.placementMaskAssetId;
     if (placement) config.objectPlacement = placement;
     else delete config.objectPlacement;
+    if (!previewFusionMode && hasObjectItems) config.objectInsertInputOrder = objectInsertInputOrder;
+    else delete config.objectInsertInputOrder;
     config.objectInsert = {
       ...objectInsertConfig,
       sourceImageAssetId,
@@ -1965,6 +1997,7 @@ function validateGenerationJobCreateBody(
       placementMode,
       placementIntent,
       harmonyPriority,
+      fusionPreference,
       allowAutoAdjustPosition,
       allowAutoAdjustRotation,
       allowAutoAdjustScale,
@@ -1977,7 +2010,7 @@ function validateGenerationJobCreateBody(
       delete config.maskAssetId;
     }
     config.editTarget = 'furniture';
-    config.batchCount = 1;
+    config.batchCount = readObjectInsertCandidateCount(config);
     config.preserveStructure = config.preserveStructure !== false;
     config.preserveCamera = config.preserveCamera !== false;
     if (typeof config.objectInsertExtraPrompt === 'string') config.objectInsertExtraPrompt = config.objectInsertExtraPrompt.trim();
@@ -2196,6 +2229,7 @@ type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'sourc
 type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
 type ObjectInsertPlacementMode = 'strict' | 'natural';
 type ObjectInsertHarmonyPriority = 'layout' | 'style' | 'balance';
+type ObjectInsertFusionPreference = 'conservative' | 'balanced' | 'design';
 
 interface ObjectInsertRequestItem {
   id: string;
@@ -2255,6 +2289,31 @@ function readObjectInsertHarmonyPriority(config: Record<string, unknown>): Objec
   return value === 'style' || value === 'balance' || value === 'layout' ? value : 'layout';
 }
 
+function readObjectInsertFusionPreference(config: Record<string, unknown>): ObjectInsertFusionPreference {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.fusionPreference === 'string'
+    ? nested.fusionPreference
+    : typeof config.objectInsertFusionPreference === 'string'
+      ? config.objectInsertFusionPreference
+      : '';
+  return value === 'conservative' || value === 'design' || value === 'balanced' ? value : 'balanced';
+}
+
+function readObjectInsertCandidateCount(config: Record<string, unknown>): 1 | 2 | 3 {
+  return config.batchCount === 2 || config.batchCount === 3 ? config.batchCount : 1;
+}
+
+function readObjectInsertPreviewFusionMode(config: Record<string, unknown>, requestMode?: unknown): boolean {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const values = [config.objectInsertMode, config.mode, nested.mode, nested.objectInsertMode, requestMode]
+    .filter((value): value is string => typeof value === 'string');
+  return !values.some(value => value === 'legacy_object_insert' || value === 'precise_inpaint');
+}
+
+function isObjectInsertRequestConfig(config: Record<string, unknown>): boolean {
+  return config.step === 'object_insert' || isRecord(config.objectInsert);
+}
+
 function readObjectInsertPlacementIntent(config: Record<string, unknown>): string {
   const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
   const value = typeof nested.placementIntent === 'string'
@@ -2288,7 +2347,7 @@ function objectInsertIncludesMask(mode: ObjectInsertDebugMode): boolean {
 
 function normalizeObjectInsertItemsForRequest(
   value: unknown,
-  input: { defaultPlacementMode: ObjectInsertPlacementMode; inputAssetIds: string[] },
+  input: { defaultPlacementMode: ObjectInsertPlacementMode; inputAssetIds: string[]; allowUnlistedReferenceAssetIds?: boolean },
 ): ObjectInsertRequestItem[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -2296,7 +2355,7 @@ function normalizeObjectInsertItemsForRequest(
     .map((item, index): ObjectInsertRequestItem => {
       const referenceAssetIds = readStringArray(item.referenceAssetIds)
         .map(assetId => assetId.trim())
-        .filter(assetId => input.inputAssetIds.includes(assetId))
+        .filter(assetId => input.allowUnlistedReferenceAssetIds || input.inputAssetIds.includes(assetId))
         .slice(0, 6);
       const placement = normalizeObjectPlacement(item.placement);
       const placementMode = item.placementMode === 'strict' || item.placementMode === 'natural'
@@ -2317,6 +2376,42 @@ function normalizeObjectInsertItemsForRequest(
     })
     .filter(item => item.referenceAssetIds.length > 0 || item.placementPreviewAssetId || item.placementMaskAssetId)
     .slice(0, 8);
+}
+
+function buildObjectInsertInputOrderForRequest(
+  items: ObjectInsertRequestItem[],
+  needsObject: boolean,
+  needsPreview: boolean,
+  needsMask: boolean,
+): Array<Record<string, unknown>> {
+  let imageIndex = 2;
+  const orders = items.map((item, itemIndex) => ({
+    itemIndex,
+    id: item.id,
+    objectType: item.objectType,
+    objectLabel: item.objectLabel,
+    referenceImageIndexes: needsObject ? item.referenceAssetIds.map(() => imageIndex++) : [],
+    placementMode: item.placementMode,
+    placementIntent: item.placementIntent,
+    extraPrompt: item.extraPrompt,
+  }));
+  const controlIndexes = new Map<string, number>();
+  const readControlIndex = (assetId: string | undefined): number | undefined => {
+    if (!assetId) return undefined;
+    const existing = controlIndexes.get(assetId);
+    if (existing) return existing;
+    const next = imageIndex++;
+    controlIndexes.set(assetId, next);
+    return next;
+  };
+  return orders.map((order, itemIndex) => {
+    const item = items[itemIndex];
+    return {
+      ...order,
+      placementGuideImageIndex: needsPreview ? readControlIndex(item.placementPreviewAssetId) : undefined,
+      placementMaskImageIndex: needsMask ? readControlIndex(item.placementMaskAssetId) : undefined,
+    };
+  });
 }
 
 function logGenerationJobModeStepDebug(stage: string, fields: { mode?: unknown; step?: unknown } = {}): void {

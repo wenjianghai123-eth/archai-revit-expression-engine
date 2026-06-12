@@ -1,28 +1,32 @@
-﻿import React from 'react';
+import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { 
-  History, 
-  Settings, 
-  Zap, 
-  LayoutDashboard,
+import {
+  AlertCircle,
+  ArrowRight,
   Database,
   FolderKanban,
+  History,
+  LayoutDashboard,
   Layers,
-  Wand2,
-  Paintbrush,
-  Box,
-  ScanLine,
-  FileImage,
-  LayoutGrid,
-  Sparkles,
-  ShieldCheck,
-  Camera,
   LogOut,
+  Plus,
+  Settings,
+  ShieldCheck,
+  Sparkles,
   WalletCards,
-  AlertCircle,
+  X,
 } from 'lucide-react';
 import { AuthUser, CreditBalance } from '../lib/api';
 import { GenerationStep } from '../types';
+import {
+  FeatureDefinition,
+  debugFeatureClick,
+  defaultFeatureIds,
+  getOptionalFeatures,
+  getVisibleFeatures,
+  readStoredVisibleFeatureIds,
+  writeStoredVisibleFeatureIds,
+} from '../featureRegistry';
 
 interface SidebarProps {
   activeTab: string;
@@ -67,89 +71,90 @@ export function Sidebar({
 
   return (
     <>
-    <div className="hidden h-screen w-72 shrink-0 flex-col border-r border-white/10 bg-[#070b16] text-white shadow-2xl lg:flex">
-      <div className="border-b border-white/10 p-6">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl bg-white shadow-lg shadow-blue-950/40">
-            <img src="/gtlogo.png" alt="烛照AI Logo" className="h-full w-full object-cover" />
+      <div className="hidden h-screen w-72 shrink-0 flex-col border-r border-white/10 bg-[#070b16] text-white shadow-2xl lg:flex">
+        <div className="border-b border-white/10 p-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl bg-white shadow-lg shadow-blue-950/40">
+              <img src="/gtlogo.png" alt="烛照AI Logo" className="h-full w-full object-cover" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xl font-black tracking-tight">烛照AI</p>
+              <p className="mt-0.5 text-[10px] font-bold tracking-[0.18em] text-slate-500">建筑空间智能表达平台</p>
+            </div>
           </div>
-          <div className="min-w-0">
-            <p className="text-xl font-black tracking-tight">烛照AI</p>
-            <p className="mt-0.5 text-[10px] font-bold tracking-[0.18em] text-slate-500">建筑空间智能表达平台</p>
+          <div className="mt-4 flex gap-2">
+            <span className="rounded-full border border-blue-400/30 bg-blue-500/10 px-2.5 py-1 text-[10px] font-bold text-blue-200">AI渲图</span>
+            <span className="rounded-full border border-violet-400/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-bold text-violet-200">烛照AI</span>
+          </div>
+          <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-blue-300">当前项目</p>
+            <h2 className="mt-2 text-lg font-bold leading-tight">烛照AI 生成工作台</h2>
+            <p className="mt-2 text-xs leading-5 text-slate-400">面向广田设计流程的 AI 方案表达工具。</p>
           </div>
         </div>
-        <div className="mt-4 flex gap-2">
-          <span className="rounded-full border border-blue-400/30 bg-blue-500/10 px-2.5 py-1 text-[10px] font-bold text-blue-200">AI渲图</span>
-          <span className="rounded-full border border-violet-400/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-bold text-violet-200">烛照AI</span>
-        </div>
-        <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-blue-300">当前项目</p>
-          <h2 className="mt-2 text-lg font-bold leading-tight">烛照AI 生成工作台</h2>
-          <p className="mt-2 text-xs leading-5 text-slate-400">面向广田设计流程的 AI 方案表达工具。</p>
-        </div>
-      </div>
 
-      <nav className="min-h-0 flex-1 space-y-6 overflow-y-auto p-4 custom-scrollbar">
-        {groups.map((group) => (
-          <div key={group.title} className="space-y-2">
-            <p className="px-3 text-[10px] font-bold uppercase tracking-[0.24em] text-slate-600">{group.title}</p>
-            {group.items.map((tab) => (
-              <NavItem key={tab.id} tab={tab} active={activeTab === tab.id} onClick={() => onTabChange(tab.id)} />
-            ))}
-          </div>
-        ))}
-      </nav>
+        <nav className="min-h-0 flex-1 space-y-6 overflow-y-auto p-4 custom-scrollbar">
+          {groups.map((group) => (
+            <div key={group.title} className="space-y-2">
+              <p className="px-3 text-[10px] font-bold uppercase tracking-[0.24em] text-slate-600">{group.title}</p>
+              {group.items.map((tab) => (
+                <NavItem key={tab.id} tab={tab} active={activeTab === tab.id} onClick={() => onTabChange(tab.id)} />
+              ))}
+            </div>
+          ))}
+        </nav>
 
-      <div className="border-t border-white/10 p-4">
-        {currentUser ? (
-          <AccountPanel
-            currentUser={currentUser}
-            creditBalance={creditBalance}
-            creditError={creditError}
-            onSignOut={onSignOut}
-          />
-        ) : null}
-        <p className="mb-2 px-3 text-[10px] font-bold uppercase tracking-[0.24em] text-slate-600">系统</p>
-        <button onClick={onSettingsOpen} className="group flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-slate-400 transition-colors hover:bg-white/5 hover:text-white" title="设置">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/5 group-hover:bg-white/10">
-            <Settings className="h-5 w-5" />
-          </div>
-          <span className="min-w-0">
-            <span className="block text-sm font-bold">设置</span>
-            <span className="block text-xs text-slate-500">后端与模型状态</span>
-          </span>
-        </button>
-        {isAdmin ? (
-          <button onClick={() => { window.location.href = '/admin'; }} className="group mt-2 flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-slate-400 transition-colors hover:bg-white/5 hover:text-white" title="后台管理">
+        <div className="border-t border-white/10 p-4">
+          {currentUser ? (
+            <AccountPanel
+              currentUser={currentUser}
+              creditBalance={creditBalance}
+              creditError={creditError}
+              onSignOut={onSignOut}
+            />
+          ) : null}
+          <p className="mb-2 px-3 text-[10px] font-bold uppercase tracking-[0.24em] text-slate-600">系统</p>
+          <button onClick={onSettingsOpen} className="group flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-slate-400 transition-colors hover:bg-white/5 hover:text-white" title="设置">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/5 group-hover:bg-white/10">
-              <ShieldCheck className="h-5 w-5" />
+              <Settings className="h-5 w-5" />
             </div>
             <span className="min-w-0">
-              <span className="block text-sm font-bold">后台管理</span>
-              <span className="block text-xs text-slate-500">用户与额度管理</span>
+              <span className="block text-sm font-bold">设置</span>
+              <span className="block text-xs text-slate-500">后端与模型状态</span>
             </span>
           </button>
-        ) : null}
+          {isAdmin ? (
+            <button onClick={() => { window.location.href = '/admin'; }} className="group mt-2 flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-slate-400 transition-colors hover:bg-white/5 hover:text-white" title="后台管理">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/5 group-hover:bg-white/10">
+                <ShieldCheck className="h-5 w-5" />
+              </div>
+              <span className="min-w-0">
+                <span className="block text-sm font-bold">后台管理</span>
+                <span className="block text-xs text-slate-500">用户与额度管理</span>
+              </span>
+            </button>
+          ) : null}
+        </div>
       </div>
-    </div>
-    <div className="fixed bottom-0 left-0 right-0 z-40 flex border-t border-white/10 bg-slate-950/95 px-2 py-2 text-white backdrop-blur lg:hidden">
-      {mobileTabs.map((tab) => (
-        <button
-          key={tab.id}
-          onClick={() => onTabChange(tab.id)}
-          className={`flex flex-1 flex-col items-center gap-1 rounded-xl px-2 py-2 text-[10px] font-bold ${
-            activeTab === tab.id ? 'bg-blue-600 text-white' : 'text-slate-400'
-          }`}
-        >
-          <tab.icon className="h-4 w-4" />
-          {tab.id === 'generate' ? '生成' : tab.label}
+
+      <div className="fixed bottom-0 left-0 right-0 z-40 flex border-t border-white/10 bg-slate-950/95 px-2 py-2 text-white backdrop-blur lg:hidden">
+        {mobileTabs.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => onTabChange(tab.id)}
+            className={`flex flex-1 flex-col items-center gap-1 rounded-xl px-2 py-2 text-[10px] font-bold ${
+              activeTab === tab.id ? 'bg-blue-600 text-white' : 'text-slate-400'
+            }`}
+          >
+            <tab.icon className="h-4 w-4" />
+            {tab.id === 'generate' ? '生成' : tab.label}
+          </button>
+        ))}
+        <button onClick={onSettingsOpen} className="flex flex-1 flex-col items-center gap-1 rounded-xl px-2 py-2 text-[10px] font-bold text-slate-400">
+          <Settings className="h-4 w-4" />
+          设置
         </button>
-      ))}
-      <button onClick={onSettingsOpen} className="flex flex-1 flex-col items-center gap-1 rounded-xl px-2 py-2 text-[10px] font-bold text-slate-400">
-        <Settings className="h-4 w-4" />
-        设置
-      </button>
-    </div>
+      </div>
     </>
   );
 }
@@ -247,78 +252,28 @@ interface StepperProps {
 }
 
 export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null, creditBalance = null }: StepperProps) {
-  const steps = [
-    {
-      id: GenerationStep.FloorplanTo3D,
-      title: '平面彩平',
-      desc: '上传平面图，生成三维彩平表达',
-      icon: ScanLine,
-      image: 'https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&q=80&w=600',
-    },
-    {
-      id: GenerationStep.PlanColorize,
-      title: '图纸智能表达',
-      desc: '上传黑白平面图，一键生成彩色分区、标注和表达图',
-      icon: FileImage,
-      image: 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&q=80&w=600',
-    },
-    {
-      id: GenerationStep.StyleRender,
-      title: '风格渲染',
-      desc: '参考图生成建筑或室内风格效果',
-      icon: Wand2,
-      image: 'https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?auto=format&fit=crop&q=80&w=600',
-    },
-    {
-      id: GenerationStep.FreeReferenceImage,
-      title: '自由参考生图',
-      desc: '上传原图和参考图，直接按提示词生成',
-      icon: FileImage,
-      image: 'https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&q=80&w=600',
-    },
-    {
-      id: GenerationStep.LocalInpainting,
-      title: '局部修饰',
-      desc: '画 mask 精修材质、家具与光影',
-      icon: Paintbrush,
-      image: 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&q=80&w=600',
-    },
-    {
-      id: GenerationStep.ObjectInsert,
-      title: '元素植入',
-      desc: '拖拽物体参考图，生成摆放示意',
-      icon: Layers,
-      image: 'https://images.unsplash.com/photo-1618220179428-22790b461013?auto=format&fit=crop&q=80&w=600',
-    },
-    {
-      id: GenerationStep.MaterialReplace,
-      title: '材质软装替换',
-      desc: '选择局部区域，替换地面、墙面、家具、灯光或材质',
-      icon: Layers,
-      image: 'https://images.unsplash.com/photo-1600566752355-35792bedcfea?auto=format&fit=crop&q=80&w=600',
-    },
-    {
-      id: GenerationStep.DesignVariants,
-      title: '方案变体',
-      desc: '一次生成多种设计方向，快速对比方案',
-      icon: LayoutGrid,
-      image: 'https://images.unsplash.com/photo-1600607688969-a5bfcd646154?auto=format&fit=crop&q=80&w=600',
-    },
-    {
-      id: GenerationStep.ModelSnapshotRender,
-      title: '白模快渲',
-      desc: '上传 3D 白模，选好角度，一键生成效果图',
-      icon: Box,
-      image: 'https://images.unsplash.com/photo-1486718448742-163732cd1544?auto=format&fit=crop&q=80&w=600',
-    },
-    {
-      id: GenerationStep.PanoramaQuickRender,
-      title: '漫游全景快渲',
-      desc: '上传模型，漫游取点，捕捉全景视点',
-      icon: Camera,
-      image: 'https://images.unsplash.com/photo-1518005020951-eccb494ad742?auto=format&fit=crop&q=80&w=600',
-    },
-  ];
+  const [addedFeatureIds, setAddedFeatureIds] = useState<string[]>(() => readStoredVisibleFeatureIds());
+  const [isFeaturePickerOpen, setIsFeaturePickerOpen] = useState(false);
+  const visibleFeatures = getVisibleFeatures(addedFeatureIds);
+  const optionalFeatures = getOptionalFeatures();
+  const visibleFeatureIdSet = new Set(visibleFeatures.map(feature => feature.id));
+
+  const handleSelectFeature = (feature: FeatureDefinition) => {
+    debugFeatureClick(feature);
+    onStepChange(feature.step);
+  };
+  const handleAddFeature = (featureId: string) => {
+    if (defaultFeatureIds.includes(featureId as typeof defaultFeatureIds[number]) || addedFeatureIds.includes(featureId)) return;
+    const nextIds = [...addedFeatureIds, featureId];
+    setAddedFeatureIds(nextIds);
+    writeStoredVisibleFeatureIds(nextIds);
+  };
+  const handleRemoveFeature = (featureId: string) => {
+    if (defaultFeatureIds.includes(featureId as typeof defaultFeatureIds[number])) return;
+    const nextIds = addedFeatureIds.filter(id => id !== featureId);
+    setAddedFeatureIds(nextIds);
+    writeStoredVisibleFeatureIds(nextIds);
+  };
 
   return (
     <div className="shrink-0 border-b border-slate-200 bg-white">
@@ -344,14 +299,15 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
         </div>
       </div>
 
-      <div className="grid gap-3 px-4 pb-3 md:grid-cols-3 xl:grid-cols-10 md:px-5">
-        {steps.map((step) => {
-          const isActive = currentStep === step.id;
-          const Icon = step.icon;
+      <div className="grid gap-3 px-4 pb-3 md:grid-cols-3 xl:grid-cols-6 md:px-5">
+        {visibleFeatures.map((feature) => {
+          const isActive = currentStep === feature.step;
+          const Icon = feature.icon;
+          const canRemove = !defaultFeatureIds.includes(feature.id as typeof defaultFeatureIds[number]);
           return (
             <button
-              key={step.id}
-              onClick={() => onStepChange(step.id)}
+              key={feature.id}
+              onClick={() => handleSelectFeature(feature)}
               className={`group relative min-h-20 overflow-hidden rounded-2xl border p-3 text-left transition-all ${
                 isActive
                   ? 'border-blue-200 bg-gradient-to-br from-blue-50 to-indigo-50 shadow-lg shadow-blue-100/60'
@@ -359,27 +315,40 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
               }`}
             >
               <img
-                src={step.image}
-                alt={step.title}
+                src={feature.image}
+                alt={feature.title}
                 className="absolute inset-0 h-full w-full object-cover opacity-10 transition-transform duration-500 group-hover:scale-105"
                 referrerPolicy="no-referrer"
               />
               <div className="absolute inset-0 bg-gradient-to-r from-white via-white/90 to-white/45" />
+              {canRemove ? (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleRemoveFeature(feature.id);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      handleRemoveFeature(feature.id);
+                    }
+                  }}
+                  className="absolute right-2 top-2 z-10 rounded-full bg-white/95 px-2 py-1 text-[10px] font-black text-slate-500 shadow-sm hover:bg-rose-50 hover:text-rose-600"
+                >
+                  隐藏
+                </span>
+              ) : null}
               <div className="relative flex items-start justify-between gap-3">
-                <div>
+                <div className="min-w-0">
                   <div className={`mb-2 flex h-8 w-8 items-center justify-center rounded-xl ${isActive ? 'bg-gradient-to-br from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-100' : 'bg-slate-100 text-slate-600'}`}>
                     <Icon className="h-4 w-4" />
                   </div>
-                  <h2 className="text-sm font-bold text-slate-950">{step.title}</h2>
-                  <p className="mt-0.5 line-clamp-1 text-xs text-slate-500">{step.desc}</p>
+                  <h2 className="truncate text-sm font-bold text-slate-950">{feature.title}</h2>
+                  <p className="mt-0.5 line-clamp-1 text-xs text-slate-500">{feature.desc}</p>
                 </div>
-                <span
-                  className={`rounded-full px-2 py-1 text-[10px] font-bold ${
-                    isActive ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'
-                  }`}
-                >
-                  0{step.id}
-                </span>
               </div>
               {isActive && (
                 <motion.div
@@ -390,6 +359,22 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
             </button>
           );
         })}
+        <button
+          type="button"
+          onClick={() => setIsFeaturePickerOpen(true)}
+          className="group relative min-h-20 overflow-hidden rounded-2xl border border-dashed border-blue-200 bg-blue-50/40 p-3 text-left transition hover:border-blue-300 hover:bg-blue-50"
+        >
+          <div className="relative flex h-full items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm">
+              <Plus className="h-5 w-5" />
+            </div>
+            <span className="min-w-0">
+              <span className="block text-sm font-black text-slate-900">+ 添加功能</span>
+              <span className="mt-0.5 block truncate text-xs text-slate-500">选择更多入口</span>
+            </span>
+            <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-blue-600" />
+          </div>
+        </button>
       </div>
 
       <div className="hidden items-center justify-end border-t border-slate-100 px-5 py-2 text-xs text-slate-500 md:flex">
@@ -402,20 +387,103 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
       </div>
 
       <div className="flex border-t border-slate-100 lg:hidden">
-        {steps.map((step) => {
-          const isActive = currentStep === step.id;
+        {visibleFeatures.map((feature) => {
+          const isActive = currentStep === feature.step;
           return (
             <button
-              key={step.id}
-              onClick={() => onStepChange(step.id)}
+              key={feature.id}
+              onClick={() => handleSelectFeature(feature)}
               className={`flex-1 px-2 py-3 text-xs font-bold ${isActive ? 'bg-blue-600 text-white' : 'text-slate-500'}`}
             >
-              {step.title}
+              {feature.title}
             </button>
           );
         })}
+        <button
+          type="button"
+          onClick={() => setIsFeaturePickerOpen(true)}
+          className="flex-1 px-2 py-3 text-xs font-bold text-blue-600"
+        >
+          更多
+        </button>
       </div>
+
+      {isFeaturePickerOpen ? (
+        <FeaturePicker
+          optionalFeatures={optionalFeatures}
+          visibleFeatureIdSet={visibleFeatureIdSet}
+          onAddFeature={handleAddFeature}
+          onRemoveFeature={handleRemoveFeature}
+          onClose={() => setIsFeaturePickerOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }
 
+function FeaturePicker({
+  optionalFeatures,
+  visibleFeatureIdSet,
+  onAddFeature,
+  onRemoveFeature,
+  onClose,
+}: {
+  optionalFeatures: FeatureDefinition[];
+  visibleFeatureIdSet: Set<string>;
+  onAddFeature: (featureId: string) => void;
+  onRemoveFeature: (featureId: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+      <div className="flex max-h-[82vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-4 py-3">
+          <div>
+            <h2 className="text-lg font-black text-slate-950">更多功能</h2>
+            <p className="mt-1 text-xs text-slate-500">默认核心功能不可移除，其他功能可添加到首页和 AI 生成页。</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200 hover:text-slate-900"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="min-h-0 overflow-y-auto p-3">
+          <div className="grid gap-2">
+            {optionalFeatures.map(feature => {
+              const Icon = feature.icon;
+              const isAdded = visibleFeatureIdSet.has(feature.id);
+              return (
+                <div key={feature.id} className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-blue-600">
+                    <Icon className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-black text-slate-900">{feature.title}</p>
+                    <p className="mt-0.5 line-clamp-1 text-xs text-slate-500">{feature.desc}</p>
+                  </div>
+                  {isAdded ? (
+                    <span className="shrink-0 rounded-full bg-blue-50 px-2 py-1 text-[10px] font-black text-blue-600">已添加</span>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => isAdded ? onRemoveFeature(feature.id) : onAddFeature(feature.id)}
+                    className={`h-9 shrink-0 rounded-xl px-3 text-xs font-black transition ${
+                      isAdded
+                        ? 'bg-white text-slate-500 hover:bg-rose-50 hover:text-rose-600'
+                        : 'bg-blue-600 text-white hover:bg-blue-700'
+                    }`}
+                  >
+                    {isAdded ? '移除' : '添加'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

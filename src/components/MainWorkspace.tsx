@@ -38,6 +38,7 @@ interface WorkspaceProps {
   onSelectGenerationResult: (resultId: string) => void;
   onToggleGenerationFavorite: (resultId: string) => void;
   onSecondaryEditResult: (resultId: string, action: SecondaryEditAction) => void;
+  onContinueObjectInsertRefine: (image: UploadedImage, source: { resultId?: string; label: string }) => void;
   onRenameGenerationResult: (resultId: string, variantName: string) => void;
   onSetViewMode: (viewMode: StepState['viewMode']) => void;
   onNextStep: () => void;
@@ -67,6 +68,7 @@ export function MainWorkspace({
   onSelectGenerationResult,
   onToggleGenerationFavorite,
   onSecondaryEditResult,
+  onContinueObjectInsertRefine,
   onRenameGenerationResult,
   onSetViewMode,
   onNextStep,
@@ -519,6 +521,7 @@ export function MainWorkspace({
           onUpdateMaterialImage={onUpdateMaterialImage}
           onUpdateConfig={onUpdateConfig}
           onGenerate={onGenerate}
+          onContinueRefineSource={onContinueObjectInsertRefine}
           projectName={projectName || selectedProjectId || 'archai-project'}
           isAdmin={isAdmin}
         />

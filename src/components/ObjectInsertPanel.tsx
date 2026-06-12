@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Crosshair, Download, ExternalLink, ImagePlus, Move, RotateCcw, RotateCw, Trash2, Upload, X } from 'lucide-react';
 import {
   GenerationConfig,
+  GenerationResultOption,
   GenerationRunStateOverride,
   GenerationStep,
   ObjectInsertItemConfig,
@@ -39,6 +40,7 @@ interface ObjectInsertPanelProps {
   onUpdateMaterialImage: (image: UploadedImage | null) => void;
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
   onGenerate: (stateOverride?: GenerationRunStateOverride) => void;
+  onContinueRefineSource?: (image: UploadedImage, source: { resultId?: string; label: string }) => void;
   projectName?: string | null;
   isAdmin?: boolean;
 }
@@ -130,6 +132,7 @@ export function ObjectInsertPanel({
   onUpdateMaterialImage,
   onUpdateConfig,
   onGenerate,
+  onContinueRefineSource,
   projectName,
   isAdmin = false,
 }: ObjectInsertPanelProps) {
@@ -889,6 +892,132 @@ export function ObjectInsertPanel({
     setIsPreparingGeneration(true);
     setMessage('正在准备多元素植入素材...');
     try {
+      const previewFusionSourceUpload = await ensureUploadedImageAsset(sourceImage, 'object-insert-preview-fusion-source');
+      const previewFusionItems = candidateItems.map(item => ({
+        ...item,
+        placement: item.id === activeObjectItem?.id ? placement : item.placement,
+      }));
+      const placementPreview = await exportCompositePlacementPreview(
+        previewFusionSourceUpload.image,
+        previewFusionItems.map(item => ({
+          image: item.referenceImages[0],
+          placement: item.placement,
+        })),
+      );
+      const placementPreviewAsset = await uploadDataUrlAsset(placementPreview.dataUrl, `object-insert-placement-preview-${Date.now()}`);
+      if (!placementPreviewAsset.id) {
+        setMessage('摆放示意图生成失败，请重试。');
+        return;
+      }
+      const effectivePreviewFusionConfig = {
+        ...state.config,
+        ...configOverride,
+        objectInsert: {
+          ...(state.config.objectInsert || {}),
+          ...(configOverride.objectInsert || {}),
+        },
+      } as GenerationConfig;
+      const previewFusionPlacementMode = readObjectInsertPlacementMode(effectivePreviewFusionConfig);
+      const previewFusionPlacementIntent = readObjectInsertPlacementIntent(effectivePreviewFusionConfig);
+      const previewFusionHarmonyPriority = readObjectInsertHarmonyPriority(effectivePreviewFusionConfig);
+      const previewFusionAllowAutoAdjustPosition = readObjectInsertAutoAdjust(effectivePreviewFusionConfig, 'allowAutoAdjustPosition');
+      const previewFusionAllowAutoAdjustRotation = readObjectInsertAutoAdjust(effectivePreviewFusionConfig, 'allowAutoAdjustRotation');
+      const previewFusionAllowAutoAdjustScale = readObjectInsertAutoAdjust(effectivePreviewFusionConfig, 'allowAutoAdjustScale');
+      const previewFusionObjectItemConfigs: ObjectInsertItemConfig[] = previewFusionItems.map(item => ({
+        id: item.id,
+        objectType: item.objectType || 'custom',
+        objectLabel: item.objectLabel || undefined,
+        referenceAssetIds: item.referenceImages.map(image => image.assetId).filter((assetId): assetId is string => Boolean(assetId)),
+        placement: item.placement,
+        placementPreviewAssetId: placementPreviewAsset.id,
+        placementMode: item.placementMode || previewFusionPlacementMode,
+        placementIntent: item.placementIntent || undefined,
+        extraPrompt: item.extraPrompt || undefined,
+      }));
+      const previewFusionConfigPatch: GenerationConfig = {
+        ...effectivePreviewFusionConfig,
+        step: 'object_insert',
+        objectInsertMode: 'object_insert_preview_fusion',
+        sourceImageAssetId: previewFusionSourceUpload.assetId,
+        placementPreviewAssetId: placementPreviewAsset.id,
+        placementGuideAssetId: placementPreviewAsset.id,
+        objectReferenceAssetId: undefined,
+        placementMaskAssetId: undefined,
+        objectPlacement: previewFusionObjectItemConfigs[0]?.placement,
+        objectInsertDebugMode: 'source_object_preview',
+        positionConstraintStrength,
+        placementMode: previewFusionPlacementMode,
+        placementIntent: previewFusionPlacementIntent,
+        harmonyPriority: previewFusionHarmonyPriority,
+        allowAutoAdjustPosition: previewFusionAllowAutoAdjustPosition,
+        allowAutoAdjustRotation: previewFusionAllowAutoAdjustRotation,
+        allowAutoAdjustScale: previewFusionAllowAutoAdjustScale,
+        objectInsert: {
+          mode: 'object_insert_preview_fusion',
+          sourceImageAssetId: previewFusionSourceUpload.assetId,
+          objectItems: previewFusionObjectItemConfigs,
+          globalExtraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
+          previewAssetId: placementPreviewAsset.id,
+          guideAssetId: placementPreviewAsset.id,
+          placement: previewFusionObjectItemConfigs[0]?.placement,
+          extraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
+          debugMode: 'source_object_preview',
+          positionConstraintStrength,
+          placementMode: previewFusionPlacementMode,
+          placementIntent: previewFusionPlacementIntent,
+          harmonyPriority: previewFusionHarmonyPriority,
+          allowAutoAdjustPosition: previewFusionAllowAutoAdjustPosition,
+          allowAutoAdjustRotation: previewFusionAllowAutoAdjustRotation,
+          allowAutoAdjustScale: previewFusionAllowAutoAdjustScale,
+        },
+        objectInsertInputOrder: undefined,
+        objectInsertExtraPrompt: state.config.objectInsertExtraPrompt || '',
+        customPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
+        maskMode: undefined,
+        maskAssetId: undefined,
+        editTarget: 'furniture',
+        preserveStructure: true,
+        preserveCamera: true,
+      };
+      setExportResult({ preview: placementPreview, mask: placementPreview, placement: previewFusionObjectItemConfigs[0]?.placement || emptyPlacement });
+      setObjectItems(objectItems.map(item => {
+        const prepared = previewFusionItems.find(preparedItem => preparedItem.id === item.id);
+        return prepared ? { ...item, placement: prepared.placement } : item;
+      }));
+      onUpdateInputImage(previewFusionSourceUpload.image);
+      onUpdateMaterialImage(null);
+      onUpdateConfig(previewFusionConfigPatch);
+      console.debug('[ObjectInsert] create generation job payload', {
+        step: 'object_insert',
+        requestMode: 'inpaint',
+        objectInsertMode: 'object_insert_preview_fusion',
+        configMode: previewFusionConfigPatch.objectInsert?.mode,
+        inputAssetIds: [previewFusionSourceUpload.assetId, placementPreviewAsset.id],
+        sourceImageAssetId: previewFusionSourceUpload.assetId,
+        placementPreviewAssetId: placementPreviewAsset.id,
+        objectItemsCount: previewFusionObjectItemConfigs.length,
+        objectItemsReferenceCount: previewFusionObjectItemConfigs.reduce((sum, item) => sum + item.referenceAssetIds.length, 0),
+        providerImageCount: 2,
+        sendsFurnitureReferencesToProvider: false,
+      });
+      console.info('[ObjectInsert] preview fusion generation job payload prepared', {
+        inputAssetIds: [previewFusionSourceUpload.assetId, placementPreviewAsset.id],
+        providerImageCount: 2,
+        sourceAssetId: previewFusionSourceUpload.assetId,
+        placementPreviewAssetId: placementPreviewAsset.id,
+        placementPreview: omitDataUrl(placementPreview),
+        objectItems: previewFusionObjectItemConfigs,
+      });
+      setMessage(`已导出 ${placementPreview.width}x${placementPreview.height} placement preview，将以原图 + 示意图模式融合。`);
+      onGenerate({
+        inputImage: previewFusionSourceUpload.image,
+        materialImage: null,
+        maskImage: null,
+        useFullImageMask: false,
+        config: previewFusionConfigPatch,
+      });
+      return;
+
       const includeObject = objectInsertIncludesObject(activeDebugMode);
       const includePreview = objectInsertIncludesPreview(activeDebugMode);
       const includeMask = objectInsertIncludesMask(activeDebugMode);
@@ -1058,9 +1187,62 @@ export function ObjectInsertPanel({
     void handleGenerateMultiClick(naturalPatch);
   };
 
-  const handleContinueTuning = () => {
-    setIsSelected(true);
-    setMessage('已回到摆放编辑。可继续调整建议区域、摆放意图或模式后再次生成。');
+  const handleContinueTuning = async () => {
+    if (state.isGenerating || isPreparingGeneration) return;
+    const source = resolveContinueRefineSource(selectedResult, state.outputImage);
+    if (!source.assetId && !source.url) {
+      setMessage('无法继续微调：未找到结果图原图资源。');
+      return;
+    }
+
+    setIsPreparingGeneration(true);
+    setMessage('正在载入当前结果作为新的原图...');
+    try {
+      const preparedSource = await buildContinueRefineUploadedImage(source);
+      const nextConfig: Partial<GenerationConfig> = {
+        sourceImageAssetId: preparedSource.assetId,
+        placementPreviewAssetId: undefined,
+        placementGuideAssetId: undefined,
+        placementMaskAssetId: undefined,
+        objectReferenceAssetId: undefined,
+        objectPlacement: undefined,
+        objectInsertInputOrder: undefined,
+        maskMode: undefined,
+        maskAssetId: undefined,
+        objectInsertMode: 'object_insert_preview_fusion',
+        objectInsert: {
+          ...(state.config.objectInsert || {}),
+          mode: 'object_insert_preview_fusion',
+          sourceImageAssetId: preparedSource.assetId,
+          objectItems: [],
+          previewAssetId: undefined,
+          guideAssetId: undefined,
+          maskAssetId: undefined,
+          objectReferenceAssetId: undefined,
+          objectReferenceAssetIds: undefined,
+          placement: undefined,
+        },
+      };
+
+      setObjectItems([]);
+      setActiveItemId('');
+      setPlacement(emptyPlacement);
+      setExportResult(null);
+      initializedPairRef.current = '';
+      onContinueRefineSource?.(preparedSource, {
+        resultId: source.resultId,
+        label: source.label,
+      });
+      onUpdateInputImage(preparedSource);
+      onUpdateMaterialImage(null);
+      onUpdateConfig(nextConfig);
+      setIsSelected(true);
+      setMessage('已将当前结果作为新的原图，可继续添加家具进行微调。');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '无法继续微调：结果图载入失败。');
+    } finally {
+      setIsPreparingGeneration(false);
+    }
   };
 
   const handleDownloadResult = async () => {
@@ -1094,7 +1276,7 @@ export function ObjectInsertPanel({
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-blue-600">Object Insert</p>
           <h2 className="mt-1 text-xl font-black text-slate-950">元素植入</h2>
-          <p className="mt-1 text-xs leading-5 text-slate-500">上传原图和物体参考图，先完成可视化摆放、placement guide 与 mask 导出。</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">上传原图后，可上传多张家具图片并直接拖动摆放到目标位置。生成时系统会自动根据摆放示意图进行自然融合，生成具有自然阴影、统一透视和协调材质的效果图。</p>
         </div>
 
         <UploadCard
@@ -1328,7 +1510,7 @@ export function ObjectInsertPanel({
               className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
             >
               <Download className="h-4 w-4" />
-              {isExporting ? '正在导出' : '导出 guide + mask'}
+              {isExporting ? '正在导出' : '导出 placement preview'}
             </button>
             <button
               type="button"
@@ -1499,7 +1681,8 @@ export function ObjectInsertPanel({
                   <button
                     type="button"
                     onClick={handleContinueTuning}
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:border-blue-200 hover:text-blue-700"
+                    disabled={state.isGenerating || isPreparingGeneration}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     继续微调
                   </button>
@@ -1883,6 +2066,114 @@ function createInitialObjectItems(config: GenerationConfig, legacyObjectImage: U
   }];
 }
 
+interface ContinueRefineSource {
+  resultId?: string;
+  label: string;
+  assetId?: string;
+  url?: string;
+  width?: number;
+  height?: number;
+}
+
+function resolveContinueRefineSource(result: GenerationResultOption | undefined, fallbackUrl: string | null): ContinueRefineSource {
+  const metadata = result?.metadata || {};
+  return {
+    resultId: result?.id,
+    label: result?.variantName || result?.variantLabel || '继续微调原图',
+    assetId: readFirstString(
+      metadata.outputAssetId,
+      metadata.originalAssetId,
+      metadata.output_asset_id,
+      metadata.original_asset_id,
+      result?.assetId,
+    ) || undefined,
+    url: readFirstString(
+      metadata.outputUrl,
+      metadata.originalUrl,
+      metadata.output_url,
+      metadata.original_url,
+      result?.imageUrl,
+      fallbackUrl,
+    ) || undefined,
+    width: readPositiveNumber(metadata.outputWidth, metadata.originalWidth, metadata.width, metadata.output_width, metadata.original_width) || undefined,
+    height: readPositiveNumber(metadata.outputHeight, metadata.originalHeight, metadata.height, metadata.output_height, metadata.original_height) || undefined,
+  };
+}
+
+async function buildContinueRefineUploadedImage(source: ContinueRefineSource): Promise<UploadedImage> {
+  let assetId = source.assetId;
+  let url = source.url || '';
+  let type = readImageMimeType(url);
+  let size = 0;
+
+  if (!assetId) {
+    if (!url) throw new Error('无法继续微调：未找到结果图原图资源。');
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('无法继续微调：结果图资源无法读取，请稍后重试。');
+    const blob = await response.blob();
+    type = blob.type || type;
+    size = blob.size;
+    const asset = await uploadImageAsset(blob, `object-insert-continue-${Date.now()}.${readImageExtension(type)}`);
+    assetId = asset.id;
+    url = asset.url || url;
+    type = asset.mimeType || type;
+    size = asset.size || size;
+  }
+
+  const displayUrl = url || source.url || '';
+  let dimensions = source.width && source.height ? { width: source.width, height: source.height } : null;
+  if (!dimensions && displayUrl) {
+    try {
+      const image = await loadCanvasImage(displayUrl);
+      dimensions = { width: image.naturalWidth, height: image.naturalHeight };
+    } catch {
+      dimensions = null;
+    }
+  }
+
+  return {
+    id: `object-insert-continue-${assetId || Date.now()}`,
+    name: source.label || '继续微调原图',
+    type,
+    size,
+    dataUrl: displayUrl,
+    url: displayUrl.startsWith('data:') ? undefined : displayUrl,
+    assetId,
+    width: dimensions?.width,
+    height: dimensions?.height,
+  };
+}
+
+function readImageMimeType(url: string | undefined): string {
+  if (!url) return 'image/png';
+  const dataUrlMimeType = /^data:([^;,]+)/u.exec(url)?.[1];
+  if (dataUrlMimeType) return dataUrlMimeType;
+  const pathname = url.split('?')[0]?.toLowerCase() || '';
+  if (pathname.endsWith('.jpg') || pathname.endsWith('.jpeg')) return 'image/jpeg';
+  if (pathname.endsWith('.webp')) return 'image/webp';
+  return 'image/png';
+}
+
+function readImageExtension(mimeType: string): string {
+  if (mimeType === 'image/jpeg') return 'jpg';
+  if (mimeType === 'image/webp') return 'webp';
+  return 'png';
+}
+
+function readFirstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+  }
+  return null;
+}
+
+function readPositiveNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return Math.round(value);
+  }
+  return null;
+}
+
 function toObjectInsertConfigItems(items: ObjectInsertDraftItem[]): ObjectInsertItemConfig[] {
   return items.slice(0, maxObjectItems).map(item => ({
     id: item.id,
@@ -1986,6 +2277,38 @@ async function exportPlacementMask(sourceImage: UploadedImage, objectImage: Uplo
   context.fillStyle = '#000000';
   context.fillRect(0, 0, width, height);
   drawPrecisePlacementMask(context, object, placement);
+
+  const dataUrl = canvas.toDataURL('image/png');
+  return { dataUrl, width, height, bytesApprox: estimateDataUrlBytes(dataUrl) };
+}
+
+async function exportCompositePlacementPreview(
+  sourceImage: UploadedImage,
+  items: Array<{ image: UploadedImage; placement: ObjectPlacement }>,
+): Promise<ExportedImageInfo> {
+  const [source, ...objects] = await Promise.all([
+    loadCanvasImage(readImageSrc(sourceImage)),
+    ...items.map(item => loadCanvasImage(readImageSrc(item.image))),
+  ]);
+  const width = sourceImage.width || source.naturalWidth || 1200;
+  const height = sourceImage.height || source.naturalHeight || 800;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas export is not supported in this browser.');
+
+  context.drawImage(source, 0, 0, width, height);
+  items.forEach((item, index) => {
+    const object = objects[index];
+    if (!object) return;
+    context.save();
+    context.translate(item.placement.x + item.placement.width / 2, item.placement.y + item.placement.height / 2);
+    context.rotate(item.placement.rotation * Math.PI / 180);
+    context.globalAlpha = 0.92;
+    context.drawImage(object, -item.placement.width / 2, -item.placement.height / 2, item.placement.width, item.placement.height);
+    context.restore();
+  });
 
   const dataUrl = canvas.toDataURL('image/png');
   return { dataUrl, width, height, bytesApprox: estimateDataUrlBytes(dataUrl) };
