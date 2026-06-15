@@ -54,6 +54,13 @@ export type GenerationJobStep =
   | 'panorama_quick_render'
   | 'object_insert'
   | 'free_reference_image';
+export type PromptTemplateFeature =
+  | 'floorplan'
+  | 'style-render'
+  | 'design-variants'
+  | 'material-replace'
+  | 'object-insert'
+  | 'free-reference-image';
 
 export interface GenerationRecord {
   id: string;
@@ -115,6 +122,42 @@ export interface ImageAsset {
   size: number;
   createdAt: string;
 }
+
+export interface PromptTemplateInputPreview {
+  label: string;
+  url: string;
+  assetId?: string;
+}
+
+export interface PromptTemplateRecord {
+  id: string;
+  name: string;
+  description: string;
+  generationStep: GenerationJobStep;
+  feature: PromptTemplateFeature;
+  featureName: string;
+  prompt: string;
+  negativePrompt?: string;
+  config: Record<string, unknown>;
+  inputAssetIds: string[];
+  referenceAssetIds: string[];
+  materialAssetIds: string[];
+  sourceAssetId?: string | null;
+  placementPreviewAssetId?: string | null;
+  outputAssetId?: string | null;
+  outputUrl: string;
+  previewAssetId?: string | null;
+  tags: string[];
+  isPublic: boolean;
+  createdBy: string;
+  createdFromGenerationRecordId?: string | null;
+  createdFromJobId?: string | null;
+  inputPreviews: PromptTemplateInputPreview[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type PromptTemplateCreateInput = Omit<PromptTemplateRecord, 'id' | 'createdBy' | 'createdAt' | 'updatedAt'>;
 
 export interface ModelAssetRecord {
   id: string;
@@ -508,6 +551,36 @@ export async function uploadImageAsset(file: Blob, filename = 'image.png'): Prom
 export async function getImageAsset(id: string): Promise<ImageAsset> {
   const response = await request<{ asset: ImageAsset }>(`/api/assets/images/${encodeURIComponent(id)}`);
   return response.asset;
+}
+
+export async function listPromptTemplates(filters: { generationStep?: GenerationJobStep; search?: string; tag?: string } = {}): Promise<PromptTemplateRecord[]> {
+  const params = new URLSearchParams();
+  if (filters.generationStep) params.set('generationStep', filters.generationStep);
+  if (filters.search?.trim()) params.set('search', filters.search.trim());
+  if (filters.tag?.trim()) params.set('tag', filters.tag.trim());
+  const query = params.toString();
+  const response = await request<{ templates: PromptTemplateRecord[] }>(`/api/prompt-templates${query ? `?${query}` : ''}`);
+  return response.templates;
+}
+
+export async function createPromptTemplate(input: PromptTemplateCreateInput): Promise<PromptTemplateRecord> {
+  const response = await request<{ template: PromptTemplateRecord }>('/api/prompt-templates', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  return response.template;
+}
+
+export async function getPromptTemplate(id: string): Promise<PromptTemplateRecord> {
+  const response = await request<{ template: PromptTemplateRecord }>(`/api/prompt-templates/${encodeURIComponent(id)}`);
+  return response.template;
+}
+
+export async function deletePromptTemplate(id: string): Promise<PromptTemplateRecord> {
+  const response = await request<{ template: PromptTemplateRecord }>(`/api/prompt-templates/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  return response.template;
 }
 
 export async function createGenerationJob(input: GenerationJobInput): Promise<GenerationJob> {

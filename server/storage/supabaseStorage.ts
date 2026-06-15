@@ -6,6 +6,7 @@ import {
   CreateGenerationRecordInput,
   CreateGenerationResultInput,
   CreateImageAssetInput,
+  CreatePromptTemplateInput,
   CreateModelAssetInput,
   UpdateModelAssetInput,
   CreateProjectInput,
@@ -18,6 +19,8 @@ import {
   GenerationRecord,
   GenerationResult,
   ImageAsset,
+  PromptTemplateFilters,
+  PromptTemplateRecord,
   ModelAsset,
   Project,
   ShareLink,
@@ -106,6 +109,34 @@ type ImageAssetRow = {
   mime_type: string;
   size: number;
   created_at: string;
+};
+
+type PromptTemplateRow = {
+  id: string;
+  name: string;
+  description: string | null;
+  generation_step: PromptTemplateRecord['generationStep'];
+  feature: PromptTemplateRecord['feature'] | null;
+  feature_name: string | null;
+  prompt: string;
+  negative_prompt: string | null;
+  config: Record<string, unknown>;
+  input_asset_ids: string[];
+  reference_asset_ids: string[];
+  material_asset_ids: string[];
+  source_asset_id: string | null;
+  placement_preview_asset_id: string | null;
+  output_asset_id: string | null;
+  output_url: string | null;
+  preview_asset_id: string | null;
+  tags: string[];
+  is_public: boolean;
+  created_by: string | null;
+  created_from_generation_record_id: string | null;
+  created_from_job_id: string | null;
+  input_previews: PromptTemplateRecord['inputPreviews'] | null;
+  created_at: string;
+  updated_at: string;
 };
 
 type ModelAssetRow = {
@@ -629,6 +660,83 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     return data ? mapImageAssetRow(data as ImageAssetRow) : null;
   }
 
+  async listPromptTemplates(filters: PromptTemplateFilters = {}): Promise<PromptTemplateRecord[]> {
+    let query = this.client
+      .from('prompt_templates')
+      .select('*')
+      .eq('is_public', true)
+      .order('created_at', { ascending: false });
+
+    if (filters.generationStep) query = query.eq('generation_step', filters.generationStep);
+    if (filters.tag) query = query.contains('tags', [filters.tag]);
+    if (filters.search) {
+      const search = escapePostgrestLike(filters.search);
+      query = query.or(`name.ilike.%${search}%,description.ilike.%${search}%,prompt.ilike.%${search}%,feature_name.ilike.%${search}%`);
+    }
+
+    const { data, error } = await query;
+    assertNoSupabaseError(error, 'listing prompt templates');
+    return ((data ?? []) as PromptTemplateRow[]).map(mapPromptTemplateRow);
+  }
+
+  async getPromptTemplate(id: string): Promise<PromptTemplateRecord | null> {
+    const { data, error } = await this.client
+      .from('prompt_templates')
+      .select('*')
+      .eq('id', id)
+      .eq('is_public', true)
+      .maybeSingle();
+
+    assertNoSupabaseError(error, 'reading prompt template');
+    return data ? mapPromptTemplateRow(data as PromptTemplateRow) : null;
+  }
+
+  async createPromptTemplate(input: CreatePromptTemplateInput): Promise<PromptTemplateRecord> {
+    const now = new Date().toISOString();
+    const row = {
+      name: input.name,
+      description: input.description || '',
+      generation_step: input.generationStep,
+      feature: input.feature,
+      feature_name: input.featureName,
+      prompt: input.prompt,
+      negative_prompt: input.negativePrompt || null,
+      config: input.config,
+      input_asset_ids: input.inputAssetIds || [],
+      reference_asset_ids: input.referenceAssetIds || [],
+      material_asset_ids: input.materialAssetIds || [],
+      source_asset_id: input.sourceAssetId || null,
+      placement_preview_asset_id: input.placementPreviewAssetId || null,
+      output_asset_id: input.outputAssetId || null,
+      output_url: input.outputUrl,
+      preview_asset_id: input.previewAssetId || input.outputAssetId || null,
+      tags: input.tags || [],
+      is_public: input.isPublic !== false,
+      created_by: input.createdBy,
+      created_from_generation_record_id: input.createdFromGenerationRecordId || null,
+      created_from_job_id: input.createdFromJobId || null,
+      input_previews: input.inputPreviews || [],
+      created_at: now,
+      updated_at: now,
+    };
+
+    const { data, error } = await this.client.from('prompt_templates').insert(row).select('*').single();
+    assertNoSupabaseError(error, 'creating prompt template');
+    return mapPromptTemplateRow(data as PromptTemplateRow);
+  }
+
+  async deletePromptTemplate(id: string): Promise<PromptTemplateRecord | null> {
+    const { data, error } = await this.client
+      .from('prompt_templates')
+      .delete()
+      .eq('id', id)
+      .select('*')
+      .maybeSingle();
+
+    assertNoSupabaseError(error, 'deleting prompt template');
+    return data ? mapPromptTemplateRow(data as PromptTemplateRow) : null;
+  }
+
   async listModelAssets(userId: string): Promise<ModelAsset[]> {
     const { data, error } = await this.client
       .from('model_assets')
@@ -1002,6 +1110,59 @@ function mapImageAssetRow(row: ImageAssetRow): ImageAsset {
     size: row.size,
     createdAt: row.created_at,
   };
+}
+
+function mapPromptTemplateRow(row: PromptTemplateRow): PromptTemplateRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description || '',
+    generationStep: row.generation_step,
+    feature: row.feature || inferPromptTemplateFeature(row.generation_step),
+    featureName: row.feature_name || row.generation_step,
+    prompt: row.prompt,
+    negativePrompt: row.negative_prompt || undefined,
+    config: row.config || {},
+    inputAssetIds: row.input_asset_ids || [],
+    referenceAssetIds: row.reference_asset_ids || [],
+    materialAssetIds: row.material_asset_ids || [],
+    sourceAssetId: row.source_asset_id,
+    placementPreviewAssetId: row.placement_preview_asset_id,
+    outputAssetId: row.output_asset_id,
+    outputUrl: row.output_url || '',
+    previewAssetId: row.preview_asset_id,
+    tags: row.tags || [],
+    isPublic: row.is_public,
+    createdBy: row.created_by || '',
+    createdFromGenerationRecordId: row.created_from_generation_record_id,
+    createdFromJobId: row.created_from_job_id,
+    inputPreviews: row.input_previews || [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function inferPromptTemplateFeature(step: PromptTemplateRecord['generationStep']): PromptTemplateRecord['feature'] {
+  switch (step) {
+    case 'floorplan_to_3d':
+      return 'floorplan';
+    case 'style_render':
+      return 'style-render';
+    case 'design_variants':
+      return 'design-variants';
+    case 'material_replace':
+      return 'material-replace';
+    case 'object_insert':
+      return 'object-insert';
+    case 'free_reference_image':
+      return 'free-reference-image';
+    default:
+      return 'floorplan';
+  }
+}
+
+function escapePostgrestLike(value: string): string {
+  return value.trim().replace(/[%_,]/g, match => `\\${match}`);
 }
 
 function mapModelAssetRow(row: ModelAssetRow): ModelAsset {

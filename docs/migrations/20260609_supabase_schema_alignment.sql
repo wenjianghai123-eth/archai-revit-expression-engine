@@ -125,6 +125,40 @@ create table if not exists public.generation_results (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.prompt_templates (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  description text,
+  generation_step text not null,
+  feature text,
+  feature_name text,
+  prompt text not null default '',
+  negative_prompt text,
+  config jsonb not null default '{}'::jsonb,
+  input_asset_ids jsonb not null default '[]'::jsonb,
+  reference_asset_ids jsonb not null default '[]'::jsonb,
+  material_asset_ids jsonb not null default '[]'::jsonb,
+  source_asset_id text,
+  placement_preview_asset_id text,
+  output_asset_id text,
+  output_url text,
+  preview_asset_id text,
+  tags jsonb not null default '[]'::jsonb,
+  is_public boolean not null default true,
+  created_by uuid,
+  created_from_generation_record_id text,
+  created_from_job_id text,
+  input_previews jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_prompt_templates_generation_step
+  on public.prompt_templates(generation_step);
+
+create index if not exists idx_prompt_templates_created_at
+  on public.prompt_templates(created_at desc);
+
 create table if not exists public.share_links (
   id text primary key,
   project_id text not null references public.projects(id) on delete cascade,

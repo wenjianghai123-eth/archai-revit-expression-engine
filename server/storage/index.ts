@@ -6,6 +6,7 @@ import {
   CreateGenerationRecordInput,
   CreateGenerationResultInput,
   CreateImageAssetInput,
+  CreatePromptTemplateInput,
   CreateModelAssetInput,
   CreateProjectInput,
   CreateShareLinkInput,
@@ -19,6 +20,8 @@ import {
   GenerationRecord,
   GenerationResult,
   ImageAsset,
+  PromptTemplateFilters,
+  PromptTemplateRecord,
   ModelAsset,
   ModelOptimizationMetadata,
   Project,
@@ -38,6 +41,7 @@ export type {
   CreateGenerationRecordInput,
   CreateGenerationResultInput,
   CreateImageAssetInput,
+  CreatePromptTemplateInput,
   CreateModelAssetInput,
   CreateProjectInput,
   CreateShareLinkInput,
@@ -51,6 +55,8 @@ export type {
   GenerationRecord,
   GenerationResult,
   ImageAsset,
+  PromptTemplateFilters,
+  PromptTemplateRecord,
   ModelAsset,
   ModelOptimizationMetadata,
   Project,
@@ -170,6 +176,22 @@ export function createImageAsset(input: CreateImageAssetInput): Promise<ImageAss
 
 export function getImageAsset(id: string, userId?: string): Promise<ImageAsset | null> {
   return storageAdapter.getImageAsset(id, userId);
+}
+
+export function listPromptTemplates(filters?: PromptTemplateFilters): Promise<PromptTemplateRecord[]> {
+  return storageAdapter.listPromptTemplates(filters);
+}
+
+export function getPromptTemplate(id: string): Promise<PromptTemplateRecord | null> {
+  return storageAdapter.getPromptTemplate(id);
+}
+
+export function createPromptTemplate(input: CreatePromptTemplateInput): Promise<PromptTemplateRecord> {
+  return storageAdapter.createPromptTemplate(input);
+}
+
+export function deletePromptTemplate(id: string): Promise<PromptTemplateRecord | null> {
+  return storageAdapter.deletePromptTemplate(id);
 }
 
 export function listModelAssets(userId: string): Promise<ModelAsset[]> {

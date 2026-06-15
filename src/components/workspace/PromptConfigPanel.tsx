@@ -111,14 +111,14 @@ function FloorplanMultiPlanControls({ config, onUpdateConfig }: FloorplanMultiPl
     <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-3">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-xs font-black text-slate-900">三维彩平输出</p>
-          <p className="mt-0.5 text-[11px] font-semibold text-slate-500">预计生成 {count} 张，消耗 {count} 点</p>
+          <p className="text-xs font-black text-slate-900">平面彩平模式</p>
+          <p className="mt-0.5 text-[11px] font-semibold text-slate-500">彩平表达、三维彩平表达和多方案输出统一在此入口内完成；预计生成 {count} 张，消耗 {count} 点</p>
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <MiniOption active={outputMode !== 'multi'} label="单方案" onClick={() => updateMultiPlan({ floorplanOutputMode: 'single', batchCount: 1 })} />
-        <MiniOption active={outputMode === 'multi'} label="多方案" onClick={() => updateMultiPlan({ floorplanOutputMode: 'multi', batchCount: config.batchCount === 2 || config.batchCount === 6 ? config.batchCount : 4 })} />
+        <MiniOption active={outputMode !== 'multi'} label="三维彩平表达" onClick={() => updateMultiPlan({ floorplanOutputMode: 'single', batchCount: 1 })} />
+        <MiniOption active={outputMode === 'multi'} label="多方案输出" onClick={() => updateMultiPlan({ floorplanOutputMode: 'multi', batchCount: config.batchCount === 2 || config.batchCount === 6 ? config.batchCount : 4 })} />
       </div>
 
       {outputMode === 'multi' ? (

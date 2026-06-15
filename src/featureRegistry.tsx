@@ -15,6 +15,7 @@ export interface FeatureDefinition {
 }
 
 export const visibleFeatureIdsStorageKey = 'visibleFeatureIds';
+const blockedFeatureIds = new Set(['floorplan_to_3d']);
 
 export const defaultFeatureIds = [
   'floor_plan_color',
@@ -28,9 +29,9 @@ export const allFeatures: FeatureDefinition[] = [
   {
     id: 'floor_plan_color',
     title: '平面彩平',
-    desc: '上传平面图，生成三维彩平表达。',
+    desc: '上传平面图，统一生成彩平、三维彩平或多方案表达。',
     input: '输入：平面图',
-    output: '输出：三维彩平',
+    output: '输出：彩平 / 多方案',
     step: GenerationStep.FloorplanTo3D,
     componentName: 'FloorplanTo3DWorkspace',
     icon: ScanLine,
@@ -79,17 +80,6 @@ export const allFeatures: FeatureDefinition[] = [
     componentName: 'DesignVariantsPanel',
     icon: LayoutGrid,
     image: 'https://images.unsplash.com/photo-1600607688969-a5bfcd646154?auto=format&fit=crop&q=80&w=900',
-  },
-  {
-    id: 'floorplan_to_3d',
-    title: '平面图生成三维彩平',
-    desc: '上传黑白平面图，快速生成可用于方案沟通的三维彩平效果。',
-    input: '输入：平面图',
-    output: '输出：三维彩平',
-    step: GenerationStep.FloorplanTo3D,
-    componentName: 'FloorplanTo3DWorkspace',
-    icon: ScanLine,
-    image: 'https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&q=80&w=900',
   },
   {
     id: 'drawing_expression',
@@ -156,7 +146,11 @@ export function readStoredVisibleFeatureIds(): string[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return sanitizeAddedFeatureIds(parsed);
+    const sanitized = sanitizeAddedFeatureIds(parsed);
+    if (JSON.stringify(parsed) !== JSON.stringify(sanitized)) {
+      window.localStorage.setItem(visibleFeatureIdsStorageKey, JSON.stringify(sanitized));
+    }
+    return sanitized;
   } catch {
     return [];
   }
@@ -196,7 +190,7 @@ function sanitizeAddedFeatureIds(featureIds: unknown[]): string[] {
   const defaultIds = new Set<string>(defaultFeatureIds);
   return Array.from(new Set(featureIds))
     .filter((id): id is string => typeof id === 'string')
-    .filter(id => validIds.has(id) && !defaultIds.has(id));
+    .filter(id => validIds.has(id) && !defaultIds.has(id) && !blockedFeatureIds.has(id));
 }
 
 function validateFeatureRegistry() {

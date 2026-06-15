@@ -11,11 +11,11 @@ import { LoginPage } from './components/LoginPage';
 import { CreativeHome } from './components/CreativeHome';
 import { ProjectList } from './components/ProjectList';
 import { GenerationStep, GenerationHistoryItem, StepState, UploadedImage, SecondaryEditAction } from './types';
-import { PROMPT_TEMPLATES } from './constants';
 import {
   cancelGenerationJob,
   createAutoProject,
   deleteProject,
+  listPromptTemplates,
   updateGenerationResult,
 } from './lib/api';
 import { useCurrentUser } from './hooks/useCurrentUser';
@@ -26,6 +26,7 @@ import { useGenerationRunner } from './hooks/useGenerationRunner';
 import { useProjectSelection } from './hooks/useProjectSelection';
 import { clearGenerationHistory, deleteGenerationRecord, listGenerationRecords } from './storage/history';
 import { buildSecondaryEditConfigPatch } from './utils/secondaryEdit';
+import { promptTemplateRecordToTemplate } from './utils/savedPromptTemplates';
 import { motion, AnimatePresence } from 'motion/react';
 
 const MainWorkspace = lazy(() => import('./components/MainWorkspace').then(module => ({ default: module.MainWorkspace })));
@@ -73,12 +74,22 @@ export default function App() {
   } = useGenerationWorkflow(() => setActiveTab('generate'));
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<GenerationHistoryItem[]>(() => listGenerationRecords());
+  const [promptTemplates, setPromptTemplates] = useState(() => [] as ReturnType<typeof promptTemplateRecordToTemplate>[]);
   const [queuedSecondaryGenerationId, setQueuedSecondaryGenerationId] = useState<string | null>(null);
   const { backendHealth, refreshBackendHealth } = useBackendHealth(isSettingsOpen);
   const { creditBalance, creditError, refreshCreditBalance } = useCreditBalance(Boolean(currentUser));
   const panoramaShareId = readPanoramaShareId();
   const publicShareToken = readPublicShareToken();
   const isAdminPath = window.location.pathname === '/admin';
+
+  const refreshPromptTemplates = useCallback(async () => {
+    try {
+      const records = await listPromptTemplates();
+      setPromptTemplates(records.map(promptTemplateRecordToTemplate));
+    } catch {
+      setPromptTemplates([]);
+    }
+  }, []);
 
   const handleReuseHistory = useCallback((item: GenerationHistoryItem) => {
     const historyInputImage = buildHistoryInputImage(item);
@@ -186,6 +197,16 @@ export default function App() {
     setQueuedSecondaryGenerationId(null);
     void handleGenerate();
   }, [handleGenerate, queuedSecondaryGenerationId]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    void refreshPromptTemplates();
+    const handleTemplatesUpdated = () => {
+      void refreshPromptTemplates();
+    };
+    window.addEventListener('prompt-templates-updated', handleTemplatesUpdated);
+    return () => window.removeEventListener('prompt-templates-updated', handleTemplatesUpdated);
+  }, [currentUser, refreshPromptTemplates]);
 
   const handleCancelGeneration = useCallback(async () => {
     const jobId = stepStates[currentStep].generationJobId;
@@ -541,7 +562,7 @@ export default function App() {
               className="min-h-0 flex-1 overflow-hidden"
             >
               <CreativeHome
-                templates={PROMPT_TEMPLATES}
+                templates={promptTemplates}
                 historyItems={historyItems}
                 onStartCreate={handleStartCreate}
                 onOpenTemplates={() => setActiveTab('templates')}
@@ -655,7 +676,7 @@ export default function App() {
               className="min-h-0 flex-1 overflow-hidden"
             >
               <Suspense fallback={<PanelLoading />}>
-                <TemplatesLibrary templates={PROMPT_TEMPLATES} currentConfig={stepStates[currentStep].config} onApply={handleApplyTemplate} />
+                <TemplatesLibrary templates={promptTemplates} currentConfig={stepStates[currentStep].config} onApply={handleApplyTemplate} />
               </Suspense>
             </motion.div>
           ) : activeTab === 'history' ? (

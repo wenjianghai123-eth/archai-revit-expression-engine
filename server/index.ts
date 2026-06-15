@@ -13,6 +13,7 @@ import {
   createGenerationRecord,
   createGenerationJob,
   createImageAsset,
+  createPromptTemplate,
   createModelAsset,
   createProject,
   createUserProfile,
@@ -27,12 +28,14 @@ import {
   getGenerationJob,
   getImageAsset,
   getAdminDashboard,
+  getPromptTemplate,
   getShareLinkByToken,
   getCreditBalance,
   getCreditTransactionByReference,
   getUserProfileByEmail,
   ImageAsset,
   listGenerationResults,
+  listPromptTemplates,
   getModelAsset,
   getProject,
   listModelAssets,
@@ -46,6 +49,7 @@ import {
   revokeShareLink,
   ShareLink,
   softDeleteProject,
+  deletePromptTemplate,
   updateGenerationJob,
   updateGenerationResult,
   updateProject,
@@ -195,6 +199,81 @@ app.post('/api/prompts/polish', requireAuth, async (
 
   try {
     res.json(apiOk(await polishPromptText(body.value)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/prompt-templates', requireAuth, async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    res.json(apiOk({ templates: await listPromptTemplates(readPromptTemplateFilters(req.query)) }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/prompt-templates', requireAuth, async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  const body = validatePromptTemplateCreateBody(req.body);
+  if (body.ok === false) {
+    res.status(400).json(apiError(body.error.message, body.error.code));
+    return;
+  }
+
+  try {
+    const user = getRequiredCurrentUser(req);
+    let outputUrl = body.value.outputUrl;
+    if (!outputUrl && body.value.outputAssetId) {
+      const outputAsset = await getImageAsset(body.value.outputAssetId);
+      if (!outputAsset) {
+        res.status(400).json(apiError('未找到本次生成结果图，不能保存为模板。', 'PROMPT_TEMPLATE_OUTPUT_ASSET_NOT_FOUND'));
+        return;
+      }
+      outputUrl = outputAsset.url;
+    }
+    const template = await createPromptTemplate({ ...body.value, outputUrl, createdBy: user.id });
+    res.status(201).json(apiOk({ template }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/prompt-templates/:id', requireAuth, async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const template = await getPromptTemplate(req.params.id);
+    if (!template) {
+      res.status(404).json(apiError('Prompt template not found.', 'PROMPT_TEMPLATE_NOT_FOUND'));
+      return;
+    }
+    res.json(apiOk({ template }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/prompt-templates/:id', requireAuth, requireAdmin, async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const template = await deletePromptTemplate(req.params.id);
+    if (!template) {
+      res.status(404).json(apiError('Prompt template not found.', 'PROMPT_TEMPLATE_NOT_FOUND'));
+      return;
+    }
+    res.json(apiOk({ template }));
   } catch (error) {
     next(error);
   }
@@ -1240,6 +1319,60 @@ function validateAdminUserCreateBody(
   };
 }
 
+function validatePromptTemplateCreateBody(
+  body: unknown,
+): { ok: true; value: Omit<Parameters<typeof createPromptTemplate>[0], 'createdBy'> } | { ok: false; error: ApiError } {
+  if (!isRecord(body)) {
+    return { ok: false, error: { message: 'Request body must be a JSON object.', code: 'INVALID_REQUEST_BODY' } };
+  }
+
+  if (!isNonEmptyString(body.name)) {
+    return { ok: false, error: { message: '模板名称不能为空。', code: 'PROMPT_TEMPLATE_NAME_REQUIRED' } };
+  }
+  if (!isGenerationStep(body.generationStep)) {
+    return { ok: false, error: { message: 'generationStep is invalid.', code: 'PROMPT_TEMPLATE_STEP_INVALID' } };
+  }
+  const feature = isPromptTemplateFeature(body.feature) ? body.feature : inferPromptTemplateFeature(body.generationStep);
+  if (body.feature !== undefined && !isPromptTemplateFeature(body.feature)) {
+    return { ok: false, error: { message: 'feature is invalid.', code: 'PROMPT_TEMPLATE_FEATURE_INVALID' } };
+  }
+  if (!isRecord(body.config)) {
+    return { ok: false, error: { message: 'config must be an object.', code: 'PROMPT_TEMPLATE_CONFIG_INVALID' } };
+  }
+  const outputAssetId = isNonEmptyString(body.outputAssetId) ? body.outputAssetId.trim() : null;
+  const outputUrl = typeof body.outputUrl === 'string' ? body.outputUrl.trim() : '';
+  if (!outputAssetId && !outputUrl) {
+    return { ok: false, error: { message: '缺少本次生成结果图，不能保存为模板。', code: 'PROMPT_TEMPLATE_OUTPUT_REQUIRED' } };
+  }
+
+  return {
+    ok: true,
+    value: {
+      name: body.name.trim().slice(0, 120),
+      description: typeof body.description === 'string' ? body.description.trim().slice(0, 1000) : '',
+      generationStep: body.generationStep,
+      feature,
+      featureName: isNonEmptyString(body.featureName) ? body.featureName.trim().slice(0, 80) : promptTemplateFeatureName(feature),
+      prompt: typeof body.prompt === 'string' ? body.prompt.trim() : '',
+      negativePrompt: typeof body.negativePrompt === 'string' ? body.negativePrompt.trim().slice(0, 2000) : undefined,
+      config: body.config,
+      inputAssetIds: readStringArray(body.inputAssetIds).slice(0, 20),
+      referenceAssetIds: readStringArray(body.referenceAssetIds).slice(0, 30),
+      materialAssetIds: readStringArray(body.materialAssetIds).slice(0, 20),
+      sourceAssetId: isNonEmptyString(body.sourceAssetId) ? body.sourceAssetId.trim() : null,
+      placementPreviewAssetId: isNonEmptyString(body.placementPreviewAssetId) ? body.placementPreviewAssetId.trim() : null,
+      outputAssetId,
+      outputUrl,
+      previewAssetId: isNonEmptyString(body.previewAssetId) ? body.previewAssetId.trim() : outputAssetId,
+      tags: readStringArray(body.tags).map(tag => tag.trim()).filter(Boolean).slice(0, 12),
+      isPublic: true,
+      createdFromGenerationRecordId: isNonEmptyString(body.createdFromGenerationRecordId) ? body.createdFromGenerationRecordId.trim() : null,
+      createdFromJobId: isNonEmptyString(body.createdFromJobId) ? body.createdFromJobId.trim() : null,
+      inputPreviews: readInputPreviews(body.inputPreviews),
+    },
+  };
+}
+
 function validateAdminUserUpdateBody(
   body: unknown,
 ): { ok: true; value: Parameters<typeof updateUserProfile>[1] } | { ok: false; error: ApiError } {
@@ -2213,12 +2346,92 @@ const allowedGenerationSteps: Array<NonNullable<GenerationJob['step']>> = [
   'free_reference_image',
 ];
 
+const allowedPromptTemplateFeatures = [
+  'floorplan',
+  'style-render',
+  'design-variants',
+  'material-replace',
+  'object-insert',
+  'free-reference-image',
+];
+
+function readPromptTemplateFilters(query: Request['query']): Parameters<typeof listPromptTemplates>[0] {
+  const generationStep = readQueryString(query.generationStep);
+  const search = readQueryString(query.search);
+  const tag = readQueryString(query.tag);
+  return {
+    ...(generationStep && isGenerationStep(generationStep) ? { generationStep } : {}),
+    ...(search ? { search: search.slice(0, 120) } : {}),
+    ...(tag ? { tag: tag.slice(0, 40) } : {}),
+  };
+}
+
+function readQueryString(value: unknown): string {
+  if (Array.isArray(value)) return readQueryString(value[0]);
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 function isGenerationMode(value: unknown): value is GenerationRecord['mode'] {
   return allowedGenerationModes.includes(value as GenerationRecord['mode']);
 }
 
 function isGenerationStep(value: unknown): value is NonNullable<GenerationJob['step']> {
   return allowedGenerationSteps.includes(value as NonNullable<GenerationJob['step']>);
+}
+
+function isPromptTemplateFeature(value: unknown): value is Parameters<typeof createPromptTemplate>[0]['feature'] {
+  return allowedPromptTemplateFeatures.includes(value as Parameters<typeof createPromptTemplate>[0]['feature']);
+}
+
+function inferPromptTemplateFeature(step: NonNullable<GenerationJob['step']>): Parameters<typeof createPromptTemplate>[0]['feature'] {
+  switch (step) {
+    case 'floorplan_to_3d':
+      return 'floorplan';
+    case 'style_render':
+      return 'style-render';
+    case 'design_variants':
+      return 'design-variants';
+    case 'material_replace':
+      return 'material-replace';
+    case 'object_insert':
+      return 'object-insert';
+    case 'free_reference_image':
+      return 'free-reference-image';
+    default:
+      return 'floorplan';
+  }
+}
+
+function promptTemplateFeatureName(feature: Parameters<typeof createPromptTemplate>[0]['feature']): string {
+  switch (feature) {
+    case 'floorplan':
+      return '平面彩平';
+    case 'style-render':
+      return '参考图风格渲染';
+    case 'design-variants':
+      return '方案变体';
+    case 'material-replace':
+      return '材质软装替换';
+    case 'object-insert':
+      return '元素植入';
+    case 'free-reference-image':
+      return '自由参考生图';
+    default:
+      return '提示词模板';
+  }
+}
+
+function readInputPreviews(value: unknown): Parameters<typeof createPromptTemplate>[0]['inputPreviews'] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isRecord)
+    .map(item => ({
+      label: typeof item.label === 'string' && item.label.trim() ? item.label.trim().slice(0, 40) : '输入素材',
+      url: typeof item.url === 'string' ? item.url.trim() : '',
+      assetId: typeof item.assetId === 'string' && item.assetId.trim() ? item.assetId.trim() : undefined,
+    }))
+    .filter(item => item.url)
+    .slice(0, 12);
 }
 
 function isObjectInsertStep(step: GenerationJob['step'], config: Record<string, unknown>): boolean {

@@ -9,6 +9,7 @@ import {
   CreateGenerationRecordInput,
   CreateGenerationResultInput,
   CreateImageAssetInput,
+  CreatePromptTemplateInput,
   CreateModelAssetInput,
   CreateProjectInput,
   CreateShareLinkInput,
@@ -20,6 +21,8 @@ import {
   GenerationRecord,
   GenerationResult,
   ImageAsset,
+  PromptTemplateFilters,
+  PromptTemplateRecord,
   ModelAsset,
   UpdateModelAssetInput,
   Project,
@@ -41,6 +44,7 @@ const emptyDatabase: AppDatabase = {
   generationResults: [],
   generationJobs: [],
   imageAssets: [],
+  promptTemplates: [],
   modelAssets: [],
   shareLinks: [],
   creditBalances: [],
@@ -140,6 +144,22 @@ export class JsonStorageAdapter implements StorageAdapter {
 
   getImageAsset(id: string, userId?: string): Promise<ImageAsset | null> {
     return getImageAsset(id, userId);
+  }
+
+  listPromptTemplates(filters?: PromptTemplateFilters): Promise<PromptTemplateRecord[]> {
+    return listPromptTemplates(filters);
+  }
+
+  getPromptTemplate(id: string): Promise<PromptTemplateRecord | null> {
+    return getPromptTemplate(id);
+  }
+
+  createPromptTemplate(input: CreatePromptTemplateInput): Promise<PromptTemplateRecord> {
+    return createPromptTemplate(input);
+  }
+
+  deletePromptTemplate(id: string): Promise<PromptTemplateRecord | null> {
+    return deletePromptTemplate(id);
   }
 
   listModelAssets(userId: string): Promise<ModelAsset[]> {
@@ -635,6 +655,81 @@ async function getImageAsset(id: string, userId?: string): Promise<ImageAsset | 
   return db.imageAssets.find(asset => asset.id === id && (!userId || asset.userId === userId)) ?? null;
 }
 
+async function listPromptTemplates(filters: PromptTemplateFilters = {}): Promise<PromptTemplateRecord[]> {
+  const db = await readDatabase();
+  return [...db.promptTemplates]
+    .filter(template => template.isPublic !== false)
+    .filter(template => matchesPromptTemplateFilters(template, filters))
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+async function getPromptTemplate(id: string): Promise<PromptTemplateRecord | null> {
+  const db = await readDatabase();
+  return db.promptTemplates.find(template => template.id === id && template.isPublic !== false) ?? null;
+}
+
+async function createPromptTemplate(input: CreatePromptTemplateInput): Promise<PromptTemplateRecord> {
+  const now = new Date().toISOString();
+  const template: PromptTemplateRecord = {
+    id: `prompt_template_${randomUUID()}`,
+    name: input.name,
+    description: input.description || '',
+    generationStep: input.generationStep,
+    feature: input.feature,
+    featureName: input.featureName,
+    prompt: input.prompt,
+    negativePrompt: input.negativePrompt,
+    config: input.config,
+    inputAssetIds: input.inputAssetIds || [],
+    referenceAssetIds: input.referenceAssetIds || [],
+    materialAssetIds: input.materialAssetIds || [],
+    sourceAssetId: input.sourceAssetId || null,
+    placementPreviewAssetId: input.placementPreviewAssetId || null,
+    outputAssetId: input.outputAssetId || null,
+    outputUrl: input.outputUrl,
+    previewAssetId: input.previewAssetId || input.outputAssetId || null,
+    tags: input.tags || [],
+    isPublic: input.isPublic !== false,
+    createdBy: input.createdBy,
+    createdFromGenerationRecordId: input.createdFromGenerationRecordId || null,
+    createdFromJobId: input.createdFromJobId || null,
+    inputPreviews: input.inputPreviews || [],
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const db = await readDatabase();
+  db.promptTemplates.unshift(template);
+  await writeDatabase(db);
+  return template;
+}
+
+async function deletePromptTemplate(id: string): Promise<PromptTemplateRecord | null> {
+  const db = await readDatabase();
+  const index = db.promptTemplates.findIndex(template => template.id === id);
+  if (index === -1) return null;
+  const [template] = db.promptTemplates.splice(index, 1);
+  await writeDatabase(db);
+  return template ?? null;
+}
+
+function matchesPromptTemplateFilters(template: PromptTemplateRecord, filters: PromptTemplateFilters): boolean {
+  if (filters.generationStep && template.generationStep !== filters.generationStep) return false;
+  if (filters.tag && !template.tags.some(tag => tag.toLowerCase() === filters.tag?.toLowerCase())) return false;
+  if (filters.search) {
+    const keyword = filters.search.toLowerCase();
+    const text = [
+      template.name,
+      template.description,
+      template.featureName,
+      template.prompt,
+      template.tags.join(' '),
+    ].join(' ').toLowerCase();
+    if (!text.includes(keyword)) return false;
+  }
+  return true;
+}
+
 async function listModelAssets(userId: string): Promise<ModelAsset[]> {
   const db = await readDatabase();
   return db.modelAssets.filter(asset => asset.userId === userId && !asset.deletedAt);
@@ -919,11 +1014,33 @@ async function readDatabase(): Promise<AppDatabase> {
     generationResults: normalizeUserScopedItems(Array.isArray(parsed.generationResults) ? parsed.generationResults : []),
     generationJobs: normalizeGenerationJobs(normalizeUserScopedItems(Array.isArray(parsed.generationJobs) ? parsed.generationJobs : [])),
     imageAssets: normalizeUserScopedItems(Array.isArray(parsed.imageAssets) ? parsed.imageAssets : []),
+    promptTemplates: normalizePromptTemplates(Array.isArray(parsed.promptTemplates) ? parsed.promptTemplates : []),
     modelAssets: normalizeUserScopedItems(Array.isArray(parsed.modelAssets) ? parsed.modelAssets : []),
     shareLinks: Array.isArray(parsed.shareLinks) ? parsed.shareLinks : [],
     creditBalances: Array.isArray(parsed.creditBalances) ? parsed.creditBalances : [],
     creditTransactions: Array.isArray(parsed.creditTransactions) ? parsed.creditTransactions : [],
   };
+}
+
+function normalizePromptTemplates(items: PromptTemplateRecord[]): PromptTemplateRecord[] {
+  return items.map(item => ({
+    ...item,
+    description: item.description || '',
+    inputAssetIds: Array.isArray(item.inputAssetIds) ? item.inputAssetIds : [],
+    referenceAssetIds: Array.isArray(item.referenceAssetIds) ? item.referenceAssetIds : [],
+    materialAssetIds: Array.isArray(item.materialAssetIds) ? item.materialAssetIds : [],
+    sourceAssetId: item.sourceAssetId || null,
+    placementPreviewAssetId: item.placementPreviewAssetId || null,
+    outputAssetId: item.outputAssetId || null,
+    outputUrl: item.outputUrl || '',
+    previewAssetId: item.previewAssetId || item.outputAssetId || null,
+    tags: Array.isArray(item.tags) ? item.tags : [],
+    isPublic: item.isPublic !== false,
+    createdFromGenerationRecordId: item.createdFromGenerationRecordId || null,
+    createdFromJobId: item.createdFromJobId || null,
+    inputPreviews: Array.isArray(item.inputPreviews) ? item.inputPreviews : [],
+    updatedAt: item.updatedAt || item.createdAt,
+  })).filter(item => item.outputUrl);
 }
 
 function normalizeUserScopedItems<T extends { userId?: string }>(items: T[]): Array<T & { userId: string }> {

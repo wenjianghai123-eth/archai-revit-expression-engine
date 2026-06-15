@@ -218,6 +218,52 @@ export interface ImageAsset {
   createdAt: string;
 }
 
+export type PromptTemplateFeature =
+  | 'floorplan'
+  | 'style-render'
+  | 'inpaint'
+  | 'model-render'
+  | 'design-variants'
+  | 'material-replace'
+  | 'plan-colorize'
+  | 'panorama-roam-render'
+  | 'object-insert'
+  | 'free-reference-image';
+
+export interface PromptTemplateInputPreview {
+  label: string;
+  url: string;
+  assetId?: string;
+}
+
+export interface PromptTemplateRecord {
+  id: string;
+  name: string;
+  description: string;
+  generationStep: GenerationJobStep;
+  feature: PromptTemplateFeature;
+  featureName: string;
+  prompt: string;
+  negativePrompt?: string;
+  config: Record<string, unknown>;
+  inputAssetIds: string[];
+  referenceAssetIds: string[];
+  materialAssetIds: string[];
+  sourceAssetId?: string | null;
+  placementPreviewAssetId?: string | null;
+  outputAssetId?: string | null;
+  outputUrl: string;
+  previewAssetId?: string | null;
+  tags: string[];
+  isPublic: boolean;
+  createdBy: string;
+  createdFromGenerationRecordId?: string | null;
+  createdFromJobId?: string | null;
+  inputPreviews: PromptTemplateInputPreview[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ModelAsset {
   id: string;
   userId: string;
@@ -327,6 +373,7 @@ export interface AppDatabase {
   generationResults: GenerationResult[];
   generationJobs: GenerationJob[];
   imageAssets: ImageAsset[];
+  promptTemplates: PromptTemplateRecord[];
   modelAssets: ModelAsset[];
   shareLinks: ShareLink[];
   creditBalances: CreditBalance[];
@@ -410,6 +457,37 @@ export type CreateImageAssetInput = {
   size: number;
 };
 
+export type CreatePromptTemplateInput = {
+  name: string;
+  description?: string;
+  generationStep: GenerationJobStep;
+  feature: PromptTemplateFeature;
+  featureName: string;
+  prompt: string;
+  negativePrompt?: string;
+  config: Record<string, unknown>;
+  inputAssetIds?: string[];
+  referenceAssetIds?: string[];
+  materialAssetIds?: string[];
+  sourceAssetId?: string | null;
+  placementPreviewAssetId?: string | null;
+  outputAssetId?: string | null;
+  outputUrl: string;
+  previewAssetId?: string | null;
+  tags?: string[];
+  isPublic?: boolean;
+  createdBy: string;
+  createdFromGenerationRecordId?: string | null;
+  createdFromJobId?: string | null;
+  inputPreviews?: PromptTemplateInputPreview[];
+};
+
+export type PromptTemplateFilters = {
+  generationStep?: GenerationJobStep;
+  search?: string;
+  tag?: string;
+};
+
 export type CreateModelAssetInput = {
   userId: string;
   url: string;
@@ -483,6 +561,11 @@ export interface StorageAdapter {
 
   createImageAsset(input: CreateImageAssetInput): Promise<ImageAsset>;
   getImageAsset(id: string, userId?: string): Promise<ImageAsset | null>;
+
+  listPromptTemplates(filters?: PromptTemplateFilters): Promise<PromptTemplateRecord[]>;
+  getPromptTemplate(id: string): Promise<PromptTemplateRecord | null>;
+  createPromptTemplate(input: CreatePromptTemplateInput): Promise<PromptTemplateRecord>;
+  deletePromptTemplate(id: string): Promise<PromptTemplateRecord | null>;
 
   listModelAssets(userId: string): Promise<ModelAsset[]>;
   getModelAsset(id: string, userId?: string): Promise<ModelAsset | null>;

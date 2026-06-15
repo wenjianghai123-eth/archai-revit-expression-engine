@@ -1,4 +1,4 @@
-import { Download, ExternalLink, FileJson, Heart, RefreshCw, Settings2, Zap } from 'lucide-react';
+import { BookOpen, Download, ExternalLink, FileJson, Heart, RefreshCw, Settings2, Zap } from 'lucide-react';
 import { type ReactNode, useState } from 'react';
 import { GenerationBatchItem, GenerationResultOption, GenerationStep, SecondaryEditAction, StepState } from '../../types';
 import { buildResultImageFilename, downloadAsset, downloadJson, downloadFallbackMessage } from '../../utils/downloadAsset';
@@ -8,6 +8,8 @@ import { ViewModeOption } from './workspaceTypes';
 import { formatElapsed } from './workspaceUtils';
 import { PreviewContent } from './ResultPreviewPanel';
 import { SecondaryEditActions } from './SecondaryEditActions';
+import { SavePromptTemplateModal } from '../SavePromptTemplateModal';
+import { canSavePromptTemplate } from '../../utils/savedPromptTemplates';
 
 interface GenerationStatusPanelProps {
   step: GenerationStep;
@@ -201,6 +203,8 @@ function ResultActions({
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
+  const [isSaveTemplateOpen, setIsSaveTemplateOpen] = useState(false);
+  const canSaveTemplate = canSavePromptTemplate(step, state, activeResult, originalPreviewImage);
 
   const handleDownload = async () => {
     if (!originalPreviewImage || isDownloading) return;
@@ -296,6 +300,16 @@ function ResultActions({
             </div>
           )}
           <div className="grid grid-cols-2 gap-2">
+            {canSaveTemplate && activeResult ? (
+              <button
+                type="button"
+                onClick={() => setIsSaveTemplateOpen(true)}
+                className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-blue-700"
+              >
+                <BookOpen className="mr-1 inline h-3.5 w-3.5" />
+                保存为提示词模板
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => window.open(originalPreviewImage, '_blank', 'noopener,noreferrer')}
@@ -335,6 +349,15 @@ function ResultActions({
           </div>
           {downloadMessage ? <p className="text-xs font-semibold text-emerald-700">{downloadMessage}</p> : null}
           {downloadError ? <p className="text-xs font-semibold text-amber-700">{downloadError}</p> : null}
+          {isSaveTemplateOpen && activeResult ? (
+            <SavePromptTemplateModal
+              step={step}
+              state={state}
+              result={activeResult}
+              previewImage={originalPreviewImage}
+              onClose={() => setIsSaveTemplateOpen(false)}
+            />
+          ) : null}
         </>
       ) : null}
     </div>

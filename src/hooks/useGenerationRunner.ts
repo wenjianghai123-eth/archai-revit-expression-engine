@@ -1177,7 +1177,7 @@ async function runFloorplanMultiPlanJobs({
         : !prompt.trim()
           ? 'prompt 为空。'
           : generationStep !== 'floorplan_to_3d'
-            ? 'generationStep 非平面图生成三维彩平。'
+            ? 'generationStep 非平面彩平。'
             : inputAssetIds.length === 0
               ? 'inputAssetIds 缺少原图素材。'
               : !batchGroupId
@@ -1447,7 +1447,7 @@ async function pollGenerationJobUntilTerminal(
 
 function buildFloorplanVariantRequestPrompt(userPrompt: string, plan: ReturnType<typeof resolveFloorplanVariantPlans>[number]): string {
   return [
-    '平面图生成三维彩平多方案。',
+    '平面彩平多方案。',
     `方案名称：${plan.variantName}`,
     plan.selectedStyleName ? `材质/风格方向：${plan.selectedStyleName}` : '',
     plan.stylePromptHint || '',

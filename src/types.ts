@@ -520,7 +520,7 @@ export interface PromptTemplate {
   id: string;
   title: string;
   category: string;
-  feature: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render' | 'object-insert';
+  feature: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render' | 'object-insert' | 'free-reference-image';
   supportedModes?: GenerationStep[] | string[];
   description: string;
   previewImage: string;
@@ -539,6 +539,23 @@ export interface PromptTemplate {
   useCase?: string;
   suitableImages?: string[];
   config: Partial<GenerationConfig>;
+  generationStep?: GenerationStep;
+  featureName?: string;
+  negativePrompt?: string;
+  inputAssetIds?: string[];
+  referenceAssetIds?: string[];
+  materialAssetIds?: string[];
+  sourceAssetId?: string;
+  placementPreviewAssetId?: string;
+  outputAssetId?: string;
+  outputUrl?: string;
+  previewAssetId?: string;
+  isPublic?: boolean;
+  createdBy?: string;
+  createdAt?: string;
+  createdFromGenerationRecordId?: string;
+  createdFromJobId?: string;
+  inputPreviews?: Array<{ label: string; url: string; assetId?: string }>;
 }
 
 export interface GenerationHistoryItem {

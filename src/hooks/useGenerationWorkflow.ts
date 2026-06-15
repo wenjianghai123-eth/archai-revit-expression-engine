@@ -1,6 +1,11 @@
 import { useCallback, useState } from 'react';
 import { DEFAULT_CONFIGS } from '../constants';
 import { GenerationConfig, GenerationStep, MaterialTexture, PromptTemplate, ReferenceImage, StepState, UploadedImage } from '../types';
+import {
+  restoreTemplateFurnitureReferences,
+  restoreTemplateInputImage,
+  restoreTemplateMaterialTextures,
+} from '../utils/savedPromptTemplates';
 
 function createInitialStepState(step: GenerationStep): StepState {
   return {
@@ -199,12 +204,35 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
     const nextConfig = targetStep === GenerationStep.FloorplanTo3D
       ? omitFloorplanStyle(template.config)
       : template.config;
+    const restoredInputImage = restoreTemplateInputImage(template);
+    const restoredMaterialTextures = restoreTemplateMaterialTextures(template);
+    const restoredFurnitureReferences = restoreTemplateFurnitureReferences(template);
+    const templateReferenceResultId = template.outputAssetId || template.id;
 
     setStepStates(prev => ({
       ...prev,
       [targetStep]: {
         ...prev[targetStep],
-        config: { ...prev[targetStep].config, ...nextConfig },
+        config: { ...prev[targetStep].config, ...nextConfig, prompt: template.promptText || nextConfig.prompt || prev[targetStep].config.prompt },
+        inputImage: restoredInputImage || prev[targetStep].inputImage,
+        materialTextures: restoredMaterialTextures.length > 0 ? restoredMaterialTextures : prev[targetStep].materialTextures,
+        furnitureReferences: restoredFurnitureReferences.length > 0 ? restoredFurnitureReferences : prev[targetStep].furnitureReferences,
+        outputImage: template.outputUrl || prev[targetStep].outputImage,
+        generationResults: template.outputUrl
+          ? [{
+              id: templateReferenceResultId,
+              imageUrl: template.outputUrl,
+              assetId: template.outputAssetId,
+              isSelected: true,
+              isFavorite: false,
+              createdAt: template.createdAt,
+              metadata: { source: 'prompt-template-reference' },
+            }]
+          : prev[targetStep].generationResults,
+        selectedGenerationResultId: template.outputUrl ? templateReferenceResultId : prev[targetStep].selectedGenerationResultId,
+        generationStatus: 'ready',
+        isGenerating: false,
+        viewMode: template.outputUrl ? 'after' : prev[targetStep].viewMode,
       },
     }));
     setCurrentStep(targetStep);

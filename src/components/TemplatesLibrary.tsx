@@ -13,11 +13,13 @@ interface TemplatesLibraryProps {
 const FEATURE_FILTERS: Array<{ label: string; value: FeatureFilter }> = [
   { label: '全部', value: 'all' },
   { label: '平面彩平', value: 'floorplan' },
-  { label: '风格渲染', value: 'style-render' },
-  { label: '局部修饰', value: 'inpaint' },
+  { label: '自由参考生图', value: 'free-reference-image' },
+  { label: '材质软装替换', value: 'material-replace' },
+  { label: '元素植入', value: 'object-insert' },
+  { label: '方案变体', value: 'design-variants' },
 ];
 
-const CATEGORY_FILTERS = ['全部', '住宅', '商业', '室内', '景观', '材质', '局部优化'];
+const CATEGORY_FILTERS = ['全部', '平面彩平', '自由参考生图', '材质软装替换', '元素植入', '方案变体'];
 const FAVORITES_STORAGE_KEY = 'archai-template-favorites-v1';
 const RECENT_STORAGE_KEY = 'archai-template-recent-v1';
 
@@ -48,6 +50,9 @@ function readRecentUsage(): Record<string, string> {
 
 function featureLabel(feature: PromptTemplate['feature']): string {
   if (feature === 'floorplan') return '平面彩平';
+  if (feature === 'free-reference-image') return '自由参考生图';
+  if (feature === 'material-replace') return '材质软装替换';
+  if (feature === 'design-variants') return '方案变体';
   if (feature === 'style-render') return '风格渲染';
   if (feature === 'object-insert') return '元素植入';
   return '局部修饰';
@@ -90,6 +95,14 @@ function matchesTemplateCategory(template: PromptTemplate, category: string): bo
 
 function promptSummary(prompt: string): string {
   return prompt.length > 132 ? `${prompt.slice(0, 132)}...` : prompt;
+}
+
+function configSummary(config: GenerationConfig): string {
+  const entries = Object.entries(config)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '' && !Array.isArray(value) && typeof value !== 'object')
+    .slice(0, 5)
+    .map(([key, value]) => `${key}: ${String(value)}`);
+  return entries.length ? entries.join(' / ') : '无额外参数';
 }
 
 export function TemplatesLibrary({ templates, currentConfig, onApply }: TemplatesLibraryProps) {
@@ -143,14 +156,7 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
   }, [templates, searchQuery, featureFilter, categoryFilter, favoritesOnly, favoriteIds]);
 
   const recommendedTemplates = useMemo(() => {
-    if (featureFilter === 'all') {
-      const preferredIds = ['floorplan-modern-courtyard-house', 'style-render-wabi-sabi', 'inpaint-living-room-material-upgrade'];
-      return preferredIds
-        .map((templateId) => templates.find((template) => template.id === templateId))
-        .filter((template): template is PromptTemplate => Boolean(template));
-    }
-
-    return templates.filter((template) => template.feature === featureFilter).slice(0, 3);
+    return (featureFilter === 'all' ? templates : templates.filter((template) => template.feature === featureFilter)).slice(0, 3);
   }, [templates, featureFilter]);
 
   const recentTemplates = useMemo(
@@ -203,7 +209,7 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                       {filteredTemplates.length} / {templates.length} 个模板
                     </span>
                   </div>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">参考效果图与对应提示词，快速复用建筑表达风格</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">从满意的生成结果沉淀全局提示词模板</p>
                 </div>
               </div>
 
@@ -267,6 +273,7 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
 
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 custom-scrollbar md:px-4">
           <div className="mx-auto max-w-[1600px] space-y-3">
+            {recommendedTemplates.length > 0 ? (
             <section className="space-y-2">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
@@ -287,13 +294,14 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                       <div className="min-w-0 flex-1">
                         <p className="text-[10px] font-bold text-blue-600">{featureLabel(template.feature)}</p>
                         <h3 className="mt-1 truncate text-sm font-bold text-slate-900">{template.title}</h3>
-                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{template.description}</p>
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{promptSummary(template.promptText)}</p>
                       </div>
                     </div>
                   </button>
                 ))}
               </div>
             </section>
+            ) : null}
 
             {recentTemplates.length > 0 && (
               <section className="space-y-2">
@@ -321,13 +329,15 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                 <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50">
                   <Sparkles className="h-6 w-6 text-blue-500" />
                 </div>
-                <h2 className="text-base font-bold text-slate-900">没有找到匹配的模板</h2>
-                <p className="mt-2 max-w-sm text-sm text-slate-500">没有找到匹配的模板，请尝试更换关键词或筛选条件。</p>
+                <h2 className="text-base font-bold text-slate-900">{templates.length === 0 ? '暂无真实提示词模板' : '没有找到匹配的模板'}</h2>
+                <p className="mt-2 max-w-sm text-sm text-slate-500">
+                  {templates.length === 0 ? '在核心功能生成满意结果后，点击结果卡片上的“保存为提示词模板”，这里会展示真实结果模板。' : '没有找到匹配的模板，请尝试更换关键词或筛选条件。'}
+                </p>
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {filteredTemplates.map((template) => {
-                  const isActive = currentConfig.prompt === template.config.prompt;
+                  const isActive = currentConfig.prompt === template.promptText || currentConfig.prompt === template.config.prompt;
                   const isFavorite = favoriteIds.includes(template.id);
 
                   return (
@@ -374,7 +384,7 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                           </div>
                         </div>
 
-                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{template.description}</p>
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{template.description || '由成功生成结果保存。'}</p>
 
                         <div className="mt-2 flex min-h-6 flex-wrap gap-1.5 overflow-hidden">
                           {(template.tags || []).slice(0, 3).map((tagValue) => (
@@ -384,8 +394,24 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                         </div>
 
                         <div className="mt-2 rounded-lg bg-slate-50 p-2">
+                          <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">Prompt</p>
                           <p className="line-clamp-4 text-[11px] leading-4 text-slate-600">{promptSummary(template.promptText)}</p>
                         </div>
+
+                        <div className="mt-2 rounded-lg bg-slate-50 p-2">
+                          <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">参数摘要</p>
+                          <p className="line-clamp-2 text-[11px] leading-4 text-slate-600">{configSummary(template.config as GenerationConfig)}</p>
+                        </div>
+
+                        {template.inputPreviews?.length ? (
+                          <div className="mt-2 flex gap-1.5 overflow-hidden">
+                            {template.inputPreviews.slice(0, 4).map((item, index) => (
+                              <img key={`${item.assetId || item.url}-${index}`} src={item.url} alt={item.label} title={item.label} className="h-9 w-9 shrink-0 rounded-lg object-cover ring-1 ring-slate-100" referrerPolicy="no-referrer" />
+                            ))}
+                          </div>
+                        ) : null}
+
+                        <p className="mt-2 text-[10px] font-semibold text-slate-400">{template.createdAt ? `创建于 ${template.createdAt}` : '创建时间未记录'}</p>
 
                         <div className="mt-auto grid shrink-0 grid-cols-3 gap-1.5 border-t border-slate-100 pt-2">
                           <button
@@ -445,7 +471,7 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                   ))}
                 </div>
 
-                <p className="mt-4 text-sm leading-6 text-slate-600">{selectedTemplate.description}</p>
+                <p className="mt-4 text-sm leading-6 text-slate-600">{selectedTemplate.description || '由成功生成结果保存的全局提示词模板。'}</p>
 
                 <div className="mt-5 rounded-xl bg-slate-50 p-4">
                   <div className="mb-2 flex items-center justify-between gap-3">
@@ -467,31 +493,32 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                   </div>
                 </div>
 
-                {selectedTemplate.useCase && (
-                  <div className="mt-5 rounded-xl border border-blue-100 bg-blue-50 p-4">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-blue-400">适用场景</p>
-                    <p className="mt-2 text-sm leading-6 text-blue-900">{selectedTemplate.useCase}</p>
-                  </div>
-                )}
-
                 <div className="mt-5 rounded-xl border border-slate-100 bg-white p-4">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">适合什么图片</p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {(selectedTemplate.suitableImages || ['当前功能对应的清晰输入图']).map((item) => (
-                      <span key={item} className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600">
-                        {item}
-                      </span>
-                    ))}
-                  </div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">本次输入素材</p>
+                  {selectedTemplate.inputPreviews?.length ? (
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      {selectedTemplate.inputPreviews.map((item, index) => (
+                        <div key={`${item.assetId || item.url}-${index}`} className="overflow-hidden rounded-lg border border-slate-100 bg-slate-50">
+                          <img src={item.url} alt={item.label} className="h-20 w-full object-cover" referrerPolicy="no-referrer" />
+                          <p className="truncate px-2 py-1 text-[10px] font-bold text-slate-600">{item.label}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-sm text-slate-400">没有可预览的输入素材。</p>
+                  )}
                 </div>
 
-                <div className="mt-5 grid grid-cols-3 gap-4 rounded-xl border border-slate-100 p-4">
-                  <DetailRow label="Style" value={selectedTemplate.recommendedStyle || selectedTemplate.config.style} />
-                  <DetailRow label="Lighting" value={selectedTemplate.recommendedLighting || selectedTemplate.config.lighting} />
-                  <DetailRow
-                    label="Material"
-                    value={selectedTemplate.recommendedMaterialStrength ?? selectedTemplate.config.materialStrength}
-                  />
+                <div className="mt-5 rounded-xl border border-slate-100 p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">参数配置</p>
+                  <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-3 text-[11px] leading-5 text-slate-600 custom-scrollbar">
+                    {JSON.stringify(selectedTemplate.config, null, 2)}
+                  </pre>
+                </div>
+
+                <div className="mt-5 grid grid-cols-2 gap-4 rounded-xl border border-slate-100 p-4">
+                  <DetailRow label="outputAssetId" value={selectedTemplate.outputAssetId || '未记录'} />
+                  <DetailRow label="createdFromJobId" value={selectedTemplate.createdFromJobId || '未记录'} />
                 </div>
               </div>
 
