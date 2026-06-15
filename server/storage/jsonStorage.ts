@@ -694,6 +694,11 @@ async function createPromptTemplate(input: CreatePromptTemplateInput): Promise<P
     createdFromGenerationRecordId: input.createdFromGenerationRecordId || null,
     createdFromJobId: input.createdFromJobId || null,
     inputPreviews: input.inputPreviews || [],
+    outputPreview: input.outputPreview || {},
+    parameterSummary: input.parameterSummary || {},
+    templateSource: input.templateSource || 'generation_result',
+    coverAssetId: input.coverAssetId || input.outputAssetId || input.previewAssetId || null,
+    coverUrl: input.coverUrl || input.outputUrl || null,
     createdAt: now,
     updatedAt: now,
   };
@@ -1039,8 +1044,17 @@ function normalizePromptTemplates(items: PromptTemplateRecord[]): PromptTemplate
     createdFromGenerationRecordId: item.createdFromGenerationRecordId || null,
     createdFromJobId: item.createdFromJobId || null,
     inputPreviews: Array.isArray(item.inputPreviews) ? item.inputPreviews : [],
+    outputPreview: isPlainObject(item.outputPreview) ? item.outputPreview : {},
+    parameterSummary: isPlainObject(item.parameterSummary) ? item.parameterSummary : {},
+    templateSource: item.templateSource || 'generation_result',
+    coverAssetId: item.coverAssetId || item.outputAssetId || item.previewAssetId || null,
+    coverUrl: item.coverUrl || item.outputUrl || null,
     updatedAt: item.updatedAt || item.createdAt,
   })).filter(item => item.outputUrl);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function normalizeUserScopedItems<T extends { userId?: string }>(items: T[]): Array<T & { userId: string }> {

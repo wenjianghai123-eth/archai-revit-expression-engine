@@ -556,6 +556,11 @@ export interface PromptTemplate {
   createdFromGenerationRecordId?: string;
   createdFromJobId?: string;
   inputPreviews?: Array<{ label: string; url: string; assetId?: string }>;
+  outputPreview?: Record<string, unknown>;
+  parameterSummary?: Record<string, unknown>;
+  templateSource?: string;
+  coverAssetId?: string;
+  coverUrl?: string;
 }
 
 export interface GenerationHistoryItem {

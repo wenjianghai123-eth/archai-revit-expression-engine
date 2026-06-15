@@ -260,6 +260,11 @@ export interface PromptTemplateRecord {
   createdFromGenerationRecordId?: string | null;
   createdFromJobId?: string | null;
   inputPreviews: PromptTemplateInputPreview[];
+  outputPreview: Record<string, unknown>;
+  parameterSummary: Record<string, unknown>;
+  templateSource: string;
+  coverAssetId?: string | null;
+  coverUrl?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -480,6 +485,11 @@ export type CreatePromptTemplateInput = {
   createdFromGenerationRecordId?: string | null;
   createdFromJobId?: string | null;
   inputPreviews?: PromptTemplateInputPreview[];
+  outputPreview?: Record<string, unknown>;
+  parameterSummary?: Record<string, unknown>;
+  templateSource?: string;
+  coverAssetId?: string | null;
+  coverUrl?: string | null;
 };
 
 export type PromptTemplateFilters = {

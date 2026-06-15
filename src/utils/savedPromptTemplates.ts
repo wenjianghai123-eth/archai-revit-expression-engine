@@ -59,10 +59,16 @@ export function buildPromptTemplatePayload(input: {
     createdFromGenerationRecordId: input.state.generationResultId,
     createdFromJobId: input.result.jobId || input.state.generationJobId || input.state.generationResultId,
     inputPreviews,
+    outputPreview: { url: outputUrl, assetId: outputAssetId },
+    parameterSummary: {},
+    templateSource: 'generation_result',
+    coverAssetId: outputAssetId,
+    coverUrl: outputUrl,
   };
 }
 
 export function promptTemplateRecordToTemplate(record: PromptTemplateRecord): PromptTemplate {
+  const outputPreviewUrl = typeof record.outputPreview?.url === 'string' ? record.outputPreview.url : '';
   return {
     id: record.id,
     title: record.name,
@@ -70,7 +76,7 @@ export function promptTemplateRecordToTemplate(record: PromptTemplateRecord): Pr
     feature: record.feature,
     supportedModes: [record.generationStep],
     description: record.description || '由成功生成结果保存的全局提示词模板。',
-    previewImage: record.outputUrl,
+    previewImage: record.coverUrl || outputPreviewUrl || record.outputUrl,
     prompt: record.prompt,
     promptText: record.prompt,
     tags: record.tags,
@@ -92,6 +98,11 @@ export function promptTemplateRecordToTemplate(record: PromptTemplateRecord): Pr
     createdFromGenerationRecordId: record.createdFromGenerationRecordId || undefined,
     createdFromJobId: record.createdFromJobId || undefined,
     inputPreviews: record.inputPreviews,
+    outputPreview: record.outputPreview,
+    parameterSummary: record.parameterSummary,
+    templateSource: record.templateSource || undefined,
+    coverAssetId: record.coverAssetId || undefined,
+    coverUrl: record.coverUrl || undefined,
   };
 }
 

@@ -1369,6 +1369,11 @@ function validatePromptTemplateCreateBody(
       createdFromGenerationRecordId: isNonEmptyString(body.createdFromGenerationRecordId) ? body.createdFromGenerationRecordId.trim() : null,
       createdFromJobId: isNonEmptyString(body.createdFromJobId) ? body.createdFromJobId.trim() : null,
       inputPreviews: readInputPreviews(body.inputPreviews),
+      outputPreview: isRecord(body.outputPreview) ? body.outputPreview : {},
+      parameterSummary: isRecord(body.parameterSummary) ? body.parameterSummary : {},
+      templateSource: isNonEmptyString(body.templateSource) ? body.templateSource.trim().slice(0, 80) : 'generation_result',
+      coverAssetId: isNonEmptyString(body.coverAssetId) ? body.coverAssetId.trim() : outputAssetId,
+      coverUrl: typeof body.coverUrl === 'string' && body.coverUrl.trim() ? body.coverUrl.trim() : outputUrl || null,
     },
   };
 }

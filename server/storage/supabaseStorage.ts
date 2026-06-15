@@ -116,7 +116,6 @@ type PromptTemplateRow = {
   name: string;
   description: string | null;
   generation_step: PromptTemplateRecord['generationStep'];
-  feature: PromptTemplateRecord['feature'] | null;
   feature_name: string | null;
   prompt: string;
   negative_prompt: string | null;
@@ -135,6 +134,11 @@ type PromptTemplateRow = {
   created_from_generation_record_id: string | null;
   created_from_job_id: string | null;
   input_previews: PromptTemplateRecord['inputPreviews'] | null;
+  output_preview: Record<string, unknown> | null;
+  parameter_summary: Record<string, unknown> | null;
+  template_source: string | null;
+  cover_asset_id: string | null;
+  cover_url: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -693,11 +697,12 @@ export class SupabaseStorageAdapter implements StorageAdapter {
 
   async createPromptTemplate(input: CreatePromptTemplateInput): Promise<PromptTemplateRecord> {
     const now = new Date().toISOString();
+    const coverAssetId = input.coverAssetId || input.outputAssetId || input.previewAssetId || null;
+    const coverUrl = input.coverUrl || input.outputUrl || null;
     const row = {
       name: input.name,
       description: input.description || '',
       generation_step: input.generationStep,
-      feature: input.feature,
       feature_name: input.featureName,
       prompt: input.prompt,
       negative_prompt: input.negativePrompt || null,
@@ -716,6 +721,11 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       created_from_generation_record_id: input.createdFromGenerationRecordId || null,
       created_from_job_id: input.createdFromJobId || null,
       input_previews: input.inputPreviews || [],
+      output_preview: input.outputPreview || {},
+      parameter_summary: input.parameterSummary || {},
+      template_source: input.templateSource || 'generation_result',
+      cover_asset_id: coverAssetId,
+      cover_url: coverUrl,
       created_at: now,
       updated_at: now,
     };
@@ -1118,7 +1128,7 @@ function mapPromptTemplateRow(row: PromptTemplateRow): PromptTemplateRecord {
     name: row.name,
     description: row.description || '',
     generationStep: row.generation_step,
-    feature: row.feature || inferPromptTemplateFeature(row.generation_step),
+    feature: inferPromptTemplateFeature(row.generation_step),
     featureName: row.feature_name || row.generation_step,
     prompt: row.prompt,
     negativePrompt: row.negative_prompt || undefined,
@@ -1137,6 +1147,11 @@ function mapPromptTemplateRow(row: PromptTemplateRow): PromptTemplateRecord {
     createdFromGenerationRecordId: row.created_from_generation_record_id,
     createdFromJobId: row.created_from_job_id,
     inputPreviews: row.input_previews || [],
+    outputPreview: isRecord(row.output_preview) ? row.output_preview : {},
+    parameterSummary: isRecord(row.parameter_summary) ? row.parameter_summary : {},
+    templateSource: row.template_source || 'generation_result',
+    coverAssetId: row.cover_asset_id,
+    coverUrl: row.cover_url,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

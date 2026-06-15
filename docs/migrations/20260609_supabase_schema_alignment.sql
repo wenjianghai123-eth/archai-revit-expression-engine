@@ -130,7 +130,6 @@ create table if not exists public.prompt_templates (
   name text not null,
   description text,
   generation_step text not null,
-  feature text,
   feature_name text,
   prompt text not null default '',
   negative_prompt text,
@@ -149,6 +148,11 @@ create table if not exists public.prompt_templates (
   created_from_generation_record_id text,
   created_from_job_id text,
   input_previews jsonb not null default '[]'::jsonb,
+  output_preview jsonb not null default '{}'::jsonb,
+  parameter_summary jsonb not null default '{}'::jsonb,
+  template_source text,
+  cover_asset_id text,
+  cover_url text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -158,6 +162,52 @@ create index if not exists idx_prompt_templates_generation_step
 
 create index if not exists idx_prompt_templates_created_at
   on public.prompt_templates(created_at desc);
+
+create index if not exists idx_prompt_templates_is_public
+  on public.prompt_templates(is_public);
+
+create or replace function public.set_prompt_templates_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists set_prompt_templates_updated_at on public.prompt_templates;
+create trigger set_prompt_templates_updated_at
+  before update on public.prompt_templates
+  for each row
+  execute function public.set_prompt_templates_updated_at();
+
+alter table public.prompt_templates enable row level security;
+
+drop policy if exists "Authenticated users can read public prompt templates" on public.prompt_templates;
+create policy "Authenticated users can read public prompt templates"
+  on public.prompt_templates for select
+  to authenticated
+  using (is_public = true);
+
+drop policy if exists "Authenticated users can insert prompt templates" on public.prompt_templates;
+create policy "Authenticated users can insert prompt templates"
+  on public.prompt_templates for insert
+  to authenticated
+  with check (auth.uid() = created_by);
+
+drop policy if exists "Users can update own prompt templates" on public.prompt_templates;
+create policy "Users can update own prompt templates"
+  on public.prompt_templates for update
+  to authenticated
+  using (auth.uid() = created_by)
+  with check (auth.uid() = created_by);
+
+drop policy if exists "Users can delete own prompt templates" on public.prompt_templates;
+create policy "Users can delete own prompt templates"
+  on public.prompt_templates for delete
+  to authenticated
+  using (auth.uid() = created_by);
 
 create table if not exists public.share_links (
   id text primary key,
