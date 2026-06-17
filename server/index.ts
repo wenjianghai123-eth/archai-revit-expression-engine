@@ -87,7 +87,7 @@ import {
   restorePendingGenerationJobs,
 } from './generationService';
 import { defaultPlanColorizeStyleId, maxPlanColorizeBatchCount, resolvePlanColorizeStyles } from '../src/constants/planColorizeStyles';
-import { resolveFloorplanBatchCount, resolveFloorplanVariantPlans, readFloorplanVariantFocus, readFloorplanVariantType } from '../src/constants/floorplanVariants';
+import { findFloorplanColorTemplate, resolveFloorplanBatchCount, resolveFloorplanVariantPlans, readFloorplanVariantFocus, readFloorplanVariantType } from '../src/constants/floorplanVariants';
 import { getGenerationCreditCost, getGenerationOutputCount } from '../src/utils/generationCredits';
 import { createAssetsRouter } from './routes/assets';
 import { createSupabaseAuthUser, resetSupabaseAuthUserPassword, updateSupabaseAuthUserMetadata } from './supabaseAdmin';
@@ -1537,6 +1537,7 @@ const materialReplaceScopes = new Set(['material-only', 'material-and-soft-decor
 const objectInsertSurfaces = new Set(['floor', 'wall', 'ceiling', 'tabletop', 'outdoor-ground', 'auto']);
 const objectInsertTypes = new Set(['sofa', 'chair', 'table', 'lamp', 'plant', 'artwork', 'sculpture', 'car', 'person', 'tree', 'signage', 'custom']);
 const objectFidelities = new Set(['strict', 'balanced', 'loose']);
+const objectInsertCandidateStrategies = new Set(['strict-placement', 'natural-fit', 'object-fidelity', 'scene-harmony']);
 
 function normalizeDesignVariantConfig(
   mode: GenerationRecord['mode'],
@@ -1553,13 +1554,18 @@ function normalizeDesignVariantConfig(
     delete config.variantChangeScope;
     delete config.variantLocks;
     delete config.variantStrategyNotes;
+    delete config.retryVariantIndex;
+    delete config.targetVariantIndex;
     delete config.stylePackId;
     delete config.customStyleLabel;
     return { ok: true };
   }
 
-  const batchCount = config.batchCount === undefined ? 4 : config.batchCount;
-  if ((batchCount !== 2 && batchCount !== 4 && batchCount !== 8) || batchCount > MAX_DESIGN_VARIANT_BATCH) {
+  const requestedBatchCount = typeof config.batchCount === 'number' ? config.batchCount : undefined;
+  const retryVariantIndex = readDesignRetryVariantIndex(config);
+  const isSingleVariantRetry = typeof retryVariantIndex === 'number' && requestedBatchCount === 1;
+  const batchCount = isSingleVariantRetry ? 1 : requestedBatchCount ?? 4;
+  if ((!isSingleVariantRetry && batchCount !== 2 && batchCount !== 4 && batchCount !== 8) || batchCount > MAX_DESIGN_VARIANT_BATCH) {
     return {
       ok: false,
       error: {
@@ -1583,7 +1589,7 @@ function normalizeDesignVariantConfig(
   const requestedStyles = Array.isArray(config.variantStyles)
     ? config.variantStyles.filter((item): item is string => typeof item === 'string' && variantStyleKeys.has(item))
     : [];
-  const defaults = defaultVariantStylesByCount[batchCount];
+  const defaults = isSingleVariantRetry ? ['modern-minimal'] : defaultVariantStylesByCount[batchCount as 2 | 4 | 8];
   const styles = [...requestedStyles];
   for (const style of defaults) {
     if (styles.length >= batchCount) break;
@@ -1591,6 +1597,13 @@ function normalizeDesignVariantConfig(
   }
 
   config.batchCount = batchCount;
+  if (isSingleVariantRetry) {
+    config.retryVariantIndex = retryVariantIndex;
+    config.targetVariantIndex = retryVariantIndex;
+  } else {
+    delete config.retryVariantIndex;
+    delete config.targetVariantIndex;
+  }
   config.variantStrategy = variantStrategy;
   config.variantStyles = styles.slice(0, batchCount);
   config.variantChangeScope = typeof config.variantChangeScope === 'string' && variantChangeScopes.has(config.variantChangeScope)
@@ -1615,6 +1628,17 @@ function normalizeDesignVariantConfig(
   if (typeof config.customStyleLabel !== 'string' || config.customStyleLabel.trim().length === 0) delete config.customStyleLabel;
   else config.customStyleLabel = config.customStyleLabel.trim();
   return { ok: true };
+}
+
+function readDesignRetryVariantIndex(config: Record<string, unknown>): number | undefined {
+  const raw = typeof config.targetVariantIndex === 'number'
+    ? config.targetVariantIndex
+    : typeof config.retryVariantIndex === 'number'
+      ? config.retryVariantIndex
+      : undefined;
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return undefined;
+  const index = Math.floor(raw);
+  return index >= 0 && index <= 7 ? index : undefined;
 }
 
 function normalizeMaterialReplaceConfig(
@@ -1772,6 +1796,8 @@ function normalizeFloorplanConfig(
     delete config.enableLegend;
     delete config.enableAreaText;
     delete config.enableMaterialLegend;
+    delete config.floorplanTemplateId;
+    delete config.floorplanRoomLabels;
     delete config.floorplanStyleTemplateIds;
     delete config.floorplanStyleTemplateNames;
     delete config.floorplanLayoutVariantIds;
@@ -1786,6 +1812,8 @@ function normalizeFloorplanConfig(
   config.enableLegend = config.enableLegend === true;
   config.enableAreaText = config.enableAreaText === true;
   config.enableMaterialLegend = config.enableMaterialLegend === true;
+  config.floorplanTemplateId = findFloorplanColorTemplate(config.floorplanTemplateId)?.id || 'residential-warm-wood';
+  config.floorplanRoomLabels = normalizeFloorplanRoomLabels(config.floorplanRoomLabels);
   if (outputMode !== 'multi') {
     config.batchCount = 1;
     delete config.floorplanVariantType;
@@ -1844,6 +1872,33 @@ function readFloorplanRenderMode(value: unknown): 'flat-color' | 'semi-3d' | 'pr
 
 function readLineworkPreservation(value: unknown): 'strict' | 'high' | 'medium' {
   return value === 'strict' || value === 'medium' || value === 'high' ? value : 'high';
+}
+
+function normalizeFloorplanRoomLabels(value: unknown): Array<{
+  id: string;
+  name: string;
+  roomType: string;
+  positionDescription: string;
+  customTypeLabel?: string;
+}> {
+  const allowedRoomTypes = new Set(['living-room', 'dining-room', 'bedroom', 'kitchen', 'bathroom', 'balcony', 'entry', 'study', 'office', 'commercial', 'custom']);
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isRecord)
+    .slice(0, 20)
+    .map((item, index) => {
+      const roomType = typeof item.roomType === 'string' && allowedRoomTypes.has(item.roomType) ? item.roomType : 'custom';
+      const normalized = {
+        id: typeof item.id === 'string' && item.id.trim() ? item.id.trim().slice(0, 80) : `room-${index + 1}`,
+        name: typeof item.name === 'string' && item.name.trim() ? item.name.trim().slice(0, 60) : `区域 ${index + 1}`,
+        roomType,
+        positionDescription: typeof item.positionDescription === 'string' ? item.positionDescription.trim().slice(0, 120) : '',
+      };
+      if (roomType === 'custom' && typeof item.customTypeLabel === 'string' && item.customTypeLabel.trim()) {
+        return { ...normalized, customTypeLabel: item.customTypeLabel.trim().slice(0, 60) };
+      }
+      return normalized;
+    });
 }
 
 function normalizeObjectPlacement(value: unknown): { x: number; y: number; width: number; height: number; rotation: number } | null {
@@ -1971,6 +2026,9 @@ function validateGenerationJobCreateBody(
     if (referenceImageAssetIds.length > 0) {
       config.referenceImageAssetIds = referenceImageAssetIds;
       config.referenceImageAssetId = referenceImageAssetIds[0];
+      config.freeReferenceReferences = normalizeFreeReferenceReferences(config.freeReferenceReferences, referenceImageAssetIds);
+    } else {
+      delete config.freeReferenceReferences;
     }
     config.batchCount = 1;
     config.targetAspectRatio = typeof config.freeReferenceAspectRatio === 'string'
@@ -1978,6 +2036,8 @@ function validateGenerationJobCreateBody(
       : typeof config.targetAspectRatio === 'string'
         ? config.targetAspectRatio
         : '1:1';
+  } else {
+    delete config.freeReferenceReferences;
   }
   if (body.mode === 'material-replace') {
     const sourceImageAssetId = typeof config.sourceImageAssetId === 'string' ? config.sourceImageAssetId.trim() : '';
@@ -2155,6 +2215,10 @@ function validateGenerationJobCreateBody(
         ? config.objectInsertExtraPrompt.trim()
         : '';
     const objectInsertInputOrder = previewFusionMode ? [] : buildObjectInsertInputOrderForRequest(objectItems, needsObject, needsPreview, needsMask);
+    const objectInsertCandidateCount = readObjectInsertCandidateCount(config);
+    const candidateStrategy = readObjectInsertCandidateStrategy(config);
+    const candidateStrategies = readObjectInsertCandidateStrategies(config, objectInsertCandidateCount);
+    const candidatePromptHints = readObjectInsertCandidatePromptHints(config, objectInsertCandidateCount);
 
     config.sourceImageAssetId = sourceImageAssetId;
     config.objectInsertMode = previewFusionMode ? 'object_insert_preview_fusion' : 'legacy_object_insert';
@@ -2210,6 +2274,9 @@ function validateGenerationJobCreateBody(
       allowAutoAdjustPosition,
       allowAutoAdjustRotation,
       allowAutoAdjustScale,
+      objectInsertCandidateStrategy: candidateStrategy,
+      objectInsertCandidateStrategies: candidateStrategies,
+      objectInsertCandidatePromptHints: candidatePromptHints,
     };
     if (needsMask) {
       config.maskMode = 'asset-mask';
@@ -2219,7 +2286,10 @@ function validateGenerationJobCreateBody(
       delete config.maskAssetId;
     }
     config.editTarget = 'furniture';
-    config.batchCount = readObjectInsertCandidateCount(config);
+    config.batchCount = objectInsertCandidateCount;
+    config.objectInsertCandidateStrategy = candidateStrategy;
+    config.objectInsertCandidateStrategies = candidateStrategies;
+    config.objectInsertCandidatePromptHints = candidatePromptHints;
     config.preserveStructure = config.preserveStructure !== false;
     config.preserveCamera = config.preserveCamera !== false;
     if (typeof config.objectInsertExtraPrompt === 'string') config.objectInsertExtraPrompt = config.objectInsertExtraPrompt.trim();
@@ -2230,6 +2300,9 @@ function validateGenerationJobCreateBody(
     delete config.enforceContactShadow;
     delete config.enforceOcclusion;
     delete config.enforcePerspectiveScale;
+    delete config.objectInsertCandidateStrategy;
+    delete config.objectInsertCandidateStrategies;
+    delete config.objectInsertCandidatePromptHints;
     if (isRecord(config.objectInsert)) {
       delete config.objectInsert.objectType;
       delete config.objectInsert.objectInsertSurface;
@@ -2237,6 +2310,9 @@ function validateGenerationJobCreateBody(
       delete config.objectInsert.enforceContactShadow;
       delete config.objectInsert.enforceOcclusion;
       delete config.objectInsert.enforcePerspectiveScale;
+      delete config.objectInsert.objectInsertCandidateStrategy;
+      delete config.objectInsert.objectInsertCandidateStrategies;
+      delete config.objectInsert.objectInsertCandidatePromptHints;
     }
   }
   if (config.editTarget !== undefined && config.editTarget !== 'general' && config.editTarget !== 'material' && config.editTarget !== 'furniture') {
@@ -2612,6 +2688,38 @@ function readObjectInsertFusionPreference(config: Record<string, unknown>): Obje
 
 function readObjectInsertCandidateCount(config: Record<string, unknown>): 1 | 2 | 3 {
   return config.batchCount === 2 || config.batchCount === 3 ? config.batchCount : 1;
+}
+
+function readObjectInsertCandidateStrategy(config: Record<string, unknown>): string {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.objectInsertCandidateStrategy === 'string'
+    ? nested.objectInsertCandidateStrategy
+    : typeof config.objectInsertCandidateStrategy === 'string'
+      ? config.objectInsertCandidateStrategy
+      : '';
+  return objectInsertCandidateStrategies.has(value) ? value : 'natural-fit';
+}
+
+function readObjectInsertCandidateStrategies(config: Record<string, unknown>, count: 1 | 2 | 3): string[] {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const configured = [
+    ...(Array.isArray(config.objectInsertCandidateStrategies) ? config.objectInsertCandidateStrategies : []),
+    ...(Array.isArray(nested.objectInsertCandidateStrategies) ? nested.objectInsertCandidateStrategies : []),
+  ].filter((value): value is string => typeof value === 'string' && objectInsertCandidateStrategies.has(value));
+  const preferred = readObjectInsertCandidateStrategy(config);
+  const defaults = [preferred, 'natural-fit', 'strict-placement', 'object-fidelity', 'scene-harmony'];
+  return Array.from(new Set([...configured, ...defaults])).slice(0, count);
+}
+
+function readObjectInsertCandidatePromptHints(config: Record<string, unknown>, count: 1 | 2 | 3): string[] {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  return [
+    ...(Array.isArray(config.objectInsertCandidatePromptHints) ? config.objectInsertCandidatePromptHints : []),
+    ...(Array.isArray(nested.objectInsertCandidatePromptHints) ? nested.objectInsertCandidatePromptHints : []),
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .slice(0, count)
+    .map(value => value.trim().slice(0, 400));
 }
 
 function readObjectInsertPreviewFusionMode(config: Record<string, unknown>, requestMode?: unknown): boolean {
@@ -3031,6 +3139,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function normalizeFreeReferenceReferences(value: unknown, allowedAssetIds: string[]) {
+  const allowedRoles = new Set(['style', 'material', 'furniture', 'lighting', 'composition', 'color', 'detail']);
+  const allowedStrengths = new Set(['low', 'medium', 'high']);
+  const items = Array.isArray(value) ? value : [];
+  return allowedAssetIds.slice(0, 6).map(assetId => {
+    const matched = items.find(item => isRecord(item) && item.assetId === assetId);
+    const role = isRecord(matched) && typeof matched.role === 'string' && allowedRoles.has(matched.role)
+      ? matched.role
+      : 'style';
+    const strength = isRecord(matched) && typeof matched.strength === 'string' && allowedStrengths.has(matched.strength)
+      ? matched.strength
+      : 'medium';
+    return { assetId, role, strength };
+  });
 }
 
 function readStringArray(value: unknown): string[] {

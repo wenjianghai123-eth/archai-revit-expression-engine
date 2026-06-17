@@ -407,16 +407,18 @@ async function processGenerationJob(jobId: string): Promise<void> {
           ? {
               ...(providerOutput.metadata || {}),
               ...originalOutputMetadata,
-              variantIndex: index,
-              variantCode: readVariantCode(index),
+              variantIndex: readDesignVariantTargetIndex(job.config, index),
+              variantCode: readVariantCode(readDesignVariantTargetIndex(job.config, index)),
               variantName: resolveVariantName(job.config, index),
-              variantLabel: readVariantLabel(index),
+              variantLabel: readVariantLabel(readDesignVariantTargetIndex(job.config, index)),
               variantStyle,
               stylePackId: typeof job.config.stylePackId === 'string' ? job.config.stylePackId : 'interior-common',
               designDirection: buildDesignVariantDirectionLabel(job.config, index, variantStyle),
               changeScopeLabel: readVariantChangeScopeLabel(job.config),
               lockedItemsLabel: readVariantLocksLabel(job.config),
               strategyNote: readVariantStrategyNote(job.config, index),
+              designDescription: buildDesignVariantDescription(job.config, readDesignVariantTargetIndex(job.config, index), variantStyle, index),
+              batchGroupId: typeof job.config.batchGroupId === 'string' ? job.config.batchGroupId : undefined,
               batchCount,
             }
           : job.mode === 'plan-colorize'
@@ -511,6 +513,9 @@ async function processGenerationJob(jobId: string): Promise<void> {
                 allowAutoAdjustPosition: readObjectInsertJobConfig(job).allowAutoAdjustPosition,
                 allowAutoAdjustRotation: readObjectInsertJobConfig(job).allowAutoAdjustRotation,
                 allowAutoAdjustScale: readObjectInsertJobConfig(job).allowAutoAdjustScale,
+                objectInsertCandidateIndex: index,
+                objectInsertCandidateStrategy: readObjectInsertCandidateStrategy(job.config, index),
+                objectInsertCandidatePromptHint: readObjectInsertCandidatePrompt(job.config, index),
               }
           : {
               ...(providerOutput.metadata || {}),
@@ -1784,16 +1789,31 @@ function buildProviderInputForVariant(
     };
   }
 
+  if (isObjectInsertJob(job)) {
+    const candidatePrompt = readObjectInsertCandidatePrompt(job.config, index);
+    return {
+      ...input,
+      prompt: [input.prompt, candidatePrompt].filter(part => part.trim().length > 0).join(' '),
+      config: {
+        ...input.config,
+        objectInsertCandidateIndex: index,
+        objectInsertCandidateStrategy: readObjectInsertCandidateStrategy(job.config, index),
+        objectInsertCandidatePromptHint: candidatePrompt,
+      },
+    };
+  }
+
   if (job.mode !== 'design-variants') return input;
+  const targetVariantIndex = readDesignVariantTargetIndex(job.config, index);
 
   return {
     ...input,
     prompt: buildDesignVariantPrompt(job, index, batchCount, variantStyle, input.qualityMode),
     config: {
       ...input.config,
-      variantIndex: index,
-      variantCode: readVariantCode(index),
-      variantLabel: readVariantLabel(index),
+      variantIndex: targetVariantIndex,
+      variantCode: readVariantCode(targetVariantIndex),
+      variantLabel: readVariantLabel(targetVariantIndex),
       variantName: resolveVariantName(job.config, index),
       variantStyle,
       stylePackId: typeof job.config.stylePackId === 'string' ? job.config.stylePackId : 'interior-common',
@@ -1804,6 +1824,8 @@ function buildProviderInputForVariant(
       changeScopeLabel: readVariantChangeScopeLabel(job.config),
       lockedItemsLabel: readVariantLocksLabel(job.config),
       strategyNote: readVariantStrategyNote(job.config, index),
+      designDescription: buildDesignVariantDescription(job.config, targetVariantIndex, variantStyle, index),
+      batchGroupId: typeof job.config.batchGroupId === 'string' ? job.config.batchGroupId : undefined,
       batchCount,
     },
   };
@@ -1834,6 +1856,8 @@ function buildFloorplanMultiPlanPrompt(
     }),
     `This is 3D colored floor plan option ${index + 1} of ${batchCount}: ${plan?.variantName || readVariantLabel(index)}.`,
     buildFloorplanExpressionControlPrompt(job.config),
+    buildFloorplanTemplatePrompt(job.config),
+    buildFloorplanRoomLabelsPrompt(job.config),
     'Common requirement: preserve the original floor plan structure, walls, doors, windows, openings, functional zoning, circulation logic, room proportions, and main spatial relationships. Do not change the basic architectural layout.',
     'Convert the plan into a clear, complete, design-oriented 3D colored floor plan with realistic materials, furniture, soft furnishing, lighting, and spatial layering.',
   ];
@@ -1881,6 +1905,60 @@ const lineworkPreservationPromptMap: Record<string, string> = {
   high: 'Linework preservation: high. Highly preserve the original linework and plan geometry, allowing only slight visual cleanup and professional graphic beautification.',
   medium: 'Linework preservation: medium. Keep the structure unchanged while allowing stronger graphic enhancement, clearer fills, material hierarchy, and presentation refinement.',
 };
+
+const floorplanTemplatePromptMap: Record<string, string> = {
+  'residential-warm-wood': 'Floorplan color template: residential warm wood. Use warm wood tones, soft neutral materials, cozy residential zoning, and clear home-oriented function expression.',
+  'premium-light-luxury': 'Floorplan color template: premium light luxury. Use refined stone, subtle metal accents, warm beige-gray palette, elegant material hierarchy, and report-ready polish.',
+  'commercial-presentation': 'Floorplan color template: commercial presentation. Emphasize display zones, circulation clarity, brand-facing material contrast, and presentation readability.',
+  'office-space': 'Floorplan color template: office workspace. Express workstations, meeting rooms, collaborative zones, reception, storage, circulation clarity, and professional neutral materials.',
+  'landscape-masterplan': 'Floorplan color template: landscape masterplan. Use planting texture, paving hierarchy, outdoor circulation, site edges, water/green area distinction, and masterplan clarity.',
+  'minimal-grayscale': 'Floorplan color template: minimal grayscale. Use restrained black-white-gray fills, subtle material contrast, clean linework, and strong plan readability.',
+};
+
+function buildFloorplanTemplatePrompt(config: Record<string, unknown>): string {
+  const id = typeof config.floorplanTemplateId === 'string' && floorplanTemplatePromptMap[config.floorplanTemplateId]
+    ? config.floorplanTemplateId
+    : 'residential-warm-wood';
+  return floorplanTemplatePromptMap[id];
+}
+
+function buildFloorplanRoomLabelsPrompt(config: Record<string, unknown>): string {
+  const labels = Array.isArray(config.floorplanRoomLabels) ? config.floorplanRoomLabels.filter(isRecord).slice(0, 20) : [];
+  if (labels.length === 0) return '';
+  return [
+    'Manual room labels: express each functional zone according to the following room labels. Keep room labels subtle and integrated with the plan; do not move walls, openings, room boundaries, or furniture outlines.',
+    ...labels.map((label, index) => {
+      const name = typeof label.name === 'string' && label.name.trim() ? label.name.trim() : `Area ${index + 1}`;
+      const type = readFloorplanRoomTypeLabel(label);
+      const position = typeof label.positionDescription === 'string' && label.positionDescription.trim()
+        ? `, location: ${label.positionDescription.trim()}`
+        : '';
+      return `Room ${index + 1}: ${name} = ${type}${position}.`;
+    }),
+  ].join(' ');
+}
+
+function readFloorplanRoomTypeLabel(label: Record<string, unknown>): string {
+  const type = typeof label.roomType === 'string' ? label.roomType : 'custom';
+  if (type === 'custom') {
+    return typeof label.customTypeLabel === 'string' && label.customTypeLabel.trim()
+      ? label.customTypeLabel.trim()
+      : 'custom room';
+  }
+  const labels: Record<string, string> = {
+    'living-room': 'living room',
+    'dining-room': 'dining room',
+    bedroom: 'bedroom',
+    kitchen: 'kitchen',
+    bathroom: 'bathroom',
+    balcony: 'balcony',
+    entry: 'entry foyer',
+    study: 'study',
+    office: 'office area',
+    commercial: 'commercial area',
+  };
+  return labels[type] || 'room';
+}
 
 function buildFloorplanExpressionControlPrompt(config: Record<string, unknown>): string {
   const renderMode = typeof config.floorplanRenderMode === 'string' && floorplanRenderModePromptMap[config.floorplanRenderMode]
@@ -1951,6 +2029,7 @@ function readProviderMs(outputs: GenerateImageOutput[]): number | undefined {
 
 function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount: number, style: string, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
   const strategy = job.config.variantStrategy === 'same-style' ? 'same-style' : 'style-matrix';
+  const targetVariantIndex = readDesignVariantTargetIndex(job.config, index);
   const customStyle = style === 'custom' && typeof job.config.customStyleLabel === 'string'
     ? `Direction: ${job.config.customStyleLabel.trim()}.`
     : variantStylePrompts[style] || variantStylePrompts['modern-minimal'];
@@ -1958,7 +2037,7 @@ function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount:
     buildSmartPromptForJob(job, qualityMode, {
       config: {
         ...job.config,
-        variantIndex: index,
+        variantIndex: targetVariantIndex,
         variantName: resolveVariantName(job.config, index),
         variantStyle: style,
       },
@@ -1967,7 +2046,7 @@ function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount:
     }),
     strategy === 'same-style' ? sameStyleVariantPrompts[index] : undefined,
     buildDesignVariantControlPrompt(job.config, index),
-    `This is ${readVariantLabel(index)} of ${batchCount}.`,
+    `This is ${readVariantLabel(targetVariantIndex)} of ${batchCount}.`,
   ];
   return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
 }
@@ -2058,6 +2137,35 @@ function buildDesignVariantDirectionLabel(config: Record<string, unknown>, index
     ? config.customStyleLabel.trim()
     : style;
   return `${resolveVariantName(config, index)} / ${customStyle}`;
+}
+
+function readDesignVariantTargetIndex(config: Record<string, unknown>, fallbackIndex: number): number {
+  const raw = typeof config.targetVariantIndex === 'number'
+    ? config.targetVariantIndex
+    : typeof config.retryVariantIndex === 'number'
+      ? config.retryVariantIndex
+      : fallbackIndex;
+  if (!Number.isFinite(raw)) return fallbackIndex;
+  const index = Math.floor(raw);
+  return index >= 0 && index <= 7 ? index : fallbackIndex;
+}
+
+function buildDesignVariantDescription(config: Record<string, unknown>, targetIndex: number, style: string, configIndex: number): string {
+  const styleText = buildDesignVariantDirectionLabel(config, configIndex, style);
+  const scopeText = readVariantChangeScopeLabel(config);
+  const locksText = readVariantLocksLabel(config);
+  const note = readVariantStrategyNote(config, configIndex);
+  const emphasis = [
+    '强调空间秩序、材质层次和整体完成度。',
+    '更关注软装氛围、色彩平衡和可落地的生活感。',
+    '突出视觉焦点、灯光节奏和方案辨识度。',
+    '在保留基础结构的前提下提升展示感和设计记忆点。',
+    '通过细节收口、材质对比和局部陈设形成差异化表达。',
+    '侧重动线清晰、功能舒适和画面整体协调。',
+    '加强主次关系、明暗层次和空间品质感。',
+    '以更完整的设计语言组织家具、材质和光影关系。',
+  ][targetIndex % 8];
+  return `${readVariantLabel(targetIndex)}采用${styleText}方向，变化范围为${scopeText}，锁定${locksText}。${emphasis}${note ? ` 方案备注：${note}` : ''}`;
 }
 
 function buildPlanColorizeBatchPrompt(job: GenerationJob, index: number, batchCount: number, style: PlanColorizeStyleOption, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
@@ -2325,6 +2433,7 @@ type ObjectInsertPlacementMode = 'strict' | 'natural';
 type ObjectInsertHarmonyPriority = 'layout' | 'style' | 'balance';
 type ObjectInsertFusionPreference = 'conservative' | 'balanced' | 'design';
 type ObjectInsertSurface = 'floor' | 'wall' | 'ceiling' | 'tabletop' | 'outdoor-ground' | 'auto';
+type ObjectInsertCandidateStrategy = 'strict-placement' | 'natural-fit' | 'object-fidelity' | 'scene-harmony';
 type ObjectFidelity = 'strict' | 'balanced' | 'loose';
 
 interface ObjectInsertItemForJob {
@@ -2402,6 +2511,34 @@ function readObjectInsertFusionPreference(config: Record<string, unknown>): Obje
 
 function readObjectInsertCandidateCount(config: Record<string, unknown>): 1 | 2 | 3 {
   return config.batchCount === 2 || config.batchCount === 3 ? config.batchCount : 1;
+}
+
+const objectInsertCandidatePromptMap: Record<ObjectInsertCandidateStrategy, string> = {
+  'strict-placement': 'Candidate strategy: strict-placement. Follow the user placement guide closely; minimize position, scale, and rotation deviation.',
+  'natural-fit': 'Candidate strategy: natural-fit. Slightly adjust position, scale, and perspective for a natural scene fit while respecting the guide.',
+  'object-fidelity': 'Candidate strategy: object-fidelity. Prioritize preserving the reference object shape, material, color, and identity.',
+  'scene-harmony': 'Candidate strategy: scene-harmony. Prioritize lighting, shadow, perspective, occlusion, and atmospheric harmony with the scene.',
+};
+
+function readObjectInsertCandidateStrategy(config: Record<string, unknown>, index: number): ObjectInsertCandidateStrategy {
+  const strategies = Array.isArray(config.objectInsertCandidateStrategies) ? config.objectInsertCandidateStrategies : [];
+  const nested = isRecord(config.objectInsert) && Array.isArray(config.objectInsert.objectInsertCandidateStrategies)
+    ? config.objectInsert.objectInsertCandidateStrategies
+    : [];
+  const value = [...strategies, ...nested][index] ?? config.objectInsertCandidateStrategy;
+  return value === 'strict-placement' || value === 'object-fidelity' || value === 'scene-harmony' || value === 'natural-fit'
+    ? value
+    : 'natural-fit';
+}
+
+function readObjectInsertCandidatePrompt(config: Record<string, unknown>, index: number): string {
+  const hints = Array.isArray(config.objectInsertCandidatePromptHints) ? config.objectInsertCandidatePromptHints : [];
+  const nested = isRecord(config.objectInsert) && Array.isArray(config.objectInsert.objectInsertCandidatePromptHints)
+    ? config.objectInsert.objectInsertCandidatePromptHints
+    : [];
+  const hint = [...hints, ...nested][index];
+  if (typeof hint === 'string' && hint.trim().length > 0) return hint.trim().slice(0, 400);
+  return objectInsertCandidatePromptMap[readObjectInsertCandidateStrategy(config, index)];
 }
 
 function readObjectInsertPreviewFusionMode(config: Record<string, unknown>, requestMode?: unknown): boolean {

@@ -15,6 +15,12 @@ export interface FloorplanLayoutTemplate {
   promptHint: string;
 }
 
+export interface FloorplanColorTemplate {
+  id: string;
+  name: string;
+  promptHint: string;
+}
+
 export interface FloorplanVariantPlan {
   variantIndex: number;
   variantName: string;
@@ -87,6 +93,39 @@ export const floorplanLayoutTemplates: FloorplanLayoutTemplate[] = [
   },
 ];
 
+export const floorplanColorTemplates: FloorplanColorTemplate[] = [
+  {
+    id: 'residential-warm-wood',
+    name: '住宅温馨木色',
+    promptHint: 'Floorplan color template: warm residential wood palette. Use warm wood flooring, soft neutral walls, cozy residential furniture fills, restrained stone accents, and clear home-like functional zoning.',
+  },
+  {
+    id: 'premium-light-luxury',
+    name: '高端轻奢彩平',
+    promptHint: 'Floorplan color template: premium light luxury. Use refined stone, warm metal accents, soft beige-gray palette, polished material hierarchy, and elegant presentation quality.',
+  },
+  {
+    id: 'commercial-presentation',
+    name: '商业汇报彩平',
+    promptHint: 'Floorplan color template: commercial presentation. Emphasize display zones, public circulation, brand-facing material contrast, clear graphic hierarchy, and report-ready readability.',
+  },
+  {
+    id: 'office-space',
+    name: '办公空间彩平',
+    promptHint: 'Floorplan color template: office workspace. Express workstations, meeting rooms, collaborative zones, reception, storage, circulation clarity, and professional neutral material systems.',
+  },
+  {
+    id: 'landscape-masterplan',
+    name: '景观总平彩平',
+    promptHint: 'Floorplan color template: landscape masterplan. Use planting textures, paving hierarchy, water/green area distinction, outdoor circulation, site edges, and masterplan presentation clarity.',
+  },
+  {
+    id: 'minimal-grayscale',
+    name: '极简黑白灰彩平',
+    promptHint: 'Floorplan color template: minimal grayscale. Use restrained black-white-gray fills, subtle material contrast, clean lines, minimal labels, and strong plan readability.',
+  },
+];
+
 export function resolveFloorplanBatchCount(value: unknown): FloorplanMultiPlanBatchCount {
   return value === 2 || value === 6 ? value : 4;
 }
@@ -137,6 +176,10 @@ export function findFloorplanStyleTemplate(id: unknown): FloorplanStyleTemplate 
 
 export function findFloorplanLayoutTemplate(id: unknown): FloorplanLayoutTemplate | undefined {
   return typeof id === 'string' ? floorplanLayoutTemplates.find(template => template.id === id) : undefined;
+}
+
+export function findFloorplanColorTemplate(id: unknown): FloorplanColorTemplate | undefined {
+  return typeof id === 'string' ? floorplanColorTemplates.find(template => template.id === id) : undefined;
 }
 
 export function readFloorplanVariantType(value: unknown): FloorplanVariantType {

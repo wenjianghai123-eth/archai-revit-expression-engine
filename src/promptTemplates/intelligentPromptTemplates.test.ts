@@ -120,4 +120,29 @@ describe('intelligent prompt templates', () => {
     expect(prompt).toContain('Lock walls and openings:');
     expect(prompt).toContain('Variant-specific strategy note: open the lounge seating but keep circulation clear');
   });
+
+  it('adds free reference image roles and strengths to the prompt', () => {
+    const prompt = buildSmartPrompt({
+      mode: 'style-render',
+      config: {
+        step: 'free_reference_image',
+        freeReferenceReferences: [
+          { assetId: 'asset-style', role: 'style', strength: 'medium' },
+          { assetId: 'asset-material', role: 'material', strength: 'high' },
+          { assetId: 'asset-lighting', role: 'lighting', strength: 'low' },
+        ],
+      },
+      userPrompt: 'create a calm hotel lobby rendering',
+    });
+
+    expect(prompt).toContain('Free reference image mode');
+    expect(prompt).toContain('Reference image 2: style reference');
+    expect(prompt).toContain('medium strength');
+    expect(prompt).toContain('Reference image 3: material reference');
+    expect(prompt).toContain('high strength');
+    expect(prompt).toContain('Reference image 4: lighting reference');
+    expect(prompt).toContain('low strength');
+    expect(prompt).toContain('Do not mechanically collage reference images');
+    expect(prompt).toContain('Do not create a split-screen');
+  });
 });

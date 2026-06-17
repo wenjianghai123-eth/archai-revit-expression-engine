@@ -1,10 +1,11 @@
 import { Download, ExternalLink, ImagePlus, Loader2, Upload, X } from 'lucide-react';
 import { useRef, useState } from 'react';
-import { GenerationConfig, GenerationRunStateOverride, StepState, UploadedImage } from '../types';
+import { FreeReferenceReference, FreeReferenceRole, FreeReferenceStrength, GenerationConfig, GenerationRunStateOverride, GenerationStep, ResultSendTargetStep, StepState, UploadedImage } from '../types';
 import { uploadImageAsset } from '../lib/api';
 import { createUploadedImage, validateImageFile } from '../utils/file';
 import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
+import { ResultSendActions } from './workspace/SecondaryEditActions';
 
 type UploadKind = 'source' | 'reference';
 
@@ -15,12 +16,32 @@ interface FreeReferenceImagePanelProps {
   onUpdateMaterialImage: (image: UploadedImage | null) => void;
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
   onGenerate: (stateOverride?: GenerationRunStateOverride) => void;
+  onSendResultToStep?: (resultId: string, targetStep: ResultSendTargetStep) => void;
 }
 
 const acceptedImageTypes = 'image/png,image/jpeg,image/webp';
 const resolutionOptions = [1024, 1536, 2048] as const;
 const aspectRatioOptions = ['1:1', '4:3', '3:4', '16:9', '9:16'] as const;
 const maxReferenceImages = 6;
+const referenceRoleOptions: Array<{ value: FreeReferenceRole; label: string }> = [
+  { value: 'style', label: '风格参考' },
+  { value: 'material', label: '材质参考' },
+  { value: 'furniture', label: '家具参考' },
+  { value: 'lighting', label: '灯光参考' },
+  { value: 'composition', label: '构图参考' },
+  { value: 'color', label: '色彩参考' },
+  { value: 'detail', label: '细节参考' },
+];
+const referenceStrengthOptions: Array<{ value: FreeReferenceStrength; label: string }> = [
+  { value: 'low', label: '弱' },
+  { value: 'medium', label: '中' },
+  { value: 'high', label: '强' },
+];
+
+interface FreeReferenceDraftSetting {
+  role: FreeReferenceRole;
+  strength: FreeReferenceStrength;
+}
 
 export function FreeReferenceImagePanel({
   state,
@@ -29,10 +50,15 @@ export function FreeReferenceImagePanel({
   onUpdateMaterialImage,
   onUpdateConfig,
   onGenerate,
+  onSendResultToStep,
 }: FreeReferenceImagePanelProps) {
   const sourceInputRef = useRef<HTMLInputElement>(null);
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const [referenceImages, setReferenceImages] = useState<UploadedImage[]>(() => state.materialImage ? [state.materialImage] : []);
+  const [referenceSettings, setReferenceSettings] = useState<FreeReferenceDraftSetting[]>(() => buildInitialReferenceSettings(
+    state.materialImage ? [state.materialImage] : [],
+    state.config.freeReferenceReferences,
+  ));
   const [uploadErrors, setUploadErrors] = useState<Record<UploadKind, string | null>>({ source: null, reference: null });
   const [isPreparing, setIsPreparing] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -88,14 +114,20 @@ export function FreeReferenceImagePanel({
 
     const images = await Promise.all(acceptedFiles.map(file => createUploadedImage(file)));
     const nextImages = [...referenceImages, ...images].slice(0, maxReferenceImages);
+    const nextSettings = [
+      ...referenceSettings,
+      ...images.map(() => createDefaultReferenceSetting()),
+    ].slice(0, maxReferenceImages);
     const referenceImageAssetIds = nextImages
       .map(image => image.assetId)
       .filter((assetId): assetId is string => Boolean(assetId));
     setReferenceImages(nextImages);
+    setReferenceSettings(nextSettings);
     onUpdateMaterialImage(nextImages[0] || null);
     onUpdateConfig({
       referenceImageAssetIds: referenceImageAssetIds,
       referenceImageAssetId: referenceImageAssetIds[0],
+      freeReferenceReferences: buildFreeReferenceReferences(nextImages, nextSettings),
     });
     setGenerationMessage(null);
     setUploadErrors(prev => ({
@@ -106,14 +138,28 @@ export function FreeReferenceImagePanel({
 
   const removeReferenceImage = (index: number) => {
     const nextImages = referenceImages.filter((_, itemIndex) => itemIndex !== index);
+    const nextSettings = referenceSettings.filter((_, itemIndex) => itemIndex !== index);
     const referenceImageAssetIds = nextImages
       .map(image => image.assetId)
       .filter((assetId): assetId is string => Boolean(assetId));
     setReferenceImages(nextImages);
+    setReferenceSettings(nextSettings);
     onUpdateMaterialImage(nextImages[0] || null);
     onUpdateConfig({
       referenceImageAssetIds: referenceImageAssetIds,
       referenceImageAssetId: referenceImageAssetIds[0],
+      freeReferenceReferences: buildFreeReferenceReferences(nextImages, nextSettings),
+    });
+  };
+
+  const updateReferenceSetting = (index: number, patch: Partial<FreeReferenceDraftSetting>) => {
+    const nextSettings = referenceImages.map((_, itemIndex) => ({
+      ...(referenceSettings[itemIndex] || createDefaultReferenceSetting()),
+      ...(itemIndex === index ? patch : {}),
+    }));
+    setReferenceSettings(nextSettings);
+    onUpdateConfig({
+      freeReferenceReferences: buildFreeReferenceReferences(referenceImages, nextSettings),
     });
   };
 
@@ -144,6 +190,7 @@ export function FreeReferenceImagePanel({
         .map(image => image.assetId)
         .filter((assetId): assetId is string => Boolean(assetId))
         .slice(0, maxReferenceImages);
+      const freeReferenceReferences = buildFreeReferenceReferences(referenceImagesWithAsset, referenceSettings);
       const target = buildTargetSize(resolution, aspectRatio);
       const configPatch: GenerationConfig = {
         ...state.config,
@@ -152,6 +199,7 @@ export function FreeReferenceImagePanel({
         sourceImageAssetId: sourceWithAsset.assetId,
         referenceImageAssetIds,
         referenceImageAssetId: referenceImageAssetIds[0],
+        freeReferenceReferences,
         freeReferenceResolution: resolution,
         freeReferenceAspectRatio: aspectRatio,
         targetWidth: target.width,
@@ -162,6 +210,7 @@ export function FreeReferenceImagePanel({
       };
 
       setReferenceImages(referenceImagesWithAsset);
+      setReferenceSettings(referenceImagesWithAsset.map((_, index) => referenceSettings[index] || createDefaultReferenceSetting()));
       onUpdateInputImage(sourceWithAsset);
       onUpdateMaterialImage(referenceImagesWithAsset[0] || null);
       onUpdateConfig(configPatch);
@@ -169,6 +218,7 @@ export function FreeReferenceImagePanel({
         console.debug('[FreeReferenceImagePanel] create generation job', {
           sourceImageAssetId: sourceWithAsset.assetId,
           referenceImageAssetIds,
+          freeReferenceReferences,
           prompt: prompt.trim(),
           resolution,
           aspectRatio,
@@ -226,9 +276,11 @@ export function FreeReferenceImagePanel({
           <UploadBox title="原图" image={sourceImage} error={uploadErrors.source} onUpload={() => sourceInputRef.current?.click()} onRemove={() => onUpdateInputImage(null)} />
           <ReferenceUploadBox
             images={referenceImages}
+            settings={referenceSettings}
             error={uploadErrors.reference}
             onUpload={() => referenceInputRef.current?.click()}
             onRemove={removeReferenceImage}
+            onSettingChange={updateReferenceSetting}
           />
 
           <label className="block">
@@ -283,6 +335,11 @@ export function FreeReferenceImagePanel({
           {originalResultImage ? (
             <div className="flex items-center justify-end gap-2 border-b border-slate-100 px-4 py-2">
               {resultDimensionsText ? <span className="text-xs font-bold text-slate-500">{resultDimensionsText}</span> : null}
+              {selectedResult && onSendResultToStep ? (
+                <div className="min-w-[260px]">
+                  <ResultSendActions resultId={selectedResult.id} currentStep={GenerationStep.FreeReferenceImage} onSend={onSendResultToStep} compact disabled={state.isGenerating} />
+                </div>
+              ) : null}
               <button type="button" onClick={() => window.open(originalResultImage, '_blank', 'noopener,noreferrer')} className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-slate-700 ring-1 ring-slate-200 hover:text-blue-700">
                 <ExternalLink className="h-3.5 w-3.5" />
                 查看原图
@@ -340,11 +397,13 @@ function UploadBox({ title, image, error, onUpload, onRemove }: {
   );
 }
 
-function ReferenceUploadBox({ images, error, onUpload, onRemove }: {
+function ReferenceUploadBox({ images, settings, error, onUpload, onRemove, onSettingChange }: {
   images: UploadedImage[];
+  settings: FreeReferenceDraftSetting[];
   error: string | null;
   onUpload: () => void;
   onRemove: (index: number) => void;
+  onSettingChange: (index: number, patch: Partial<FreeReferenceDraftSetting>) => void;
 }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -358,14 +417,34 @@ function ReferenceUploadBox({ images, error, onUpload, onRemove }: {
         </button>
       </div>
       {images.length > 0 ? (
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           {images.map((image, index) => (
-            <div key={image.id} className="group relative overflow-hidden rounded-lg border border-slate-200 bg-white">
-              <img src={readImageSrc(image)} alt={`参考图 ${index + 1}`} className="aspect-square w-full object-cover" />
-              <span className="absolute left-1 top-1 rounded bg-slate-950/70 px-1.5 py-0.5 text-[10px] font-black text-white">{index + 1}</span>
-              <button type="button" onClick={() => onRemove(index)} className="absolute right-1 top-1 rounded bg-white/90 p-1 text-slate-500 opacity-0 shadow-sm transition group-hover:opacity-100 hover:text-rose-600">
-                <X className="h-3.5 w-3.5" />
-              </button>
+            <div key={image.id} className="group overflow-hidden rounded-lg border border-slate-200 bg-white">
+              <div className="relative">
+                <img src={readImageSrc(image)} alt={`参考图 ${index + 1}`} className="aspect-square w-full object-cover" />
+                <span className="absolute left-1 top-1 rounded bg-slate-950/70 px-1.5 py-0.5 text-[10px] font-black text-white">{index + 1}</span>
+                <button type="button" onClick={() => onRemove(index)} className="absolute right-1 top-1 rounded bg-white/90 p-1 text-slate-500 opacity-0 shadow-sm transition group-hover:opacity-100 hover:text-rose-600">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <div className="space-y-1.5 p-1.5">
+                <select
+                  value={(settings[index] || createDefaultReferenceSetting()).role}
+                  onChange={event => onSettingChange(index, { role: event.currentTarget.value as FreeReferenceRole })}
+                  className="w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-700"
+                  aria-label={`参考图 ${index + 1} 角色`}
+                >
+                  {referenceRoleOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <select
+                  value={(settings[index] || createDefaultReferenceSetting()).strength}
+                  onChange={event => onSettingChange(index, { strength: event.currentTarget.value as FreeReferenceStrength })}
+                  className="w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-700"
+                  aria-label={`参考图 ${index + 1} 强度`}
+                >
+                  {referenceStrengthOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
             </div>
           ))}
         </div>
@@ -378,6 +457,40 @@ function ReferenceUploadBox({ images, error, onUpload, onRemove }: {
       {error ? <p className="mt-2 text-xs font-semibold text-rose-600">{error}</p> : null}
     </div>
   );
+}
+
+function createDefaultReferenceSetting(): FreeReferenceDraftSetting {
+  return { role: 'style', strength: 'medium' };
+}
+
+function buildInitialReferenceSettings(
+  images: UploadedImage[],
+  references: FreeReferenceReference[] | undefined,
+): FreeReferenceDraftSetting[] {
+  return images.map(image => {
+    const matched = image.assetId ? references?.find(item => item.assetId === image.assetId) : undefined;
+    return {
+      role: matched?.role || 'style',
+      strength: matched?.strength || 'medium',
+    };
+  });
+}
+
+function buildFreeReferenceReferences(
+  images: UploadedImage[],
+  settings: FreeReferenceDraftSetting[],
+): FreeReferenceReference[] {
+  return images
+    .map((image, index) => {
+      if (!image.assetId) return null;
+      const setting = settings[index] || createDefaultReferenceSetting();
+      return {
+        assetId: image.assetId,
+        role: setting.role,
+        strength: setting.strength,
+      };
+    })
+    .filter((item): item is FreeReferenceReference => Boolean(item));
 }
 
 async function ensureUploadedImageAsset(image: UploadedImage, basename: string): Promise<UploadedImage> {

@@ -10,7 +10,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { LoginPage } from './components/LoginPage';
 import { CreativeHome } from './components/CreativeHome';
 import { ProjectList } from './components/ProjectList';
-import { GenerationStep, GenerationHistoryItem, StepState, UploadedImage, SecondaryEditAction } from './types';
+import { GenerationStep, GenerationHistoryItem, ResultSendTargetStep, StepState, UploadedImage, SecondaryEditAction } from './types';
 import {
   cancelGenerationJob,
   createAutoProject,
@@ -26,6 +26,7 @@ import { useGenerationRunner } from './hooks/useGenerationRunner';
 import { useProjectSelection } from './hooks/useProjectSelection';
 import { clearGenerationHistory, deleteGenerationRecord, listGenerationRecords } from './storage/history';
 import { buildSecondaryEditConfigPatch } from './utils/secondaryEdit';
+import { getOriginalResultAssetId, getOriginalResultImageUrl } from './utils/resultImage';
 import { promptTemplateRecordToTemplate } from './utils/savedPromptTemplates';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -369,6 +370,91 @@ export default function App() {
     setQueuedSecondaryGenerationId(`${result.id}:${action}:${Date.now()}`);
   }, [currentStep, setStepStates, stepStates]);
 
+  const handleSendResultToStep = useCallback((resultId: string, targetStep: ResultSendTargetStep) => {
+    const currentState = stepStates[currentStep];
+    const result = currentState.generationResults.find(item => item.id === resultId)
+      || (currentState.outputImage
+        ? {
+            id: currentState.generationResultId || resultId,
+            imageUrl: currentState.outputImage,
+            assetId: undefined,
+            isSelected: true,
+            isFavorite: false,
+            createdAt: currentState.generationCreatedAt || undefined,
+          }
+        : null);
+
+    if (!result) return;
+
+    const imageUrl = getOriginalResultImageUrl(result, result.imageUrl);
+    if (!imageUrl) return;
+
+    const label = result.variantName || result.variantLabel || '当前结果';
+    const assetId = getOriginalResultAssetId(result) || undefined;
+    const nextInputImage: UploadedImage = {
+      id: `send-${targetStep}-${result.id}-${Date.now()}`,
+      name: `${label}.png`,
+      type: readImageMimeType(imageUrl),
+      size: 0,
+      dataUrl: imageUrl,
+      url: imageUrl.startsWith('data:') ? undefined : imageUrl,
+      assetId,
+    };
+    const parentJobId = result.jobId || currentState.generationJobId;
+    const parentRecordId = currentState.generationResultId;
+    const action = `send-to-${targetStep}` as const;
+
+    setCurrentStep(targetStep);
+    setActiveTab('generate');
+    setStepStates(prev => {
+      const previous = prev[targetStep];
+      const nextConfig = buildContinuationConfigForTarget(targetStep, previous.config, nextInputImage.assetId, {
+        parentResultId: result.id,
+        parentJobId,
+        parentRecordId,
+      });
+      return {
+        ...prev,
+        [targetStep]: {
+          ...previous,
+          inputImage: nextInputImage,
+          materialImage: targetStep === GenerationStep.FreeReferenceImage ? previous.materialImage : null,
+          materialTextures: targetStep === GenerationStep.MaterialReplace ? previous.materialTextures : [],
+          furnitureReferences: [],
+          maskImage: null,
+          useFullImageMask: false,
+          config: nextConfig,
+          outputImage: null,
+          generationResults: [],
+          selectedGenerationResultId: null,
+          isGenerating: false,
+          generationStatus: 'ready',
+          generationError: null,
+          generationWarnings: [],
+          generationProvider: null,
+          generationResultId: null,
+          generationCreatedAt: null,
+          generationJobId: null,
+          generationJobStatus: null,
+          generationJobDiagnostics: null,
+          generationProgress: 0,
+          generationLogs: [`send-result: 已将「${label}」发送到 ${readGenerationStepLabel(targetStep)}。`],
+          viewMode: 'original',
+          continuationSource: {
+            parentResultId: result.id,
+            parentJobId,
+            parentRecordId,
+            imageUrl,
+            assetId,
+            label,
+            action,
+            createdAt: new Date().toISOString(),
+          },
+        },
+      };
+    });
+  }, [currentStep, setCurrentStep, setStepStates, stepStates]);
+
   const handleContinueObjectInsertRefine = useCallback((image: UploadedImage, source: { resultId?: string; label: string }) => {
     setCurrentStep(GenerationStep.ObjectInsert);
     setActiveTab('generate');
@@ -639,6 +725,7 @@ export default function App() {
                         onSelectGenerationResult={handleSelectGenerationResult}
                         onToggleGenerationFavorite={handleToggleGenerationFavorite}
                         onSecondaryEditResult={handleSecondaryEditResult}
+                        onSendResultToStep={handleSendResultToStep}
                         onContinueObjectInsertRefine={handleContinueObjectInsertRefine}
                         onRenameGenerationResult={handleRenameGenerationResult}
                         onSetViewMode={handleSetViewMode}
@@ -760,6 +847,82 @@ function buildHistoryInputImage(item: GenerationHistoryItem): UploadedImage | nu
     url: item.inputImageUrl,
     assetId: item.inputImageAssetId,
   };
+}
+
+function buildContinuationConfigForTarget(
+  targetStep: ResultSendTargetStep,
+  previousConfig: StepState['config'],
+  sourceImageAssetId: string | undefined,
+  parent: { parentResultId: string; parentJobId?: string | null; parentRecordId?: string | null },
+): StepState['config'] {
+  const base = {
+    ...previousConfig,
+    sourceImageAssetId,
+    parentResultId: parent.parentResultId,
+    parentJobId: parent.parentJobId,
+    parentRecordId: parent.parentRecordId,
+  };
+
+  if (targetStep === GenerationStep.MaterialReplace) {
+    return {
+      ...base,
+      maskMode: undefined,
+      maskAssetId: undefined,
+      editMode: base.editMode || 'smart-type',
+      preserveLighting: base.preserveLighting ?? true,
+      preserveGeometry: base.preserveGeometry ?? true,
+      preserveStructure: base.preserveStructure ?? true,
+    };
+  }
+
+  if (targetStep === GenerationStep.ObjectInsert) {
+    return {
+      ...base,
+      objectReferenceAssetId: undefined,
+      placementGuideAssetId: undefined,
+      placementPreviewAssetId: undefined,
+      placementMaskAssetId: undefined,
+      objectPlacement: undefined,
+      objectInsertInputOrder: undefined,
+      maskMode: undefined,
+      maskAssetId: undefined,
+      objectInsertMode: 'object_insert_preview_fusion',
+      objectInsert: {
+        ...(base.objectInsert || {}),
+        mode: 'object_insert_preview_fusion',
+        sourceImageAssetId,
+        objectItems: [],
+        previewAssetId: undefined,
+        guideAssetId: undefined,
+        maskAssetId: undefined,
+        objectReferenceAssetId: undefined,
+        objectReferenceAssetIds: undefined,
+        placement: undefined,
+      },
+    };
+  }
+
+  if (targetStep === GenerationStep.DesignVariants) {
+    return {
+      ...base,
+      preserveStructure: base.preserveStructure ?? true,
+      preserveCamera: base.preserveCamera ?? true,
+    };
+  }
+
+  return {
+    ...base,
+    referenceImageAssetId: undefined,
+    referenceImageAssetIds: [],
+    freeReferenceReferences: [],
+  };
+}
+
+function readGenerationStepLabel(step: ResultSendTargetStep): string {
+  if (step === GenerationStep.MaterialReplace) return '材质替换';
+  if (step === GenerationStep.ObjectInsert) return '元素植入';
+  if (step === GenerationStep.DesignVariants) return '方案变体';
+  return '自由参考生图';
 }
 
 function readImageMimeType(imageUrl: string): string {

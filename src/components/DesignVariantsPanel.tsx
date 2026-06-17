@@ -1,11 +1,12 @@
-import { Download, FileText, Heart, ImagePlus, LayoutGrid, Printer, Sparkles, Star } from 'lucide-react';
+import { Download, FileText, Heart, ImagePlus, LayoutGrid, Printer, RefreshCcw, Sparkles, Star } from 'lucide-react';
 import { type ReactNode, useState } from 'react';
 import { designVariantPacks, getDesignVariantPack } from '../constants/designVariantPacks';
-import { DesignVariantBatchCount, GenerationConfig, GenerationResultOption, GenerationStep, SecondaryEditAction, StepState, UploadedImage, VariantChangeScope, VariantLock, VariantStyleKey } from '../types';
+import { DesignVariantBatchCount, GenerationConfig, GenerationResultOption, GenerationStep, ResultSendTargetStep, SecondaryEditAction, StepState, UploadedImage, VariantChangeScope, VariantLock, VariantStyleKey } from '../types';
 import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
 import { getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
+import { ResultSendActions } from './workspace/SecondaryEditActions';
 
 interface DesignVariantsPanelProps {
   state: StepState;
@@ -22,6 +23,8 @@ interface DesignVariantsPanelProps {
   onSelectGenerationResult: (resultId: string) => void;
   onToggleGenerationFavorite: (resultId: string) => void;
   onSecondaryEditResult?: (resultId: string, action: SecondaryEditAction) => void;
+  onSendResultToStep?: (resultId: string, targetStep: ResultSendTargetStep) => void;
+  onRetryVariant?: (variantIndex: number) => void;
   onRenameGenerationResult: (resultId: string, variantName: string) => void;
 }
 
@@ -93,6 +96,8 @@ export function DesignVariantsPanel({
   onSelectGenerationResult,
   onToggleGenerationFavorite,
   onSecondaryEditResult,
+  onSendResultToStep,
+  onRetryVariant,
   onRenameGenerationResult,
 }: DesignVariantsPanelProps) {
   const [exportMode, setExportMode] = useState<'compare' | 'report' | null>(null);
@@ -347,9 +352,26 @@ export function DesignVariantsPanel({
             </div>
 
             <div className={`grid gap-3 ${batchCount === 2 ? 'lg:grid-cols-2' : batchCount === 8 ? 'md:grid-cols-2 2xl:grid-cols-4' : 'lg:grid-cols-2'}`}>
-              {resultOptions.length > 0 ? resultOptions.map((result, index) => (
-                <VariantCard key={result.id} result={result} index={index} active={result.id === selectedResultId || result.isSelected} style={selectedStyles[index]} fallbackName={variantNames[index]} projectName={projectName} onSelect={() => onSelectGenerationResult(result.id)} onFavorite={() => onToggleGenerationFavorite(result.id)} onContinueEdit={() => onSecondaryEditResult?.(result.id, 'continue-edit')} onRename={name => handleResultNameChange(result, index, name)} />
-              )) : Array.from({ length: batchCount }).map((_, index) => (
+              {resultOptions.length > 0 ? resultOptions.map((result, index) => {
+                const variantIndex = typeof result.variantIndex === 'number' ? result.variantIndex : index;
+                return (
+                  <VariantCard
+                    key={result.id}
+                    result={result}
+                    index={variantIndex}
+                    active={result.id === selectedResultId || result.isSelected}
+                    style={selectedStyles[variantIndex] || selectedStyles[index]}
+                    fallbackName={variantNames[variantIndex] || variantNames[index]}
+                    projectName={projectName}
+                    onSelect={() => onSelectGenerationResult(result.id)}
+                    onFavorite={() => onToggleGenerationFavorite(result.id)}
+                    onContinueEdit={() => onSecondaryEditResult?.(result.id, 'continue-edit')}
+                    onSend={targetStep => onSendResultToStep?.(result.id, targetStep)}
+                    onRetry={() => onRetryVariant?.(variantIndex)}
+                    onRename={name => handleResultNameChange(result, variantIndex, name)}
+                  />
+                );
+              }) : Array.from({ length: batchCount }).map((_, index) => (
                 <PlaceholderCard key={index} index={index} style={selectedStyles[index]} name={variantNames[index]} note={variantStrategyNotes[index] || ''} onNameChange={name => handleConfigNameChange(index, name)} onStyleChange={style => handleStyleChange(index, style)} onNoteChange={note => handleVariantNoteChange(index, note)} />
               ))}
             </div>
@@ -385,13 +407,21 @@ function readMetadataString(metadata: Record<string, unknown> | undefined, key: 
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
-function VariantCard({ result, index, active, style, fallbackName, projectName, onSelect, onFavorite, onContinueEdit, onRename }: { result: GenerationResultOption; index: number; active: boolean; style: VariantStyleKey | undefined; fallbackName: string; projectName?: string | null; onSelect: () => void; onFavorite: () => void; onContinueEdit: () => void; onRename: (name: string) => void }) {
+function VariantCard({ result, index, active, style, fallbackName, projectName, onSelect, onFavorite, onContinueEdit, onSend, onRetry, onRename }: { result: GenerationResultOption; index: number; active: boolean; style: VariantStyleKey | undefined; fallbackName: string; projectName?: string | null; onSelect: () => void; onFavorite: () => void; onContinueEdit: () => void; onSend?: (targetStep: ResultSendTargetStep) => void; onRetry?: () => void; onRename: (name: string) => void }) {
   const label = result.variantName || result.variantLabel || fallbackName || readVariantLabel(index);
   const styleLabel = result.variantStyleLabel || readVariantStyleLabel(result.variantStyle || style);
   const designDirection = result.designDirection || readMetadataString(result.metadata, 'designDirection') || styleLabel;
   const changeScopeLabel = result.changeScopeLabel || readMetadataString(result.metadata, 'changeScopeLabel');
   const lockedItemsLabel = result.lockedItemsLabel || readMetadataString(result.metadata, 'lockedItemsLabel');
   const strategyNote = result.strategyNote || readMetadataString(result.metadata, 'strategyNote');
+  const designDescription = result.designDescription || readMetadataString(result.metadata, 'designDescription') || buildVariantDesignDescription({
+    index,
+    name: label,
+    styleLabel,
+    changeScopeLabel,
+    lockedItemsLabel,
+    strategyNote,
+  });
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -445,6 +475,9 @@ function VariantCard({ result, index, active, style, fallbackName, projectName, 
             {strategyNote ? <p><span className="font-bold text-slate-800">备注：</span>{strategyNote}</p> : null}
           </div>
         ) : null}
+        <p className="rounded-md border border-slate-100 bg-white px-3 py-2 text-xs leading-5 text-slate-600">
+          <span className="font-bold text-slate-800">方案说明：</span>{designDescription}
+        </p>
         <div className="grid grid-cols-3 gap-2">
           <button type="button" onClick={onSelect} className="rounded-md bg-slate-900 px-2 py-2 text-xs font-bold text-white">{result.isSelected ? '已设为主方案' : '设为主方案'}</button>
           <button type="button" onClick={onFavorite} className="rounded-md bg-slate-100 px-2 py-2 text-xs font-bold text-slate-700">收藏</button>
@@ -452,7 +485,21 @@ function VariantCard({ result, index, active, style, fallbackName, projectName, 
         </div>
         {downloadMessage ? <p className="text-xs font-semibold text-emerald-700">{downloadMessage}</p> : null}
         {downloadError ? <p className="text-xs font-semibold text-amber-700">{downloadError}</p> : null}
-        <button type="button" onClick={onContinueEdit} className="inline-flex items-center gap-1 text-xs font-bold text-blue-700"><Star className="h-3.5 w-3.5" />继续编辑</button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={onContinueEdit} className="inline-flex items-center gap-1 text-xs font-bold text-blue-700"><Star className="h-3.5 w-3.5" />继续编辑</button>
+          {onRetry ? (
+            <button type="button" onClick={onRetry} className="inline-flex items-center gap-1 text-xs font-bold text-slate-700">
+              <RefreshCcw className="h-3.5 w-3.5" />
+              重试此方案
+            </button>
+          ) : null}
+        </div>
+        {onSend ? (
+          <div className="rounded-md bg-slate-50 p-2">
+            <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">发送到其他功能</p>
+            <ResultSendActions resultId={result.id} currentStep={GenerationStep.DesignVariants} onSend={(_, targetStep) => onSend(targetStep)} compact />
+          </div>
+        ) : null}
       </div>
     </article>
   );
@@ -530,6 +577,37 @@ function PrintVariant({ result, name, style, showDescription }: { result: Genera
       </div>
     </article>
   );
+}
+
+function buildVariantDesignDescription({
+  index,
+  name,
+  styleLabel,
+  changeScopeLabel,
+  lockedItemsLabel,
+  strategyNote,
+}: {
+  index: number;
+  name: string;
+  styleLabel: string;
+  changeScopeLabel?: string;
+  lockedItemsLabel?: string;
+  strategyNote?: string;
+}): string {
+  const emphasis = [
+    '强调空间秩序、材质层次和整体完成度。',
+    '更关注软装氛围、色彩平衡和可落地的生活感。',
+    '突出视觉焦点、灯光节奏和方案辨识度。',
+    '在保留基础结构的前提下提升展示感和设计记忆点。',
+    '通过细节收口、材质对比和局部陈设形成差异化表达。',
+    '侧重动线清晰、功能舒适和画面整体协调。',
+    '加强主次关系、明暗层次和空间品质感。',
+    '以更完整的设计语言组织家具、材质和光影关系。',
+  ][Math.max(0, index) % 8];
+  const scopeText = changeScopeLabel ? `变化范围控制在“${changeScopeLabel}”内` : '变化范围保持为整体方案优化';
+  const lockText = lockedItemsLabel ? `，同时保持${lockedItemsLabel}不被破坏` : '，同时保持关键结构和视角稳定';
+  const noteText = strategyNote ? `；备注方向：${strategyNote}` : '';
+  return `${name}采用${styleLabel}方向，${scopeText}${lockText}。${emphasis}${noteText}`;
 }
 
 function ControlGroup({ title, children }: { title: string; children: ReactNode }) {

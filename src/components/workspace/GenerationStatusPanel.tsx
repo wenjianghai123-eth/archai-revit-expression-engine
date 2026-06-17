@@ -1,13 +1,13 @@
 import { BookOpen, Download, ExternalLink, FileJson, Heart, RefreshCw, Settings2, Zap } from 'lucide-react';
 import { type ReactNode, useState } from 'react';
-import { GenerationBatchItem, GenerationResultOption, GenerationStep, SecondaryEditAction, StepState } from '../../types';
+import { GenerationBatchItem, GenerationResultOption, GenerationStep, ResultSendTargetStep, SecondaryEditAction, StepState } from '../../types';
 import { buildResultImageFilename, downloadAsset, downloadJson, downloadFallbackMessage } from '../../utils/downloadAsset';
-import { secondaryEditActionLabels } from '../../utils/secondaryEdit';
+import { continuationActionLabels } from '../../utils/secondaryEdit';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../../utils/resultImage';
 import { ViewModeOption } from './workspaceTypes';
 import { formatElapsed } from './workspaceUtils';
 import { PreviewContent } from './ResultPreviewPanel';
-import { SecondaryEditActions } from './SecondaryEditActions';
+import { MaterialRepairActions, ResultSendActions, SecondaryEditActions } from './SecondaryEditActions';
 import { SavePromptTemplateModal } from '../SavePromptTemplateModal';
 import { canSavePromptTemplate } from '../../utils/savedPromptTemplates';
 
@@ -32,6 +32,7 @@ interface GenerationStatusPanelProps {
   onSelectGenerationResult: (resultId: string) => void;
   onToggleGenerationFavorite: (resultId: string) => void;
   onSecondaryEditResult: (resultId: string, action: SecondaryEditAction) => void;
+  onSendResultToStep: (resultId: string, targetStep: ResultSendTargetStep) => void;
   onRetryBatchItem?: (variantIndex: number) => void;
   onSetViewMode: (viewMode: StepState['viewMode']) => void;
   onNextStep: () => void;
@@ -59,6 +60,7 @@ export function GenerationStatusPanel({
   onSelectGenerationResult,
   onToggleGenerationFavorite,
   onSecondaryEditResult,
+  onSendResultToStep,
   onRetryBatchItem,
   onSetViewMode,
   onNextStep,
@@ -91,6 +93,7 @@ export function GenerationStatusPanel({
           onSelectGenerationResult={onSelectGenerationResult}
           onToggleGenerationFavorite={onToggleGenerationFavorite}
           onSecondaryEditResult={onSecondaryEditResult}
+          onSendResultToStep={onSendResultToStep}
           onRetryBatchItem={onRetryBatchItem}
         />
         <GenerationMessages state={state} onGenerate={onGenerate} />
@@ -175,6 +178,7 @@ interface ResultActionsProps {
   onSelectGenerationResult: (resultId: string) => void;
   onToggleGenerationFavorite: (resultId: string) => void;
   onSecondaryEditResult: (resultId: string, action: SecondaryEditAction) => void;
+  onSendResultToStep: (resultId: string, targetStep: ResultSendTargetStep) => void;
   onRetryBatchItem?: (variantIndex: number) => void;
 }
 
@@ -191,6 +195,7 @@ function ResultActions({
   onSelectGenerationResult,
   onToggleGenerationFavorite,
   onSecondaryEditResult,
+  onSendResultToStep,
   onRetryBatchItem,
 }: ResultActionsProps) {
   const activeResult = resultOptions.find(result => result.id === selectedResultId)
@@ -256,6 +261,16 @@ function ResultActions({
           </div>
           {dimensionsText ? <p className="mb-2 text-[10px] font-bold text-slate-500">{dimensionsText}</p> : null}
           <SecondaryEditActions resultId={activeResult.id} onAction={onSecondaryEditResult} compact disabled={state.isGenerating} />
+          {step === GenerationStep.MaterialReplace ? (
+            <div className="mt-2">
+              <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-emerald-500">快捷修复</p>
+              <MaterialRepairActions resultId={activeResult.id} onAction={onSecondaryEditResult} compact disabled={state.isGenerating} />
+            </div>
+          ) : null}
+          <div className="mt-2">
+            <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">发送到其他功能</p>
+            <ResultSendActions resultId={activeResult.id} currentStep={step} onSend={onSendResultToStep} compact disabled={state.isGenerating} />
+          </div>
         </div>
       ) : null}
 
@@ -294,6 +309,14 @@ function ResultActions({
                   ) : null}
                   <div className="border-t border-slate-100 p-1.5">
                     <SecondaryEditActions resultId={result.id} onAction={onSecondaryEditResult} compact disabled={state.isGenerating} />
+                    {step === GenerationStep.MaterialReplace ? (
+                      <div className="mt-1.5">
+                        <MaterialRepairActions resultId={result.id} onAction={onSecondaryEditResult} compact disabled={state.isGenerating} />
+                      </div>
+                    ) : null}
+                    <div className="mt-1.5">
+                      <ResultSendActions resultId={result.id} currentStep={step} onSend={onSendResultToStep} compact disabled={state.isGenerating} />
+                    </div>
                   </div>
                 </div>
               ))}
@@ -375,7 +398,7 @@ function ContinuationSourceBanner({ state }: { state: StepState }) {
         <div className="min-w-0 flex-1">
           <p className="text-[10px] font-bold uppercase tracking-widest text-blue-500">继续生成来源</p>
           <p className="mt-1 truncate text-xs font-bold text-slate-900">由 {source.label} 继续生成</p>
-          <p className="mt-0.5 truncate text-[11px] text-slate-500">{secondaryEditActionLabels[source.action]} · {source.parentResultId}</p>
+          <p className="mt-0.5 truncate text-[11px] text-slate-500">{continuationActionLabels[source.action] || source.action} · {source.parentResultId}</p>
         </div>
       </div>
     </div>

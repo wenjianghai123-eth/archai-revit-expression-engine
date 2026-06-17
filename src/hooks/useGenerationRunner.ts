@@ -14,7 +14,7 @@ import {
   uploadImageAsset,
   type CreditBalance,
 } from '../lib/api';
-import { GenerationBatchItem, GenerationConfig, GenerationHistoryItem, GenerationJobStep, GenerationMode, GenerationProvider, GenerationResultOption, GenerationRunStateOverride, GenerationStep, ObjectFidelity, ObjectInsertDebugMode, ObjectInsertHarmonyPriority, ObjectInsertItemConfig, ObjectInsertPlacementMode, ObjectInsertPositionConstraintStrength, ObjectInsertSurface, StepState, UploadedImage, VariantStyleKey } from '../types';
+import { FreeReferenceReference, GenerationBatchItem, GenerationConfig, GenerationHistoryItem, GenerationJobStep, GenerationMode, GenerationProvider, GenerationResultOption, GenerationRunStateOverride, GenerationStep, ObjectFidelity, ObjectInsertCandidateStrategy, ObjectInsertDebugMode, ObjectInsertHarmonyPriority, ObjectInsertItemConfig, ObjectInsertPlacementMode, ObjectInsertPositionConstraintStrength, ObjectInsertSurface, StepState, UploadedImage, VariantStyleKey } from '../types';
 import { getGenerationCreditCost } from '../utils/generationCredits';
 import { isGenerationJobRunningStatus, normalizeGenerationJobResult } from '../utils/generationJobResult';
 
@@ -48,7 +48,7 @@ export function useGenerationRunner({
 
   const handleGenerate = useCallback(async (stateOverride?: GenerationRunStateOverride) => {
     const baseState = stepStates[currentStep];
-    const stateAtStart: StepState = stateOverride
+    let stateAtStart: StepState = stateOverride
       ? {
           ...baseState,
           ...stateOverride,
@@ -109,9 +109,7 @@ export function useGenerationRunner({
       const hasObjectItems = objectItems.length > 0;
       const objectItemsHaveReference = objectItems.some(item => item.referenceAssetIds.length > 0);
       const hasPlacement = Boolean(objectPlacement?.width && objectPlacement.height);
-      const missingMessage = !stateAtStart.inputImage.assetId
-          ? '原始场景图尚未上传为素材，请重新上传原图。'
-        : needsObject && !stateAtStart.materialImage && !objectItemsHaveReference
+      const missingMessage = needsObject && !stateAtStart.materialImage && !objectItemsHaveReference
           ? '请先上传物体参考图。'
         : needsObject && !objectReferenceAssetId && !objectItemsHaveReference
           ? '物体参考图尚未上传为素材，请重新上传物体图。'
@@ -256,6 +254,45 @@ export function useGenerationRunner({
       }));
     }
 
+    if (!stateAtStart.inputImage.assetId) {
+      try {
+        const uploadedInputImage = await ensureUploadedInputImageAsset(stateAtStart.inputImage, `archai-continuation-${Date.now()}`);
+        stateAtStart = {
+          ...stateAtStart,
+          inputImage: uploadedInputImage,
+          config: {
+            ...stateAtStart.config,
+            sourceImageAssetId: uploadedInputImage.assetId,
+          },
+        };
+        setStepStates(prev => ({
+          ...prev,
+          [currentStep]: {
+            ...prev[currentStep],
+            inputImage: uploadedInputImage,
+            config: {
+              ...prev[currentStep].config,
+              sourceImageAssetId: uploadedInputImage.assetId,
+            },
+            generationLogs: [...prev[currentStep].generationLogs, 'upload: 已将来源结果图上传为素材。'].slice(-8),
+          },
+        }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '来源结果图上传失败，请重新上传图片后再生成。';
+        setStepStates(prev => ({
+          ...prev,
+          [currentStep]: {
+            ...prev[currentStep],
+            isGenerating: false,
+            generationStatus: 'error',
+            generationError: message,
+            generationLogs: [...prev[currentStep].generationLogs, `error: ${message}`].slice(-8),
+          },
+        }));
+        return;
+      }
+    }
+
     const canUseAsyncJob = Boolean(
       activeProjectId &&
       stateAtStart.inputImage.assetId,
@@ -292,6 +329,9 @@ export function useGenerationRunner({
         const freeReferenceAssetIds = isFreeReferenceImage
           ? readConfigStringArray(stateAtStart.config.referenceImageAssetIds).slice(0, 6)
           : [];
+        const freeReferenceReferences = isFreeReferenceImage
+          ? readFreeReferenceReferences(stateAtStart.config, freeReferenceAssetIds)
+          : [];
         const planColorizeStyles = isPlanColorize
           ? resolvePlanColorizeStyles(
               stateAtStart.config.planColorizeBatchEnabled
@@ -310,6 +350,13 @@ export function useGenerationRunner({
         const floorplanVariantPlans = isFloorplanMultiPlan
           ? resolveFloorplanVariantPlans({ ...stateAtStart.config, batchCount: floorplanBatchCount }, floorplanBatchCount)
           : [];
+        const designVariantRetryIndex = currentStep === GenerationStep.DesignVariants
+          ? readDesignVariantRetryIndex(stateAtStart.config)
+          : undefined;
+        const isDesignVariantSingleRetry = typeof designVariantRetryIndex === 'number';
+        const designVariantBatchGroupId = currentStep === GenerationStep.DesignVariants
+          ? stateAtStart.config.batchGroupId || (isDesignVariantSingleRetry ? createBatchGroupId('design-variants') : undefined)
+          : undefined;
         const objectInsertDebugMode = isObjectInsert ? readObjectInsertDebugMode(stateAtStart.config) : 'full';
         const objectInsertNeedsObject = isObjectInsertPreviewFusion ? false : objectInsertIncludesObject(objectInsertDebugMode);
         const objectInsertNeedsPreview = isObjectInsertPreviewFusion ? true : objectInsertIncludesPreview(objectInsertDebugMode);
@@ -320,6 +367,8 @@ export function useGenerationRunner({
         const objectInsertHarmonyPriority = isObjectInsert ? readObjectInsertHarmonyPriority(stateAtStart.config) : 'layout';
         const objectInsertFusionPreference = isObjectInsert ? readObjectInsertFusionPreference(stateAtStart.config) : 'balanced';
         const objectInsertCandidateCount = isObjectInsert ? readObjectInsertCandidateCount(stateAtStart.config) : 1;
+        const objectInsertCandidateStrategies = isObjectInsert ? resolveObjectInsertCandidateStrategies(stateAtStart.config, objectInsertCandidateCount) : [];
+        const objectInsertCandidatePromptHints = isObjectInsert ? buildObjectInsertCandidatePromptHints(objectInsertCandidateStrategies) : [];
         const objectInsertAllowAutoAdjustPosition = isObjectInsert ? readObjectInsertAutoAdjust(stateAtStart.config, 'allowAutoAdjustPosition') : true;
         const objectInsertAllowAutoAdjustRotation = isObjectInsert ? readObjectInsertAutoAdjust(stateAtStart.config, 'allowAutoAdjustRotation') : true;
         const objectInsertAllowAutoAdjustScale = isObjectInsert ? readObjectInsertAutoAdjust(stateAtStart.config, 'allowAutoAdjustScale') : true;
@@ -369,6 +418,9 @@ export function useGenerationRunner({
               allowAutoAdjustPosition: objectInsertAllowAutoAdjustPosition,
               allowAutoAdjustRotation: objectInsertAllowAutoAdjustRotation,
               allowAutoAdjustScale: objectInsertAllowAutoAdjustScale,
+              objectInsertCandidateStrategy: objectInsertCandidateStrategies[0] || 'natural-fit',
+              objectInsertCandidateStrategies,
+              objectInsertCandidatePromptHints,
             }
           : undefined;
         const furnitureReferenceAssetIds = stateAtStart.furnitureReferences
@@ -500,6 +552,7 @@ export function useGenerationRunner({
             freeReferenceImage: isFreeReferenceImage ? {
               sourceImageAssetId: stateAtStart.inputImage.assetId,
               referenceImageAssetIds: freeReferenceAssetIds,
+              freeReferenceReferences,
               prompt: userSupplementPrompt,
               resolution: stateAtStart.config.freeReferenceResolution || 1024,
               aspectRatio: stateAtStart.config.freeReferenceAspectRatio || '1:1',
@@ -520,7 +573,9 @@ export function useGenerationRunner({
               mode: generationMode,
               step: generationStep,
             qualityMode: stateAtStart.config.qualityMode || 'balanced',
-            batchCount: currentStep === GenerationStep.DesignVariants && (stateAtStart.config.batchCount === 2 || stateAtStart.config.batchCount === 4 || stateAtStart.config.batchCount === 8)
+            batchCount: isDesignVariantSingleRetry
+              ? 1
+              : currentStep === GenerationStep.DesignVariants && (stateAtStart.config.batchCount === 2 || stateAtStart.config.batchCount === 4 || stateAtStart.config.batchCount === 8)
               ? stateAtStart.config.batchCount
               : isPlanColorize
                 ? Math.min(Math.max(planColorizeStyles.length || 1, 1), 6) as GenerationConfig['batchCount']
@@ -540,6 +595,8 @@ export function useGenerationRunner({
             variantChangeScope: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.variantChangeScope || 'full-design' : undefined,
             variantLocks: currentStep === GenerationStep.DesignVariants ? resolveVariantLocks(stateAtStart.config) : undefined,
             variantStrategyNotes: currentStep === GenerationStep.DesignVariants ? resolveVariantStrategyNotes(stateAtStart.config) : undefined,
+            retryVariantIndex: isDesignVariantSingleRetry ? designVariantRetryIndex : undefined,
+            targetVariantIndex: isDesignVariantSingleRetry ? designVariantRetryIndex : undefined,
             customStyleLabel: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.customStyleLabel : undefined,
             planColorizeBatchEnabled: isPlanColorize ? planColorizeStyles.length > 1 || stateAtStart.config.planColorizeBatchEnabled === true : undefined,
             planColorizeStyleIds: isPlanColorize ? planColorizeStyles.map(style => style.id) : undefined,
@@ -548,7 +605,7 @@ export function useGenerationRunner({
             selectedStyleId: isPlanColorize ? planColorizeStyles[0]?.id : undefined,
             selectedStyleName: isPlanColorize ? planColorizeStyles[0]?.name : undefined,
             selectedStylePromptHint: isPlanColorize ? planColorizeStyles[0]?.promptHint : undefined,
-            batchGroupId: isPlanColorize ? planColorizeBatchGroupId : isFloorplanMultiPlan ? floorplanBatchGroupId : undefined,
+            batchGroupId: isPlanColorize ? planColorizeBatchGroupId : isFloorplanMultiPlan ? floorplanBatchGroupId : designVariantBatchGroupId,
             floorplanOutputMode: currentStep === GenerationStep.FloorplanTo3D ? stateAtStart.config.floorplanOutputMode || 'single' : undefined,
             floorplanVariantType: isFloorplanMultiPlan ? stateAtStart.config.floorplanVariantType || 'material_style' : undefined,
             floorplanVariantFocus: isFloorplanMultiPlan ? stateAtStart.config.floorplanVariantFocus || 'material_style' : undefined,
@@ -557,6 +614,8 @@ export function useGenerationRunner({
             enableLegend: currentStep === GenerationStep.FloorplanTo3D ? stateAtStart.config.enableLegend === true : undefined,
             enableAreaText: currentStep === GenerationStep.FloorplanTo3D ? stateAtStart.config.enableAreaText === true : undefined,
             enableMaterialLegend: currentStep === GenerationStep.FloorplanTo3D ? stateAtStart.config.enableMaterialLegend === true : undefined,
+            floorplanTemplateId: currentStep === GenerationStep.FloorplanTo3D ? stateAtStart.config.floorplanTemplateId || 'residential-warm-wood' : undefined,
+            floorplanRoomLabels: currentStep === GenerationStep.FloorplanTo3D ? stateAtStart.config.floorplanRoomLabels || [] : undefined,
             floorplanStyleTemplateIds: isFloorplanMultiPlan ? floorplanVariantPlans.map(plan => plan.selectedStyleId).filter((id): id is string => Boolean(id)) : undefined,
             floorplanStyleTemplateNames: isFloorplanMultiPlan ? floorplanVariantPlans.map(plan => plan.selectedStyleName).filter((name): name is string => Boolean(name)) : undefined,
             floorplanLayoutVariantIds: isFloorplanMultiPlan ? floorplanVariantPlans.map(plan => plan.layoutVariantId).filter((id): id is string => Boolean(id)) : undefined,
@@ -610,9 +669,13 @@ export function useGenerationRunner({
             allowAutoAdjustPosition: isObjectInsert ? objectInsertAllowAutoAdjustPosition : undefined,
             allowAutoAdjustRotation: isObjectInsert ? objectInsertAllowAutoAdjustRotation : undefined,
             allowAutoAdjustScale: isObjectInsert ? objectInsertAllowAutoAdjustScale : undefined,
+            objectInsertCandidateStrategy: isObjectInsert ? objectInsertCandidateStrategies[0] || 'natural-fit' : undefined,
+            objectInsertCandidateStrategies: isObjectInsert ? objectInsertCandidateStrategies : undefined,
+            objectInsertCandidatePromptHints: isObjectInsert ? objectInsertCandidatePromptHints : undefined,
             objectInsertExtraPrompt: isObjectInsert ? stateAtStart.config.objectInsertExtraPrompt || stateAtStart.config.customPrompt : undefined,
             referenceImageAssetId: isFreeReferenceImage ? freeReferenceAssetIds[0] || stateAtStart.materialImage?.assetId || stateAtStart.config.referenceImageAssetId : undefined,
             referenceImageAssetIds: isFreeReferenceImage ? freeReferenceAssetIds : undefined,
+            freeReferenceReferences: isFreeReferenceImage ? freeReferenceReferences : undefined,
             freeReferenceResolution: isFreeReferenceImage ? stateAtStart.config.freeReferenceResolution || 1024 : undefined,
             freeReferenceAspectRatio: isFreeReferenceImage ? stateAtStart.config.freeReferenceAspectRatio || '1:1' : undefined,
             inputSource: currentStep === GenerationStep.ModelSnapshotRender ? stateAtStart.config.inputSource : currentStep === GenerationStep.PanoramaQuickRender ? 'panorama-capture' : undefined,
@@ -740,7 +803,11 @@ export function useGenerationRunner({
           void refreshCreditBalance();
           const providerName = parseGenerationProvider(latestJob.provider);
           const materializedResultImages = await materializeNormalizedResultImages(normalizedJob, latestJob);
-          const generationResults = materializedResultImages.map((result, index) => ({
+          const nextGenerationResults = materializedResultImages.map((result, index) => {
+            const effectiveVariantIndex = currentStep === GenerationStep.DesignVariants && isDesignVariantSingleRetry
+              ? designVariantRetryIndex ?? index
+              : index;
+            return ({
                 id: result.id,
                 imageUrl: result.imageUrl,
                 assetId: result.assetId || normalizedJob.outputAssetIds[index],
@@ -749,14 +816,14 @@ export function useGenerationRunner({
                 createdAt: result.createdAt,
                 metadata: result.metadata,
                 variantIndex: currentStep === GenerationStep.DesignVariants
-                  ? readMetadataNumber(result.metadata, 'variantIndex') ?? index
+                  ? readMetadataNumber(result.metadata, 'variantIndex') ?? effectiveVariantIndex
                   : currentStep === GenerationStep.FloorplanTo3D
                     ? readMetadataNumber(result.metadata, 'variantIndex') ?? index
                   : currentStep === GenerationStep.PlanColorize
                     ? readMetadataNumber(result.metadata, 'planColorizeStyleIndex') ?? index
                     : undefined,
                 variantCode: currentStep === GenerationStep.DesignVariants
-                  ? readMetadataString(result.metadata, 'variantCode') || readVariantCode(index)
+                  ? readMetadataString(result.metadata, 'variantCode') || readVariantCode(effectiveVariantIndex)
                   : currentStep === GenerationStep.FloorplanTo3D
                     ? readMetadataString(result.metadata, 'variantCode') || readVariantCode(index)
                   : currentStep === GenerationStep.PlanColorize
@@ -770,7 +837,7 @@ export function useGenerationRunner({
                     ? readMetadataString(result.metadata, 'selectedStyleName') || readMetadataString(result.metadata, 'variantName')
                     : undefined,
                 variantLabel: currentStep === GenerationStep.DesignVariants
-                  ? readMetadataString(result.metadata, 'variantName') || readVariantLabel(index)
+                  ? readMetadataString(result.metadata, 'variantName') || readVariantLabel(effectiveVariantIndex)
                   : currentStep === GenerationStep.FloorplanTo3D
                     ? readMetadataString(result.metadata, 'variantName') || `三维彩平方案 ${index + 1}`
                   : currentStep === GenerationStep.PlanColorize
@@ -798,7 +865,12 @@ export function useGenerationRunner({
                 changeScopeLabel: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'changeScopeLabel') : undefined,
                 lockedItemsLabel: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'lockedItemsLabel') : undefined,
                 strategyNote: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'strategyNote') : undefined,
-              }));
+                designDescription: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'designDescription') : undefined,
+              });
+          });
+          const generationResults = currentStep === GenerationStep.DesignVariants && isDesignVariantSingleRetry
+            ? mergeRetriedDesignVariantResults(stateAtStart.generationResults, nextGenerationResults, designVariantRetryIndex)
+            : nextGenerationResults;
           const selectedResult = generationResults.find(result => result.isSelected) || generationResults[0];
           const providerWarnings: string[] = [];
           const record = selectedResult ? saveGenerationRecord({
@@ -857,7 +929,7 @@ export function useGenerationRunner({
               generationJobDiagnostics: latestJob.diagnostics || null,
               generationProgress: 100,
               generationLogs: [...prev[currentStep].generationLogs, 'succeeded: 生成结果已保存到项目记录。'].slice(-8),
-              viewMode: 'after',
+              viewMode: currentStep === GenerationStep.MaterialReplace ? 'overlay' : 'after',
             },
           }));
           return;
@@ -1072,7 +1144,7 @@ export function useGenerationRunner({
           generationCreatedAt: response.createdAt,
           generationProgress: 100,
           generationLogs: [...currentState.generationLogs, 'success: 旧生成接口返回成功。'].slice(-8),
-          viewMode: 'after'
+          viewMode: currentStep === GenerationStep.MaterialReplace ? 'overlay' : 'after'
         }
       };
       });
@@ -1245,6 +1317,8 @@ async function runFloorplanMultiPlanJobs({
       enableLegend: stateAtStart.config.enableLegend === true,
       enableAreaText: stateAtStart.config.enableAreaText === true,
       enableMaterialLegend: stateAtStart.config.enableMaterialLegend === true,
+      floorplanTemplateId: stateAtStart.config.floorplanTemplateId || 'residential-warm-wood',
+      floorplanRoomLabels: stateAtStart.config.floorplanRoomLabels || [],
       batchGroupId,
       variantIndex: plan.variantIndex,
       schemeName: plan.variantName,
@@ -1555,10 +1629,12 @@ function formatGenerationJobError(job: Awaited<ReturnType<typeof getGenerationJo
 function buildPromptForGeneration(step: GenerationStep, prompt: string, state?: StepState): string {
   if (step === GenerationStep.FreeReferenceImage) {
     const userPrompt = state ? readSupplementalPromptForGeneration(step, state.config, prompt) : prompt;
+    const referenceControlPrompt = state ? buildFreeReferenceControlPrompt(state.config) : '';
     return [
       '通用自由参考生图。',
       '第一张图是原图，必须作为主要基础。',
       '如果提供了后续图片，它们均为参考图，用于综合参考风格、材质、色彩、氛围、家具语言、细节和构图意图。',
+      referenceControlPrompt,
       '根据用户提示词生成新的自然、协调、完整的效果图。',
       '不要机械拼贴参考图，不要生成拼图、分屏或对比图。',
       '保持画面完整，不要添加文字、水印、边框或 UI。',
@@ -1694,6 +1770,43 @@ function readObjectInsertFusionPreference(config: GenerationConfig): 'conservati
 
 function readObjectInsertCandidateCount(config: GenerationConfig): 1 | 2 | 3 {
   return config.batchCount === 2 || config.batchCount === 3 ? config.batchCount : 1;
+}
+
+const objectInsertCandidateStrategyPrompts: Record<ObjectInsertCandidateStrategy, string> = {
+  'strict-placement': 'Candidate strategy: strict-placement. Follow the user placement guide closely; minimize position, scale, and rotation deviation.',
+  'natural-fit': 'Candidate strategy: natural-fit. Slightly adjust position, scale, and perspective for a natural scene fit while respecting the guide.',
+  'object-fidelity': 'Candidate strategy: object-fidelity. Prioritize preserving the reference object shape, material, color, and identity.',
+  'scene-harmony': 'Candidate strategy: scene-harmony. Prioritize lighting, shadow, perspective, occlusion, and atmospheric harmony with the scene.',
+};
+
+function readObjectInsertCandidateStrategy(config: GenerationConfig): ObjectInsertCandidateStrategy {
+  const value = config.objectInsert?.objectInsertCandidateStrategy || config.objectInsertCandidateStrategy;
+  return value === 'strict-placement' || value === 'object-fidelity' || value === 'scene-harmony' || value === 'natural-fit'
+    ? value
+    : 'natural-fit';
+}
+
+function resolveObjectInsertCandidateStrategies(config: GenerationConfig, count: 1 | 2 | 3): ObjectInsertCandidateStrategy[] {
+  const preferred = readObjectInsertCandidateStrategy(config);
+  const configured = [
+    ...(Array.isArray(config.objectInsertCandidateStrategies) ? config.objectInsertCandidateStrategies : []),
+    ...(Array.isArray(config.objectInsert?.objectInsertCandidateStrategies) ? config.objectInsert.objectInsertCandidateStrategies : []),
+  ].filter((value): value is ObjectInsertCandidateStrategy => (
+    value === 'strict-placement' || value === 'natural-fit' || value === 'object-fidelity' || value === 'scene-harmony'
+  ));
+  const merged = Array.from(new Set<ObjectInsertCandidateStrategy>([
+    ...configured,
+    preferred,
+    'natural-fit',
+    'strict-placement',
+    'object-fidelity',
+    'scene-harmony',
+  ]));
+  return merged.slice(0, count);
+}
+
+function buildObjectInsertCandidatePromptHints(strategies: ObjectInsertCandidateStrategy[]): string[] {
+  return strategies.map(strategy => objectInsertCandidateStrategyPrompts[strategy]);
 }
 
 function readObjectInsertAutoAdjust(
@@ -1913,6 +2026,76 @@ function resolveVariantStrategyNotes(config: GenerationConfig) {
   return Array.from({ length: batchCount }, (_, index) => notes[index] || '');
 }
 
+function readDesignVariantRetryIndex(config: GenerationConfig): number | undefined {
+  const raw = typeof config.targetVariantIndex === 'number'
+    ? config.targetVariantIndex
+    : typeof config.retryVariantIndex === 'number'
+      ? config.retryVariantIndex
+      : undefined;
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return undefined;
+  const index = Math.floor(raw);
+  return index >= 0 && index <= 7 ? index : undefined;
+}
+
+function mergeRetriedDesignVariantResults(
+  previousResults: GenerationResultOption[],
+  retryResults: GenerationResultOption[],
+  retryVariantIndex: number | undefined,
+): GenerationResultOption[] {
+  if (typeof retryVariantIndex !== 'number' || retryResults.length === 0) return retryResults;
+  const normalizedRetryResults = retryResults.map((result, index) => ({
+    ...result,
+    isSelected: index === 0,
+    variantIndex: retryVariantIndex,
+    variantCode: result.variantCode || readVariantCode(retryVariantIndex),
+    variantLabel: result.variantLabel || readVariantLabel(retryVariantIndex),
+  }));
+  const merged = previousResults
+    .filter(result => result.variantIndex !== retryVariantIndex)
+    .map(result => ({ ...result, isSelected: false }));
+  merged.push(...normalizedRetryResults);
+  return merged.sort((a, b) => (a.variantIndex ?? 999) - (b.variantIndex ?? 999));
+}
+
+function readFreeReferenceReferences(config: GenerationConfig, assetIds: string[]): FreeReferenceReference[] {
+  const allowedRoles = ['style', 'material', 'furniture', 'lighting', 'composition', 'color', 'detail'] as const;
+  const allowedStrengths = ['low', 'medium', 'high'] as const;
+  const configured = Array.isArray(config.freeReferenceReferences) ? config.freeReferenceReferences : [];
+  return assetIds.map(assetId => {
+    const matched = configured.find(item => item.assetId === assetId);
+    return {
+      assetId,
+      role: allowedRoles.find(role => role === matched?.role) || 'style',
+      strength: allowedStrengths.find(strength => strength === matched?.strength) || 'medium',
+    };
+  });
+}
+
+function buildFreeReferenceControlPrompt(config: GenerationConfig): string {
+  const references = Array.isArray(config.freeReferenceReferences) ? config.freeReferenceReferences : [];
+  if (references.length === 0) return '';
+  return [
+    '参考图角色与强度说明：',
+    ...references.map((reference, index) => `参考图 ${index + 2}：${readFreeReferenceRoleLabel(reference.role)}，参考强度 ${readFreeReferenceStrengthLabel(reference.strength)}。`),
+  ].join('\n');
+}
+
+function readFreeReferenceRoleLabel(role: FreeReferenceReference['role']): string {
+  if (role === 'material') return '材质参考';
+  if (role === 'furniture') return '家具参考';
+  if (role === 'lighting') return '灯光参考';
+  if (role === 'composition') return '构图参考';
+  if (role === 'color') return '色彩参考';
+  if (role === 'detail') return '细节参考';
+  return '风格参考';
+}
+
+function readFreeReferenceStrengthLabel(strength: FreeReferenceReference['strength']): string {
+  if (strength === 'low') return '弱';
+  if (strength === 'high') return '强';
+  return '中';
+}
+
 function readVariantLabel(index: number): string {
   return `方案 ${String.fromCharCode(65 + index)}`;
 }
@@ -2121,6 +2304,30 @@ function parseGenerationProvider(value: string): GenerationProvider | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function ensureUploadedInputImageAsset(image: UploadedImage, basename: string): Promise<UploadedImage> {
+  if (image.assetId) return image;
+  const file = image.dataUrl.startsWith('data:')
+    ? dataUrlToFile(image.dataUrl, basename)
+    : await imageUrlToFile(image.url || image.dataUrl, basename, image.type);
+  const asset = await uploadImageAsset(file, file.name);
+  return {
+    ...image,
+    url: asset.url,
+    assetId: asset.id,
+  };
+}
+
+async function imageUrlToFile(imageUrl: string, basename: string, fallbackMimeType?: string): Promise<File> {
+  const response = await fetch(imageUrl);
+  if (!response.ok) {
+    throw new Error('来源结果图下载失败，请重新上传图片后再生成。');
+  }
+  const blob = await response.blob();
+  const mimeType = blob.type || fallbackMimeType || 'image/png';
+  const extension = getImageExtension(mimeType);
+  return new File([blob], `${basename}.${extension}`, { type: mimeType });
 }
 
 function dataUrlToFile(dataUrl: string, basename: string): File {

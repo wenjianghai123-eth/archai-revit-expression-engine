@@ -1,6 +1,7 @@
 import { BookOpen } from 'lucide-react';
-import { GenerationConfig, GenerationStep } from '../../types';
+import { FloorplanRoomLabel, FloorplanRoomType, GenerationConfig, GenerationStep } from '../../types';
 import {
+  floorplanColorTemplates,
   floorplanLayoutTemplates,
   floorplanStyleTemplates,
   resolveFloorplanBatchCount,
@@ -81,12 +82,28 @@ interface FloorplanMultiPlanControlsProps {
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
 }
 
+const floorplanRoomTypeOptions: Array<{ value: FloorplanRoomType; label: string }> = [
+  { value: 'living-room', label: '客厅' },
+  { value: 'dining-room', label: '餐厅' },
+  { value: 'bedroom', label: '卧室' },
+  { value: 'kitchen', label: '厨房' },
+  { value: 'bathroom', label: '卫生间' },
+  { value: 'balcony', label: '阳台' },
+  { value: 'entry', label: '玄关' },
+  { value: 'study', label: '书房' },
+  { value: 'office', label: '办公区' },
+  { value: 'commercial', label: '商业区' },
+  { value: 'custom', label: '自定义' },
+];
+
 function FloorplanMultiPlanControls({ config, onUpdateConfig }: FloorplanMultiPlanControlsProps) {
   const outputMode = config.floorplanOutputMode || 'single';
   const variantType = config.floorplanVariantType || 'material_style';
   const variantFocus = config.floorplanVariantFocus || (variantType === 'mixed' ? 'both' : variantType);
   const renderMode = config.floorplanRenderMode || 'semi-3d';
   const lineworkPreservation = config.lineworkPreservation || 'high';
+  const floorplanTemplateId = config.floorplanTemplateId || 'residential-warm-wood';
+  const roomLabels = Array.isArray(config.floorplanRoomLabels) ? config.floorplanRoomLabels : [];
   const batchCount = resolveFloorplanBatchCount(config.batchCount);
   const count = outputMode === 'multi' ? batchCount : 1;
 
@@ -107,6 +124,29 @@ function FloorplanMultiPlanControls({ config, onUpdateConfig }: FloorplanMultiPl
       floorplanLayoutVariantNames: plans.map(plan => plan.layoutVariantName).filter((name): name is string => Boolean(name)),
       variantNames: plans.map(plan => plan.variantName),
     });
+  };
+
+  const updateRoomLabel = (id: string, patch: Partial<FloorplanRoomLabel>) => {
+    onUpdateConfig({ floorplanRoomLabels: roomLabels.map(label => label.id === id ? { ...label, ...patch } : label) });
+  };
+
+  const addRoomLabel = () => {
+    const nextIndex = roomLabels.length + 1;
+    onUpdateConfig({
+      floorplanRoomLabels: [
+        ...roomLabels,
+        {
+          id: `room-${Date.now()}-${nextIndex}`,
+          name: `区域 ${nextIndex}`,
+          roomType: 'living-room',
+          positionDescription: '',
+        },
+      ],
+    });
+  };
+
+  const removeRoomLabel = (id: string) => {
+    onUpdateConfig({ floorplanRoomLabels: roomLabels.filter(label => label.id !== id) });
   };
 
   return (
@@ -145,6 +185,69 @@ function FloorplanMultiPlanControls({ config, onUpdateConfig }: FloorplanMultiPl
         <FloorplanCheckbox checked={Boolean(config.enableLegend)} label="添加图例" onChange={checked => updateMultiPlan({ enableLegend: checked })} />
         <FloorplanCheckbox checked={Boolean(config.enableAreaText)} label="添加面积/功能文字" onChange={checked => updateMultiPlan({ enableAreaText: checked })} />
         <FloorplanCheckbox checked={Boolean(config.enableMaterialLegend)} label="添加材质图例" onChange={checked => updateMultiPlan({ enableMaterialLegend: checked })} />
+      </div>
+
+      <label className="block">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">彩平模板</span>
+        <select
+          value={floorplanTemplateId}
+          onChange={event => updateMultiPlan({ floorplanTemplateId: event.currentTarget.value as GenerationConfig['floorplanTemplateId'] })}
+          className="mt-2 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 outline-none focus:border-blue-300"
+        >
+          {floorplanColorTemplates.map(template => <option key={template.id} value={template.id}>{template.name}</option>)}
+        </select>
+      </label>
+
+      <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <p className="text-xs font-black text-slate-900">房间类型标注</p>
+            <p className="mt-0.5 text-[11px] text-slate-500">添加区域名称、房间类型和位置描述。</p>
+          </div>
+          <button type="button" onClick={addRoomLabel} className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-bold text-white">添加</button>
+        </div>
+        {roomLabels.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-3 text-xs font-semibold text-slate-400">未添加房间标签，系统会自动识别功能区。</p>
+        ) : (
+          <div className="space-y-2">
+            {roomLabels.map(label => (
+              <div key={label.id} className="space-y-2 rounded-lg border border-slate-200 bg-white p-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    value={label.name}
+                    onChange={event => updateRoomLabel(label.id, { name: event.currentTarget.value })}
+                    placeholder="区域名称"
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-bold text-slate-700 outline-none focus:border-blue-300"
+                  />
+                  <select
+                    value={label.roomType}
+                    onChange={event => updateRoomLabel(label.id, { roomType: event.currentTarget.value as FloorplanRoomType })}
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-bold text-slate-700 outline-none focus:border-blue-300"
+                  >
+                    {floorplanRoomTypeOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </div>
+                {label.roomType === 'custom' ? (
+                  <input
+                    value={label.customTypeLabel || ''}
+                    onChange={event => updateRoomLabel(label.id, { customTypeLabel: event.currentTarget.value })}
+                    placeholder="自定义房间类型"
+                    className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-bold text-slate-700 outline-none focus:border-blue-300"
+                  />
+                ) : null}
+                <div className="flex gap-2">
+                  <input
+                    value={label.positionDescription}
+                    onChange={event => updateRoomLabel(label.id, { positionDescription: event.currentTarget.value })}
+                    placeholder="位置描述，例如：左上角、入口右侧、南侧大开间"
+                    className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold text-slate-700 outline-none focus:border-blue-300"
+                  />
+                  <button type="button" onClick={() => removeRoomLabel(label.id)} className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600">删除</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {outputMode === 'multi' ? (

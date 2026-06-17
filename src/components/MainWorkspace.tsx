@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
-import { GenerationConfig, GenerationHistoryItem, GenerationProvider, GenerationRunStateOverride, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, SecondaryEditAction, StepState, UploadedImage } from '../types';
+import { GenerationConfig, GenerationHistoryItem, GenerationProvider, GenerationRunStateOverride, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, ResultSendTargetStep, SecondaryEditAction, StepState, UploadedImage } from '../types';
 import { createUploadedImage, validateImageFile } from '../utils/file';
 import { getProject, uploadImageAsset } from '../lib/api';
 import { GenerationStatusPanel } from './workspace/GenerationStatusPanel';
@@ -38,6 +38,7 @@ interface WorkspaceProps {
   onSelectGenerationResult: (resultId: string) => void;
   onToggleGenerationFavorite: (resultId: string) => void;
   onSecondaryEditResult: (resultId: string, action: SecondaryEditAction) => void;
+  onSendResultToStep: (resultId: string, targetStep: ResultSendTargetStep) => void;
   onContinueObjectInsertRefine: (image: UploadedImage, source: { resultId?: string; label: string }) => void;
   onRenameGenerationResult: (resultId: string, variantName: string) => void;
   onSetViewMode: (viewMode: StepState['viewMode']) => void;
@@ -68,6 +69,7 @@ export function MainWorkspace({
   onSelectGenerationResult,
   onToggleGenerationFavorite,
   onSecondaryEditResult,
+  onSendResultToStep,
   onContinueObjectInsertRefine,
   onRenameGenerationResult,
   onSetViewMode,
@@ -363,6 +365,29 @@ export function MainWorkspace({
     />
   );
 
+  const handleRetryDesignVariant = (variantIndex: number) => {
+    const existingResult = resultOptions.find(result => result.variantIndex === variantIndex) || resultOptions[variantIndex];
+    const variantStyles = Array.isArray(state.config.variantStyles) ? state.config.variantStyles : [];
+    const variantNames = Array.isArray(state.config.variantNames) ? state.config.variantNames : [];
+    const variantNotes = Array.isArray(state.config.variantStrategyNotes) ? state.config.variantStrategyNotes : [];
+    const retryName = existingResult?.variantName || variantNames[variantIndex] || `方案 ${String.fromCharCode(65 + variantIndex)}`;
+    const retryStyle = existingResult?.variantStyle || variantStyles[variantIndex] || variantStyles[0] || 'modern-minimal';
+    onGenerate({
+      config: {
+        ...state.config,
+        batchCount: 1,
+        batchGroupId: state.config.batchGroupId || `design-variants-${Date.now()}`,
+        targetVariantIndex: variantIndex,
+        retryVariantIndex: variantIndex,
+        variantNames: [retryName],
+        variantStyles: [retryStyle],
+        variantStrategyNotes: [existingResult?.strategyNote || variantNotes[variantIndex] || ''],
+        variantChangeScope: state.config.variantChangeScope || 'full-design',
+        variantLocks: state.config.variantLocks || ['structure', 'camera', 'walls-openings'],
+      },
+    });
+  };
+
   if (isDesignVariantsStep) {
     return (
       <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">
@@ -382,6 +407,8 @@ export function MainWorkspace({
           onSelectGenerationResult={onSelectGenerationResult}
           onToggleGenerationFavorite={onToggleGenerationFavorite}
           onSecondaryEditResult={onSecondaryEditResult}
+          onSendResultToStep={onSendResultToStep}
+          onRetryVariant={handleRetryDesignVariant}
           onRenameGenerationResult={onRenameGenerationResult}
         />
         <GenerationStatusPanel
@@ -405,6 +432,7 @@ export function MainWorkspace({
           onSelectGenerationResult={onSelectGenerationResult}
           onToggleGenerationFavorite={onToggleGenerationFavorite}
           onSecondaryEditResult={onSecondaryEditResult}
+          onSendResultToStep={onSendResultToStep}
           onSetViewMode={onSetViewMode}
           onNextStep={onGenerate}
           onReset={onReset}
@@ -447,6 +475,7 @@ export function MainWorkspace({
           onSelectGenerationResult={onSelectGenerationResult}
           onToggleGenerationFavorite={onToggleGenerationFavorite}
           onSecondaryEditResult={onSecondaryEditResult}
+          onSendResultToStep={onSendResultToStep}
           onSetViewMode={onSetViewMode}
           onNextStep={onGenerate}
           onReset={onReset}
@@ -485,6 +514,7 @@ export function MainWorkspace({
           onSelectGenerationResult={onSelectGenerationResult}
           onToggleGenerationFavorite={onToggleGenerationFavorite}
           onSecondaryEditResult={onSecondaryEditResult}
+          onSendResultToStep={onSendResultToStep}
           onSetViewMode={onSetViewMode}
           onNextStep={onGenerate}
           onReset={onReset}
@@ -538,6 +568,7 @@ export function MainWorkspace({
         onUpdateMaterialImage={onUpdateMaterialImage}
         onUpdateConfig={onUpdateConfig}
         onGenerate={onGenerate}
+        onSendResultToStep={onSendResultToStep}
       />
     );
   }
@@ -633,6 +664,7 @@ export function MainWorkspace({
         onSelectGenerationResult={onSelectGenerationResult}
         onToggleGenerationFavorite={onToggleGenerationFavorite}
         onSecondaryEditResult={onSecondaryEditResult}
+        onSendResultToStep={onSendResultToStep}
         onRetryBatchItem={variantIndex => onGenerate({ config: { ...state.config, floorplanRetryVariantIndex: variantIndex } })}
         onSetViewMode={onSetViewMode}
         onNextStep={onNextStep}

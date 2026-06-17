@@ -55,7 +55,27 @@ export type MaterialPatternScale = 'small' | 'medium' | 'large';
 export type MaterialDirection = 'auto' | 'horizontal' | 'vertical' | 'diagonal' | 'herringbone';
 export type MaterialFinish = 'matte' | 'satin' | 'glossy' | 'rough';
 export type MaterialReplaceScope = 'material-only' | 'material-and-soft-decor' | 'creative';
-export type SecondaryEditAction = 'regenerate' | 'similar' | 'realism' | 'lighting' | 'style' | 'continue-edit';
+export type SecondaryEditAction =
+  | 'regenerate'
+  | 'similar'
+  | 'realism'
+  | 'lighting'
+  | 'style'
+  | 'continue-edit'
+  | 'material-clean-boundary'
+  | 'material-smaller-texture'
+  | 'material-larger-texture'
+  | 'material-less-reflection'
+  | 'material-keep-lighting'
+  | 'material-selected-area-only';
+export type ResultSendTargetStep =
+  | GenerationStep.MaterialReplace
+  | GenerationStep.ObjectInsert
+  | GenerationStep.DesignVariants
+  | GenerationStep.FreeReferenceImage;
+export type ContinuationAction = SecondaryEditAction | `send-to-${ResultSendTargetStep}`;
+export type FreeReferenceRole = 'style' | 'material' | 'furniture' | 'lighting' | 'composition' | 'color' | 'detail';
+export type FreeReferenceStrength = 'low' | 'medium' | 'high';
 export type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview';
 export type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
 export type ObjectInsertPlacementMode = 'strict' | 'natural';
@@ -64,6 +84,10 @@ export type ObjectInsertFusionPreference = 'conservative' | 'balanced' | 'design
 export type ObjectInsertSurface = 'floor' | 'wall' | 'ceiling' | 'tabletop' | 'outdoor-ground' | 'auto';
 export type ObjectInsertType = 'sofa' | 'chair' | 'table' | 'lamp' | 'plant' | 'artwork' | 'sculpture' | 'car' | 'person' | 'tree' | 'signage' | 'custom';
 export type ObjectFidelity = 'strict' | 'balanced' | 'loose';
+export type ObjectInsertUIMode = 'simple' | 'advanced';
+export type ObjectInsertCandidateStrategy = 'strict-placement' | 'natural-fit' | 'object-fidelity' | 'scene-harmony';
+export type FloorplanRoomType = 'living-room' | 'dining-room' | 'bedroom' | 'kitchen' | 'bathroom' | 'balcony' | 'entry' | 'study' | 'office' | 'commercial' | 'custom';
+export type FloorplanTemplateId = 'residential-warm-wood' | 'premium-light-luxury' | 'commercial-presentation' | 'office-space' | 'landscape-masterplan' | 'minimal-grayscale';
 export type PlanDrawingType = 'residential' | 'commercial' | 'office' | 'hotel' | 'landscape' | 'site-plan' | 'custom';
 export type PlanExpressionTemplate = 'zoning-color' | 'colored-plan' | 'landscape-plan' | 'furniture-enhance' | 'annotation-plan' | 'circulation-analysis';
 export type MaterialReplaceEditMode = 'smart-type' | 'mask';
@@ -97,6 +121,20 @@ export type MaterialReplaceTargetMaterial =
   | 'warm-light-strip'
   | 'plant'
   | 'custom';
+
+export interface FreeReferenceReference {
+  assetId: string;
+  role: FreeReferenceRole;
+  strength: FreeReferenceStrength;
+}
+
+export interface FloorplanRoomLabel {
+  id: string;
+  name: string;
+  roomType: FloorplanRoomType;
+  positionDescription: string;
+  customTypeLabel?: string;
+}
 
 export interface GenerationJobDiagnostics {
   phase?: GenerationJobPhase;
@@ -284,6 +322,8 @@ export interface GenerationConfig {
   enableLegend?: boolean;
   enableAreaText?: boolean;
   enableMaterialLegend?: boolean;
+  floorplanRoomLabels?: FloorplanRoomLabel[];
+  floorplanTemplateId?: FloorplanTemplateId;
   floorplanStyleTemplateIds?: string[];
   floorplanStyleTemplateNames?: string[];
   floorplanLayoutVariantIds?: string[];
@@ -295,6 +335,8 @@ export interface GenerationConfig {
   variantChangeScope?: VariantChangeScope;
   variantLocks?: VariantLock[];
   variantStrategyNotes?: string[];
+  retryVariantIndex?: number;
+  targetVariantIndex?: number;
   customStyleLabel?: string;
   planColorizeBatchEnabled?: boolean;
   planColorizeStyleIds?: string[];
@@ -337,6 +379,7 @@ export interface GenerationConfig {
   objectReferenceAssetId?: string;
   referenceImageAssetId?: string;
   referenceImageAssetIds?: string[];
+  freeReferenceReferences?: FreeReferenceReference[];
   freeReferenceResolution?: 1024 | 1536 | 2048;
   freeReferenceAspectRatio?: '1:1' | '4:3' | '3:4' | '16:9' | '9:16';
   placementGuideAssetId?: string;
@@ -346,6 +389,10 @@ export interface GenerationConfig {
   objectInsert?: ObjectInsertConfig;
   objectInsertMode?: 'object_insert_preview_fusion' | 'legacy_object_insert';
   objectInsertInputOrder?: Array<Record<string, unknown>>;
+  objectInsertUIMode?: ObjectInsertUIMode;
+  objectInsertCandidateStrategy?: ObjectInsertCandidateStrategy;
+  objectInsertCandidateStrategies?: ObjectInsertCandidateStrategy[];
+  objectInsertCandidatePromptHints?: string[];
   objectInsertDebugMode?: ObjectInsertDebugMode;
   objectInsertSurface?: ObjectInsertSurface;
   objectType?: ObjectInsertType | string;
@@ -437,6 +484,9 @@ export interface ObjectInsertConfig {
   allowAutoAdjustPosition?: boolean;
   allowAutoAdjustRotation?: boolean;
   allowAutoAdjustScale?: boolean;
+  objectInsertCandidateStrategy?: ObjectInsertCandidateStrategy;
+  objectInsertCandidateStrategies?: ObjectInsertCandidateStrategy[];
+  objectInsertCandidatePromptHints?: string[];
 }
 
 export interface GenerationResultOption {
@@ -460,6 +510,7 @@ export interface GenerationResultOption {
   changeScopeLabel?: string;
   lockedItemsLabel?: string;
   strategyNote?: string;
+  designDescription?: string;
 }
 
 export type GenerationBatchItemStatus = 'queued' | 'running' | 'succeeded' | 'failed';
@@ -487,7 +538,7 @@ export interface ContinuationSource {
   imageUrl: string;
   assetId?: string;
   label: string;
-  action: SecondaryEditAction;
+  action: ContinuationAction;
   createdAt: string;
 }
 

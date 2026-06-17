@@ -79,6 +79,23 @@ describe('floorplan expression controls', () => {
     expect(prompt).toContain('Add a material legend');
   });
 
+  it('adds floorplan template and manual room labels to prompt', () => {
+    const prompt = buildFloorplanColorPrompt({
+      floorplanTemplateId: 'office-space',
+      floorplanRoomLabels: [
+        { id: 'r1', name: '开放办公区', roomType: 'office', positionDescription: '平面中部' },
+        { id: 'r2', name: '洽谈区', roomType: 'custom', customTypeLabel: 'client meeting area', positionDescription: '入口右侧' },
+      ],
+    });
+
+    expect(prompt).toContain('彩平模板：办公空间彩平');
+    expect(prompt).toContain('Floorplan color template: office workspace.');
+    expect(prompt).toContain('Room label guidance');
+    expect(prompt).toContain('开放办公区 = office area');
+    expect(prompt).toContain('洽谈区 = client meeting area');
+    expect(prompt).toContain('location: 入口右侧');
+  });
+
   it('keeps smart floorplan defaults stable while adding explicit controls', () => {
     const defaultPrompt = buildSmartPrompt({
       mode: 'floorplan',
@@ -99,5 +116,21 @@ describe('floorplan expression controls', () => {
     expect(controlledPrompt).toContain('Strengthen presentation-board quality');
     expect(controlledPrompt).toContain('Linework preservation: medium.');
     expect(controlledPrompt).toContain('Add a concise graphic legend');
+  });
+
+  it('adds template and room labels to smart floorplan prompt', () => {
+    const prompt = buildSmartPrompt({
+      mode: 'floorplan',
+      config: {
+        floorplanTemplateId: 'commercial-presentation',
+        floorplanRoomLabels: [
+          { id: 'r1', name: '展示区', roomType: 'commercial', positionDescription: '主入口正前方' },
+        ],
+      },
+    });
+
+    expect(prompt).toContain('Floorplan color template: commercial presentation.');
+    expect(prompt).toContain('Manual room labels');
+    expect(prompt).toContain('展示区 = commercial area');
   });
 });

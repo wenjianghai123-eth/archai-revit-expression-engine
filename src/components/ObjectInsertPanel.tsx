@@ -9,6 +9,8 @@ import {
   ObjectInsertDebugMode,
   ObjectFidelity,
   ObjectInsertHarmonyPriority,
+  ObjectInsertCandidateStrategy,
+  ObjectInsertUIMode,
   ObjectInsertPlacementMode,
   ObjectInsertPositionConstraintStrength,
   ObjectInsertSurface,
@@ -109,6 +111,12 @@ const objectInsertHarmonyPriorityOptions: Array<{ value: ObjectInsertHarmonyPrio
   { value: 'style', label: '风格材质' },
   { value: 'balance', label: '视觉平衡' },
 ];
+const objectInsertCandidateStrategyOptions: Array<{ value: ObjectInsertCandidateStrategy; label: string; hint: string }> = [
+  { value: 'strict-placement', label: '严格贴合摆放', hint: 'Candidate strategy: strict-placement. Follow the user placement guide closely; minimize position, scale, and rotation deviation.' },
+  { value: 'natural-fit', label: '自然微调位置比例', hint: 'Candidate strategy: natural-fit. Slightly adjust position, scale, and perspective for a natural scene fit while respecting the guide.' },
+  { value: 'object-fidelity', label: '优先保留物体造型', hint: 'Candidate strategy: object-fidelity. Prioritize preserving the reference object shape, material, color, and identity.' },
+  { value: 'scene-harmony', label: '优先融入场景光影', hint: 'Candidate strategy: scene-harmony. Prioritize lighting, shadow, perspective, occlusion, and atmospheric harmony with the scene.' },
+];
 
 const objectTypeOptions: Array<{ value: ObjectInsertType; label: string }> = [
   { value: 'sofa', label: '沙发' },
@@ -204,6 +212,10 @@ export function ObjectInsertPanel({
     transformOrigin: 'center center',
   }), [sourceHeight, sourceWidth]);
   const canShowSafetyDebug = isAdmin || import.meta.env.DEV;
+  const uiMode: ObjectInsertUIMode = state.config.objectInsertUIMode === 'advanced' ? 'advanced' : 'simple';
+  const candidateCount = state.config.batchCount === 2 || state.config.batchCount === 3 ? state.config.batchCount : 1;
+  const candidateStrategy = readObjectInsertCandidateStrategy(state.config);
+  const candidateStrategies = resolveObjectInsertCandidateStrategies(state.config, candidateCount);
   const activeDebugMode: ObjectInsertDebugMode = canShowSafetyDebug && isSafetyDebugEnabled ? debugInputMode : 'full';
   const positionConstraintStrength = readObjectInsertPositionConstraintStrength(state.config);
   const positionConstraintOption = objectInsertPositionConstraintOptions.find(option => option.value === positionConstraintStrength)
@@ -267,10 +279,24 @@ export function ObjectInsertPanel({
     const nextEnforcePerspectiveScale = patch.enforcePerspectiveScale ?? enforcePerspectiveScale;
     const nextPositionConstraint = patch.positionConstraintStrength || positionConstraintStrength;
     const nextPlacement = patch.objectPlacement || placement;
+    const nextCandidateStrategy = patch.objectInsertCandidateStrategy || candidateStrategy;
+    const nextCandidateCount = patch.batchCount === 2 || patch.batchCount === 3
+      ? patch.batchCount
+      : candidateCount;
+    const nextCandidateStrategies = patch.objectInsertCandidateStrategies || resolveObjectInsertCandidateStrategies({
+      ...state.config,
+      objectInsertCandidateStrategy: nextCandidateStrategy,
+      batchCount: nextCandidateCount,
+    }, nextCandidateCount);
+    const nextCandidatePromptHints = patch.objectInsertCandidatePromptHints || buildObjectInsertCandidatePromptHints(nextCandidateStrategies);
     const nestedPatch: ObjectInsertConfigPatch = patch.objectInsert || {};
 
     return {
       ...patch,
+      objectInsertUIMode: patch.objectInsertUIMode || uiMode,
+      objectInsertCandidateStrategy: nextCandidateStrategy,
+      objectInsertCandidateStrategies: nextCandidateStrategies,
+      objectInsertCandidatePromptHints: nextCandidatePromptHints,
       placementMode: nextPlacementMode,
       placementIntent: nextPlacementIntent,
       harmonyPriority: nextHarmonyPriority,
@@ -302,6 +328,9 @@ export function ObjectInsertPanel({
         allowAutoAdjustPosition: nextAllowPosition,
         allowAutoAdjustRotation: nextAllowRotation,
         allowAutoAdjustScale: nextAllowScale,
+        objectInsertCandidateStrategy: nextCandidateStrategy,
+        objectInsertCandidateStrategies: nextCandidateStrategies,
+        objectInsertCandidatePromptHints: nextCandidatePromptHints,
         objectType: nestedPatch.objectType || nextObjectType,
         objectInsertSurface: nestedPatch.objectInsertSurface || nextObjectInsertSurface,
         objectFidelity: nestedPatch.objectFidelity || nextObjectFidelity,
@@ -318,6 +347,8 @@ export function ObjectInsertPanel({
     allowAutoAdjustPosition,
     allowAutoAdjustRotation,
     allowAutoAdjustScale,
+    candidateCount,
+    candidateStrategy,
     configObjectItems,
     enforceContactShadow,
     enforceOcclusion,
@@ -332,6 +363,7 @@ export function ObjectInsertPanel({
     state.config.customPrompt,
     state.config.objectInsert,
     state.config.objectInsertExtraPrompt,
+    uiMode,
   ]);
 
   const updatePlacement = useCallback((nextPlacement: ObjectPlacement, itemId = activeObjectItem?.id) => {
@@ -776,6 +808,32 @@ export function ObjectInsertPanel({
     }));
   };
 
+  const handleCandidateCountChange = (count: 1 | 2 | 3) => {
+    const strategies = resolveObjectInsertCandidateStrategies({
+      ...state.config,
+      batchCount: count,
+      objectInsertCandidateStrategy: candidateStrategy,
+    }, count);
+    onUpdateConfig(buildObjectInsertConfigPatch({
+      batchCount: count,
+      objectInsertCandidateStrategies: strategies,
+      objectInsertCandidatePromptHints: buildObjectInsertCandidatePromptHints(strategies),
+    }));
+  };
+
+  const handleCandidateStrategyChange = (value: ObjectInsertCandidateStrategy) => {
+    const strategies = resolveObjectInsertCandidateStrategies({
+      ...state.config,
+      objectInsertCandidateStrategy: value,
+      batchCount: candidateCount,
+    }, candidateCount);
+    onUpdateConfig(buildObjectInsertConfigPatch({
+      objectInsertCandidateStrategy: value,
+      objectInsertCandidateStrategies: strategies,
+      objectInsertCandidatePromptHints: buildObjectInsertCandidatePromptHints(strategies),
+    }));
+  };
+
   const handleAutoAdjustChange = (
     key: 'allowAutoAdjustPosition' | 'allowAutoAdjustRotation' | 'allowAutoAdjustScale',
     value: boolean,
@@ -970,6 +1028,9 @@ export function ObjectInsertPanel({
         editTarget: 'furniture',
         preserveStructure: true,
         preserveCamera: true,
+        objectInsertCandidateStrategy: effectiveConfig.objectInsertCandidateStrategy || candidateStrategy,
+        objectInsertCandidateStrategies: candidateStrategies,
+        objectInsertCandidatePromptHints: buildObjectInsertCandidatePromptHints(candidateStrategies),
       };
 
       onUpdateInputImage(sourceWithAsset);
@@ -1113,6 +1174,9 @@ export function ObjectInsertPanel({
         editTarget: 'furniture',
         preserveStructure: true,
         preserveCamera: true,
+        objectInsertCandidateStrategy: effectivePreviewFusionConfig.objectInsertCandidateStrategy || candidateStrategy,
+        objectInsertCandidateStrategies: candidateStrategies,
+        objectInsertCandidatePromptHints: buildObjectInsertCandidatePromptHints(candidateStrategies),
       };
       setExportResult({ preview: placementPreview, mask: placementPreview, placement: previewFusionObjectItemConfigs[0]?.placement || emptyPlacement });
       setObjectItems(objectItems.map(item => {
@@ -1280,6 +1344,9 @@ export function ObjectInsertPanel({
         editTarget: 'furniture',
         preserveStructure: true,
         preserveCamera: true,
+        objectInsertCandidateStrategy: effectiveConfig.objectInsertCandidateStrategy || candidateStrategy,
+        objectInsertCandidateStrategies: candidateStrategies,
+        objectInsertCandidatePromptHints: buildObjectInsertCandidatePromptHints(candidateStrategies),
       };
       const nextItems = objectItems.map(item => {
         const prepared = preparedItems.find(preparedItem => preparedItem.id === item.id);
@@ -1414,6 +1481,21 @@ export function ObjectInsertPanel({
           <p className="mt-1 text-xs leading-5 text-slate-500">上传原图后，可上传多张家具图片并直接拖动摆放到目标位置。生成时系统会自动根据摆放示意图进行自然融合，生成具有自然阴影、统一透视和协调材质的效果图。</p>
         </div>
 
+        <div className="grid grid-cols-2 gap-1 rounded-2xl bg-slate-100 p-1">
+          {(['simple', 'advanced'] as ObjectInsertUIMode[]).map(mode => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => onUpdateConfig({ objectInsertUIMode: mode })}
+              className={`rounded-xl px-3 py-2 text-xs font-black transition ${
+                uiMode === mode ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              {mode === 'simple' ? '简单模式' : '高级模式'}
+            </button>
+          ))}
+        </div>
+
         <UploadCard
           title="原始场景图"
           description="作为画布底图，必填。"
@@ -1426,6 +1508,18 @@ export function ObjectInsertPanel({
             onUpdateConfig({ sourceImageAssetId: undefined, objectPlacement: emptyPlacement });
           }}
         />
+
+        {uiMode === 'simple' ? (
+          <UploadCard
+            title="物体参考图"
+            description="上传要植入的物体，随后在画布中拖拽摆放。"
+            image={objectImage}
+            error={uploadErrors.object}
+            onUpload={() => objectInputRef.current?.click()}
+            onRemove={handleRemoveObject}
+          />
+        ) : (
+          <>
 
         <ObjectItemsPanel
           items={objectItems}
@@ -1524,6 +1618,36 @@ export function ObjectInsertPanel({
               <input type="checkbox" checked={enforcePerspectiveScale} onChange={event => handleObjectConstraintChange('enforcePerspectiveScale', event.currentTarget.checked)} className="h-4 w-4 rounded border-blue-200 text-blue-600" />
             </label>
           </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+          <p className="text-xs font-black text-slate-900">候选策略</p>
+          <div className="mt-3 grid grid-cols-3 gap-1.5 rounded-xl bg-white p-1">
+            {([1, 2, 3] as const).map(count => (
+              <button
+                key={count}
+                type="button"
+                onClick={() => handleCandidateCountChange(count)}
+                className={`rounded-lg px-2 py-1.5 text-xs font-black transition ${
+                  candidateCount === count ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                }`}
+              >
+                {count} 张
+              </button>
+            ))}
+          </div>
+          <select
+            value={candidateStrategy}
+            onChange={event => handleCandidateStrategyChange(event.currentTarget.value as ObjectInsertCandidateStrategy)}
+            className="mt-3 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800 outline-none focus:border-blue-300"
+          >
+            {objectInsertCandidateStrategyOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          {candidateCount > 1 ? (
+            <p className="mt-2 text-xs leading-5 text-slate-500">
+              多候选会自动组合：{candidateStrategies.map(strategy => readObjectInsertCandidateStrategyLabel(strategy)).join(' / ')}
+            </p>
+          ) : null}
         </div>
 
         {generationPreflightWarnings.length > 0 ? (
@@ -1702,6 +1826,8 @@ export function ObjectInsertPanel({
             ) : null}
           </div>
         ) : null}
+          </>
+        )}
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col p-4">
@@ -2139,6 +2265,30 @@ function readObjectInsertPlacementIntent(config: GenerationConfig): string {
 function readObjectInsertHarmonyPriority(config: GenerationConfig): ObjectInsertHarmonyPriority {
   const value = config.objectInsert?.harmonyPriority || config.harmonyPriority;
   return value === 'style' || value === 'balance' || value === 'layout' ? value : 'layout';
+}
+
+function readObjectInsertCandidateStrategy(config: GenerationConfig): ObjectInsertCandidateStrategy {
+  const value = config.objectInsert?.objectInsertCandidateStrategy || config.objectInsertCandidateStrategy;
+  return objectInsertCandidateStrategyOptions.some(option => option.value === value) ? value : 'natural-fit';
+}
+
+function resolveObjectInsertCandidateStrategies(config: GenerationConfig, count: 1 | 2 | 3): ObjectInsertCandidateStrategy[] {
+  const preferred = readObjectInsertCandidateStrategy(config);
+  const configured = [
+    ...(Array.isArray(config.objectInsertCandidateStrategies) ? config.objectInsertCandidateStrategies : []),
+    ...(Array.isArray(config.objectInsert?.objectInsertCandidateStrategies) ? config.objectInsert.objectInsertCandidateStrategies : []),
+  ].filter((strategy): strategy is ObjectInsertCandidateStrategy => objectInsertCandidateStrategyOptions.some(option => option.value === strategy));
+  const defaults: ObjectInsertCandidateStrategy[] = [preferred, 'natural-fit', 'strict-placement', 'object-fidelity', 'scene-harmony'];
+  const merged = Array.from(new Set([...configured, ...defaults]));
+  return merged.slice(0, count);
+}
+
+function buildObjectInsertCandidatePromptHints(strategies: ObjectInsertCandidateStrategy[]): string[] {
+  return strategies.map(strategy => objectInsertCandidateStrategyOptions.find(option => option.value === strategy)?.hint || '');
+}
+
+function readObjectInsertCandidateStrategyLabel(strategy: ObjectInsertCandidateStrategy): string {
+  return objectInsertCandidateStrategyOptions.find(option => option.value === strategy)?.label || '自然融合';
 }
 
 function readObjectInsertAutoAdjust(

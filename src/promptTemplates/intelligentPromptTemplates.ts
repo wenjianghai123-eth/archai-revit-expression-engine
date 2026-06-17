@@ -270,6 +270,8 @@ function buildFloorplanPrompt(input: BuildSmartPromptInput, userPrompt: string):
   const parts = [
     floorplanBasePrompt,
     buildFloorplanExpressionControlPrompt(input.config),
+    buildFloorplanTemplatePrompt(input.config),
+    buildFloorplanRoomLabelsPrompt(input.config),
     buildStructuredContext(input.config, input.mode),
     input.hasMaterialReferences ? '已提供的材质参考图优先作为颜色、纹理、质感和铺贴方向参考，不要复制参考图中的无关物体、背景或透视构图。' : undefined,
     input.materialNames && input.materialNames.length > 0 ? `材质参考名称：${input.materialNames.join('、')}。` : undefined,
@@ -285,6 +287,54 @@ const floorplanRenderModePrompts: Record<string, string> = {
   'semi-3d': 'Floor plan render mode: semi-3d. Create a layered semi-3D colored floor plan expression, while preserving the original floor plan structure, walls, openings, furniture outlines, and plan proportions.',
   presentation: 'Floor plan render mode: presentation. Strengthen presentation-board quality, material hierarchy, graphic completeness, clean composition, and readable spatial expression while preserving the original plan structure.',
 };
+
+const floorplanTemplatePrompts: Record<string, string> = {
+  'residential-warm-wood': 'Floorplan color template: residential warm wood. Use warm wood tones, soft neutral materials, cozy residential zoning, and clear home-oriented function expression.',
+  'premium-light-luxury': 'Floorplan color template: premium light luxury. Use refined stone, subtle metal accents, warm beige-gray palette, elegant material hierarchy, and report-ready polish.',
+  'commercial-presentation': 'Floorplan color template: commercial presentation. Emphasize display zones, circulation clarity, brand-facing material contrast, and presentation readability.',
+  'office-space': 'Floorplan color template: office workspace. Express workstations, meeting rooms, collaborative zones, reception, storage, circulation clarity, and professional neutral materials.',
+  'landscape-masterplan': 'Floorplan color template: landscape masterplan. Use planting texture, paving hierarchy, outdoor circulation, site edges, water/green area distinction, and masterplan clarity.',
+  'minimal-grayscale': 'Floorplan color template: minimal grayscale. Use restrained black-white-gray fills, subtle material contrast, clean linework, and strong plan readability.',
+};
+
+function buildFloorplanTemplatePrompt(config: object | undefined): string | undefined {
+  const id = readConfigString(config, 'floorplanTemplateId') || 'residential-warm-wood';
+  return floorplanTemplatePrompts[id] || floorplanTemplatePrompts['residential-warm-wood'];
+}
+
+function buildFloorplanRoomLabelsPrompt(config: object | undefined): string | undefined {
+  const value = readConfigValue(config, 'floorplanRoomLabels');
+  const labels = Array.isArray(value) ? value.filter(isRecord).slice(0, 20) : [];
+  if (labels.length === 0) return undefined;
+  const lines = labels.map((label, index) => {
+    const name = readConfigString(label, 'name') || `Area ${index + 1}`;
+    const type = readFloorplanRoomTypeLabel(label);
+    const position = readConfigString(label, 'positionDescription');
+    return `Room ${index + 1}: ${name} = ${type}${position ? `, location: ${position}` : ''}.`;
+  });
+  return joinPrompt([
+    'Manual room labels: express each functional zone according to the following room labels. Keep room labels subtle and integrated with the plan; do not move walls, openings, room boundaries, or furniture outlines.',
+    ...lines,
+  ]);
+}
+
+function readFloorplanRoomTypeLabel(label: Record<string, unknown>): string {
+  const type = readConfigString(label, 'roomType') || 'custom';
+  if (type === 'custom') return readConfigString(label, 'customTypeLabel') || 'custom room';
+  const labels: Record<string, string> = {
+    'living-room': 'living room',
+    'dining-room': 'dining room',
+    bedroom: 'bedroom',
+    kitchen: 'kitchen',
+    bathroom: 'bathroom',
+    balcony: 'balcony',
+    entry: 'entry foyer',
+    study: 'study',
+    office: 'office area',
+    commercial: 'commercial area',
+  };
+  return labels[type] || 'room';
+}
 
 const lineworkPreservationPrompts: Record<string, string> = {
   strict: 'Linework preservation: strict. Extremely strictly preserve the original linework, wall thickness, doors, windows, furniture outlines, room boundaries, and all plan geometry.',
@@ -307,9 +357,45 @@ function buildFloorplanExpressionControlPrompt(config: object | undefined): stri
 function buildStyleRenderPrompt(input: BuildSmartPromptInput, userPrompt: string): string {
   return joinPrompt([
     styleRenderBasePrompt,
+    buildFreeReferenceImagePrompt(input.config),
     buildStructuredContext(input.config, input.mode),
     changeStrengthInstruction(readSmartPromptChangeStrength(input.config, input.mode), input.mode),
     userPrompt ? `User extra requirements: ${userPrompt}` : 'No extra user requirements. Follow the structured selections and produce a stable default architectural rendering.',
+  ]);
+}
+
+const freeReferenceRolePrompts: Record<string, string> = {
+  style: 'style reference',
+  material: 'material reference',
+  furniture: 'furniture reference',
+  lighting: 'lighting reference',
+  composition: 'composition reference',
+  color: 'color palette reference',
+  detail: 'detail reference',
+};
+
+const freeReferenceStrengthPrompts: Record<string, string> = {
+  low: 'low strength, use this reference subtly',
+  medium: 'medium strength, apply it clearly but keep the source image dominant',
+  high: 'high strength, strongly follow this reference role while preserving the source image structure',
+};
+
+function buildFreeReferenceImagePrompt(config: object | undefined): string | undefined {
+  if (readConfigString(config, 'step') !== 'free_reference_image') return undefined;
+  const referencesValue = readConfigValue(config, 'freeReferenceReferences');
+  const references = Array.isArray(referencesValue) ? referencesValue.filter(isRecord).slice(0, 6) : [];
+  const referenceLines = references.map((reference, index) => {
+    const role = readConfigString(reference, 'role') || 'style';
+    const strength = readConfigString(reference, 'strength') || 'medium';
+    return `Reference image ${index + 2}: ${freeReferenceRolePrompts[role] || freeReferenceRolePrompts.style}; ${freeReferenceStrengthPrompts[strength] || freeReferenceStrengthPrompts.medium}.`;
+  });
+
+  return joinPrompt([
+    'Free reference image mode: Image 1 is the source image and must remain the dominant foundation for geometry, camera, perspective, composition, spatial layout, and main object relationships.',
+    referenceLines.length > 0
+      ? joinPrompt(referenceLines)
+      : 'Additional images are references only. Use them for style, material, color, lighting, furniture language, composition intent, and details according to the user prompt.',
+    'Do not mechanically collage reference images. Do not create a split-screen, comparison image, grid, before/after layout, mood board, UI, border, watermark, or text labels.',
   ]);
 }
 

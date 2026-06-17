@@ -64,6 +64,39 @@ describe('DesignVariantsPanel', () => {
     expect(html).toContain('导出对比页');
     expect(html).toContain('一键生成汇报页');
   });
+  it('renders variant description metadata and single retry action', () => {
+    const html = renderToStaticMarkup(React.createElement(DesignVariantsPanel, {
+      ...defaultProps,
+      state: createState({
+        batchCount: 4,
+        variantNames: ['方案 A', '方案 B', '方案 C', '方案 D'],
+        variantStyles: ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'],
+      }),
+      resultOptions: [
+        {
+          id: 'c',
+          imageUrl: 'data:image/png;base64,c',
+          isSelected: true,
+          isFavorite: false,
+          variantIndex: 2,
+          variantName: '方案 C',
+          variantStyleLabel: '轻奢',
+          designDirection: '方案 C / light-luxury',
+          changeScopeLabel: '整体方案',
+          lockedItemsLabel: '结构、视角、门窗',
+          strategyNote: '强化展示墙',
+        },
+      ],
+      selectedResultId: 'c',
+      previewImage: 'data:image/png;base64,c',
+      onRetryVariant: () => undefined,
+    }));
+
+    expect(html).toContain('方案说明');
+    expect(html).toContain('强化展示墙');
+    expect(html).toContain('重试此方案');
+    expect(html).toContain('整体方案');
+  });
 });
 
 function createState(config: Partial<StepState['config']>): StepState {

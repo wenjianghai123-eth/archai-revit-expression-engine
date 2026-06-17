@@ -1,3 +1,6 @@
+import { findFloorplanColorTemplate } from '../constants/floorplanVariants';
+import { FloorplanRoomLabel, FloorplanTemplateId } from '../types';
+
 interface FloorplanPromptInput {
   userPrompt?: string;
   hasMaterialReferences?: boolean;
@@ -7,6 +10,8 @@ interface FloorplanPromptInput {
   enableLegend?: boolean;
   enableAreaText?: boolean;
   enableMaterialLegend?: boolean;
+  floorplanTemplateId?: FloorplanTemplateId;
+  floorplanRoomLabels?: FloorplanRoomLabel[];
 }
 
 export const DEFAULT_FLOORPLAN_COLOR_PROMPT = [
@@ -55,6 +60,16 @@ export function buildFloorplanColorPrompt(input?: string | FloorplanPromptInput)
     if (normalizedInput.enableMaterialLegend) pieces.push('Add a material legend that explains key floor, wall, soft furnishing, and finish categories where appropriate.');
   }
 
+  const template = normalizedInput.floorplanTemplateId ? findFloorplanColorTemplate(normalizedInput.floorplanTemplateId) : undefined;
+  if (template) {
+    pieces.push('', `彩平模板：${template.name}`, template.promptHint);
+  }
+
+  const roomLabelPrompt = buildFloorplanRoomLabelsPrompt(normalizedInput.floorplanRoomLabels || []);
+  if (roomLabelPrompt) {
+    pieces.push('', roomLabelPrompt);
+  }
+
   if (normalizedInput.hasMaterialReferences) {
     pieces.push('', MATERIAL_REFERENCE_PROMPT);
     if (materialNames.length > 0) {
@@ -72,4 +87,38 @@ export function buildFloorplanColorPrompt(input?: string | FloorplanPromptInput)
   }
 
   return pieces.join('\n');
+}
+
+function buildFloorplanRoomLabelsPrompt(labels: FloorplanRoomLabel[]): string {
+  const sanitized = labels
+    .map(label => ({
+      name: label.name.trim(),
+      type: readFloorplanRoomTypeLabel(label),
+      position: label.positionDescription.trim(),
+    }))
+    .filter(label => label.name || label.type || label.position)
+    .slice(0, 20);
+  if (sanitized.length === 0) return '';
+  return [
+    'Room label guidance: express the functional zones according to these manual room labels. Keep labels visually integrated with the floor plan and do not move walls, openings, or furniture outlines.',
+    ...sanitized.map((label, index) => `Room ${index + 1}: ${label.name || `Area ${index + 1}`} = ${label.type}${label.position ? `, location: ${label.position}` : ''}.`),
+  ].join('\n');
+}
+
+function readFloorplanRoomTypeLabel(label: FloorplanRoomLabel): string {
+  if (label.roomType === 'custom') return label.customTypeLabel?.trim() || 'custom room';
+  const labels: Record<FloorplanRoomLabel['roomType'], string> = {
+    'living-room': 'living room',
+    'dining-room': 'dining room',
+    bedroom: 'bedroom',
+    kitchen: 'kitchen',
+    bathroom: 'bathroom',
+    balcony: 'balcony',
+    entry: 'entry foyer',
+    study: 'study',
+    office: 'office area',
+    commercial: 'commercial area',
+    custom: 'custom room',
+  };
+  return labels[label.roomType] || 'room';
 }
