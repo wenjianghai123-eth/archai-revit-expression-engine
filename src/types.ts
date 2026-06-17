@@ -28,12 +28,16 @@ export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed
 export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
 export type QualityMode = 'draft' | 'fast' | 'balanced' | 'high';
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
+export type VariantChangeScope = 'material-only' | 'soft-decoration' | 'lighting' | 'furniture-layout' | 'color-palette' | 'full-design';
+export type VariantLock = 'structure' | 'camera' | 'walls-openings' | 'fixed-furniture' | 'floor-material' | 'ceiling' | 'main-color';
 export type DesignVariantBatchCount = 2 | 4 | 8;
 export type PlanColorizeBatchCount = 1 | 2 | 3 | 4 | 5 | 6;
 export type FloorplanMultiPlanBatchCount = 2 | 4 | 6;
 export type FloorplanMultiPlanMode = 'single' | 'multi';
 export type FloorplanVariantType = 'material_style' | 'furniture_layout' | 'mixed';
 export type FloorplanVariantFocus = 'material_style' | 'furniture_layout' | 'both';
+export type FloorplanRenderMode = 'flat-color' | 'semi-3d' | 'presentation';
+export type LineworkPreservation = 'strict' | 'high' | 'medium';
 export type VariantStyleKey =
   | 'modern-minimal'
   | 'wabi-sabi'
@@ -47,12 +51,19 @@ export type VariantStyleKey =
   | 'premium-gray'
   | 'custom';
 export type MaterialReplaceStrength = 'subtle' | 'balanced' | 'strong';
+export type MaterialPatternScale = 'small' | 'medium' | 'large';
+export type MaterialDirection = 'auto' | 'horizontal' | 'vertical' | 'diagonal' | 'herringbone';
+export type MaterialFinish = 'matte' | 'satin' | 'glossy' | 'rough';
+export type MaterialReplaceScope = 'material-only' | 'material-and-soft-decor' | 'creative';
 export type SecondaryEditAction = 'regenerate' | 'similar' | 'realism' | 'lighting' | 'style' | 'continue-edit';
 export type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview';
 export type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
 export type ObjectInsertPlacementMode = 'strict' | 'natural';
 export type ObjectInsertHarmonyPriority = 'layout' | 'style' | 'balance';
 export type ObjectInsertFusionPreference = 'conservative' | 'balanced' | 'design';
+export type ObjectInsertSurface = 'floor' | 'wall' | 'ceiling' | 'tabletop' | 'outdoor-ground' | 'auto';
+export type ObjectInsertType = 'sofa' | 'chair' | 'table' | 'lamp' | 'plant' | 'artwork' | 'sculpture' | 'car' | 'person' | 'tree' | 'signage' | 'custom';
+export type ObjectFidelity = 'strict' | 'balanced' | 'loose';
 export type PlanDrawingType = 'residential' | 'commercial' | 'office' | 'hotel' | 'landscape' | 'site-plan' | 'custom';
 export type PlanExpressionTemplate = 'zoning-color' | 'colored-plan' | 'landscape-plan' | 'furniture-enhance' | 'annotation-plan' | 'circulation-analysis';
 export type MaterialReplaceEditMode = 'smart-type' | 'mask';
@@ -268,6 +279,11 @@ export interface GenerationConfig {
   floorplanOutputMode?: FloorplanMultiPlanMode;
   floorplanVariantType?: FloorplanVariantType;
   floorplanVariantFocus?: FloorplanVariantFocus;
+  floorplanRenderMode?: FloorplanRenderMode;
+  lineworkPreservation?: LineworkPreservation;
+  enableLegend?: boolean;
+  enableAreaText?: boolean;
+  enableMaterialLegend?: boolean;
   floorplanStyleTemplateIds?: string[];
   floorplanStyleTemplateNames?: string[];
   floorplanLayoutVariantIds?: string[];
@@ -276,6 +292,9 @@ export interface GenerationConfig {
   stylePackId?: string;
   variantStyles?: VariantStyleKey[];
   variantNames?: string[];
+  variantChangeScope?: VariantChangeScope;
+  variantLocks?: VariantLock[];
+  variantStrategyNotes?: string[];
   customStyleLabel?: string;
   planColorizeBatchEnabled?: boolean;
   planColorizeStyleIds?: string[];
@@ -299,6 +318,10 @@ export interface GenerationConfig {
   customPrompt?: string;
   targetObjectType?: MaterialReplaceTargetObject;
   targetMaterial?: MaterialReplaceTargetMaterial;
+  materialPatternScale?: MaterialPatternScale;
+  materialDirection?: MaterialDirection;
+  materialFinish?: MaterialFinish;
+  materialReplaceScope?: MaterialReplaceScope;
   customMaterialPrompt?: string;
   preserveLighting?: boolean;
   preserveGeometry?: boolean;
@@ -324,6 +347,12 @@ export interface GenerationConfig {
   objectInsertMode?: 'object_insert_preview_fusion' | 'legacy_object_insert';
   objectInsertInputOrder?: Array<Record<string, unknown>>;
   objectInsertDebugMode?: ObjectInsertDebugMode;
+  objectInsertSurface?: ObjectInsertSurface;
+  objectType?: ObjectInsertType | string;
+  objectFidelity?: ObjectFidelity;
+  enforceContactShadow?: boolean;
+  enforceOcclusion?: boolean;
+  enforcePerspectiveScale?: boolean;
   positionConstraintStrength?: ObjectInsertPositionConstraintStrength;
   placementMode?: ObjectInsertPlacementMode;
   placementIntent?: string;
@@ -363,12 +392,17 @@ export interface ObjectPlacement {
 
 export interface ObjectInsertItemConfig {
   id: string;
-  objectType: string;
+  objectType: ObjectInsertType | string;
   objectLabel?: string;
   referenceAssetIds: string[];
   placement?: ObjectPlacement;
   placementPreviewAssetId?: string;
   placementMaskAssetId?: string;
+  objectInsertSurface?: ObjectInsertSurface;
+  objectFidelity?: ObjectFidelity;
+  enforceContactShadow?: boolean;
+  enforceOcclusion?: boolean;
+  enforcePerspectiveScale?: boolean;
   placementMode?: ObjectInsertPlacementMode;
   placementIntent?: string;
   extraPrompt?: string;
@@ -379,6 +413,12 @@ export interface ObjectInsertConfig {
   sourceImageAssetId?: string;
   objectItems?: ObjectInsertItemConfig[];
   globalExtraPrompt?: string;
+  objectType?: ObjectInsertType | string;
+  objectInsertSurface?: ObjectInsertSurface;
+  objectFidelity?: ObjectFidelity;
+  enforceContactShadow?: boolean;
+  enforceOcclusion?: boolean;
+  enforcePerspectiveScale?: boolean;
   objectReferenceAssetId?: string;
   objectReferenceAssetIds?: string[];
   guideAssetId?: string;
@@ -416,6 +456,10 @@ export interface GenerationResultOption {
   variantStyle?: VariantStyleKey;
   variantStyleLabel?: string;
   stylePackId?: string;
+  designDirection?: string;
+  changeScopeLabel?: string;
+  lockedItemsLabel?: string;
+  strategyNote?: string;
 }
 
 export type GenerationBatchItemStatus = 'queued' | 'running' | 'succeeded' | 'failed';

@@ -1,7 +1,7 @@
 import { Download, FileText, Heart, ImagePlus, LayoutGrid, Printer, Sparkles, Star } from 'lucide-react';
 import { type ReactNode, useState } from 'react';
 import { designVariantPacks, getDesignVariantPack } from '../constants/designVariantPacks';
-import { DesignVariantBatchCount, GenerationConfig, GenerationResultOption, GenerationStep, SecondaryEditAction, StepState, UploadedImage, VariantStyleKey } from '../types';
+import { DesignVariantBatchCount, GenerationConfig, GenerationResultOption, GenerationStep, SecondaryEditAction, StepState, UploadedImage, VariantChangeScope, VariantLock, VariantStyleKey } from '../types';
 import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
 import { getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
@@ -59,6 +59,25 @@ const defaultStylesByCount: Record<DesignVariantBatchCount, VariantStyleKey[]> =
   8: ['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby'],
 };
 
+const variantChangeScopeOptions: Array<{ value: VariantChangeScope; label: string }> = [
+  { value: 'material-only', label: '只变材质' },
+  { value: 'soft-decoration', label: '只变软装' },
+  { value: 'lighting', label: '只变灯光' },
+  { value: 'furniture-layout', label: '调整家具布局' },
+  { value: 'color-palette', label: '调整色彩体系' },
+  { value: 'full-design', label: '整体方案' },
+];
+
+const variantLockOptions: Array<{ value: VariantLock; label: string }> = [
+  { value: 'structure', label: '锁定结构' },
+  { value: 'camera', label: '锁定视角' },
+  { value: 'walls-openings', label: '锁定门窗' },
+  { value: 'fixed-furniture', label: '锁定固定家具' },
+  { value: 'floor-material', label: '锁定地面' },
+  { value: 'ceiling', label: '锁定天花' },
+  { value: 'main-color', label: '锁定主色调' },
+];
+
 export function DesignVariantsPanel({
   state,
   resultOptions,
@@ -85,6 +104,9 @@ export function DesignVariantsPanel({
   const stylePackId = state.config.stylePackId || 'interior-common';
   const selectedStyles = resolveSelectedStyles(state.config, batchCount);
   const variantNames = resolveVariantNames(state.config, batchCount);
+  const variantChangeScope = readVariantChangeScope(state.config.variantChangeScope);
+  const variantLocks = resolveVariantLocks(state.config.variantLocks);
+  const variantStrategyNotes = resolveVariantStrategyNotes(state.config, batchCount);
   const selectedResult = resultOptions.find(result => result.id === selectedResultId) || resultOptions.find(result => result.isSelected) || resultOptions[0] || null;
 
   const handleBatchCountChange = (nextBatchCount: DesignVariantBatchCount) => {
@@ -93,6 +115,7 @@ export function DesignVariantsPanel({
       batchCount: nextBatchCount,
       variantStyles: resolveSelectedStyles({ ...state.config, batchCount: nextBatchCount, variantStyles: pack.styles }, nextBatchCount),
       variantNames: resolveVariantNames({ ...state.config, batchCount: nextBatchCount }, nextBatchCount),
+      variantStrategyNotes: resolveVariantStrategyNotes({ ...state.config, batchCount: nextBatchCount }, nextBatchCount),
     });
   };
 
@@ -114,6 +137,19 @@ export function DesignVariantsPanel({
     const next = [...variantNames];
     next[index] = name;
     onUpdateConfig({ variantNames: next });
+  };
+
+  const handleVariantNoteChange = (index: number, note: string) => {
+    const next = [...variantStrategyNotes];
+    next[index] = note;
+    onUpdateConfig({ variantStrategyNotes: next.slice(0, batchCount) });
+  };
+
+  const handleVariantLockChange = (lock: VariantLock, checked: boolean) => {
+    const next = checked
+      ? Array.from(new Set([...variantLocks, lock]))
+      : variantLocks.filter(item => item !== lock);
+    onUpdateConfig({ variantLocks: next });
   };
 
   const handleResultNameChange = (result: GenerationResultOption, index: number, name: string) => {
@@ -217,6 +253,34 @@ export function DesignVariantsPanel({
               <SegmentedButton active={variantStrategy === 'same-style'} onClick={() => onUpdateConfig({ variantStrategy: 'same-style' })} label="同一风格多方案" />
             </ControlGroup>
 
+            <ControlGroup title="变化范围">
+              {variantChangeScopeOptions.map(option => (
+                <SegmentedButton
+                  key={option.value}
+                  active={variantChangeScope === option.value}
+                  onClick={() => onUpdateConfig({ variantChangeScope: option.value })}
+                  label={option.label}
+                />
+              ))}
+            </ControlGroup>
+
+            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <p className="text-xs font-bold text-slate-500">锁定项</p>
+              <div className="mt-3 grid gap-2">
+                {variantLockOptions.map(option => (
+                  <label key={option.value} className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700">
+                    <span>{option.label}</span>
+                    <input
+                      type="checkbox"
+                      checked={variantLocks.includes(option.value)}
+                      onChange={event => handleVariantLockChange(option.value, event.currentTarget.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-slate-900"
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+
             <SmartPromptAssistant
               mode="design-variants"
               config={state.config}
@@ -286,7 +350,7 @@ export function DesignVariantsPanel({
               {resultOptions.length > 0 ? resultOptions.map((result, index) => (
                 <VariantCard key={result.id} result={result} index={index} active={result.id === selectedResultId || result.isSelected} style={selectedStyles[index]} fallbackName={variantNames[index]} projectName={projectName} onSelect={() => onSelectGenerationResult(result.id)} onFavorite={() => onToggleGenerationFavorite(result.id)} onContinueEdit={() => onSecondaryEditResult?.(result.id, 'continue-edit')} onRename={name => handleResultNameChange(result, index, name)} />
               )) : Array.from({ length: batchCount }).map((_, index) => (
-                <PlaceholderCard key={index} index={index} style={selectedStyles[index]} name={variantNames[index]} onNameChange={name => handleConfigNameChange(index, name)} onStyleChange={style => handleStyleChange(index, style)} />
+                <PlaceholderCard key={index} index={index} style={selectedStyles[index]} name={variantNames[index]} note={variantStrategyNotes[index] || ''} onNameChange={name => handleConfigNameChange(index, name)} onStyleChange={style => handleStyleChange(index, style)} onNoteChange={note => handleVariantNoteChange(index, note)} />
               ))}
             </div>
           </main>
@@ -297,21 +361,37 @@ export function DesignVariantsPanel({
   );
 }
 
-function PlaceholderCard({ index, style, name, onNameChange, onStyleChange }: { index: number; style: VariantStyleKey; name: string; onNameChange: (name: string) => void; onStyleChange: (style: VariantStyleKey) => void }) {
+function PlaceholderCard({ index, style, name, note, onNameChange, onStyleChange, onNoteChange }: { index: number; style: VariantStyleKey; name: string; note: string; onNameChange: (name: string) => void; onStyleChange: (style: VariantStyleKey) => void; onNoteChange: (note: string) => void }) {
   return (
     <div className="space-y-3 rounded-lg border border-dashed border-slate-200 bg-white p-3">
       <input value={name} onChange={event => onNameChange(event.currentTarget.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm font-bold text-slate-900 outline-none focus:border-blue-300" />
       <select value={style} onChange={event => onStyleChange(event.currentTarget.value as VariantStyleKey)} className="w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
         {variantStyleOptions.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}
       </select>
+      <textarea
+        value={note}
+        onChange={event => onNoteChange(event.currentTarget.value)}
+        maxLength={200}
+        placeholder="方案备注，例如：更暖的木色、增强展示墙、减少金属感"
+        className="h-20 w-full resize-none rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 outline-none focus:border-blue-300"
+      />
       <div className="flex min-h-48 items-center justify-center rounded-md bg-slate-50 text-sm font-bold text-slate-300">{readVariantLabel(index)}</div>
     </div>
   );
 }
 
+function readMetadataString(metadata: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = metadata?.[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
 function VariantCard({ result, index, active, style, fallbackName, projectName, onSelect, onFavorite, onContinueEdit, onRename }: { result: GenerationResultOption; index: number; active: boolean; style: VariantStyleKey | undefined; fallbackName: string; projectName?: string | null; onSelect: () => void; onFavorite: () => void; onContinueEdit: () => void; onRename: (name: string) => void }) {
   const label = result.variantName || result.variantLabel || fallbackName || readVariantLabel(index);
   const styleLabel = result.variantStyleLabel || readVariantStyleLabel(result.variantStyle || style);
+  const designDirection = result.designDirection || readMetadataString(result.metadata, 'designDirection') || styleLabel;
+  const changeScopeLabel = result.changeScopeLabel || readMetadataString(result.metadata, 'changeScopeLabel');
+  const lockedItemsLabel = result.lockedItemsLabel || readMetadataString(result.metadata, 'lockedItemsLabel');
+  const strategyNote = result.strategyNote || readMetadataString(result.metadata, 'strategyNote');
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -352,12 +432,19 @@ function VariantCard({ result, index, active, style, fallbackName, projectName, 
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <input value={label} onChange={event => onRename(event.currentTarget.value)} className="w-full rounded-md border border-transparent px-2 py-1 text-sm font-bold text-slate-900 outline-none hover:border-slate-200 focus:border-blue-300" />
-            <p className="mt-0.5 px-2 text-xs text-slate-500">{styleLabel}</p>
+            <p className="mt-0.5 px-2 text-xs text-slate-500">{designDirection}</p>
           </div>
           <button type="button" onClick={onFavorite} className={`rounded-full p-1.5 ${result.isFavorite ? 'bg-rose-50 text-rose-600' : 'bg-slate-100 text-slate-500'}`} title="收藏">
             <Heart className={`h-4 w-4 ${result.isFavorite ? 'fill-current' : ''}`} />
           </button>
         </div>
+        {(changeScopeLabel || lockedItemsLabel || strategyNote) ? (
+          <div className="space-y-1 rounded-md bg-slate-50 px-3 py-2 text-[11px] leading-5 text-slate-600">
+            {changeScopeLabel ? <p><span className="font-bold text-slate-800">变化范围：</span>{changeScopeLabel}</p> : null}
+            {lockedItemsLabel ? <p><span className="font-bold text-slate-800">锁定项：</span>{lockedItemsLabel}</p> : null}
+            {strategyNote ? <p><span className="font-bold text-slate-800">备注：</span>{strategyNote}</p> : null}
+          </div>
+        ) : null}
         <div className="grid grid-cols-3 gap-2">
           <button type="button" onClick={onSelect} className="rounded-md bg-slate-900 px-2 py-2 text-xs font-bold text-white">{result.isSelected ? '已设为主方案' : '设为主方案'}</button>
           <button type="button" onClick={onFavorite} className="rounded-md bg-slate-100 px-2 py-2 text-xs font-bold text-slate-700">收藏</button>
@@ -427,12 +514,18 @@ function DesignVariantReportPage({ payload }: { payload: { inputImage: UploadedI
 }
 
 function PrintVariant({ result, name, style, showDescription }: { result: GenerationResultOption; name: string; style: VariantStyleKey | undefined; showDescription?: boolean }) {
+  const changeScopeLabel = result.changeScopeLabel || readMetadataString(result.metadata, 'changeScopeLabel');
+  const lockedItemsLabel = result.lockedItemsLabel || readMetadataString(result.metadata, 'lockedItemsLabel');
+  const strategyNote = result.strategyNote || readMetadataString(result.metadata, 'strategyNote');
   return (
     <article className="break-inside-avoid overflow-hidden rounded-lg border border-slate-200">
       <img src={result.imageUrl} alt={name} className="h-52 w-full object-cover" />
       <div className="p-3">
         <p className="font-bold text-slate-950">{name}</p>
         <p className="text-xs text-slate-500">{readVariantStyleLabel(style)}</p>
+        {changeScopeLabel ? <p className="mt-2 text-xs leading-5 text-slate-600">变化范围：{changeScopeLabel}</p> : null}
+        {lockedItemsLabel ? <p className="text-xs leading-5 text-slate-600">锁定项：{lockedItemsLabel}</p> : null}
+        {strategyNote ? <p className="text-xs leading-5 text-slate-600">备注：{strategyNote}</p> : null}
         {showDescription ? <p className="mt-2 text-xs leading-5 text-slate-600">{styleDescriptionByKey[style || 'custom'] || styleDescriptionByKey.custom}</p> : null}
       </div>
     </article>
@@ -463,6 +556,20 @@ function resolveSelectedStyles(config: GenerationConfig, batchCount: DesignVaria
 function resolveVariantNames(config: GenerationConfig, batchCount: DesignVariantBatchCount): string[] {
   const names = Array.isArray(config.variantNames) ? [...config.variantNames] : [];
   return Array.from({ length: batchCount }, (_, index) => names[index] || readVariantLabel(index));
+}
+
+function resolveVariantStrategyNotes(config: GenerationConfig, batchCount: DesignVariantBatchCount): string[] {
+  const notes = Array.isArray(config.variantStrategyNotes) ? [...config.variantStrategyNotes] : [];
+  return Array.from({ length: batchCount }, (_, index) => notes[index] || '');
+}
+
+function readVariantChangeScope(value: GenerationConfig['variantChangeScope']): VariantChangeScope {
+  return variantChangeScopeOptions.some(option => option.value === value) ? value : 'full-design';
+}
+
+function resolveVariantLocks(value: GenerationConfig['variantLocks']): VariantLock[] {
+  const locks = Array.isArray(value) ? value : ['structure', 'camera', 'walls-openings'];
+  return locks.filter((lock): lock is VariantLock => variantLockOptions.some(option => option.value === lock));
 }
 
 function readVariantLabel(index: number): string {

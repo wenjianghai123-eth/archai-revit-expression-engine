@@ -1518,6 +1518,8 @@ const variantStyleKeys = new Set([
   'premium-gray',
   'custom',
 ]);
+const variantChangeScopes = new Set(['material-only', 'soft-decoration', 'lighting', 'furniture-layout', 'color-palette', 'full-design']);
+const variantLocks = new Set(['structure', 'camera', 'walls-openings', 'fixed-furniture', 'floor-material', 'ceiling', 'main-color']);
 const MAX_DESIGN_VARIANT_BATCH = Number(process.env.MAX_DESIGN_VARIANT_BATCH || 8);
 const defaultVariantStylesByCount: Record<2 | 4 | 8, string[]> = {
   2: ['modern-minimal', 'natural-wood'],
@@ -1528,6 +1530,13 @@ const designVariantPackIds = new Set(['interior-common', 'commercial', 'office',
 
 const materialReplaceObjectTypes = new Set(['floor', 'wall', 'ceiling', 'cabinet', 'sofa', 'table-chair', 'lighting', 'plant', 'door-window', 'feature-wall', 'other']);
 const materialReplaceMaterials = new Set(['light-wood', 'dark-wood', 'walnut', 'microcement', 'rock-slab', 'marble', 'terrazzo', 'tile', 'leather', 'fabric', 'metal', 'glass', 'art-paint', 'linear-light', 'warm-light-strip', 'plant', 'custom']);
+const materialPatternScales = new Set(['small', 'medium', 'large']);
+const materialDirections = new Set(['auto', 'horizontal', 'vertical', 'diagonal', 'herringbone']);
+const materialFinishes = new Set(['matte', 'satin', 'glossy', 'rough']);
+const materialReplaceScopes = new Set(['material-only', 'material-and-soft-decor', 'creative']);
+const objectInsertSurfaces = new Set(['floor', 'wall', 'ceiling', 'tabletop', 'outdoor-ground', 'auto']);
+const objectInsertTypes = new Set(['sofa', 'chair', 'table', 'lamp', 'plant', 'artwork', 'sculpture', 'car', 'person', 'tree', 'signage', 'custom']);
+const objectFidelities = new Set(['strict', 'balanced', 'loose']);
 
 function normalizeDesignVariantConfig(
   mode: GenerationRecord['mode'],
@@ -1541,6 +1550,9 @@ function normalizeDesignVariantConfig(
     delete config.variantStrategy;
     delete config.variantStyles;
     delete config.variantNames;
+    delete config.variantChangeScope;
+    delete config.variantLocks;
+    delete config.variantStrategyNotes;
     delete config.stylePackId;
     delete config.customStyleLabel;
     return { ok: true };
@@ -1581,6 +1593,15 @@ function normalizeDesignVariantConfig(
   config.batchCount = batchCount;
   config.variantStrategy = variantStrategy;
   config.variantStyles = styles.slice(0, batchCount);
+  config.variantChangeScope = typeof config.variantChangeScope === 'string' && variantChangeScopes.has(config.variantChangeScope)
+    ? config.variantChangeScope
+    : 'full-design';
+  config.variantLocks = Array.isArray(config.variantLocks)
+    ? config.variantLocks.filter((item): item is string => typeof item === 'string' && variantLocks.has(item))
+    : ['structure', 'camera', 'walls-openings'];
+  config.variantStrategyNotes = readStringArray(config.variantStrategyNotes)
+    .slice(0, batchCount)
+    .map(item => item.trim().slice(0, 200));
   config.stylePackId = typeof config.stylePackId === 'string' && designVariantPackIds.has(config.stylePackId) ? config.stylePackId : 'interior-common';
   config.variantNames = readStringArray(config.variantNames)
     .slice(0, batchCount)
@@ -1605,6 +1626,10 @@ function normalizeMaterialReplaceConfig(
     delete config.targetMaterial;
     delete config.customMaterialPrompt;
     delete config.materialReferenceAssetIds;
+    delete config.materialPatternScale;
+    delete config.materialDirection;
+    delete config.materialFinish;
+    delete config.materialReplaceScope;
     delete config.preserveLighting;
     return { ok: true };
   }
@@ -1616,6 +1641,10 @@ function normalizeMaterialReplaceConfig(
   config.preserveGeometry = config.preserveGeometry !== false;
   config.preserveStructure = config.preserveStructure !== false;
   config.strength = config.strength === 'subtle' || config.strength === 'strong' ? config.strength : 'balanced';
+  config.materialPatternScale = typeof config.materialPatternScale === 'string' && materialPatternScales.has(config.materialPatternScale) ? config.materialPatternScale : 'medium';
+  config.materialDirection = typeof config.materialDirection === 'string' && materialDirections.has(config.materialDirection) ? config.materialDirection : 'auto';
+  config.materialFinish = typeof config.materialFinish === 'string' && materialFinishes.has(config.materialFinish) ? config.materialFinish : 'matte';
+  config.materialReplaceScope = typeof config.materialReplaceScope === 'string' && materialReplaceScopes.has(config.materialReplaceScope) ? config.materialReplaceScope : 'material-only';
 
   if (config.targetObjectType === undefined || config.targetObjectType === null || config.targetObjectType === '') {
     delete config.targetObjectType;
@@ -1738,6 +1767,11 @@ function normalizeFloorplanConfig(
     delete config.floorplanOutputMode;
     delete config.floorplanVariantType;
     delete config.floorplanVariantFocus;
+    delete config.floorplanRenderMode;
+    delete config.lineworkPreservation;
+    delete config.enableLegend;
+    delete config.enableAreaText;
+    delete config.enableMaterialLegend;
     delete config.floorplanStyleTemplateIds;
     delete config.floorplanStyleTemplateNames;
     delete config.floorplanLayoutVariantIds;
@@ -1747,6 +1781,11 @@ function normalizeFloorplanConfig(
 
   const outputMode = config.floorplanOutputMode === 'multi' ? 'multi' : 'single';
   config.floorplanOutputMode = outputMode;
+  config.floorplanRenderMode = readFloorplanRenderMode(config.floorplanRenderMode);
+  config.lineworkPreservation = readLineworkPreservation(config.lineworkPreservation);
+  config.enableLegend = config.enableLegend === true;
+  config.enableAreaText = config.enableAreaText === true;
+  config.enableMaterialLegend = config.enableMaterialLegend === true;
   if (outputMode !== 'multi') {
     config.batchCount = 1;
     delete config.floorplanVariantType;
@@ -1797,6 +1836,14 @@ function normalizeFloorplanConfig(
   if (typeof config.customPrompt !== 'string' || config.customPrompt.trim().length === 0) delete config.customPrompt;
   else config.customPrompt = config.customPrompt.trim();
   return { ok: true };
+}
+
+function readFloorplanRenderMode(value: unknown): 'flat-color' | 'semi-3d' | 'presentation' {
+  return value === 'flat-color' || value === 'presentation' || value === 'semi-3d' ? value : 'semi-3d';
+}
+
+function readLineworkPreservation(value: unknown): 'strict' | 'high' | 'medium' {
+  return value === 'strict' || value === 'medium' || value === 'high' ? value : 'high';
 }
 
 function normalizeObjectPlacement(value: unknown): { x: number; y: number; width: number; height: number; rotation: number } | null {
@@ -1994,12 +2041,24 @@ function validateGenerationJobCreateBody(
     const allowAutoAdjustPosition = readObjectInsertAutoAdjust(config, 'allowAutoAdjustPosition');
     const allowAutoAdjustRotation = readObjectInsertAutoAdjust(config, 'allowAutoAdjustRotation');
     const allowAutoAdjustScale = readObjectInsertAutoAdjust(config, 'allowAutoAdjustScale');
+    const objectType = readObjectInsertType(config);
+    const objectInsertSurface = readObjectInsertSurface(config);
+    const objectFidelity = readObjectFidelity(config);
+    const enforceContactShadow = readObjectInsertBooleanConstraint(config, 'enforceContactShadow');
+    const enforceOcclusion = readObjectInsertBooleanConstraint(config, 'enforceOcclusion');
+    const enforcePerspectiveScale = readObjectInsertBooleanConstraint(config, 'enforcePerspectiveScale');
     const needsObject = previewFusionMode ? false : objectInsertIncludesObject(debugMode);
     const needsPreview = previewFusionMode ? true : objectInsertIncludesPreview(debugMode);
     const needsMask = previewFusionMode ? false : objectInsertIncludesMask(debugMode);
     const needsPlacement = previewFusionMode ? false : needsPreview || needsMask;
     const objectItems = normalizeObjectInsertItemsForRequest(objectInsertConfig.objectItems, {
       defaultPlacementMode: placementMode,
+      defaultObjectType: objectType,
+      defaultSurface: objectInsertSurface,
+      defaultFidelity: objectFidelity,
+      defaultEnforceContactShadow: enforceContactShadow,
+      defaultEnforceOcclusion: enforceOcclusion,
+      defaultEnforcePerspectiveScale: enforcePerspectiveScale,
       inputAssetIds,
       allowUnlistedReferenceAssetIds: previewFusionMode,
     });
@@ -2105,6 +2164,12 @@ function validateGenerationJobCreateBody(
     config.placementIntent = placementIntent;
     config.harmonyPriority = harmonyPriority;
     config.objectInsertFusionPreference = fusionPreference;
+    config.objectType = objectType;
+    config.objectInsertSurface = objectInsertSurface;
+    config.objectFidelity = objectFidelity;
+    config.enforceContactShadow = enforceContactShadow;
+    config.enforceOcclusion = enforceOcclusion;
+    config.enforcePerspectiveScale = enforcePerspectiveScale;
     config.allowAutoAdjustPosition = allowAutoAdjustPosition;
     config.allowAutoAdjustRotation = allowAutoAdjustRotation;
     config.allowAutoAdjustScale = allowAutoAdjustScale;
@@ -2136,6 +2201,12 @@ function validateGenerationJobCreateBody(
       placementIntent,
       harmonyPriority,
       fusionPreference,
+      objectType,
+      objectInsertSurface,
+      objectFidelity,
+      enforceContactShadow,
+      enforceOcclusion,
+      enforcePerspectiveScale,
       allowAutoAdjustPosition,
       allowAutoAdjustRotation,
       allowAutoAdjustScale,
@@ -2152,6 +2223,21 @@ function validateGenerationJobCreateBody(
     config.preserveStructure = config.preserveStructure !== false;
     config.preserveCamera = config.preserveCamera !== false;
     if (typeof config.objectInsertExtraPrompt === 'string') config.objectInsertExtraPrompt = config.objectInsertExtraPrompt.trim();
+  } else {
+    delete config.objectType;
+    delete config.objectInsertSurface;
+    delete config.objectFidelity;
+    delete config.enforceContactShadow;
+    delete config.enforceOcclusion;
+    delete config.enforcePerspectiveScale;
+    if (isRecord(config.objectInsert)) {
+      delete config.objectInsert.objectType;
+      delete config.objectInsert.objectInsertSurface;
+      delete config.objectInsert.objectFidelity;
+      delete config.objectInsert.enforceContactShadow;
+      delete config.objectInsert.enforceOcclusion;
+      delete config.objectInsert.enforcePerspectiveScale;
+    }
   }
   if (config.editTarget !== undefined && config.editTarget !== 'general' && config.editTarget !== 'material' && config.editTarget !== 'furniture') {
     return { ok: false, error: { message: 'editTarget must be general, material, or furniture.', code: 'GENERATION_JOB_EDIT_TARGET_INVALID' } };
@@ -2448,6 +2534,8 @@ type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
 type ObjectInsertPlacementMode = 'strict' | 'natural';
 type ObjectInsertHarmonyPriority = 'layout' | 'style' | 'balance';
 type ObjectInsertFusionPreference = 'conservative' | 'balanced' | 'design';
+type ObjectInsertSurface = 'floor' | 'wall' | 'ceiling' | 'tabletop' | 'outdoor-ground' | 'auto';
+type ObjectFidelity = 'strict' | 'balanced' | 'loose';
 
 interface ObjectInsertRequestItem {
   id: string;
@@ -2457,6 +2545,11 @@ interface ObjectInsertRequestItem {
   placement?: { x: number; y: number; width: number; height: number; rotation: number };
   placementPreviewAssetId?: string;
   placementMaskAssetId?: string;
+  objectInsertSurface: ObjectInsertSurface;
+  objectFidelity: ObjectFidelity;
+  enforceContactShadow: boolean;
+  enforceOcclusion: boolean;
+  enforcePerspectiveScale: boolean;
   placementMode: ObjectInsertPlacementMode;
   placementIntent?: string;
   extraPrompt?: string;
@@ -2551,6 +2644,45 @@ function readObjectInsertAutoAdjust(
   return value === undefined ? true : value !== false;
 }
 
+function readObjectInsertType(config: Record<string, unknown>): string {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.objectType === 'string'
+    ? nested.objectType
+    : typeof config.objectType === 'string'
+      ? config.objectType
+      : '';
+  return objectInsertTypes.has(value) ? value : 'custom';
+}
+
+function readObjectInsertSurface(config: Record<string, unknown>): ObjectInsertSurface {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.objectInsertSurface === 'string'
+    ? nested.objectInsertSurface
+    : typeof config.objectInsertSurface === 'string'
+      ? config.objectInsertSurface
+      : '';
+  return objectInsertSurfaces.has(value) ? value as ObjectInsertSurface : 'auto';
+}
+
+function readObjectFidelity(config: Record<string, unknown>): ObjectFidelity {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.objectFidelity === 'string'
+    ? nested.objectFidelity
+    : typeof config.objectFidelity === 'string'
+      ? config.objectFidelity
+      : '';
+  return objectFidelities.has(value) ? value as ObjectFidelity : 'balanced';
+}
+
+function readObjectInsertBooleanConstraint(
+  config: Record<string, unknown>,
+  key: 'enforceContactShadow' | 'enforceOcclusion' | 'enforcePerspectiveScale',
+): boolean {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested[key] === 'boolean' ? nested[key] : typeof config[key] === 'boolean' ? config[key] : undefined;
+  return value === undefined ? true : value !== false;
+}
+
 function objectInsertIncludesObject(mode: ObjectInsertDebugMode): boolean {
   return mode !== 'source_prompt';
 }
@@ -2565,7 +2697,17 @@ function objectInsertIncludesMask(mode: ObjectInsertDebugMode): boolean {
 
 function normalizeObjectInsertItemsForRequest(
   value: unknown,
-  input: { defaultPlacementMode: ObjectInsertPlacementMode; inputAssetIds: string[]; allowUnlistedReferenceAssetIds?: boolean },
+  input: {
+    defaultPlacementMode: ObjectInsertPlacementMode;
+    defaultObjectType: string;
+    defaultSurface: ObjectInsertSurface;
+    defaultFidelity: ObjectFidelity;
+    defaultEnforceContactShadow: boolean;
+    defaultEnforceOcclusion: boolean;
+    defaultEnforcePerspectiveScale: boolean;
+    inputAssetIds: string[];
+    allowUnlistedReferenceAssetIds?: boolean;
+  },
 ): ObjectInsertRequestItem[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -2579,14 +2721,28 @@ function normalizeObjectInsertItemsForRequest(
       const placementMode = item.placementMode === 'strict' || item.placementMode === 'natural'
         ? item.placementMode
         : input.defaultPlacementMode;
+      const objectType = isNonEmptyString(item.objectType) && objectInsertTypes.has(item.objectType.trim())
+        ? item.objectType.trim()
+        : input.defaultObjectType;
+      const objectInsertSurface = typeof item.objectInsertSurface === 'string' && objectInsertSurfaces.has(item.objectInsertSurface)
+        ? item.objectInsertSurface as ObjectInsertSurface
+        : input.defaultSurface;
+      const objectFidelity = typeof item.objectFidelity === 'string' && objectFidelities.has(item.objectFidelity)
+        ? item.objectFidelity as ObjectFidelity
+        : input.defaultFidelity;
       return {
         id: isNonEmptyString(item.id) ? item.id.trim() : `object-item-${index + 1}`,
-        objectType: isNonEmptyString(item.objectType) ? item.objectType.trim() : 'custom',
+        objectType,
         objectLabel: isNonEmptyString(item.objectLabel) ? item.objectLabel.trim() : undefined,
         referenceAssetIds,
         placement: placement || undefined,
         placementPreviewAssetId: isNonEmptyString(item.placementPreviewAssetId) ? item.placementPreviewAssetId.trim() : undefined,
         placementMaskAssetId: isNonEmptyString(item.placementMaskAssetId) ? item.placementMaskAssetId.trim() : undefined,
+        objectInsertSurface,
+        objectFidelity,
+        enforceContactShadow: typeof item.enforceContactShadow === 'boolean' ? item.enforceContactShadow : input.defaultEnforceContactShadow,
+        enforceOcclusion: typeof item.enforceOcclusion === 'boolean' ? item.enforceOcclusion : input.defaultEnforceOcclusion,
+        enforcePerspectiveScale: typeof item.enforcePerspectiveScale === 'boolean' ? item.enforcePerspectiveScale : input.defaultEnforcePerspectiveScale,
         placementMode,
         placementIntent: isNonEmptyString(item.placementIntent) ? item.placementIntent.trim() : undefined,
         extraPrompt: isNonEmptyString(item.extraPrompt) ? item.extraPrompt.trim() : undefined,
@@ -2609,6 +2765,11 @@ function buildObjectInsertInputOrderForRequest(
     objectType: item.objectType,
     objectLabel: item.objectLabel,
     referenceImageIndexes: needsObject ? item.referenceAssetIds.map(() => imageIndex++) : [],
+    objectInsertSurface: item.objectInsertSurface,
+    objectFidelity: item.objectFidelity,
+    enforceContactShadow: item.enforceContactShadow,
+    enforceOcclusion: item.enforceOcclusion,
+    enforcePerspectiveScale: item.enforcePerspectiveScale,
     placementMode: item.placementMode,
     placementIntent: item.placementIntent,
     extraPrompt: item.extraPrompt,

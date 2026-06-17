@@ -14,6 +14,10 @@ describe('MaterialReplaceConfigPanel', () => {
       targetObjectType: 'floor',
       targetMaterial: 'dark-wood',
       strength: 'balanced',
+      materialPatternScale: 'medium',
+      materialDirection: 'auto',
+      materialFinish: 'matte',
+      materialReplaceScope: 'material-only',
       preserveLighting: true,
       preserveGeometry: true,
     };
@@ -29,8 +33,12 @@ describe('MaterialReplaceConfigPanel', () => {
     expect(html).toContain('精细涂抹');
     expect(html).toContain('目标区域');
     expect(html).toContain('目标材质');
+    expect(html).toContain('纹理尺度');
+    expect(html).toContain('铺贴方向');
+    expect(html).toContain('表面光泽');
+    expect(html).toContain('替换范围');
+    expect(html).toContain('人字拼');
+    expect(html).toContain('材质 + 软装微调');
     expect(html).toContain('上传对应贴图');
-    expect(html).toContain('当前：地面');
-    expect(html).toContain('已选择 1 张');
   });
 });

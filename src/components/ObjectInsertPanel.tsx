@@ -7,9 +7,12 @@ import {
   GenerationStep,
   ObjectInsertItemConfig,
   ObjectInsertDebugMode,
+  ObjectFidelity,
   ObjectInsertHarmonyPriority,
   ObjectInsertPlacementMode,
   ObjectInsertPositionConstraintStrength,
+  ObjectInsertSurface,
+  ObjectInsertType,
   ObjectPlacement,
   StepState,
   UploadedImage,
@@ -25,10 +28,15 @@ type InteractionMode = 'move' | 'resize' | 'rotate';
 
 interface ObjectInsertDraftItem {
   id: string;
-  objectType: string;
+  objectType: ObjectInsertType | string;
   objectLabel: string;
   referenceImages: UploadedImage[];
   placement: ObjectPlacement;
+  objectInsertSurface: ObjectInsertSurface;
+  objectFidelity: ObjectFidelity;
+  enforceContactShadow: boolean;
+  enforceOcclusion: boolean;
+  enforcePerspectiveScale: boolean;
   placementMode: ObjectInsertPlacementMode;
   placementIntent: string;
   extraPrompt: string;
@@ -102,18 +110,41 @@ const objectInsertHarmonyPriorityOptions: Array<{ value: ObjectInsertHarmonyPrio
   { value: 'balance', label: '视觉平衡' },
 ];
 
-const objectTypeOptions: Array<{ value: string; label: string }> = [
-  { value: 'furniture', label: '家具' },
+const objectTypeOptions: Array<{ value: ObjectInsertType; label: string }> = [
+  { value: 'sofa', label: '沙发' },
   { value: 'chair', label: '椅子' },
   { value: 'table', label: '桌子' },
-  { value: 'sofa', label: '沙发' },
-  { value: 'ceiling_light', label: '吊顶灯' },
-  { value: 'coffee_table', label: '茶几' },
-  { value: 'bed', label: '床' },
-  { value: 'cabinet', label: '边柜' },
-  { value: 'rug', label: '地毯' },
-  { value: 'decorative_painting', label: '装饰画' },
+  { value: 'lamp', label: '灯具' },
+  { value: 'plant', label: '绿植' },
+  { value: 'artwork', label: '装饰画' },
+  { value: 'sculpture', label: '雕塑' },
+  { value: 'car', label: '车辆' },
+  { value: 'person', label: '人物' },
+  { value: 'tree', label: '树木' },
+  { value: 'signage', label: '标识' },
   { value: 'custom', label: '自定义' },
+];
+const legacyObjectTypeLabels: Record<string, string> = {
+  furniture: '家具',
+  ceiling_light: '吊顶灯',
+  coffee_table: '茶几',
+  bed: '床',
+  cabinet: '边柜',
+  rug: '地毯',
+  decorative_painting: '装饰画',
+};
+const objectInsertSurfaceOptions: Array<{ value: ObjectInsertSurface; label: string }> = [
+  { value: 'auto', label: '自动' },
+  { value: 'floor', label: '地面' },
+  { value: 'wall', label: '墙面' },
+  { value: 'ceiling', label: '天花' },
+  { value: 'tabletop', label: '桌面' },
+  { value: 'outdoor-ground', label: '室外地面' },
+];
+const objectFidelityOptions: Array<{ value: ObjectFidelity; label: string }> = [
+  { value: 'strict', label: '严格保留' },
+  { value: 'balanced', label: '平衡' },
+  { value: 'loose', label: '自然融合' },
 ];
 const maxObjectItems = 8;
 const maxReferencesPerObject = 6;
@@ -189,6 +220,19 @@ export function ObjectInsertPanel({
   const allowAutoAdjustPosition = readObjectInsertAutoAdjust(state.config, 'allowAutoAdjustPosition');
   const allowAutoAdjustRotation = readObjectInsertAutoAdjust(state.config, 'allowAutoAdjustRotation');
   const allowAutoAdjustScale = readObjectInsertAutoAdjust(state.config, 'allowAutoAdjustScale');
+  const activeObjectType = readActiveObjectType(state.config, activeObjectItem);
+  const activeObjectInsertSurface = readActiveObjectInsertSurface(state.config, activeObjectItem);
+  const activeObjectFidelity = readActiveObjectFidelity(state.config, activeObjectItem);
+  const enforceContactShadow = readObjectInsertBooleanConstraint(state.config, activeObjectItem, 'enforceContactShadow');
+  const enforceOcclusion = readObjectInsertBooleanConstraint(state.config, activeObjectItem, 'enforceOcclusion');
+  const enforcePerspectiveScale = readObjectInsertBooleanConstraint(state.config, activeObjectItem, 'enforcePerspectiveScale');
+  const generationPreflightWarnings = useMemo(() => buildObjectInsertPreflightWarnings({
+    surface: activeObjectInsertSurface,
+    objectImage,
+    placement: activeObjectItem?.placement || placement,
+    sourceWidth,
+    sourceHeight,
+  }), [activeObjectInsertSurface, activeObjectItem?.placement, objectImage, placement, sourceHeight, sourceWidth]);
   const submitPreview = useMemo(() => buildObjectInsertSubmitPreview({
     mode: activeDebugMode,
     sourceImage,
@@ -215,6 +259,12 @@ export function ObjectInsertPanel({
     const nextAllowPosition = patch.allowAutoAdjustPosition ?? allowAutoAdjustPosition;
     const nextAllowRotation = patch.allowAutoAdjustRotation ?? allowAutoAdjustRotation;
     const nextAllowScale = patch.allowAutoAdjustScale ?? allowAutoAdjustScale;
+    const nextObjectType = patch.objectType || activeObjectType;
+    const nextObjectInsertSurface = patch.objectInsertSurface || activeObjectInsertSurface;
+    const nextObjectFidelity = patch.objectFidelity || activeObjectFidelity;
+    const nextEnforceContactShadow = patch.enforceContactShadow ?? enforceContactShadow;
+    const nextEnforceOcclusion = patch.enforceOcclusion ?? enforceOcclusion;
+    const nextEnforcePerspectiveScale = patch.enforcePerspectiveScale ?? enforcePerspectiveScale;
     const nextPositionConstraint = patch.positionConstraintStrength || positionConstraintStrength;
     const nextPlacement = patch.objectPlacement || placement;
     const nestedPatch: ObjectInsertConfigPatch = patch.objectInsert || {};
@@ -227,6 +277,12 @@ export function ObjectInsertPanel({
       allowAutoAdjustPosition: nextAllowPosition,
       allowAutoAdjustRotation: nextAllowRotation,
       allowAutoAdjustScale: nextAllowScale,
+      objectType: nextObjectType,
+      objectInsertSurface: nextObjectInsertSurface,
+      objectFidelity: nextObjectFidelity,
+      enforceContactShadow: nextEnforceContactShadow,
+      enforceOcclusion: nextEnforceOcclusion,
+      enforcePerspectiveScale: nextEnforcePerspectiveScale,
       positionConstraintStrength: nextPositionConstraint,
       objectPlacement: nextPlacement,
       objectInsert: {
@@ -246,14 +302,26 @@ export function ObjectInsertPanel({
         allowAutoAdjustPosition: nextAllowPosition,
         allowAutoAdjustRotation: nextAllowRotation,
         allowAutoAdjustScale: nextAllowScale,
+        objectType: nestedPatch.objectType || nextObjectType,
+        objectInsertSurface: nestedPatch.objectInsertSurface || nextObjectInsertSurface,
+        objectFidelity: nestedPatch.objectFidelity || nextObjectFidelity,
+        enforceContactShadow: nestedPatch.enforceContactShadow ?? nextEnforceContactShadow,
+        enforceOcclusion: nestedPatch.enforceOcclusion ?? nextEnforceOcclusion,
+        enforcePerspectiveScale: nestedPatch.enforcePerspectiveScale ?? nextEnforcePerspectiveScale,
       },
     };
   }, [
     activeObjectItem?.referenceImages,
+    activeObjectFidelity,
+    activeObjectInsertSurface,
+    activeObjectType,
     allowAutoAdjustPosition,
     allowAutoAdjustRotation,
     allowAutoAdjustScale,
     configObjectItems,
+    enforceContactShadow,
+    enforceOcclusion,
+    enforcePerspectiveScale,
     harmonyPriority,
     objectImage?.assetId,
     placement,
@@ -547,12 +615,18 @@ export function ObjectInsertPanel({
         }
         const itemIndex = baseItems.length + newItems.length;
         const basePlacement = sourceImage ? createPlacementForImages(sourceImage, image) : emptyPlacement;
+        const typeLabel = readObjectTypeLabel(activeObjectType);
         const nextItem = {
           ...createDefaultObjectItem(itemIndex),
-          objectType: 'furniture',
-          objectLabel: `家具 ${itemIndex + 1}`,
+          objectType: activeObjectType || 'custom',
+          objectLabel: `${typeLabel} ${itemIndex + 1}`,
           referenceImages: [image],
           placement: sourceImage ? offsetPlacement(basePlacement, sourceWidth, sourceHeight, itemIndex) : basePlacement,
+          objectInsertSurface: activeObjectInsertSurface,
+          objectFidelity: activeObjectFidelity,
+          enforceContactShadow,
+          enforceOcclusion,
+          enforcePerspectiveScale,
           placementMode,
           placementIntent,
         };
@@ -575,7 +649,7 @@ export function ObjectInsertPanel({
           objectItems: toObjectInsertConfigItems(nextItems),
         },
       }));
-      setMessage(`已新增 ${newItems.length} 个家具对象。`);
+      setMessage(`已新增 ${newItems.length} 个植入对象。`);
     } catch (error) {
       setUploadErrors(prev => ({
         ...prev,
@@ -583,8 +657,14 @@ export function ObjectInsertPanel({
       }));
     }
   }, [
+    activeObjectFidelity,
+    activeObjectInsertSurface,
+    activeObjectType,
     buildObjectInsertConfigPatch,
     createPlacementForImages,
+    enforceContactShadow,
+    enforceOcclusion,
+    enforcePerspectiveScale,
     objectItems,
     onUpdateConfig,
     onUpdateMaterialImage,
@@ -702,6 +782,61 @@ export function ObjectInsertPanel({
   ) => {
     onUpdateConfig(buildObjectInsertConfigPatch({
       [key]: value,
+    }));
+  };
+
+  const handleObjectTypeChange = (value: string) => {
+    if (activeObjectItem) {
+      handleUpdateObjectItem(activeObjectItem.id, { objectType: value });
+    }
+    onUpdateConfig(buildObjectInsertConfigPatch({
+      objectType: value,
+      objectInsert: {
+        ...(state.config.objectInsert || {}),
+        objectType: value,
+      },
+    }));
+  };
+
+  const handleObjectSurfaceChange = (value: ObjectInsertSurface) => {
+    if (activeObjectItem) {
+      handleUpdateObjectItem(activeObjectItem.id, { objectInsertSurface: value });
+    }
+    onUpdateConfig(buildObjectInsertConfigPatch({
+      objectInsertSurface: value,
+      objectInsert: {
+        ...(state.config.objectInsert || {}),
+        objectInsertSurface: value,
+      },
+    }));
+  };
+
+  const handleObjectFidelityChange = (value: ObjectFidelity) => {
+    if (activeObjectItem) {
+      handleUpdateObjectItem(activeObjectItem.id, { objectFidelity: value });
+    }
+    onUpdateConfig(buildObjectInsertConfigPatch({
+      objectFidelity: value,
+      objectInsert: {
+        ...(state.config.objectInsert || {}),
+        objectFidelity: value,
+      },
+    }));
+  };
+
+  const handleObjectConstraintChange = (
+    key: 'enforceContactShadow' | 'enforceOcclusion' | 'enforcePerspectiveScale',
+    value: boolean,
+  ) => {
+    if (activeObjectItem) {
+      handleUpdateObjectItem(activeObjectItem.id, { [key]: value });
+    }
+    onUpdateConfig(buildObjectInsertConfigPatch({
+      [key]: value,
+      objectInsert: {
+        ...(state.config.objectInsert || {}),
+        [key]: value,
+      },
     }));
   };
 
@@ -1316,7 +1451,7 @@ export function ObjectInsertPanel({
             <p>原图：{sourceImage ? '1 张' : '未上传'}</p>
             <p>对象数量：{objectItems.length}</p>
             {objectItems.map((item, index) => {
-              const typeLabel = objectTypeOptions.find(option => option.value === item.objectType)?.label || item.objectType;
+              const typeLabel = readObjectTypeLabel(item.objectType);
               return (
                 <p key={item.id} className="truncate">
                   {item.objectLabel || `${typeLabel} ${index + 1}`}：参考图 {item.referenceImages.length} 张
@@ -1326,6 +1461,79 @@ export function ObjectInsertPanel({
           </div>
           {uploadErrors.object ? <p className="mt-2 text-xs leading-5 text-rose-600">{uploadErrors.object}</p> : null}
         </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+          <p className="text-xs font-black text-slate-900">元素配置</p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <label className="block">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">对象类型</span>
+              <select
+                value={activeObjectType}
+                onChange={event => handleObjectTypeChange(event.currentTarget.value)}
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800 outline-none focus:border-blue-300"
+              >
+                {!objectTypeOptions.some(option => option.value === activeObjectType) ? (
+                  <option value={activeObjectType}>{readObjectTypeLabel(activeObjectType)}</option>
+                ) : null}
+                {objectTypeOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">放置面</span>
+              <select
+                value={activeObjectInsertSurface}
+                onChange={event => handleObjectSurfaceChange(event.currentTarget.value as ObjectInsertSurface)}
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800 outline-none focus:border-blue-300"
+              >
+                {objectInsertSurfaceOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="mt-3">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">物体保真度</p>
+            <div className="mt-1 grid grid-cols-3 gap-1.5 rounded-xl bg-white p-1">
+              {objectFidelityOptions.map(option => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => handleObjectFidelityChange(option.value)}
+                  className={`rounded-lg px-2 py-1.5 text-[11px] font-black transition ${
+                    activeObjectFidelity === option.value
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-2 text-xs text-slate-700">
+            <label className="inline-flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
+              <span className="font-bold">生成接触阴影</span>
+              <input type="checkbox" checked={enforceContactShadow} onChange={event => handleObjectConstraintChange('enforceContactShadow', event.currentTarget.checked)} className="h-4 w-4 rounded border-blue-200 text-blue-600" />
+            </label>
+            <label className="inline-flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
+              <span className="font-bold">保持遮挡关系</span>
+              <input type="checkbox" checked={enforceOcclusion} onChange={event => handleObjectConstraintChange('enforceOcclusion', event.currentTarget.checked)} className="h-4 w-4 rounded border-blue-200 text-blue-600" />
+            </label>
+            <label className="inline-flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
+              <span className="font-bold">匹配透视比例</span>
+              <input type="checkbox" checked={enforcePerspectiveScale} onChange={event => handleObjectConstraintChange('enforcePerspectiveScale', event.currentTarget.checked)} className="h-4 w-4 rounded border-blue-200 text-blue-600" />
+            </label>
+          </div>
+        </div>
+
+        {generationPreflightWarnings.length > 0 ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+            <p className="font-black text-amber-900">生成前提示</p>
+            <ul className="mt-1 list-disc space-y-1 pl-4">
+              {generationPreflightWarnings.map(warning => <li key={warning}>{warning}</li>)}
+            </ul>
+          </div>
+        ) : null}
 
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
           <label className="text-xs font-bold text-slate-800" htmlFor="object-insert-prompt">补充提示词</label>
@@ -1793,7 +2001,7 @@ function ObjectItemsPanel({
       <div className="mt-3 space-y-2">
         {items.map((item, index) => {
           const isActive = item.id === activeItemId;
-          const typeLabel = objectTypeOptions.find(option => option.value === item.objectType)?.label || item.objectType;
+          const typeLabel = readObjectTypeLabel(item.objectType);
           const hasPlacement = Boolean(item.placement.width && item.placement.height);
           return (
             <div key={item.id} className={`rounded-xl border bg-white p-2 ${isActive ? 'border-blue-400 ring-2 ring-blue-100' : 'border-slate-200'}`}>
@@ -1803,6 +2011,9 @@ function ObjectItemsPanel({
               </button>
               <div className="mt-2 grid grid-cols-2 gap-2">
                 <select value={item.objectType} onChange={event => onUpdate(item.id, { objectType: event.currentTarget.value })} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-700">
+                  {!objectTypeOptions.some(option => option.value === item.objectType) ? (
+                    <option value={item.objectType}>{readObjectTypeLabel(item.objectType)}</option>
+                  ) : null}
                   {objectTypeOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
                 <input value={item.objectLabel} onChange={event => onUpdate(item.id, { objectLabel: event.currentTarget.value })} placeholder="对象名称" className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-700" />
@@ -2030,10 +2241,15 @@ function createObjectItemId(): string {
 function createDefaultObjectItem(index = 0): ObjectInsertDraftItem {
   return {
     id: createObjectItemId(),
-    objectType: 'furniture',
-    objectLabel: `家具 ${index + 1}`,
+    objectType: 'custom',
+    objectLabel: `对象 ${index + 1}`,
     referenceImages: [],
     placement: emptyPlacement,
+    objectInsertSurface: 'auto',
+    objectFidelity: 'balanced',
+    enforceContactShadow: true,
+    enforceOcclusion: true,
+    enforcePerspectiveScale: true,
     placementMode: 'natural',
     placementIntent: '',
     extraPrompt: '',
@@ -2045,10 +2261,15 @@ function createInitialObjectItems(config: GenerationConfig, legacyObjectImage: U
   if (items && items.length > 0) {
     return items.slice(0, maxObjectItems).map((item, index) => ({
       id: item.id || createObjectItemId(),
-      objectType: item.objectType || 'custom',
+      objectType: item.objectType || readActiveObjectType(config, null),
       objectLabel: item.objectLabel || `对象 ${index + 1}`,
       referenceImages: [],
       placement: sanitizePlacement(item.placement || (index === 0 ? config.objectPlacement : undefined) || emptyPlacement),
+      objectInsertSurface: item.objectInsertSurface || readActiveObjectInsertSurface(config, null),
+      objectFidelity: item.objectFidelity || readActiveObjectFidelity(config, null),
+      enforceContactShadow: item.enforceContactShadow ?? readObjectInsertBooleanConstraint(config, null, 'enforceContactShadow'),
+      enforceOcclusion: item.enforceOcclusion ?? readObjectInsertBooleanConstraint(config, null, 'enforceOcclusion'),
+      enforcePerspectiveScale: item.enforcePerspectiveScale ?? readObjectInsertBooleanConstraint(config, null, 'enforcePerspectiveScale'),
       placementMode: item.placementMode === 'strict' ? 'strict' : 'natural',
       placementIntent: item.placementIntent || '',
       extraPrompt: item.extraPrompt || '',
@@ -2060,6 +2281,12 @@ function createInitialObjectItems(config: GenerationConfig, legacyObjectImage: U
     ...legacyItem,
     referenceImages: legacyObjectImage ? [legacyObjectImage] : [],
     placement: sanitizePlacement(config.objectPlacement || config.objectInsert?.placement || emptyPlacement),
+    objectType: readActiveObjectType(config, null),
+    objectInsertSurface: readActiveObjectInsertSurface(config, null),
+    objectFidelity: readActiveObjectFidelity(config, null),
+    enforceContactShadow: readObjectInsertBooleanConstraint(config, null, 'enforceContactShadow'),
+    enforceOcclusion: readObjectInsertBooleanConstraint(config, null, 'enforceOcclusion'),
+    enforcePerspectiveScale: readObjectInsertBooleanConstraint(config, null, 'enforcePerspectiveScale'),
     placementMode: readObjectInsertPlacementMode(config),
     placementIntent: readObjectInsertPlacementIntent(config),
     extraPrompt: config.objectInsertExtraPrompt || config.objectInsert?.extraPrompt || config.customPrompt || '',
@@ -2184,6 +2411,11 @@ function toObjectInsertConfigItems(items: ObjectInsertDraftItem[]): ObjectInsert
       .filter((assetId): assetId is string => Boolean(assetId))
       .slice(0, maxReferencesPerObject),
     placement: item.placement,
+    objectInsertSurface: item.objectInsertSurface,
+    objectFidelity: item.objectFidelity,
+    enforceContactShadow: item.enforceContactShadow,
+    enforceOcclusion: item.enforceOcclusion,
+    enforcePerspectiveScale: item.enforcePerspectiveScale,
     placementMode: item.placementMode,
     placementIntent: item.placementIntent || undefined,
     extraPrompt: item.extraPrompt || undefined,
@@ -2196,10 +2428,72 @@ function buildObjectInsertSummary(items: ObjectInsertItemConfig[]): string {
     `原图：1 张`,
     `对象数量：${items.length}`,
     ...items.map((item, index) => {
-      const typeLabel = objectTypeOptions.find(option => option.value === item.objectType)?.label || item.objectLabel || item.objectType || `对象 ${index + 1}`;
+      const typeLabel = readObjectTypeLabel(item.objectType || item.objectLabel || `对象 ${index + 1}`);
       return `${item.objectLabel || typeLabel}参考图：${item.referenceAssetIds.length} 张`;
     }),
   ].join('\n');
+}
+
+function readObjectTypeLabel(value: string | undefined): string {
+  if (!value) return '自定义';
+  return objectTypeOptions.find(option => option.value === value)?.label || legacyObjectTypeLabels[value] || value;
+}
+
+function readActiveObjectType(config: GenerationConfig, item: ObjectInsertDraftItem | null): string {
+  return item?.objectType || config.objectInsert?.objectType || config.objectType || 'custom';
+}
+
+function readActiveObjectInsertSurface(config: GenerationConfig, item: ObjectInsertDraftItem | null): ObjectInsertSurface {
+  const value = item?.objectInsertSurface || config.objectInsert?.objectInsertSurface || config.objectInsertSurface;
+  return value === 'floor'
+    || value === 'wall'
+    || value === 'ceiling'
+    || value === 'tabletop'
+    || value === 'outdoor-ground'
+    || value === 'auto'
+    ? value
+    : 'auto';
+}
+
+function readActiveObjectFidelity(config: GenerationConfig, item: ObjectInsertDraftItem | null): ObjectFidelity {
+  const value = item?.objectFidelity || config.objectInsert?.objectFidelity || config.objectFidelity;
+  return value === 'strict' || value === 'balanced' || value === 'loose' ? value : 'balanced';
+}
+
+function readObjectInsertBooleanConstraint(
+  config: GenerationConfig,
+  item: ObjectInsertDraftItem | null,
+  key: 'enforceContactShadow' | 'enforceOcclusion' | 'enforcePerspectiveScale',
+): boolean {
+  const value = item?.[key] ?? config.objectInsert?.[key] ?? config[key];
+  return value === undefined ? true : value !== false;
+}
+
+function buildObjectInsertPreflightWarnings(input: {
+  surface: ObjectInsertSurface;
+  objectImage: UploadedImage | null;
+  placement: ObjectPlacement;
+  sourceWidth: number;
+  sourceHeight: number;
+}): string[] {
+  const warnings: string[] = [];
+  if (input.surface === 'auto') {
+    warnings.push('未明确选择放置面，AI 会自动判断；墙面、天花或桌面物体建议手动指定。');
+  }
+
+  const mimeType = input.objectImage?.type?.toLowerCase() || '';
+  const fileName = input.objectImage?.name?.toLowerCase() || '';
+  if (input.objectImage && (mimeType.includes('jpeg') || fileName.endsWith('.jpg') || fileName.endsWith('.jpeg'))) {
+    warnings.push('物体参考图可能包含复杂背景，建议使用主体清晰、背景简单或透明 PNG 的参考图。');
+  }
+
+  const sourceArea = Math.max(1, input.sourceWidth * input.sourceHeight);
+  const placementArea = Math.max(0, input.placement.width * input.placement.height);
+  const minSide = Math.min(input.placement.width, input.placement.height);
+  if (placementArea > 0 && (placementArea / sourceArea < 0.015 || minSide < 48)) {
+    warnings.push('摆放框偏小，可能影响遮挡、阴影和比例判断，可适当放大后再生成。');
+  }
+  return warnings;
 }
 
 function sanitizePlacement(placement: ObjectPlacement | undefined, sourceWidth = 1200, sourceHeight = 800): ObjectPlacement {

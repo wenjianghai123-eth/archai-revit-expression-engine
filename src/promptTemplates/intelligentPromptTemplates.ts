@@ -151,6 +151,33 @@ const targetMaterialLabels: Record<string, string> = {
   custom: '自定义材质',
 };
 
+const materialPatternScalePrompts: Record<string, string> = {
+  small: 'Texture scale: small. Use fine-grained material texture with compact pattern scale, suitable for close interior detail.',
+  medium: 'Texture scale: medium. Use balanced, realistic material pattern scale that matches architectural surfaces.',
+  large: 'Texture scale: large. Use larger slabs, wider planks, or broader grain/pattern scale while keeping proportions believable.',
+};
+
+const materialDirectionPrompts: Record<string, string> = {
+  auto: 'Tile, wood, or grain direction: auto. Choose the most natural direction according to the target surface, perspective, and existing architecture.',
+  horizontal: 'Tile, wood, or grain direction: horizontal. Align the main pattern horizontally along the target surface.',
+  vertical: 'Tile, wood, or grain direction: vertical. Align the main pattern vertically along the target surface.',
+  diagonal: 'Tile, wood, or grain direction: diagonal. Use a diagonal laying direction with controlled perspective alignment.',
+  herringbone: 'Tile, wood, or grain direction: herringbone. Use a refined herringbone pattern where suitable for the selected material.',
+};
+
+const materialFinishPrompts: Record<string, string> = {
+  matte: 'Surface finish: matte. Keep reflections low, with soft diffuse light response and calm material behavior.',
+  satin: 'Surface finish: satin. Use a gentle soft sheen with subtle reflection and realistic mid-roughness surface behavior.',
+  glossy: 'Surface finish: glossy. Add clearer highlights and controlled reflections while avoiding mirror-like distortion unless the material requires it.',
+  rough: 'Surface finish: rough. Emphasize tactile roughness, micro texture, and low reflectivity with natural shadow breakup.',
+};
+
+const materialReplaceScopePrompts: Record<string, string> = {
+  'material-only': 'Replacement scope: material only. Only change the target material; do not change geometry, furniture shape, furniture layout, object count, camera angle, or spatial structure.',
+  'material-and-soft-decor': 'Replacement scope: material and soft decor refinement. Material changes are primary; allow minor local soft furnishing detail adjustments only when they help the target material feel integrated.',
+  creative: 'Replacement scope: creative optimization. Allow more visible design refinement, color coordination, and local styling improvements while preserving the original geometry, layout, camera, and structural relationships.',
+};
+
 const drawingTypePrompts: Record<string, string> = {
   residential: 'Plan type: residential interior plan.',
   commercial: 'Plan type: commercial space plan.',
@@ -242,6 +269,7 @@ export function readSmartPromptChangeStrength(config?: object, mode?: SmartPromp
 function buildFloorplanPrompt(input: BuildSmartPromptInput, userPrompt: string): string {
   const parts = [
     floorplanBasePrompt,
+    buildFloorplanExpressionControlPrompt(input.config),
     buildStructuredContext(input.config, input.mode),
     input.hasMaterialReferences ? '已提供的材质参考图优先作为颜色、纹理、质感和铺贴方向参考，不要复制参考图中的无关物体、背景或透视构图。' : undefined,
     input.materialNames && input.materialNames.length > 0 ? `材质参考名称：${input.materialNames.join('、')}。` : undefined,
@@ -250,6 +278,30 @@ function buildFloorplanPrompt(input: BuildSmartPromptInput, userPrompt: string):
     '如补充要求与保持原始平面结构冲突，以保持结构、墙体、门窗、家具位置和画布比例为准。',
   ];
   return joinPrompt(parts);
+}
+
+const floorplanRenderModePrompts: Record<string, string> = {
+  'flat-color': 'Floor plan render mode: flat-color. Keep a pure flat colored plan expression; do not generate a perspective rendering, bird-eye view, 3D view, elevation, or interior effect image.',
+  'semi-3d': 'Floor plan render mode: semi-3d. Create a layered semi-3D colored floor plan expression, while preserving the original floor plan structure, walls, openings, furniture outlines, and plan proportions.',
+  presentation: 'Floor plan render mode: presentation. Strengthen presentation-board quality, material hierarchy, graphic completeness, clean composition, and readable spatial expression while preserving the original plan structure.',
+};
+
+const lineworkPreservationPrompts: Record<string, string> = {
+  strict: 'Linework preservation: strict. Extremely strictly preserve the original linework, wall thickness, doors, windows, furniture outlines, room boundaries, and all plan geometry.',
+  high: 'Linework preservation: high. Highly preserve the original linework and plan geometry, allowing only slight visual cleanup and professional graphic beautification.',
+  medium: 'Linework preservation: medium. Keep the structure unchanged while allowing stronger graphic enhancement, clearer fills, material hierarchy, and presentation refinement.',
+};
+
+function buildFloorplanExpressionControlPrompt(config: object | undefined): string {
+  const renderMode = readConfigString(config, 'floorplanRenderMode') || 'semi-3d';
+  const lineworkPreservation = readConfigString(config, 'lineworkPreservation') || 'high';
+  return joinPrompt([
+    floorplanRenderModePrompts[renderMode] || floorplanRenderModePrompts['semi-3d'],
+    lineworkPreservationPrompts[lineworkPreservation] || lineworkPreservationPrompts.high,
+    readConfigValue(config, 'enableLegend') === true ? 'Add a concise graphic legend where appropriate, without covering important plan content.' : undefined,
+    readConfigValue(config, 'enableAreaText') === true ? 'Add clear area or functional text labels where appropriate; keep text minimal, legible, and aligned with the plan.' : undefined,
+    readConfigValue(config, 'enableMaterialLegend') === true ? 'Add a material legend that explains key floor, wall, soft furnishing, and finish categories where appropriate.' : undefined,
+  ]);
 }
 
 function buildStyleRenderPrompt(input: BuildSmartPromptInput, userPrompt: string): string {
@@ -298,10 +350,58 @@ function buildDesignVariantsPrompt(input: BuildSmartPromptInput, userPrompt: str
     designVariantsBasePrompt,
     input.variantName ? `Variant name: ${input.variantName}.` : undefined,
     input.variantStyle ? `Variant style direction: ${input.variantStyle}.` : undefined,
+    buildDesignVariantControlPrompt(input.config),
     buildStructuredContext(input.config, input.mode),
     changeStrengthInstruction(readSmartPromptChangeStrength(input.config, input.mode), input.mode),
     userPrompt ? `User extra requirements: ${userPrompt}` : 'No extra user requirements. Use the selected design direction and structured parameters to create a stable scheme option.',
   ]);
+}
+
+const variantChangeScopePrompts: Record<string, string> = {
+  'material-only': 'Variation change scope: material-only. Only change materials and finishes; preserve furniture layout, lighting composition, structure, camera, and major colors unless required by material realism.',
+  'soft-decoration': 'Variation change scope: soft-decoration. Change loose furniture/decor only, including textiles, artwork, plants, accessories, and movable styling elements.',
+  lighting: 'Variation change scope: lighting. Mainly change lighting atmosphere, fixture glow, brightness balance, and mood while keeping layout and material system stable.',
+  'furniture-layout': 'Variation change scope: furniture-layout. Adjust movable furniture layout while preserving structure, walls, openings, camera, and fixed built-ins.',
+  'color-palette': 'Variation change scope: color-palette. Change color system only; keep forms, layout, materials types, structure, and camera stable.',
+  'full-design': 'Variation change scope: full-design. Create a coherent alternative design while preserving the locked architectural constraints.',
+};
+
+const variantLockPrompts: Record<string, string> = {
+  structure: 'Lock structure: preserve architectural structure, room boundaries, columns, beams, stairs, and built elements.',
+  camera: 'Lock camera: preserve original camera angle, perspective, crop, field of view, and composition.',
+  'walls-openings': 'Lock walls and openings: preserve wall positions, doors, windows, openings, and facade apertures.',
+  'fixed-furniture': 'Lock fixed furniture: preserve built-in cabinets, counters, kitchen systems, wardrobes, and fixed millwork.',
+  'floor-material': 'Lock floor material: preserve the existing floor material, pattern, color, and finish.',
+  ceiling: 'Lock ceiling: preserve ceiling form, height, cornices, coffers, and fixed ceiling design.',
+  'main-color': 'Lock main color: preserve the dominant color family and only make restrained supporting adjustments.',
+};
+
+function buildDesignVariantControlPrompt(config: object | undefined): string {
+  const scope = readDesignVariantChangeScope(config);
+  const locks = readDesignVariantLocks(config);
+  const index = readFiniteNumber(readConfigValue(config, 'variantIndex')) || 0;
+  const note = readDesignVariantStrategyNote(config, index);
+  return joinPrompt([
+    variantChangeScopePrompts[scope] || variantChangeScopePrompts['full-design'],
+    locks.length > 0 ? `Locked items for this variant: ${locks.map(lock => variantLockPrompts[lock]).filter(Boolean).join(' ')}` : undefined,
+    note ? `Variant-specific strategy note: ${note}` : undefined,
+  ]);
+}
+
+function readDesignVariantChangeScope(config: object | undefined): string {
+  const value = readConfigString(config, 'variantChangeScope');
+  return variantChangeScopePrompts[value] ? value : 'full-design';
+}
+
+function readDesignVariantLocks(config: object | undefined): string[] {
+  const locks = readStringArray(config, 'variantLocks');
+  const valid = locks.filter(lock => Boolean(variantLockPrompts[lock]));
+  return valid.length > 0 ? valid : ['structure', 'camera', 'walls-openings'];
+}
+
+function readDesignVariantStrategyNote(config: object | undefined, index: number): string {
+  const notes = readStringArray(config, 'variantStrategyNotes');
+  return (notes[index] || '').trim().slice(0, 200);
 }
 
 function buildMaterialReplacePrompt(input: BuildSmartPromptInput, userPrompt: string): string {
@@ -311,12 +411,20 @@ function buildMaterialReplacePrompt(input: BuildSmartPromptInput, userPrompt: st
   const targetMaterialLabel = targetMaterialLabels[targetMaterialKey] || readSmartMaterial(input.config) || targetMaterialLabels.custom;
   const editMode = readConfigString(input.config, 'editMode') === 'mask' ? 'mask' : 'smart-type';
   const basePrompt = editMode === 'mask' ? materialReplaceMaskPrompt : materialReplaceSmartPrompt;
+  const patternScale = readConfigString(input.config, 'materialPatternScale') || 'medium';
+  const materialDirection = readConfigString(input.config, 'materialDirection') || 'auto';
+  const materialFinish = readConfigString(input.config, 'materialFinish') || 'matte';
+  const replaceScope = readConfigString(input.config, 'materialReplaceScope') || 'material-only';
 
   return joinPrompt([
     basePrompt
       .replace('{targetObjectTypeLabel}', targetObjectTypeLabel)
       .replace('{targetMaterialLabel}', targetMaterialLabel),
     input.hasMaterialReferences ? 'Use the material reference only for texture, color, finish, and material feeling. Do not copy its composition or objects.' : undefined,
+    materialPatternScalePrompts[patternScale] || materialPatternScalePrompts.medium,
+    materialDirectionPrompts[materialDirection] || materialDirectionPrompts.auto,
+    materialFinishPrompts[materialFinish] || materialFinishPrompts.matte,
+    materialReplaceScopePrompts[replaceScope] || materialReplaceScopePrompts['material-only'],
     buildStructuredContext(input.config, input.mode, { includeMaterial: false }),
     changeStrengthInstruction(readSmartPromptChangeStrength(input.config, input.mode), input.mode),
     userPrompt ? `User extra requirements: ${userPrompt}` : 'No extra user requirements. Use the selected target area and material to produce a stable material replacement.',
@@ -369,6 +477,7 @@ function buildObjectInsertPrompt(input: BuildSmartPromptInput, userPrompt: strin
     buildObjectInsertInputModePrompt(debugMode, placementMode),
     buildObjectInsertPositionConstraintPrompt(input.config),
     buildObjectInsertSpatialRelationPrompt(input.config, userPrompt),
+    buildObjectInsertProfessionalConstraintsPrompt(input.config),
     buildStructuredContext(input.config, input.mode),
     buildObjectPlacementPrompt(input.config),
     changeStrengthInstruction(readSmartPromptChangeStrength(input.config, input.mode), input.mode),
@@ -510,6 +619,71 @@ function readObjectInsertHarmonyPriority(config: object | undefined): string {
 function readObjectInsertAutoAdjust(
   config: object | undefined,
   key: 'allowAutoAdjustPosition' | 'allowAutoAdjustRotation' | 'allowAutoAdjustScale',
+): boolean {
+  const nested = readConfigValue(config, 'objectInsert');
+  const nestedValue = isRecord(nested) ? readConfigValue(nested, key) : undefined;
+  const value = typeof nestedValue === 'boolean' ? nestedValue : readConfigValue(config, key);
+  return typeof value === 'boolean' ? value : true;
+}
+
+function buildObjectInsertProfessionalConstraintsPrompt(config: object | undefined): string {
+  const surface = readObjectInsertSurface(config);
+  const fidelity = readObjectFidelity(config);
+  const surfacePrompt = surface === 'floor'
+    ? 'Placement surface: floor. The inserted object must stand on the ground plane with a natural contact shadow.'
+    : surface === 'outdoor-ground'
+      ? 'Placement surface: outdoor ground. The inserted object must stand on the outdoor ground plane with a natural contact shadow.'
+      : surface === 'wall'
+        ? 'Placement surface: wall. The inserted object must be attached to the wall, not floating.'
+        : surface === 'ceiling'
+          ? 'Placement surface: ceiling. The inserted object must hang from or attach to the ceiling.'
+          : surface === 'tabletop'
+            ? 'Placement surface: tabletop. The inserted object must sit on the tabletop, with correct scale and occlusion.'
+            : 'Placement surface: auto. Infer the correct supporting surface from the scene, guide, reference object, and user intent.';
+  const fidelityPrompt = fidelity === 'strict'
+    ? 'Object fidelity: strict. Preserve the reference object shape, material, color, proportions, and distinctive details as closely as possible.'
+    : fidelity === 'loose'
+      ? 'Object fidelity: loose. The object may be adapted moderately for scene harmony while keeping its core type and design intent recognizable.'
+      : 'Object fidelity: balanced. Preserve the object identity while adapting lighting, perspective, scale, and minor material response for natural integration.';
+  return joinPrompt([
+    surfacePrompt,
+    fidelityPrompt,
+    readObjectInsertBooleanConstraint(config, 'enforceContactShadow')
+      ? 'Contact shadow constraint: generate physically plausible contact shadows where the inserted object touches the supporting surface.'
+      : undefined,
+    readObjectInsertBooleanConstraint(config, 'enforceOcclusion')
+      ? 'Occlusion constraint: preserve correct front-back occlusion with existing scene elements; the inserted object must not ignore nearby furniture, walls, railings, plants, or tabletop edges.'
+      : undefined,
+    readObjectInsertBooleanConstraint(config, 'enforcePerspectiveScale')
+      ? 'Perspective scale constraint: match the original camera perspective, horizon, vanishing direction, object scale, and distance cues.'
+      : undefined,
+  ]);
+}
+
+function readObjectInsertSurface(config: object | undefined): string {
+  const nested = readConfigValue(config, 'objectInsert');
+  const nestedValue = isRecord(nested) ? readConfigString(nested, 'objectInsertSurface') : '';
+  const value = nestedValue || readConfigString(config, 'objectInsertSurface');
+  return value === 'floor'
+    || value === 'wall'
+    || value === 'ceiling'
+    || value === 'tabletop'
+    || value === 'outdoor-ground'
+    || value === 'auto'
+    ? value
+    : 'auto';
+}
+
+function readObjectFidelity(config: object | undefined): string {
+  const nested = readConfigValue(config, 'objectInsert');
+  const nestedValue = isRecord(nested) ? readConfigString(nested, 'objectFidelity') : '';
+  const value = nestedValue || readConfigString(config, 'objectFidelity');
+  return value === 'strict' || value === 'balanced' || value === 'loose' ? value : 'balanced';
+}
+
+function readObjectInsertBooleanConstraint(
+  config: object | undefined,
+  key: 'enforceContactShadow' | 'enforceOcclusion' | 'enforcePerspectiveScale',
 ): boolean {
   const nested = readConfigValue(config, 'objectInsert');
   const nestedValue = isRecord(nested) ? readConfigValue(nested, key) : undefined;

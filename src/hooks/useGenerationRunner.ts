@@ -14,7 +14,7 @@ import {
   uploadImageAsset,
   type CreditBalance,
 } from '../lib/api';
-import { GenerationBatchItem, GenerationConfig, GenerationHistoryItem, GenerationJobStep, GenerationMode, GenerationProvider, GenerationResultOption, GenerationRunStateOverride, GenerationStep, ObjectInsertDebugMode, ObjectInsertHarmonyPriority, ObjectInsertItemConfig, ObjectInsertPlacementMode, ObjectInsertPositionConstraintStrength, StepState, UploadedImage, VariantStyleKey } from '../types';
+import { GenerationBatchItem, GenerationConfig, GenerationHistoryItem, GenerationJobStep, GenerationMode, GenerationProvider, GenerationResultOption, GenerationRunStateOverride, GenerationStep, ObjectFidelity, ObjectInsertDebugMode, ObjectInsertHarmonyPriority, ObjectInsertItemConfig, ObjectInsertPlacementMode, ObjectInsertPositionConstraintStrength, ObjectInsertSurface, StepState, UploadedImage, VariantStyleKey } from '../types';
 import { getGenerationCreditCost } from '../utils/generationCredits';
 import { isGenerationJobRunningStatus, normalizeGenerationJobResult } from '../utils/generationJobResult';
 
@@ -323,6 +323,12 @@ export function useGenerationRunner({
         const objectInsertAllowAutoAdjustPosition = isObjectInsert ? readObjectInsertAutoAdjust(stateAtStart.config, 'allowAutoAdjustPosition') : true;
         const objectInsertAllowAutoAdjustRotation = isObjectInsert ? readObjectInsertAutoAdjust(stateAtStart.config, 'allowAutoAdjustRotation') : true;
         const objectInsertAllowAutoAdjustScale = isObjectInsert ? readObjectInsertAutoAdjust(stateAtStart.config, 'allowAutoAdjustScale') : true;
+        const objectInsertObjectType = isObjectInsert ? readObjectInsertType(stateAtStart.config) : 'custom';
+        const objectInsertSurface = isObjectInsert ? readObjectInsertSurface(stateAtStart.config) : 'auto';
+        const objectInsertFidelity = isObjectInsert ? readObjectFidelity(stateAtStart.config) : 'balanced';
+        const objectInsertEnforceContactShadow = isObjectInsert ? readObjectInsertBooleanConstraint(stateAtStart.config, 'enforceContactShadow') : true;
+        const objectInsertEnforceOcclusion = isObjectInsert ? readObjectInsertBooleanConstraint(stateAtStart.config, 'enforceOcclusion') : true;
+        const objectInsertEnforcePerspectiveScale = isObjectInsert ? readObjectInsertBooleanConstraint(stateAtStart.config, 'enforcePerspectiveScale') : true;
         const panoramaReferenceAssetIds = isPanoramaQuickRender
           ? readConfigStringArray(stateAtStart.config.panoramaReferenceAssetIds).slice(0, 6)
           : [];
@@ -354,6 +360,12 @@ export function useGenerationRunner({
               placementIntent: objectInsertPlacementIntent,
               harmonyPriority: objectInsertHarmonyPriority,
               fusionPreference: objectInsertFusionPreference,
+              objectType: objectInsertObjectType,
+              objectInsertSurface,
+              objectFidelity: objectInsertFidelity,
+              enforceContactShadow: objectInsertEnforceContactShadow,
+              enforceOcclusion: objectInsertEnforceOcclusion,
+              enforcePerspectiveScale: objectInsertEnforcePerspectiveScale,
               allowAutoAdjustPosition: objectInsertAllowAutoAdjustPosition,
               allowAutoAdjustRotation: objectInsertAllowAutoAdjustRotation,
               allowAutoAdjustScale: objectInsertAllowAutoAdjustScale,
@@ -475,6 +487,12 @@ export function useGenerationRunner({
               placementIntent: objectInsertPlacementIntent,
               harmonyPriority: objectInsertHarmonyPriority,
               fusionPreference: objectInsertFusionPreference,
+              objectType: objectInsertObjectType,
+              objectInsertSurface,
+              objectFidelity: objectInsertFidelity,
+              enforceContactShadow: objectInsertEnforceContactShadow,
+              enforceOcclusion: objectInsertEnforceOcclusion,
+              enforcePerspectiveScale: objectInsertEnforcePerspectiveScale,
               allowAutoAdjustPosition: objectInsertAllowAutoAdjustPosition,
               allowAutoAdjustRotation: objectInsertAllowAutoAdjustRotation,
               allowAutoAdjustScale: objectInsertAllowAutoAdjustScale,
@@ -519,6 +537,9 @@ export function useGenerationRunner({
               : isFloorplanMultiPlan
                 ? floorplanVariantPlans.map(plan => plan.variantName)
                 : undefined,
+            variantChangeScope: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.variantChangeScope || 'full-design' : undefined,
+            variantLocks: currentStep === GenerationStep.DesignVariants ? resolveVariantLocks(stateAtStart.config) : undefined,
+            variantStrategyNotes: currentStep === GenerationStep.DesignVariants ? resolveVariantStrategyNotes(stateAtStart.config) : undefined,
             customStyleLabel: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.customStyleLabel : undefined,
             planColorizeBatchEnabled: isPlanColorize ? planColorizeStyles.length > 1 || stateAtStart.config.planColorizeBatchEnabled === true : undefined,
             planColorizeStyleIds: isPlanColorize ? planColorizeStyles.map(style => style.id) : undefined,
@@ -531,6 +552,11 @@ export function useGenerationRunner({
             floorplanOutputMode: currentStep === GenerationStep.FloorplanTo3D ? stateAtStart.config.floorplanOutputMode || 'single' : undefined,
             floorplanVariantType: isFloorplanMultiPlan ? stateAtStart.config.floorplanVariantType || 'material_style' : undefined,
             floorplanVariantFocus: isFloorplanMultiPlan ? stateAtStart.config.floorplanVariantFocus || 'material_style' : undefined,
+            floorplanRenderMode: currentStep === GenerationStep.FloorplanTo3D ? stateAtStart.config.floorplanRenderMode || 'semi-3d' : undefined,
+            lineworkPreservation: currentStep === GenerationStep.FloorplanTo3D ? stateAtStart.config.lineworkPreservation || 'high' : undefined,
+            enableLegend: currentStep === GenerationStep.FloorplanTo3D ? stateAtStart.config.enableLegend === true : undefined,
+            enableAreaText: currentStep === GenerationStep.FloorplanTo3D ? stateAtStart.config.enableAreaText === true : undefined,
+            enableMaterialLegend: currentStep === GenerationStep.FloorplanTo3D ? stateAtStart.config.enableMaterialLegend === true : undefined,
             floorplanStyleTemplateIds: isFloorplanMultiPlan ? floorplanVariantPlans.map(plan => plan.selectedStyleId).filter((id): id is string => Boolean(id)) : undefined,
             floorplanStyleTemplateNames: isFloorplanMultiPlan ? floorplanVariantPlans.map(plan => plan.selectedStyleName).filter((name): name is string => Boolean(name)) : undefined,
             floorplanLayoutVariantIds: isFloorplanMultiPlan ? floorplanVariantPlans.map(plan => plan.layoutVariantId).filter((id): id is string => Boolean(id)) : undefined,
@@ -575,6 +601,12 @@ export function useGenerationRunner({
             placementIntent: isObjectInsert ? objectInsertPlacementIntent : undefined,
             harmonyPriority: isObjectInsert ? objectInsertHarmonyPriority : undefined,
             objectInsertFusionPreference: isObjectInsert ? objectInsertFusionPreference : undefined,
+            objectType: isObjectInsert ? objectInsertObjectType : undefined,
+            objectInsertSurface: isObjectInsert ? objectInsertSurface : undefined,
+            objectFidelity: isObjectInsert ? objectInsertFidelity : undefined,
+            enforceContactShadow: isObjectInsert ? objectInsertEnforceContactShadow : undefined,
+            enforceOcclusion: isObjectInsert ? objectInsertEnforceOcclusion : undefined,
+            enforcePerspectiveScale: isObjectInsert ? objectInsertEnforcePerspectiveScale : undefined,
             allowAutoAdjustPosition: isObjectInsert ? objectInsertAllowAutoAdjustPosition : undefined,
             allowAutoAdjustRotation: isObjectInsert ? objectInsertAllowAutoAdjustRotation : undefined,
             allowAutoAdjustScale: isObjectInsert ? objectInsertAllowAutoAdjustScale : undefined,
@@ -597,6 +629,10 @@ export function useGenerationRunner({
             customPrompt: stateAtStart.config.customPrompt,
             targetObjectType: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.targetObjectType : undefined,
             targetMaterial: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.targetMaterial : undefined,
+            materialPatternScale: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.materialPatternScale || 'medium' : undefined,
+            materialDirection: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.materialDirection || 'auto' : undefined,
+            materialFinish: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.materialFinish || 'matte' : undefined,
+            materialReplaceScope: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.materialReplaceScope || 'material-only' : undefined,
             customMaterialPrompt: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.customMaterialPrompt : undefined,
             preserveLighting: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.preserveLighting ?? true : undefined,
             preserveGeometry: stateAtStart.config.preserveGeometry ?? true,
@@ -758,6 +794,10 @@ export function useGenerationRunner({
                   : currentStep === GenerationStep.PlanColorize
                     ? readMetadataString(result.metadata, 'batchGroupId')
                     : undefined,
+                designDirection: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'designDirection') : undefined,
+                changeScopeLabel: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'changeScopeLabel') : undefined,
+                lockedItemsLabel: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'lockedItemsLabel') : undefined,
+                strategyNote: currentStep === GenerationStep.DesignVariants ? readMetadataString(result.metadata, 'strategyNote') : undefined,
               }));
           const selectedResult = generationResults.find(result => result.isSelected) || generationResults[0];
           const providerWarnings: string[] = [];
@@ -1200,6 +1240,11 @@ async function runFloorplanMultiPlanJobs({
       floorplanOutputMode: 'multi',
       floorplanVariantType: stateAtStart.config.floorplanVariantType || 'material_style',
       floorplanVariantFocus: stateAtStart.config.floorplanVariantFocus || 'material_style',
+      floorplanRenderMode: stateAtStart.config.floorplanRenderMode || 'semi-3d',
+      lineworkPreservation: stateAtStart.config.lineworkPreservation || 'high',
+      enableLegend: stateAtStart.config.enableLegend === true,
+      enableAreaText: stateAtStart.config.enableAreaText === true,
+      enableMaterialLegend: stateAtStart.config.enableMaterialLegend === true,
       batchGroupId,
       variantIndex: plan.variantIndex,
       schemeName: plan.variantName,
@@ -1564,6 +1609,11 @@ function readObjectInsertItems(config: GenerationConfig): ObjectInsertItemConfig
         placement: item.placement,
         placementPreviewAssetId: item.placementPreviewAssetId,
         placementMaskAssetId: item.placementMaskAssetId,
+        objectInsertSurface: item.objectInsertSurface || readObjectInsertSurface(config),
+        objectFidelity: item.objectFidelity || readObjectFidelity(config),
+        enforceContactShadow: item.enforceContactShadow ?? readObjectInsertBooleanConstraint(config, 'enforceContactShadow'),
+        enforceOcclusion: item.enforceOcclusion ?? readObjectInsertBooleanConstraint(config, 'enforceOcclusion'),
+        enforcePerspectiveScale: item.enforcePerspectiveScale ?? readObjectInsertBooleanConstraint(config, 'enforcePerspectiveScale'),
         placementMode: item.placementMode,
         placementIntent: item.placementIntent,
         extraPrompt: item.extraPrompt,
@@ -1579,12 +1629,17 @@ function readObjectInsertItems(config: GenerationConfig): ObjectInsertItemConfig
   if (referenceAssetIds.length === 0) return [];
   return [{
     id: 'legacy-object-1',
-    objectType: 'custom',
+    objectType: readObjectInsertType(config),
     objectLabel: '对象 1',
     referenceAssetIds,
     placement: config.objectInsert?.placement || config.objectPlacement,
     placementPreviewAssetId: config.objectInsert?.previewAssetId || config.objectInsert?.guideAssetId || config.placementPreviewAssetId || config.placementGuideAssetId,
     placementMaskAssetId: config.objectInsert?.maskAssetId || config.placementMaskAssetId || config.maskAssetId,
+    objectInsertSurface: readObjectInsertSurface(config),
+    objectFidelity: readObjectFidelity(config),
+    enforceContactShadow: readObjectInsertBooleanConstraint(config, 'enforceContactShadow'),
+    enforceOcclusion: readObjectInsertBooleanConstraint(config, 'enforceOcclusion'),
+    enforcePerspectiveScale: readObjectInsertBooleanConstraint(config, 'enforcePerspectiveScale'),
     placementMode: config.objectInsert?.placementMode || config.placementMode,
     placementIntent: config.objectInsert?.placementIntent || config.placementIntent,
     extraPrompt: config.objectInsert?.extraPrompt || config.objectInsertExtraPrompt || config.customPrompt,
@@ -1644,6 +1699,36 @@ function readObjectInsertCandidateCount(config: GenerationConfig): 1 | 2 | 3 {
 function readObjectInsertAutoAdjust(
   config: GenerationConfig,
   key: 'allowAutoAdjustPosition' | 'allowAutoAdjustRotation' | 'allowAutoAdjustScale',
+): boolean {
+  const value = config.objectInsert?.[key] ?? config[key];
+  return value === undefined ? true : value !== false;
+}
+
+function readObjectInsertType(config: GenerationConfig): string {
+  const value = config.objectInsert?.objectType || config.objectType;
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : 'custom';
+}
+
+function readObjectInsertSurface(config: GenerationConfig): ObjectInsertSurface {
+  const value = config.objectInsert?.objectInsertSurface || config.objectInsertSurface;
+  return value === 'floor'
+    || value === 'wall'
+    || value === 'ceiling'
+    || value === 'tabletop'
+    || value === 'outdoor-ground'
+    || value === 'auto'
+    ? value
+    : 'auto';
+}
+
+function readObjectFidelity(config: GenerationConfig): ObjectFidelity {
+  const value = config.objectInsert?.objectFidelity || config.objectFidelity;
+  return value === 'strict' || value === 'balanced' || value === 'loose' ? value : 'balanced';
+}
+
+function readObjectInsertBooleanConstraint(
+  config: GenerationConfig,
+  key: 'enforceContactShadow' | 'enforceOcclusion' | 'enforcePerspectiveScale',
 ): boolean {
   const value = config.objectInsert?.[key] ?? config[key];
   return value === undefined ? true : value !== false;
@@ -1814,6 +1899,18 @@ function resolveVariantNames(config: GenerationConfig) {
   const batchCount = config.batchCount === 2 || config.batchCount === 8 ? config.batchCount : 4;
   const names = Array.isArray(config.variantNames) ? [...config.variantNames] : [];
   return Array.from({ length: batchCount }, (_, index) => names[index] || readVariantLabel(index));
+}
+
+function resolveVariantLocks(config: GenerationConfig) {
+  const allowed = ['structure', 'camera', 'walls-openings', 'fixed-furniture', 'floor-material', 'ceiling', 'main-color'];
+  const locks = Array.isArray(config.variantLocks) ? config.variantLocks : ['structure', 'camera', 'walls-openings'];
+  return locks.filter((lock): lock is NonNullable<GenerationConfig['variantLocks']>[number] => allowed.includes(lock));
+}
+
+function resolveVariantStrategyNotes(config: GenerationConfig) {
+  const batchCount = config.batchCount === 2 || config.batchCount === 8 ? config.batchCount : 4;
+  const notes = Array.isArray(config.variantStrategyNotes) ? config.variantStrategyNotes : [];
+  return Array.from({ length: batchCount }, (_, index) => notes[index] || '');
 }
 
 function readVariantLabel(index: number): string {

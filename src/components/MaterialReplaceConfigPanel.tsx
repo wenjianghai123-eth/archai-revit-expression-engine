@@ -58,6 +58,33 @@ const strengthOptions = [
   ['strong', '明显'],
 ] as const;
 
+const patternScaleOptions = [
+  ['small', '小'],
+  ['medium', '中'],
+  ['large', '大'],
+] as const;
+
+const materialDirectionOptions = [
+  ['auto', '自动'],
+  ['horizontal', '横向'],
+  ['vertical', '竖向'],
+  ['diagonal', '斜铺'],
+  ['herringbone', '人字拼'],
+] as const;
+
+const materialFinishOptions = [
+  ['matte', '哑光'],
+  ['satin', '柔光'],
+  ['glossy', '亮面'],
+  ['rough', '粗糙'],
+] as const;
+
+const replaceScopeOptions = [
+  ['material-only', '仅换材质'],
+  ['material-and-soft-decor', '材质 + 软装微调'],
+  ['creative', '创意优化'],
+] as const;
+
 export function MaterialReplaceConfigPanel({
   config,
   materialReferenceCount = 0,
@@ -66,6 +93,10 @@ export function MaterialReplaceConfigPanel({
   const editMode = config.editMode === 'mask' ? 'mask' : 'smart-type';
   const activeObject = config.targetObjectType;
   const activeStrength = config.strength === 'subtle' || config.strength === 'strong' ? config.strength : 'balanced';
+  const activePatternScale = config.materialPatternScale || 'medium';
+  const activeDirection = config.materialDirection || 'auto';
+  const activeFinish = config.materialFinish || 'matte';
+  const activeReplaceScope = config.materialReplaceScope || 'material-only';
   const recommendations = activeObject ? recommendedMaterials[activeObject] || [] : [];
   const selectedObjectLabel = targetObjectOptions.find(([value]) => value === activeObject)?.[1] || '未选择';
 
@@ -153,6 +184,86 @@ export function MaterialReplaceConfigPanel({
                 config.targetMaterial === value
                   ? 'border-blue-600 bg-blue-50 text-blue-700'
                   : 'border-slate-200 bg-white text-slate-600 hover:border-blue-200'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">纹理尺度</label>
+        <div className="grid grid-cols-3 gap-2">
+          {patternScaleOptions.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => onUpdateConfig({ materialPatternScale: value })}
+              className={`rounded-lg border px-3 py-2 text-[10px] font-bold ${
+                activePatternScale === value
+                  ? 'border-emerald-600 bg-white text-emerald-700'
+                  : 'border-slate-200 bg-white/80 text-slate-500'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">铺贴方向</label>
+        <div className="grid grid-cols-2 gap-2">
+          {materialDirectionOptions.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => onUpdateConfig({ materialDirection: value })}
+              className={`rounded-lg border px-3 py-2 text-[10px] font-bold ${
+                activeDirection === value
+                  ? 'border-emerald-600 bg-white text-emerald-700'
+                  : 'border-slate-200 bg-white/80 text-slate-500'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">表面光泽</label>
+        <div className="grid grid-cols-4 gap-2">
+          {materialFinishOptions.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => onUpdateConfig({ materialFinish: value })}
+              className={`rounded-lg border px-2.5 py-2 text-[10px] font-bold ${
+                activeFinish === value
+                  ? 'border-emerald-600 bg-white text-emerald-700'
+                  : 'border-slate-200 bg-white/80 text-slate-500'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">替换范围</label>
+        <div className="grid grid-cols-1 gap-2">
+          {replaceScopeOptions.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => onUpdateConfig({ materialReplaceScope: value })}
+              className={`rounded-lg border px-3 py-2 text-xs font-bold ${
+                activeReplaceScope === value
+                  ? 'border-emerald-600 bg-white text-emerald-700'
+                  : 'border-slate-200 bg-white/80 text-slate-500'
               }`}
             >
               {label}

@@ -85,6 +85,8 @@ function FloorplanMultiPlanControls({ config, onUpdateConfig }: FloorplanMultiPl
   const outputMode = config.floorplanOutputMode || 'single';
   const variantType = config.floorplanVariantType || 'material_style';
   const variantFocus = config.floorplanVariantFocus || (variantType === 'mixed' ? 'both' : variantType);
+  const renderMode = config.floorplanRenderMode || 'semi-3d';
+  const lineworkPreservation = config.lineworkPreservation || 'high';
   const batchCount = resolveFloorplanBatchCount(config.batchCount);
   const count = outputMode === 'multi' ? batchCount : 1;
 
@@ -119,6 +121,30 @@ function FloorplanMultiPlanControls({ config, onUpdateConfig }: FloorplanMultiPl
       <div className="grid grid-cols-2 gap-2">
         <MiniOption active={outputMode !== 'multi'} label="三维彩平表达" onClick={() => updateMultiPlan({ floorplanOutputMode: 'single', batchCount: 1 })} />
         <MiniOption active={outputMode === 'multi'} label="多方案输出" onClick={() => updateMultiPlan({ floorplanOutputMode: 'multi', batchCount: config.batchCount === 2 || config.batchCount === 6 ? config.batchCount : 4 })} />
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">表达类型</p>
+        <div className="grid grid-cols-3 gap-2">
+          <MiniOption active={renderMode === 'flat-color'} label="彩色平面图" onClick={() => updateMultiPlan({ floorplanRenderMode: 'flat-color' })} />
+          <MiniOption active={renderMode === 'semi-3d'} label="三维彩平" onClick={() => updateMultiPlan({ floorplanRenderMode: 'semi-3d' })} />
+          <MiniOption active={renderMode === 'presentation'} label="汇报表达图" onClick={() => updateMultiPlan({ floorplanRenderMode: 'presentation' })} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">线稿保持</p>
+        <div className="grid grid-cols-3 gap-2">
+          <MiniOption active={lineworkPreservation === 'strict'} label="严格保留" onClick={() => updateMultiPlan({ lineworkPreservation: 'strict' })} />
+          <MiniOption active={lineworkPreservation === 'high'} label="高度保留" onClick={() => updateMultiPlan({ lineworkPreservation: 'high' })} />
+          <MiniOption active={lineworkPreservation === 'medium'} label="适度美化" onClick={() => updateMultiPlan({ lineworkPreservation: 'medium' })} />
+        </div>
+      </div>
+
+      <div className="grid gap-2">
+        <FloorplanCheckbox checked={Boolean(config.enableLegend)} label="添加图例" onChange={checked => updateMultiPlan({ enableLegend: checked })} />
+        <FloorplanCheckbox checked={Boolean(config.enableAreaText)} label="添加面积/功能文字" onChange={checked => updateMultiPlan({ enableAreaText: checked })} />
+        <FloorplanCheckbox checked={Boolean(config.enableMaterialLegend)} label="添加材质图例" onChange={checked => updateMultiPlan({ enableMaterialLegend: checked })} />
       </div>
 
       {outputMode === 'multi' ? (
@@ -173,6 +199,20 @@ function MiniOption({ active, label, onClick }: { active: boolean; label: string
     >
       {label}
     </button>
+  );
+}
+
+function FloorplanCheckbox({ checked, label, onChange }: { checked: boolean; label: string; onChange: (checked: boolean) => void }) {
+  return (
+    <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600">
+      <span>{label}</span>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={event => onChange(event.currentTarget.checked)}
+        className="h-4 w-4 rounded border-slate-300 text-blue-600"
+      />
+    </label>
   );
 }
 

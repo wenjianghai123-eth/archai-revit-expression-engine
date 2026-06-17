@@ -2,6 +2,11 @@ interface FloorplanPromptInput {
   userPrompt?: string;
   hasMaterialReferences?: boolean;
   materialNames?: string[];
+  floorplanRenderMode?: 'flat-color' | 'semi-3d' | 'presentation';
+  lineworkPreservation?: 'strict' | 'high' | 'medium';
+  enableLegend?: boolean;
+  enableAreaText?: boolean;
+  enableMaterialLegend?: boolean;
 }
 
 export const DEFAULT_FLOORPLAN_COLOR_PROMPT = [
@@ -18,6 +23,18 @@ const MATERIAL_REFERENCE_PROMPT = [
   '不要复制材质参考图中的无关物体、背景、透视关系或拍摄构图。',
 ].join('\n');
 
+const FLOORPLAN_RENDER_MODE_PROMPTS: Record<NonNullable<FloorplanPromptInput['floorplanRenderMode']>, string> = {
+  'flat-color': 'Floor plan render mode: flat-color. Keep a pure flat colored plan expression; do not generate a perspective rendering, bird-eye view, 3D view, elevation, or interior effect image.',
+  'semi-3d': 'Floor plan render mode: semi-3d. Create a layered semi-3D colored floor plan expression, while preserving the original floor plan structure.',
+  presentation: 'Floor plan render mode: presentation. Strengthen presentation-board quality, material hierarchy, graphic completeness, and readable spatial expression.',
+};
+
+const LINEWORK_PRESERVATION_PROMPTS: Record<NonNullable<FloorplanPromptInput['lineworkPreservation']>, string> = {
+  strict: 'Linework preservation: strict. Extremely strictly preserve the original linework, wall thickness, doors, windows, furniture outlines, room boundaries, and all plan geometry.',
+  high: 'Linework preservation: high. Highly preserve the original linework and plan geometry, allowing only slight visual cleanup and professional graphic beautification.',
+  medium: 'Linework preservation: medium. Keep the structure unchanged while allowing stronger graphic enhancement and clearer material hierarchy.',
+};
+
 export function buildFloorplanColorPrompt(input?: string | FloorplanPromptInput): string {
   const normalizedInput = typeof input === 'string' ? { userPrompt: input } : input || {};
   const trimmedUserPrompt = normalizedInput.userPrompt?.trim();
@@ -26,6 +43,17 @@ export function buildFloorplanColorPrompt(input?: string | FloorplanPromptInput)
     .filter(Boolean);
 
   const pieces = [DEFAULT_FLOORPLAN_COLOR_PROMPT];
+
+  if (normalizedInput.floorplanRenderMode || normalizedInput.lineworkPreservation || normalizedInput.enableLegend || normalizedInput.enableAreaText || normalizedInput.enableMaterialLegend) {
+    pieces.push(
+      '',
+      FLOORPLAN_RENDER_MODE_PROMPTS[normalizedInput.floorplanRenderMode || 'semi-3d'],
+      LINEWORK_PRESERVATION_PROMPTS[normalizedInput.lineworkPreservation || 'high'],
+    );
+    if (normalizedInput.enableLegend) pieces.push('Add a concise graphic legend where appropriate, without covering important plan content.');
+    if (normalizedInput.enableAreaText) pieces.push('Add clear area or functional text labels where appropriate; keep text minimal, legible, and aligned with the plan.');
+    if (normalizedInput.enableMaterialLegend) pieces.push('Add a material legend that explains key floor, wall, soft furnishing, and finish categories where appropriate.');
+  }
 
   if (normalizedInput.hasMaterialReferences) {
     pieces.push('', MATERIAL_REFERENCE_PROMPT);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildFloorplanColorPrompt, DEFAULT_FLOORPLAN_COLOR_PROMPT } from './floorplanPrompts';
+import { buildSmartPrompt } from '../promptTemplates/intelligentPromptTemplates';
 
 describe('buildFloorplanColorPrompt', () => {
   it('builds a complete interior colored floorplan default prompt', () => {
@@ -57,5 +58,46 @@ describe('buildFloorplanColorPrompt', () => {
 
     expect(prompt).toContain('用户补充要求：\n强化玄关石材层次。');
     expect(prompt).toContain('室内平面彩平图');
+  });
+});
+describe('floorplan expression controls', () => {
+  it('adds floorplan render mode, linework preservation, and legend controls', () => {
+    const prompt = buildFloorplanColorPrompt({
+      floorplanRenderMode: 'flat-color',
+      lineworkPreservation: 'strict',
+      enableLegend: true,
+      enableAreaText: true,
+      enableMaterialLegend: true,
+    });
+
+    expect(prompt).toContain('Floor plan render mode: flat-color.');
+    expect(prompt).toContain('pure flat colored plan expression');
+    expect(prompt).toContain('Linework preservation: strict.');
+    expect(prompt).toContain('Extremely strictly preserve the original linework');
+    expect(prompt).toContain('Add a concise graphic legend');
+    expect(prompt).toContain('Add clear area or functional text labels');
+    expect(prompt).toContain('Add a material legend');
+  });
+
+  it('keeps smart floorplan defaults stable while adding explicit controls', () => {
+    const defaultPrompt = buildSmartPrompt({
+      mode: 'floorplan',
+      config: {},
+    });
+    const controlledPrompt = buildSmartPrompt({
+      mode: 'floorplan',
+      config: {
+        floorplanRenderMode: 'presentation',
+        lineworkPreservation: 'medium',
+        enableLegend: true,
+      },
+    });
+
+    expect(defaultPrompt).toContain('Floor plan render mode: semi-3d.');
+    expect(defaultPrompt).toContain('Linework preservation: high.');
+    expect(controlledPrompt).toContain('Floor plan render mode: presentation.');
+    expect(controlledPrompt).toContain('Strengthen presentation-board quality');
+    expect(controlledPrompt).toContain('Linework preservation: medium.');
+    expect(controlledPrompt).toContain('Add a concise graphic legend');
   });
 });

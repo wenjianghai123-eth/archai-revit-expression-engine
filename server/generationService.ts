@@ -413,6 +413,10 @@ async function processGenerationJob(jobId: string): Promise<void> {
               variantLabel: readVariantLabel(index),
               variantStyle,
               stylePackId: typeof job.config.stylePackId === 'string' ? job.config.stylePackId : 'interior-common',
+              designDirection: buildDesignVariantDirectionLabel(job.config, index, variantStyle),
+              changeScopeLabel: readVariantChangeScopeLabel(job.config),
+              lockedItemsLabel: readVariantLocksLabel(job.config),
+              strategyNote: readVariantStrategyNote(job.config, index),
               batchCount,
             }
           : job.mode === 'plan-colorize'
@@ -465,6 +469,10 @@ async function processGenerationJob(jobId: string): Promise<void> {
                 mode: 'material-replace',
                 targetObjectType: typeof job.config.targetObjectType === 'string' ? job.config.targetObjectType : undefined,
                 targetMaterial: typeof job.config.targetMaterial === 'string' ? job.config.targetMaterial : undefined,
+                materialPatternScale: typeof job.config.materialPatternScale === 'string' ? job.config.materialPatternScale : undefined,
+                materialDirection: typeof job.config.materialDirection === 'string' ? job.config.materialDirection : undefined,
+                materialFinish: typeof job.config.materialFinish === 'string' ? job.config.materialFinish : undefined,
+                materialReplaceScope: typeof job.config.materialReplaceScope === 'string' ? job.config.materialReplaceScope : undefined,
               }
           : job.mode === 'panorama-roam-render'
             ? {
@@ -494,6 +502,12 @@ async function processGenerationJob(jobId: string): Promise<void> {
                 placementMode: readObjectInsertJobConfig(job).placementMode,
                 placementIntent: readObjectInsertJobConfig(job).placementIntent,
                 harmonyPriority: readObjectInsertJobConfig(job).harmonyPriority,
+                objectType: readObjectInsertJobConfig(job).objectType,
+                objectInsertSurface: readObjectInsertJobConfig(job).objectInsertSurface,
+                objectFidelity: readObjectInsertJobConfig(job).objectFidelity,
+                enforceContactShadow: readObjectInsertJobConfig(job).enforceContactShadow,
+                enforceOcclusion: readObjectInsertJobConfig(job).enforceOcclusion,
+                enforcePerspectiveScale: readObjectInsertJobConfig(job).enforcePerspectiveScale,
                 allowAutoAdjustPosition: readObjectInsertJobConfig(job).allowAutoAdjustPosition,
                 allowAutoAdjustRotation: readObjectInsertJobConfig(job).allowAutoAdjustRotation,
                 allowAutoAdjustScale: readObjectInsertJobConfig(job).allowAutoAdjustScale,
@@ -1783,6 +1797,13 @@ function buildProviderInputForVariant(
       variantName: resolveVariantName(job.config, index),
       variantStyle,
       stylePackId: typeof job.config.stylePackId === 'string' ? job.config.stylePackId : 'interior-common',
+      variantChangeScope: readVariantChangeScope(job.config),
+      variantLocks: readVariantLocks(job.config),
+      variantStrategyNotes: readVariantStrategyNotes(job.config, batchCount),
+      designDirection: buildDesignVariantDirectionLabel(job.config, index, variantStyle),
+      changeScopeLabel: readVariantChangeScopeLabel(job.config),
+      lockedItemsLabel: readVariantLocksLabel(job.config),
+      strategyNote: readVariantStrategyNote(job.config, index),
       batchCount,
     },
   };
@@ -1812,6 +1833,7 @@ function buildFloorplanMultiPlanPrompt(
       },
     }),
     `This is 3D colored floor plan option ${index + 1} of ${batchCount}: ${plan?.variantName || readVariantLabel(index)}.`,
+    buildFloorplanExpressionControlPrompt(job.config),
     'Common requirement: preserve the original floor plan structure, walls, doors, windows, openings, functional zoning, circulation logic, room proportions, and main spatial relationships. Do not change the basic architectural layout.',
     'Convert the plan into a clear, complete, design-oriented 3D colored floor plan with realistic materials, furniture, soft furnishing, lighting, and spatial layering.',
   ];
@@ -1842,8 +1864,38 @@ function buildFloorplanMultiPlanPrompt(
     pieces.push('Priority: material style, color system, lighting, and atmosphere should change visibly.');
   }
 
-  pieces.push('Do not output a collage, comparison sheet, text, labels, watermark, dimensions, or UI elements.');
+  pieces.push(job.config.enableLegend === true || job.config.enableAreaText === true || job.config.enableMaterialLegend === true
+    ? 'Do not output a collage, comparison sheet, watermark, dimensions, or UI elements. Any legend or labels must be minimal, useful, and part of the floor plan presentation.'
+    : 'Do not output a collage, comparison sheet, text, labels, watermark, dimensions, or UI elements.');
   return pieces.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+}
+
+const floorplanRenderModePromptMap: Record<string, string> = {
+  'flat-color': 'Floor plan render mode: flat-color. Keep a pure flat colored plan expression; do not generate a perspective rendering, bird-eye view, 3D view, elevation, or interior effect image.',
+  'semi-3d': 'Floor plan render mode: semi-3d. Create a layered semi-3D colored floor plan expression, while preserving the original floor plan structure, walls, openings, furniture outlines, and plan proportions.',
+  presentation: 'Floor plan render mode: presentation. Strengthen presentation-board quality, material hierarchy, graphic completeness, clean composition, and readable spatial expression while preserving the original plan structure.',
+};
+
+const lineworkPreservationPromptMap: Record<string, string> = {
+  strict: 'Linework preservation: strict. Extremely strictly preserve the original linework, wall thickness, doors, windows, furniture outlines, room boundaries, and all plan geometry.',
+  high: 'Linework preservation: high. Highly preserve the original linework and plan geometry, allowing only slight visual cleanup and professional graphic beautification.',
+  medium: 'Linework preservation: medium. Keep the structure unchanged while allowing stronger graphic enhancement, clearer fills, material hierarchy, and presentation refinement.',
+};
+
+function buildFloorplanExpressionControlPrompt(config: Record<string, unknown>): string {
+  const renderMode = typeof config.floorplanRenderMode === 'string' && floorplanRenderModePromptMap[config.floorplanRenderMode]
+    ? config.floorplanRenderMode
+    : 'semi-3d';
+  const lineworkPreservation = typeof config.lineworkPreservation === 'string' && lineworkPreservationPromptMap[config.lineworkPreservation]
+    ? config.lineworkPreservation
+    : 'high';
+  return [
+    floorplanRenderModePromptMap[renderMode],
+    lineworkPreservationPromptMap[lineworkPreservation],
+    config.enableLegend === true ? 'Add a concise graphic legend where appropriate, without covering important plan content.' : '',
+    config.enableAreaText === true ? 'Add clear area or functional text labels where appropriate; keep text minimal, legible, and aligned with the plan.' : '',
+    config.enableMaterialLegend === true ? 'Add a material legend that explains key floor, wall, soft furnishing, and finish categories where appropriate.' : '',
+  ].filter(part => part.trim().length > 0).join(' ');
 }
 
 async function mapWithConcurrency<T, R>(
@@ -1904,13 +1956,108 @@ function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount:
     : variantStylePrompts[style] || variantStylePrompts['modern-minimal'];
   const parts = [
     buildSmartPromptForJob(job, qualityMode, {
+      config: {
+        ...job.config,
+        variantIndex: index,
+        variantName: resolveVariantName(job.config, index),
+        variantStyle: style,
+      },
       variantStyle: customStyle,
       variantName: resolveVariantName(job.config, index),
     }),
     strategy === 'same-style' ? sameStyleVariantPrompts[index] : undefined,
+    buildDesignVariantControlPrompt(job.config, index),
     `This is ${readVariantLabel(index)} of ${batchCount}.`,
   ];
   return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+}
+
+const variantChangeScopePromptMap: Record<string, string> = {
+  'material-only': 'Variation change scope: material-only. Only change materials and finishes; preserve furniture layout, lighting composition, structure, camera, and major colors unless required by material realism.',
+  'soft-decoration': 'Variation change scope: soft-decoration. Change loose furniture, decor, textiles, artwork, plants, and styling accessories only; preserve structure and fixed elements.',
+  lighting: 'Variation change scope: lighting. Mainly change lighting atmosphere, fixture glow, brightness balance, and mood; keep materials, layout, and structure mostly stable.',
+  'furniture-layout': 'Variation change scope: furniture-layout. Adjust movable furniture layout while preserving structure, walls, openings, camera, and fixed built-ins.',
+  'color-palette': 'Variation change scope: color-palette. Change the color system only; keep forms, layout, materials types, structure, and camera stable.',
+  'full-design': 'Variation change scope: full-design. Create a coherent alternative design while preserving the locked architectural constraints.',
+};
+
+const variantChangeScopeLabels: Record<string, string> = {
+  'material-only': '只变材质',
+  'soft-decoration': '只变软装',
+  lighting: '只变灯光',
+  'furniture-layout': '调整家具布局',
+  'color-palette': '调整色彩体系',
+  'full-design': '整体方案',
+};
+
+const variantLockPromptMap: Record<string, string> = {
+  structure: 'Lock structure: preserve architectural structure, room boundaries, columns, beams, stairs, and built elements.',
+  camera: 'Lock camera: preserve original camera angle, perspective, crop, field of view, and composition.',
+  'walls-openings': 'Lock walls and openings: preserve wall positions, doors, windows, openings, and facade apertures.',
+  'fixed-furniture': 'Lock fixed furniture: preserve built-in cabinets, counters, kitchen systems, wardrobes, and fixed millwork.',
+  'floor-material': 'Lock floor material: preserve the existing floor material, pattern, color, and finish.',
+  ceiling: 'Lock ceiling: preserve ceiling form, height, cornices, coffers, and fixed ceiling design.',
+  'main-color': 'Lock main color: preserve the dominant color family and only make restrained supporting adjustments.',
+};
+
+const variantLockLabels: Record<string, string> = {
+  structure: '结构',
+  camera: '视角',
+  'walls-openings': '门窗',
+  'fixed-furniture': '固定家具',
+  'floor-material': '地面',
+  ceiling: '天花',
+  'main-color': '主色调',
+};
+
+function buildDesignVariantControlPrompt(config: Record<string, unknown>, index: number): string {
+  const scope = readVariantChangeScope(config);
+  const locks = readVariantLocks(config);
+  const note = readVariantStrategyNote(config, index);
+  return [
+    variantChangeScopePromptMap[scope] || variantChangeScopePromptMap['full-design'],
+    locks.length > 0 ? `Locked items for this variant: ${locks.map(lock => variantLockPromptMap[lock]).filter(Boolean).join(' ')}` : undefined,
+    note ? `Variant-specific strategy note: ${note}` : undefined,
+  ].filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+}
+
+function readVariantChangeScope(config: Record<string, unknown>): string {
+  return typeof config.variantChangeScope === 'string' && variantChangeScopePromptMap[config.variantChangeScope]
+    ? config.variantChangeScope
+    : 'full-design';
+}
+
+function readVariantLocks(config: Record<string, unknown>): string[] {
+  const allowed = new Set(Object.keys(variantLockPromptMap));
+  const locks = Array.isArray(config.variantLocks) ? config.variantLocks : ['structure', 'camera', 'walls-openings'];
+  return locks.filter((lock): lock is string => typeof lock === 'string' && allowed.has(lock));
+}
+
+function readVariantStrategyNotes(config: Record<string, unknown>, batchCount: number): string[] {
+  const notes = Array.isArray(config.variantStrategyNotes) ? config.variantStrategyNotes : [];
+  return Array.from({ length: batchCount }, (_, index) => typeof notes[index] === 'string' ? notes[index].trim().slice(0, 200) : '');
+}
+
+function readVariantStrategyNote(config: Record<string, unknown>, index: number): string {
+  const notes = Array.isArray(config.variantStrategyNotes) ? config.variantStrategyNotes : [];
+  const value = notes[index];
+  return typeof value === 'string' ? value.trim().slice(0, 200) : '';
+}
+
+function readVariantChangeScopeLabel(config: Record<string, unknown>): string {
+  return variantChangeScopeLabels[readVariantChangeScope(config)] || variantChangeScopeLabels['full-design'];
+}
+
+function readVariantLocksLabel(config: Record<string, unknown>): string {
+  const locks = readVariantLocks(config);
+  return locks.length > 0 ? locks.map(lock => variantLockLabels[lock] || lock).join('、') : '无';
+}
+
+function buildDesignVariantDirectionLabel(config: Record<string, unknown>, index: number, style: string): string {
+  const customStyle = style === 'custom' && typeof config.customStyleLabel === 'string' && config.customStyleLabel.trim().length > 0
+    ? config.customStyleLabel.trim()
+    : style;
+  return `${resolveVariantName(config, index)} / ${customStyle}`;
 }
 
 function buildPlanColorizeBatchPrompt(job: GenerationJob, index: number, batchCount: number, style: PlanColorizeStyleOption, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
@@ -2177,6 +2324,8 @@ type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
 type ObjectInsertPlacementMode = 'strict' | 'natural';
 type ObjectInsertHarmonyPriority = 'layout' | 'style' | 'balance';
 type ObjectInsertFusionPreference = 'conservative' | 'balanced' | 'design';
+type ObjectInsertSurface = 'floor' | 'wall' | 'ceiling' | 'tabletop' | 'outdoor-ground' | 'auto';
+type ObjectFidelity = 'strict' | 'balanced' | 'loose';
 
 interface ObjectInsertItemForJob {
   id: string;
@@ -2185,6 +2334,11 @@ interface ObjectInsertItemForJob {
   referenceAssetIds: string[];
   placementPreviewAssetId?: string;
   placementMaskAssetId?: string;
+  objectInsertSurface: ObjectInsertSurface;
+  objectFidelity: ObjectFidelity;
+  enforceContactShadow: boolean;
+  enforceOcclusion: boolean;
+  enforcePerspectiveScale: boolean;
   placementMode: ObjectInsertPlacementMode;
   placementIntent: string;
   extraPrompt: string;
@@ -2280,6 +2434,40 @@ function readObjectInsertAutoAdjust(
   return value === undefined ? true : value !== false;
 }
 
+function readObjectInsertType(config: Record<string, unknown>): string {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = readConfigStringValue(nested.objectType) || readConfigStringValue(config.objectType);
+  return value || 'custom';
+}
+
+function readObjectInsertSurface(config: Record<string, unknown>): ObjectInsertSurface {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = readConfigStringValue(nested.objectInsertSurface) || readConfigStringValue(config.objectInsertSurface);
+  return value === 'floor'
+    || value === 'wall'
+    || value === 'ceiling'
+    || value === 'tabletop'
+    || value === 'outdoor-ground'
+    || value === 'auto'
+    ? value
+    : 'auto';
+}
+
+function readObjectFidelity(config: Record<string, unknown>): ObjectFidelity {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = readConfigStringValue(nested.objectFidelity) || readConfigStringValue(config.objectFidelity);
+  return value === 'strict' || value === 'balanced' || value === 'loose' ? value : 'balanced';
+}
+
+function readObjectInsertBooleanConstraint(
+  config: Record<string, unknown>,
+  key: 'enforceContactShadow' | 'enforceOcclusion' | 'enforcePerspectiveScale',
+): boolean {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested[key] === 'boolean' ? nested[key] : typeof config[key] === 'boolean' ? config[key] : undefined;
+  return value === undefined ? true : value !== false;
+}
+
 function objectInsertIncludesObject(mode: ObjectInsertDebugMode): boolean {
   return mode !== 'source_prompt';
 }
@@ -2301,6 +2489,12 @@ function readObjectInsertJobConfig(job: GenerationJob): {
   placementMode: ObjectInsertPlacementMode;
   placementIntent: string;
   harmonyPriority: ObjectInsertHarmonyPriority;
+  objectType: string;
+  objectInsertSurface: ObjectInsertSurface;
+  objectFidelity: ObjectFidelity;
+  enforceContactShadow: boolean;
+  enforceOcclusion: boolean;
+  enforcePerspectiveScale: boolean;
   allowAutoAdjustPosition: boolean;
   allowAutoAdjustRotation: boolean;
   allowAutoAdjustScale: boolean;
@@ -2321,6 +2515,12 @@ function readObjectInsertJobConfig(job: GenerationJob): {
     placementMode: readObjectInsertPlacementMode(job.config),
     placementIntent: readObjectInsertPlacementIntent(job.config),
     harmonyPriority: readObjectInsertHarmonyPriority(job.config),
+    objectType: readObjectInsertType(job.config),
+    objectInsertSurface: readObjectInsertSurface(job.config),
+    objectFidelity: readObjectFidelity(job.config),
+    enforceContactShadow: readObjectInsertBooleanConstraint(job.config, 'enforceContactShadow'),
+    enforceOcclusion: readObjectInsertBooleanConstraint(job.config, 'enforceOcclusion'),
+    enforcePerspectiveScale: readObjectInsertBooleanConstraint(job.config, 'enforcePerspectiveScale'),
     allowAutoAdjustPosition: readObjectInsertAutoAdjust(job.config, 'allowAutoAdjustPosition'),
     allowAutoAdjustRotation: readObjectInsertAutoAdjust(job.config, 'allowAutoAdjustRotation'),
     allowAutoAdjustScale: readObjectInsertAutoAdjust(job.config, 'allowAutoAdjustScale'),
@@ -2344,6 +2544,11 @@ function readObjectInsertItemsFromJob(job: GenerationJob): ObjectInsertItemForJo
       referenceAssetIds: readStringArray(item.referenceAssetIds).slice(0, 6),
       placementPreviewAssetId: readConfigStringValue(item.placementPreviewAssetId),
       placementMaskAssetId: readConfigStringValue(item.placementMaskAssetId),
+      objectInsertSurface: readObjectInsertSurface({ ...job.config, objectInsert: { ...nested, ...item } }),
+      objectFidelity: readObjectFidelity({ ...job.config, objectInsert: { ...nested, ...item } }),
+      enforceContactShadow: typeof item.enforceContactShadow === 'boolean' ? item.enforceContactShadow : readObjectInsertBooleanConstraint(job.config, 'enforceContactShadow'),
+      enforceOcclusion: typeof item.enforceOcclusion === 'boolean' ? item.enforceOcclusion : readObjectInsertBooleanConstraint(job.config, 'enforceOcclusion'),
+      enforcePerspectiveScale: typeof item.enforcePerspectiveScale === 'boolean' ? item.enforcePerspectiveScale : readObjectInsertBooleanConstraint(job.config, 'enforcePerspectiveScale'),
       placementMode: item.placementMode === 'strict' ? 'strict' : item.placementMode === 'natural' ? 'natural' : readObjectInsertPlacementMode(job.config),
       placementIntent: readConfigStringValue(item.placementIntent),
       extraPrompt: readConfigStringValue(item.extraPrompt),
@@ -2365,6 +2570,11 @@ function readObjectInsertItemsFromJob(job: GenerationJob): ObjectInsertItemForJo
     referenceAssetIds: uniqueReferenceAssetIds,
     placementPreviewAssetId: legacy.previewAssetId,
     placementMaskAssetId: legacy.maskAssetId,
+    objectInsertSurface: legacy.objectInsertSurface,
+    objectFidelity: legacy.objectFidelity,
+    enforceContactShadow: legacy.enforceContactShadow,
+    enforceOcclusion: legacy.enforceOcclusion,
+    enforcePerspectiveScale: legacy.enforcePerspectiveScale,
     placementMode: legacy.placementMode,
     placementIntent: legacy.placementIntent,
     extraPrompt: readConfigStringValue(nested.extraPrompt) || readConfigStringValue(job.config.objectInsertExtraPrompt) || readConfigStringValue(job.config.customPrompt),
@@ -2432,6 +2642,11 @@ function buildObjectInsertInputOrder(
     objectType: item.objectType,
     objectLabel: item.objectLabel,
     referenceImageIndexes: needsObject ? item.referenceAssetIds.map(() => imageIndex++) : [],
+    objectInsertSurface: item.objectInsertSurface,
+    objectFidelity: item.objectFidelity,
+    enforceContactShadow: item.enforceContactShadow,
+    enforceOcclusion: item.enforceOcclusion,
+    enforcePerspectiveScale: item.enforcePerspectiveScale,
     placementMode: item.placementMode,
     placementIntent: item.placementIntent,
     extraPrompt: item.extraPrompt,
