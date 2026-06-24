@@ -18,6 +18,7 @@ interface InputImagePanelProps {
   onUpdateMaterialImage: (image: UploadedImage | null) => void;
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
   onRemoveFurnitureReference: (id: string) => void;
+  onFileDrop: (target: UploadTarget, files: FileList) => void;
 }
 
 export function InputImagePanel({
@@ -34,11 +35,12 @@ export function InputImagePanel({
   onUpdateMaterialImage,
   onUpdateConfig,
   onRemoveFurnitureReference,
+  onFileDrop,
 }: InputImagePanelProps) {
   return (
     <>
       <div className="mb-4 flex items-center justify-between">
-        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">输入配置</span>
+        <span className="workspace-section-title">素材上传</span>
         <span className="rounded bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-600">{modeLabel(step)}</span>
       </div>
 
@@ -50,6 +52,7 @@ export function InputImagePanel({
           uploadErrors={uploadErrors}
           onUploadClick={onUploadClick}
           onClear={() => onUpdateInputImage(null)}
+          onFileDrop={onFileDrop}
         />
         <EditTargetControls step={step} config={config} onUpdateConfig={onUpdateConfig} />
         {showFurnitureReferences ? (
@@ -69,6 +72,7 @@ export function InputImagePanel({
             uploadErrors={uploadErrors}
             onUploadClick={onUploadClick}
             onClear={() => onUpdateMaterialImage(null)}
+            onFileDrop={onFileDrop}
           />
         ) : null}
       </div>
@@ -84,9 +88,10 @@ interface UploadFieldProps {
   uploadErrors: UploadErrors;
   onUploadClick: (target: UploadTarget) => void;
   onClear: () => void;
+  onFileDrop: (target: UploadTarget, files: FileList) => void;
 }
 
-function UploadField({ target, image, title, optional = false, uploadErrors, onUploadClick, onClear }: UploadFieldProps) {
+function UploadField({ target, image, title, optional = false, uploadErrors, onUploadClick, onClear, onFileDrop }: UploadFieldProps) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
@@ -96,6 +101,11 @@ function UploadField({ target, image, title, optional = false, uploadErrors, onU
       <button
         type="button"
         onClick={() => onUploadClick(target)}
+        onDragOver={event => event.preventDefault()}
+        onDrop={event => {
+          event.preventDefault();
+          if (event.dataTransfer.files.length > 0) onFileDrop(target, event.dataTransfer.files);
+        }}
         className="relative flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 text-slate-400 transition hover:border-blue-200 hover:bg-blue-50/40"
       >
         {image ? (
@@ -116,7 +126,8 @@ function UploadField({ target, image, title, optional = false, uploadErrors, onU
         ) : (
           <div className="flex flex-col items-center gap-2 text-xs font-bold">
             <Upload className="h-7 w-7" />
-            点击上传 PNG / JPG / WEBP
+            <span>点击上传或拖拽图片到此处</span>
+            <span className="text-[10px] font-semibold text-slate-400">PNG / JPG / WEBP</span>
           </div>
         )}
       </button>

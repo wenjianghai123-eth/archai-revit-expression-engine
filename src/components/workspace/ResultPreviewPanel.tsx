@@ -68,7 +68,7 @@ export function ResultPreviewPanel({
   };
 
   return (
-    <main className={className || 'flex min-w-0 flex-1 flex-col'}>
+    <main className={className || 'workspace-canvas mx-3 flex min-w-0 flex-1 flex-col overflow-hidden'}>
       {showToolbar ? (
         <div className="flex h-12 items-center justify-between border-b border-slate-200 bg-white/70 px-4">
           <div className="flex overflow-hidden rounded-lg bg-slate-200 p-0.5">
@@ -91,7 +91,7 @@ export function ResultPreviewPanel({
       ) : null}
 
       <div className={showToolbar ? 'min-h-0 flex-1 p-5' : 'h-full'}>
-        <div className={`relative ${showToolbar ? 'h-full overflow-hidden rounded border border-slate-200 bg-white shadow-2xl' : 'h-full'}`}>
+        <div className={`relative ${showToolbar ? 'workspace-result-frame h-full overflow-hidden border bg-white shadow-2xl' : 'h-full'}`}>
           {originalPreviewImage && !state.isGenerating ? (
             <div className="absolute right-3 top-3 z-10 flex flex-col items-end gap-1">
               {dimensionsText ? (

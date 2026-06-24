@@ -262,12 +262,12 @@ export function FreeReferenceImagePanel({
   };
 
   return (
-    <section className="flex min-h-0 flex-1 overflow-hidden bg-slate-100 p-4">
+    <section className="workspace-surface flex min-h-0 flex-1 overflow-hidden p-4">
       <input ref={sourceInputRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleUpload('source', event.currentTarget.files); event.currentTarget.value = ''; }} />
       <input ref={referenceInputRef} type="file" accept={acceptedImageTypes} multiple className="hidden" onChange={event => { void handleUpload('reference', event.currentTarget.files); event.currentTarget.value = ''; }} />
 
       <div className="mx-auto grid w-full max-w-6xl min-h-0 gap-4 lg:grid-cols-[360px_1fr]">
-        <aside className="space-y-3 overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 custom-scrollbar">
+        <aside className="glass-panel space-y-3 overflow-y-auto rounded-3xl border border-white/60 p-4 custom-scrollbar">
           <div>
             <h2 className="text-lg font-black text-slate-950">自由参考生图</h2>
             <p className="mt-1 text-xs font-semibold text-slate-500">原图是主要基础图；参考图可选，上传后用于风格、材质、构图、氛围和细节参考。</p>
@@ -319,7 +319,7 @@ export function FreeReferenceImagePanel({
           </div>
         </aside>
 
-        <main className="min-h-0 overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <main className="workspace-canvas min-h-0 overflow-hidden rounded-3xl border border-white/60">
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
             <div>
               <p className="text-sm font-bold text-slate-900">结果图</p>

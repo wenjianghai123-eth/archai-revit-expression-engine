@@ -123,7 +123,7 @@ export function PlanColorizePanel({
   };
 
   return (
-    <section className="min-w-0 flex-1 overflow-y-auto bg-slate-100 p-4 custom-scrollbar">
+    <section className="workspace-surface min-w-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
       <div className="mx-auto grid max-w-7xl gap-4 xl:grid-cols-[340px_1fr]">
         <aside className="space-y-4">
           <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">

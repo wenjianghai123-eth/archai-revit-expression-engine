@@ -71,7 +71,7 @@ export function Sidebar({
 
   return (
     <>
-      <div className="hidden h-screen w-72 shrink-0 flex-col border-r border-white/10 bg-[#070b16] text-white shadow-2xl lg:flex">
+      <div className="hidden h-screen w-72 shrink-0 flex-col border-r border-white/10 bg-[linear-gradient(180deg,#071a1d_0%,#0b2428_58%,#102f35_100%)] text-white shadow-2xl lg:flex">
         <div className="border-b border-white/10 p-6">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl bg-white shadow-lg shadow-blue-950/40">
@@ -228,7 +228,7 @@ function NavItem({
       onClick={onClick}
       className={`group relative flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left transition-all ${
         active
-          ? 'bg-gradient-to-r from-blue-600/90 to-indigo-600/90 text-white shadow-lg shadow-blue-950/40'
+          ? 'bg-gradient-to-r from-teal-600/90 to-cyan-700/90 text-white shadow-lg shadow-teal-950/40'
           : 'text-slate-400 hover:bg-white/5 hover:text-white'
       }`}
     >
@@ -237,9 +237,9 @@ function NavItem({
       </div>
       <span className="min-w-0">
         <span className="block text-sm font-bold">{tab.label}</span>
-        <span className={`mt-0.5 block text-xs ${active ? 'text-blue-100' : 'text-slate-500'}`}>{tab.desc}</span>
+        <span className={`mt-0.5 block text-xs ${active ? 'text-teal-50' : 'text-slate-500'}`}>{tab.desc}</span>
       </span>
-      {active && <motion.div layoutId="active-pill" className="absolute -left-4 h-8 w-1 rounded-r-full bg-indigo-300" />}
+      {active && <motion.div layoutId="active-pill" className="absolute -left-4 h-8 w-1 rounded-r-full bg-teal-200" />}
     </button>
   );
 }
@@ -276,18 +276,18 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
   };
 
   return (
-    <div className="shrink-0 border-b border-slate-200 bg-white">
+    <div className="workspace-topbar shrink-0">
       <div className="flex items-center justify-between gap-4 px-4 py-3 md:px-5">
         <div>
           <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.28em] text-blue-600">
             <Sparkles className="h-3.5 w-3.5" />
-            烛照AI 创作平台
+            ARCHITECTURE AI STUDIO
           </div>
-          <h1 className="mt-1 text-lg font-bold tracking-tight text-slate-950 md:text-xl">烛照AI 生成工作台</h1>
-          <p className="mt-0.5 text-xs text-slate-500">面向广田设计流程的 AI 方案表达工具</p>
+          <h1 className="mt-1 text-lg font-bold tracking-tight text-slate-950 md:text-xl">AI 设计工作台</h1>
+          <p className="mt-0.5 text-xs text-slate-500">选择功能、上传素材并输入提示词，快速生成建筑与室内设计表达结果。</p>
         </div>
-        <div className="hidden rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-bold text-slate-500 md:block">
-          <span>广田内部版 / Express Backend</span>
+        <div className="hidden rounded-full border border-white/70 bg-white/55 px-4 py-2 text-xs font-bold text-slate-600 shadow-sm backdrop-blur md:block">
+          <span className="text-teal-700">当前功能：{readStepperFeatureLabel(currentStep)}</span>
           <span className="mx-2 text-slate-300">/</span>
           <span>本次消耗：{estimatedCreditCost === null ? '-' : estimatedCreditCost} 算力点</span>
           {creditBalance !== null ? (
@@ -299,7 +299,7 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
         </div>
       </div>
 
-      <div className="grid gap-3 px-4 pb-3 md:grid-cols-3 xl:grid-cols-6 md:px-5">
+      <div className="workspace-feature-grid grid gap-3 px-4 pb-3 md:grid-cols-3 xl:grid-cols-6 md:px-5">
         {visibleFeatures.map((feature) => {
           const isActive = currentStep === feature.step;
           const Icon = feature.icon;
@@ -308,10 +308,10 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
             <button
               key={feature.id}
               onClick={() => handleSelectFeature(feature)}
-              className={`group relative min-h-20 overflow-hidden rounded-2xl border p-3 text-left transition-all ${
+              className={`workspace-feature-card group relative min-h-20 overflow-hidden border p-3 text-left transition-all ${
                 isActive
-                  ? 'border-blue-200 bg-gradient-to-br from-blue-50 to-indigo-50 shadow-lg shadow-blue-100/60'
-                  : 'border-slate-200 bg-white hover:border-blue-200 hover:bg-slate-50'
+                  ? 'workspace-feature-card-active'
+                  : ''
               }`}
             >
               <img
@@ -343,7 +343,7 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
               ) : null}
               <div className="relative flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className={`mb-2 flex h-8 w-8 items-center justify-center rounded-xl ${isActive ? 'bg-gradient-to-br from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-100' : 'bg-slate-100 text-slate-600'}`}>
+                  <div className={`mb-2 flex h-8 w-8 items-center justify-center rounded-xl ${isActive ? 'bg-gradient-to-br from-teal-600 to-cyan-700 text-white shadow-lg shadow-teal-100' : 'bg-white/70 text-slate-600 shadow-sm'}`}>
                     <Icon className="h-4 w-4" />
                   </div>
                   <h2 className="truncate text-sm font-bold text-slate-950">{feature.title}</h2>
@@ -353,7 +353,7 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
               {isActive && (
                 <motion.div
                   layoutId="active-step-card"
-                  className="absolute bottom-0 left-0 h-1 w-full bg-gradient-to-r from-blue-600 to-indigo-600"
+                  className="absolute bottom-0 left-0 h-1 w-full bg-gradient-to-r from-teal-500 to-cyan-600"
                 />
               )}
             </button>
@@ -362,7 +362,7 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
         <button
           type="button"
           onClick={() => setIsFeaturePickerOpen(true)}
-          className="group relative min-h-20 overflow-hidden rounded-2xl border border-dashed border-blue-200 bg-blue-50/40 p-3 text-left transition hover:border-blue-300 hover:bg-blue-50"
+          className="workspace-feature-card group relative min-h-20 overflow-hidden border border-dashed p-3 text-left transition"
         >
           <div className="relative flex h-full items-center gap-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm">
@@ -486,4 +486,17 @@ function FeaturePicker({
       </div>
     </div>
   );
+}
+
+function readStepperFeatureLabel(step: GenerationStep): string {
+  if (step === GenerationStep.FloorplanTo3D) return '平面彩平';
+  if (step === GenerationStep.FreeReferenceImage) return '自由参考生图';
+  if (step === GenerationStep.MaterialReplace) return '材质软装替换';
+  if (step === GenerationStep.ObjectInsert) return '元素植入';
+  if (step === GenerationStep.DesignVariants) return '方案变体';
+  if (step === GenerationStep.PlanColorize) return '图纸智能表达';
+  if (step === GenerationStep.ModelSnapshotRender) return '白模快渲';
+  if (step === GenerationStep.PanoramaQuickRender) return '全景快渲';
+  if (step === GenerationStep.StyleRender) return '风格渲染';
+  return '局部修饰';
 }

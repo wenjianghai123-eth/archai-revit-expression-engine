@@ -817,7 +817,7 @@ export function PanoramaQuickRenderPanel({
         }}
       />
 
-      <section className="min-w-0 flex-1 overflow-y-auto bg-slate-100 p-4 custom-scrollbar">
+      <section className="workspace-surface min-w-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
         <div className="grid min-h-full gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
           <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">

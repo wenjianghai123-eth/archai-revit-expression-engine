@@ -1470,11 +1470,11 @@ export function ObjectInsertPanel({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">
+    <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden p-3">
       <input ref={sourceInputRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleUploadImage('source', event.currentTarget.files); event.currentTarget.value = ''; }} />
       <input ref={objectInputRef} type="file" accept={acceptedImageTypes} multiple className="hidden" onChange={event => { void handleUploadObjectReferences(event.currentTarget.files); event.currentTarget.value = ''; }} />
 
-      <aside className="flex w-80 shrink-0 flex-col gap-3 overflow-y-auto border-r border-slate-200 bg-white p-4 custom-scrollbar">
+      <aside className="workspace-side-panel glass-panel flex w-80 shrink-0 flex-col gap-3 overflow-y-auto rounded-l-3xl border border-white/60 p-4 custom-scrollbar">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-blue-600">Object Insert</p>
           <h2 className="mt-1 text-xl font-black text-slate-950">元素植入</h2>
@@ -1830,7 +1830,7 @@ export function ObjectInsertPanel({
         )}
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col p-4">
+      <main className="workspace-canvas mx-3 flex min-w-0 flex-1 flex-col p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-lg font-black text-slate-950">摆放画布</h3>
@@ -1930,7 +1930,7 @@ export function ObjectInsertPanel({
         </div>
       </main>
 
-      <aside className="flex w-80 shrink-0 flex-col gap-3 overflow-y-auto border-l border-slate-200 bg-white p-4 custom-scrollbar">
+      <aside className="workspace-side-panel glass-panel flex w-80 shrink-0 flex-col gap-3 overflow-y-auto rounded-r-3xl border border-white/60 p-4 custom-scrollbar">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-slate-400">Placement</p>
           <h3 className="mt-1 text-lg font-black text-slate-950">摆放参数</h3>

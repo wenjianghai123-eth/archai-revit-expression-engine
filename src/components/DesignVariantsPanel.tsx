@@ -195,9 +195,9 @@ export function DesignVariantsPanel({
   };
 
   return (
-    <section className="min-w-0 flex-1 overflow-y-auto bg-slate-100 p-4 custom-scrollbar">
+    <section className="workspace-surface min-w-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
       <div className="mx-auto flex max-w-7xl flex-col gap-4">
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <div className="glass-panel flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-white/60 px-4 py-3">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-950 text-white">
               <LayoutGrid className="h-5 w-5" />

@@ -31,6 +31,7 @@ import { promptTemplateRecordToTemplate } from './utils/savedPromptTemplates';
 import { motion, AnimatePresence } from 'motion/react';
 
 const MainWorkspace = lazy(() => import('./components/MainWorkspace').then(module => ({ default: module.MainWorkspace })));
+const LandingPage = lazy(() => import('./pages/LandingPage').then(module => ({ default: module.LandingPage })));
 const AssetBank = lazy(() => import('./components/AssetBank').then(module => ({ default: module.AssetBank })));
 const TemplatesLibrary = lazy(() => import('./components/TemplatesLibrary').then(module => ({ default: module.TemplatesLibrary })));
 const ProjectDetail = lazy(() => import('./components/ProjectDetail').then(module => ({ default: module.ProjectDetail })));
@@ -39,6 +40,7 @@ const PanoramaSharePage = lazy(() => import('./components/PanoramaSharePage').th
 const AdminPage = lazy(() => import('./components/AdminPage').then(module => ({ default: module.AdminPage })));
 
 export default function App() {
+  const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const {
     user: currentUser,
     isLoading: isUserLoading,
@@ -81,7 +83,7 @@ export default function App() {
   const { creditBalance, creditError, refreshCreditBalance } = useCreditBalance(Boolean(currentUser));
   const panoramaShareId = readPanoramaShareId();
   const publicShareToken = readPublicShareToken();
-  const isAdminPath = window.location.pathname === '/admin';
+  const isAdminPath = currentPath === '/admin';
 
   const refreshPromptTemplates = useCallback(async () => {
     try {
@@ -198,6 +200,20 @@ export default function App() {
     setQueuedSecondaryGenerationId(null);
     void handleGenerate();
   }, [handleGenerate, queuedSecondaryGenerationId]);
+
+  useEffect(() => {
+    const handlePopState = () => setCurrentPath(window.location.pathname);
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    if (currentPath !== '/app') return;
+    const requestedStep = readWorkspaceFeatureStep();
+    if (!requestedStep) return;
+    setCurrentStep(requestedStep);
+    setActiveTab('generate');
+  }, [currentPath, setActiveTab, setCurrentStep]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -578,6 +594,14 @@ export default function App() {
     startCreate(setCurrentStep, step);
   }, [setCurrentStep, startCreate]);
 
+  const handleStartFromLanding = useCallback((step: GenerationStep) => {
+    const nextUrl = `/app?feature=${readWorkspaceFeatureSlug(step)}`;
+    window.history.pushState({}, '', nextUrl);
+    setCurrentPath('/app');
+    setCurrentStep(step);
+    setActiveTab('generate');
+  }, [setActiveTab, setCurrentStep]);
+
   if (panoramaShareId) {
     return (
       <Suspense fallback={<PageLoading />}>
@@ -590,6 +614,14 @@ export default function App() {
     return (
       <Suspense fallback={<PageLoading />}>
         <PublicSharePreview token={publicShareToken} />
+      </Suspense>
+    );
+  }
+
+  if (currentPath === '/') {
+    return (
+      <Suspense fallback={<PageLoading />}>
+        <LandingPage onStartCreate={handleStartFromLanding} />
       </Suspense>
     );
   }
@@ -689,7 +721,7 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex min-h-0 flex-1 flex-col overflow-hidden min-w-0"
+              className="workspace-theme flex min-h-0 flex-1 flex-col overflow-hidden min-w-0"
             >
               <Stepper
                 currentStep={currentStep}
@@ -933,4 +965,22 @@ function readImageMimeType(imageUrl: string): string {
   if (pathname.endsWith('.webp')) return 'image/webp';
   if (pathname.endsWith('.svg')) return 'image/svg+xml';
   return 'image/png';
+}
+
+function readWorkspaceFeatureStep(): GenerationStep | null {
+  const feature = new URLSearchParams(window.location.search).get('feature');
+  if (feature === 'floor-plan-color') return GenerationStep.FloorplanTo3D;
+  if (feature === 'free-reference-image') return GenerationStep.FreeReferenceImage;
+  if (feature === 'material-replace') return GenerationStep.MaterialReplace;
+  if (feature === 'object-insert') return GenerationStep.ObjectInsert;
+  if (feature === 'design-variants') return GenerationStep.DesignVariants;
+  return null;
+}
+
+function readWorkspaceFeatureSlug(step: GenerationStep): string {
+  if (step === GenerationStep.FreeReferenceImage) return 'free-reference-image';
+  if (step === GenerationStep.MaterialReplace) return 'material-replace';
+  if (step === GenerationStep.ObjectInsert) return 'object-insert';
+  if (step === GenerationStep.DesignVariants) return 'design-variants';
+  return 'floor-plan-color';
 }

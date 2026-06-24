@@ -390,7 +390,7 @@ export function MainWorkspace({
 
   if (isDesignVariantsStep) {
     return (
-      <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">
+      <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden">
         <input ref={inputFileRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleFileSelected('input', event.currentTarget.files); event.currentTarget.value = ''; }} />
         <DesignVariantsPanel
           state={state}
@@ -443,7 +443,7 @@ export function MainWorkspace({
 
   if (isPlanColorizeStep) {
     return (
-      <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">
+      <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden">
         <input ref={inputFileRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleFileSelected('input', event.currentTarget.files); event.currentTarget.value = ''; }} />
         <PlanColorizePanel
           state={state}
@@ -486,7 +486,7 @@ export function MainWorkspace({
 
   if (isModelSnapshotStep) {
     return (
-      <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">
+      <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden">
         <ModelSnapshotRenderPanel
           state={state}
           onUpdateConfig={onUpdateConfig}
@@ -525,7 +525,7 @@ export function MainWorkspace({
 
   if (isPanoramaQuickRenderStep) {
     return (
-      <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">
+      <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden">
         <PanoramaQuickRenderPanel
           state={state}
           config={state.config}
@@ -544,7 +544,7 @@ export function MainWorkspace({
 
   if (isObjectInsertStep) {
     return (
-      <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">
+      <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden">
         <ObjectInsertPanel
           state={state}
           onUpdateInputImage={onUpdateInputImage}
@@ -574,13 +574,13 @@ export function MainWorkspace({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 overflow-hidden bg-slate-100">
+    <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden p-3">
       <input ref={inputFileRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleFileSelected('input', event.currentTarget.files); event.currentTarget.value = ''; }} />
       <input ref={materialFileRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleFileSelected('material', event.currentTarget.files); event.currentTarget.value = ''; }} />
       <input ref={materialTextureFileRef} type="file" accept={acceptedImageTypes} multiple className="hidden" onChange={event => { void handleTextureFiles(event.currentTarget.files); event.currentTarget.value = ''; }} />
       <input ref={furnitureReferenceFileRef} type="file" accept={acceptedImageTypes} multiple className="hidden" onChange={event => { void handleFurnitureReferenceFiles(event.currentTarget.files); event.currentTarget.value = ''; }} />
 
-      <aside className="flex w-80 shrink-0 flex-col overflow-y-auto border-r border-slate-200 bg-white p-4 custom-scrollbar">
+      <aside className="workspace-side-panel glass-panel flex w-80 shrink-0 flex-col overflow-y-auto rounded-l-3xl border border-white/60 p-4 custom-scrollbar">
         <InputImagePanel
           step={step}
           inputImage={state.inputImage}
@@ -595,6 +595,7 @@ export function MainWorkspace({
           onUpdateMaterialImage={onUpdateMaterialImage}
           onUpdateConfig={onUpdateConfig}
           onRemoveFurnitureReference={handleRemoveFurnitureReference}
+          onFileDrop={(target, files) => { void handleFileSelected(target, files); }}
         />
         <div className="mt-5 space-y-5">
           {!isMaterialReplaceStep ? (

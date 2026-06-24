@@ -1,0 +1,215 @@
+.workspace-theme {
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(circle at 14% 8%, rgba(76, 167, 163, 0.24), transparent 32%),
+    radial-gradient(circle at 88% 12%, rgba(244, 174, 126, 0.22), transparent 29%),
+    radial-gradient(circle at 52% 108%, rgba(116, 154, 176, 0.18), transparent 38%),
+    linear-gradient(135deg, #f7faf9 0%, #eaf3f1 46%, #fff4ea 100%);
+}
+
+.workspace-theme::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  content: "";
+  background-image:
+    linear-gradient(rgba(15, 118, 110, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 118, 110, 0.025) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, black, transparent 72%);
+}
+
+.workspace-topbar {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.62);
+  background: rgba(250, 253, 252, 0.72);
+  box-shadow: 0 14px 42px rgba(15, 23, 42, 0.06);
+  backdrop-filter: blur(22px);
+}
+
+.workspace-surface {
+  background: transparent !important;
+}
+
+.glass-panel,
+.workspace-theme aside.bg-white,
+.workspace-theme :where(section, main, div, label):not(.workspace-theme):not(.workspace-surface)[class*="border"][class*="bg-white"] {
+  border-color: rgba(255, 255, 255, 0.62) !important;
+  background: rgba(255, 255, 255, 0.72) !important;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.075);
+  backdrop-filter: blur(18px);
+}
+
+.glass-card {
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.68);
+  box-shadow: 0 16px 44px rgba(15, 23, 42, 0.07);
+  backdrop-filter: blur(16px);
+}
+
+.soft-border {
+  border-color: rgba(71, 134, 132, 0.16) !important;
+}
+
+.workspace-theme .workspace-feature-card {
+  border-color: rgba(255, 255, 255, 0.66);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.055);
+  backdrop-filter: blur(14px);
+}
+
+.workspace-theme .workspace-feature-card:hover {
+  border-color: rgba(13, 148, 136, 0.32);
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 18px 44px rgba(15, 118, 110, 0.12);
+  transform: translateY(-2px);
+}
+
+.workspace-theme .workspace-feature-card-active {
+  border-color: rgba(13, 148, 136, 0.42);
+  background: linear-gradient(135deg, rgba(236, 253, 250, 0.92), rgba(239, 246, 255, 0.84));
+  box-shadow:
+    0 18px 46px rgba(13, 148, 136, 0.14),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.72);
+}
+
+.workspace-theme input:not([type="file"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.workspace-theme textarea,
+.workspace-theme select {
+  border-color: rgba(100, 116, 139, 0.18) !important;
+  border-radius: 14px !important;
+  background: rgba(255, 255, 255, 0.68) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.workspace-theme input:not([type="file"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+.workspace-theme textarea:focus,
+.workspace-theme select:focus {
+  border-color: rgba(13, 148, 136, 0.5) !important;
+  background: rgba(255, 255, 255, 0.9) !important;
+  box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.1);
+  outline: none;
+}
+
+.gradient-primary-button,
+.workspace-theme button.bg-blue-600,
+.workspace-theme button.bg-slate-900 {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: linear-gradient(135deg, #0f766e 0%, #0e7490 100%) !important;
+  box-shadow: 0 10px 28px rgba(15, 118, 110, 0.2);
+}
+
+.gradient-primary-button:hover,
+.workspace-theme button.bg-blue-600:hover,
+.workspace-theme button.bg-slate-900:hover {
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+}
+
+.workspace-theme button:disabled {
+  box-shadow: none !important;
+  filter: saturate(0.45);
+  transform: none !important;
+}
+
+.workspace-theme button[class*="border-dashed"] {
+  border-color: rgba(13, 148, 136, 0.28) !important;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(153, 246, 228, 0.16), transparent 56%),
+    rgba(255, 255, 255, 0.5) !important;
+}
+
+.workspace-theme button[class*="border-dashed"]:hover {
+  border-color: rgba(13, 148, 136, 0.52) !important;
+  background-color: rgba(240, 253, 250, 0.78) !important;
+}
+
+.workspace-theme .workspace-canvas {
+  border: 1px solid rgba(255, 255, 255, 0.66);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.48);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.09);
+  backdrop-filter: blur(16px);
+}
+
+.workspace-theme .workspace-result-frame {
+  border-color: rgba(255, 255, 255, 0.7) !important;
+  border-radius: 20px !important;
+  background: linear-gradient(135deg, rgba(248, 250, 252, 0.86), rgba(236, 253, 250, 0.62)) !important;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.12) !important;
+}
+
+.workspace-theme .workspace-error-card {
+  border-color: rgba(244, 63, 94, 0.16) !important;
+  border-radius: 16px;
+  background: rgba(255, 241, 242, 0.82) !important;
+  box-shadow: 0 12px 28px rgba(159, 18, 57, 0.06);
+}
+
+.workspace-section-title {
+  color: #0f766e;
+  font-size: 0.625rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 1180px) {
+  .workspace-theme .workspace-side-panel {
+    width: 16rem;
+  }
+}
+
+@media (max-width: 900px) {
+  .workspace-theme .workspace-layout {
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .workspace-theme .workspace-side-panel {
+    width: 100%;
+    max-height: none;
+    flex-shrink: 0;
+    border-radius: 24px;
+  }
+
+  .workspace-theme .workspace-canvas {
+    width: 100%;
+    min-height: 32rem;
+    margin: 0.75rem 0;
+  }
+}
+
+@media (max-width: 767px) {
+  .workspace-theme {
+    background:
+      radial-gradient(circle at 10% 4%, rgba(76, 167, 163, 0.2), transparent 34%),
+      radial-gradient(circle at 92% 10%, rgba(244, 174, 126, 0.18), transparent 30%),
+      linear-gradient(150deg, #f7faf9, #edf5f3 55%, #fff7f0);
+  }
+
+  .workspace-theme .workspace-feature-grid {
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+  }
+
+  .workspace-theme .workspace-feature-card {
+    min-width: 13rem;
+    scroll-snap-align: start;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .workspace-theme.workspace-dark {
+    background:
+      radial-gradient(circle at 20% 10%, rgba(20, 184, 166, 0.22), transparent 30%),
+      radial-gradient(circle at 80% 15%, rgba(251, 146, 60, 0.16), transparent 28%),
+      linear-gradient(135deg, #071a1d 0%, #0b2428 48%, #102f35 100%);
+  }
+}

@@ -67,10 +67,10 @@ export function GenerationStatusPanel({
   onReset,
 }: GenerationStatusPanelProps) {
   return (
-    <aside className="flex w-96 shrink-0 flex-col overflow-y-auto border-l border-slate-200 bg-white p-4 custom-scrollbar">
+    <aside className="workspace-side-panel glass-panel flex w-96 shrink-0 flex-col overflow-y-auto rounded-r-3xl border border-white/60 p-4 custom-scrollbar">
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{title}</span>
+          <span className="workspace-section-title">{title}</span>
           <p className="mt-1 text-xs text-slate-500">{statusLabel}</p>
         </div>
         <Settings2 className="h-4 w-4 text-slate-300" />
@@ -250,7 +250,7 @@ function ResultActions({
           </button>
         ))}
       </div>
-      <div className="h-48 overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <div className="h-56 overflow-hidden rounded-2xl border border-white/70 bg-white shadow-sm">
         <PreviewContent state={state} originalImageUrl={originalImageUrl} previewImage={originalPreviewImage} />
       </div>
       {originalPreviewImage && activeResult ? (
@@ -540,7 +540,7 @@ function GenerationMessages({ state, onGenerate }: GenerationMessagesProps) {
       )}
 
       {state.generationError && (
-        <div className="whitespace-pre-wrap break-words rounded-xl border border-red-100 bg-red-50 p-3 text-xs leading-5 text-red-700">
+        <div className="workspace-error-card whitespace-pre-wrap break-words rounded-xl border p-3 text-xs leading-5 text-red-700">
           {state.generationError}
           <button type="button" onClick={onGenerate} className="mt-2 block rounded bg-white px-2 py-1 text-[10px] font-bold text-red-600">
             重试
