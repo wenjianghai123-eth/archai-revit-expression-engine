@@ -635,6 +635,14 @@ function buildObjectInsertInputModePrompt(mode: string, placementMode: string): 
     ].join('\n');
   }
 
+  if (mode === 'source_placement_preview') {
+    return [
+      'Input mode: image 1 is the original scene; image 2 is a clean placement preview made from the original scene plus the user-dragged object layer.',
+      'Image 2 is the main soft-anchor placement reference. It contains no editor borders, handles, controls, masks, or UI.',
+      'Use image 2 for object type, approximate location, approximate size, and approximate orientation.',
+    ].join('\n');
+  }
+
   return placementMode === 'strict'
     ? 'Full input: image 1 original scene, image 2 furniture/object reference, image 3 placement guide, and image 4 edit-area mask. The placement guide and mask define location, size, rotation, and edit extent according to the selected position constraint strength.'
     : 'Full input: image 1 original scene, image 2 furniture/object reference, image 3 suggested placement area, and image 4 edit-area mask. The guide and mask indicate a local area for natural placement optimization.';
@@ -647,6 +655,7 @@ function readObjectInsertDebugMode(config: object | undefined): string {
     || mode === 'source_object'
     || mode === 'source_object_mask'
     || mode === 'source_object_preview'
+    || mode === 'source_placement_preview'
     ? mode
     : 'full';
 }

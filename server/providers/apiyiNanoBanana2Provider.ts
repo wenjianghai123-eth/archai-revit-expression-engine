@@ -246,13 +246,18 @@ export function collectApiYiImageSources(input: GenerateImageInput): string[] {
 function buildApiYiPrompt(input: GenerateImageInput): string {
   if (isObjectInsertPreviewFusion(input)) {
     return [
-      'The first image is the original interior scene and must remain the main base image.',
-      'The second image is the placement preview created by the user.',
-      'Naturally integrate the furniture arrangement from the placement preview into the original scene.',
-      'Preserve the original room structure and camera view.',
-      'Match realistic scale, perspective, lighting, shadows, materials, floor contact, and occlusion.',
-      'Do not add text, labels, logos, watermarks, borders, collages, or split-screen layouts.',
-      `User instruction: ${input.prompt}`,
+      'Image 1 is the original scene.',
+      'Image 2 is the clean placement preview, showing the object type, approximate location, approximate size, and approximate orientation intended by the user.',
+      '',
+      'Insert the object into the original scene near the position indicated in Image 2.',
+      'The overlay position is a soft anchor, not a rigid bounding box.',
+      'Small local adjustments are allowed for realism, perspective, floor contact, circulation, and composition, but the object must stay in the same nearby area.',
+      'Do not move the object to a far-away area of the scene. Do not relocate it to a different side of the room.',
+      '',
+      'Prioritize natural integration, realistic lighting and shadows, correct scale, coherent perspective, believable contact with floor / wall / support surface, and placement near the user-indicated layer position.',
+      'For multiple objects, keep every object near its own overlay position. Do not omit objects and do not swap their positions.',
+      'Do not redesign the whole room. Do not move unrelated furniture. Do not add extra copies of the object. Do not create a collage or split-screen.',
+      input.prompt,
     ].join('\n');
   }
 

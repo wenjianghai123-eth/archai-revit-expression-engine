@@ -702,25 +702,30 @@ function buildObjectInsertPrompt(input: GenerateImageInput): string {
 function buildObjectInsertPreviewFusionPrompt(input: GenerateImageInput): string {
   const userPrompt = readObjectInsertPreviewFusionUserPrompt(input.config, input.prompt);
   return [
-    'The first image is the original interior scene and must remain the main base image.',
-    'The second image is a placement preview created by the user. It shows the desired furniture arrangement, approximate positions, approximate sizes, orientations, materials, and colors of the inserted furniture objects.',
+    'Image 1 is the original scene.',
+    'Image 2 is the clean placement preview. It shows the object type, approximate location, approximate size, and approximate orientation intended by the user.',
     '',
-    'Please generate one natural, realistic interior rendering based on the original image and the placement preview.',
-    'Use the placement preview as a visual arrangement guide.',
-    'Naturally integrate the furniture shown in the placement preview into the original scene.',
+    'Insert the object into the original scene near the position indicated in Image 2.',
+    'The overlay position is a soft anchor, not a rigid bounding box.',
+    'Small local adjustments are allowed for realism, perspective, floor contact, circulation, and composition, but the object must stay in the same nearby area.',
+    'Keep the final placement close to the user-indicated overlay position.',
+    'Do not move the object to a far-away area of the scene.',
+    'Do not relocate it to a different side of the room.',
     '',
-    'The result should have realistic scale, natural placement, believable floor contact, natural shadows, and perspective consistent with the original scene.',
-    'Preserve the furniture style, material, and color shown in the placement preview as much as possible.',
+    'Prioritize:',
+    '1. natural integration,',
+    '2. realistic lighting and shadows,',
+    '3. correct scale,',
+    '4. coherent perspective,',
+    '5. believable contact with floor / wall / support surface,',
+    '6. placement near the user-indicated layer position.',
     '',
-    'You may add a small number of appropriate decorative items or soft furnishings, such as cushions, small decor pieces, curtains, rugs, table accessories, or other subtle scene-enhancing details, only when they help the inserted furniture feel more natural and better integrated into the room.',
-    'These additions must remain modest, coherent with the scene, and secondary to the main inserted furniture.',
-    'Do not overcrowd the space or significantly change the original layout.',
+    'For multiple objects, keep every object near its own overlay position. Do not omit objects and do not swap their positions.',
+    'The result should look like the object is naturally placed near the indicated overlay position, not rigidly pasted, and not relocated far away.',
+    'Do not redesign the whole room. Do not move unrelated furniture. Do not add extra copies of the object. Do not create a collage or split-screen.',
     '',
-    'Preserve the original room structure and camera view.',
-    'Do not unnecessarily redesign the whole room.',
-    'Do not add text, labels, logos, watermarks, borders, collages, or split-screen layouts.',
-    '',
-    'User instruction:',
+    '中文补充：用户拖动图层所示的位置是主要参考位置。请将物体自然融合到该位置附近，允许为了真实感做小范围微调，但不要偏离过远，不要移动到画面其他区域。重点保证自然摆放、真实光影、统一透视和合理尺度。',
+    'User extra instruction:',
     userPrompt,
   ].join('\n');
 }
@@ -876,6 +881,9 @@ function buildObjectInsertProviderInputPrompt(input: GenerateImageInput): string
   }
   if (mode === 'source_object_preview') {
     return `Input order: image 1 is ${sceneLabel}; image 2 is a furniture/object reference; image 3 is a placement guide with translucent object placement and outline. No mask is provided in this debug request.`;
+  }
+  if (mode === 'source_placement_preview') {
+    return `Input order: image 1 is ${sceneLabel}; image 2 is a clean placement preview made from the original scene plus the user's dragged object layers. No object reference image, mask, editor border, or UI control is provided.`;
   }
   return `Input order: image 1 is ${sceneLabel}; image 2 is a furniture/object reference; image 3 is a placement guide with translucent object placement and outline; image 4 is the precise placement mask.`;
 }
@@ -1068,6 +1076,7 @@ function readObjectInsertDebugMode(config: Record<string, unknown>): string {
     || value === 'source_object'
     || value === 'source_object_mask'
     || value === 'source_object_preview'
+    || value === 'source_placement_preview'
     ? value
     : 'full';
 }

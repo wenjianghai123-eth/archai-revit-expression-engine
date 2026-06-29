@@ -1845,6 +1845,7 @@ function readObjectInsertDebugMode(config: GenerationConfig): ObjectInsertDebugM
     || mode === 'source_object'
     || mode === 'source_object_mask'
     || mode === 'source_object_preview'
+    || mode === 'source_placement_preview'
     ? mode
     : 'full';
 }
@@ -1953,10 +1954,12 @@ function readObjectInsertBooleanConstraint(
 }
 
 function objectInsertIncludesObject(mode: ObjectInsertDebugMode): boolean {
+  if (mode === 'source_placement_preview') return false;
   return mode !== 'source_prompt';
 }
 
 function objectInsertIncludesPreview(mode: ObjectInsertDebugMode): boolean {
+  if (mode === 'source_placement_preview') return true;
   return mode === 'full' || mode === 'source_object_preview';
 }
 

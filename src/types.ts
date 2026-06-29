@@ -79,9 +79,10 @@ export type ResultSendTargetStep =
 export type ContinuationAction = SecondaryEditAction | `send-to-${ResultSendTargetStep}`;
 export type FreeReferenceRole = 'style' | 'material' | 'furniture' | 'lighting' | 'composition' | 'color' | 'detail';
 export type FreeReferenceStrength = 'low' | 'medium' | 'high';
-export type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview';
+export type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview' | 'source_placement_preview';
 export type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
 export type ObjectInsertPlacementMode = 'strict' | 'natural';
+export type ObjectInsertPlacementConstraintMode = 'soft-anchor' | 'strict' | 'natural';
 export type ObjectInsertHarmonyPriority = 'layout' | 'style' | 'balance';
 export type ObjectInsertFusionPreference = 'conservative' | 'balanced' | 'design';
 export type ObjectInsertSurface = 'floor' | 'wall' | 'ceiling' | 'tabletop' | 'outdoor-ground' | 'auto';
@@ -425,6 +426,11 @@ export interface GenerationConfig {
   allowAutoAdjustPosition?: boolean;
   allowAutoAdjustRotation?: boolean;
   allowAutoAdjustScale?: boolean;
+  placementConstraintMode?: ObjectInsertPlacementConstraintMode;
+  placementAnchorStrength?: number;
+  maxCenterOffsetRatio?: number;
+  maxScaleAdjustmentRatio?: number;
+  maxRotationAdjustmentDeg?: number;
   objectInsertExtraPrompt?: string;
   inputSource?: 'model-capture' | 'uploaded-snapshot';
   modelSnapshotMetadata?: ModelSnapshotMetadata;
@@ -469,6 +475,11 @@ export interface ObjectInsertItemConfig {
   enforcePerspectiveScale?: boolean;
   placementMode?: ObjectInsertPlacementMode;
   placementIntent?: string;
+  placementConstraintMode?: ObjectInsertPlacementConstraintMode;
+  placementAnchorStrength?: number;
+  maxCenterOffsetRatio?: number;
+  maxScaleAdjustmentRatio?: number;
+  maxRotationAdjustmentDeg?: number;
   extraPrompt?: string;
 }
 
@@ -501,6 +512,11 @@ export interface ObjectInsertConfig {
   allowAutoAdjustPosition?: boolean;
   allowAutoAdjustRotation?: boolean;
   allowAutoAdjustScale?: boolean;
+  placementConstraintMode?: ObjectInsertPlacementConstraintMode;
+  placementAnchorStrength?: number;
+  maxCenterOffsetRatio?: number;
+  maxScaleAdjustmentRatio?: number;
+  maxRotationAdjustmentDeg?: number;
   objectInsertCandidateStrategy?: ObjectInsertCandidateStrategy;
   objectInsertCandidateStrategies?: ObjectInsertCandidateStrategy[];
   objectInsertCandidatePromptHints?: string[];

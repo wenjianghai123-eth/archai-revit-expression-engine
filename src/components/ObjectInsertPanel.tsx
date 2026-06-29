@@ -89,6 +89,7 @@ const objectInsertDebugModeOptions: Array<{ value: ObjectInsertDebugMode; label:
   { value: 'source_object', label: '原图 + 物体参考图' },
   { value: 'source_object_mask', label: '原图 + 物体参考图 + mask' },
   { value: 'source_object_preview', label: '原图 + 物体参考图 + placement guide' },
+  { value: 'source_placement_preview', label: '原图 + 干净摆放示意图' },
 ];
 const objectInsertPositionConstraintOptions: Array<{
   value: ObjectInsertPositionConstraintStrength;
@@ -157,6 +158,13 @@ const objectFidelityOptions: Array<{ value: ObjectFidelity; label: string }> = [
 ];
 const maxObjectItems = 8;
 const maxReferencesPerObject = 6;
+const softAnchorPlacementConfig = {
+  placementConstraintMode: 'soft-anchor' as const,
+  placementAnchorStrength: 0.72,
+  maxCenterOffsetRatio: 0.12,
+  maxScaleAdjustmentRatio: 0.18,
+  maxRotationAdjustmentDeg: 20,
+};
 
 interface DebugSubmitPreviewItem {
   id: string;
@@ -917,7 +925,10 @@ export function ObjectInsertPanel({
 
     setIsExporting(true);
     try {
-      const guide = await exportPlacementGuide(sourceImage, objectImage, placement);
+      const guide = await exportCompositePlacementPreview(sourceImage, [{
+        image: objectImage,
+        placement,
+      }]);
       const mask = await exportPlacementMask(sourceImage, objectImage, placement);
       const nextResult = { preview: guide, mask, placement };
       setExportResult(nextResult);
@@ -936,10 +947,10 @@ export function ObjectInsertPanel({
         placementMode,
         placementIntent,
         positionConstraintStrength,
-        guide: omitDataUrl(guide),
+        cleanPlacementPreview: omitDataUrl(guide),
         mask: omitDataUrl(mask),
       });
-      setMessage('已导出 placement guide 和精确 mask，详细信息已输出到控制台。');
+      setMessage('已导出干净摆放示意图和精确 mask，详细信息已输出到控制台。');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '导出失败，请重试。');
     } finally {
@@ -1127,7 +1138,7 @@ export function ObjectInsertPanel({
       const previewFusionPlacementMode = readObjectInsertPlacementMode(effectivePreviewFusionConfig);
       const previewFusionPlacementIntent = readObjectInsertPlacementIntent(effectivePreviewFusionConfig);
       const previewFusionHarmonyPriority = readObjectInsertHarmonyPriority(effectivePreviewFusionConfig);
-      const previewFusionAllowAutoAdjustPosition = readObjectInsertAutoAdjust(effectivePreviewFusionConfig, 'allowAutoAdjustPosition');
+      const previewFusionAllowAutoAdjustPosition = true;
       const previewFusionAllowAutoAdjustRotation = readObjectInsertAutoAdjust(effectivePreviewFusionConfig, 'allowAutoAdjustRotation');
       const previewFusionAllowAutoAdjustScale = readObjectInsertAutoAdjust(effectivePreviewFusionConfig, 'allowAutoAdjustScale');
       const previewFusionObjectItemConfigs: ObjectInsertItemConfig[] = previewFusionItems.map(item => ({
@@ -1139,6 +1150,7 @@ export function ObjectInsertPanel({
         placementPreviewAssetId: placementPreviewAsset.id,
         placementMode: item.placementMode || previewFusionPlacementMode,
         placementIntent: item.placementIntent || undefined,
+        ...softAnchorPlacementConfig,
         extraPrompt: item.extraPrompt || undefined,
       }));
       const previewFusionConfigPatch: GenerationConfig = {
@@ -1151,11 +1163,12 @@ export function ObjectInsertPanel({
         objectReferenceAssetId: undefined,
         placementMaskAssetId: undefined,
         objectPlacement: previewFusionObjectItemConfigs[0]?.placement,
-        objectInsertDebugMode: 'source_object_preview',
-        positionConstraintStrength,
+        objectInsertDebugMode: 'source_placement_preview',
+        positionConstraintStrength: 'medium',
         placementMode: previewFusionPlacementMode,
         placementIntent: previewFusionPlacementIntent,
         harmonyPriority: previewFusionHarmonyPriority,
+        ...softAnchorPlacementConfig,
         allowAutoAdjustPosition: previewFusionAllowAutoAdjustPosition,
         allowAutoAdjustRotation: previewFusionAllowAutoAdjustRotation,
         allowAutoAdjustScale: previewFusionAllowAutoAdjustScale,
@@ -1168,11 +1181,12 @@ export function ObjectInsertPanel({
           guideAssetId: placementPreviewAsset.id,
           placement: previewFusionObjectItemConfigs[0]?.placement,
           extraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
-          debugMode: 'source_object_preview',
-          positionConstraintStrength,
+          debugMode: 'source_placement_preview',
+          positionConstraintStrength: 'medium',
           placementMode: previewFusionPlacementMode,
           placementIntent: previewFusionPlacementIntent,
           harmonyPriority: previewFusionHarmonyPriority,
+          ...softAnchorPlacementConfig,
           allowAutoAdjustPosition: previewFusionAllowAutoAdjustPosition,
           allowAutoAdjustRotation: previewFusionAllowAutoAdjustRotation,
           allowAutoAdjustScale: previewFusionAllowAutoAdjustScale,
@@ -1185,9 +1199,10 @@ export function ObjectInsertPanel({
         editTarget: 'furniture',
         preserveStructure: true,
         preserveCamera: true,
-        objectInsertCandidateStrategy: effectivePreviewFusionConfig.objectInsertCandidateStrategy || candidateStrategy,
-        objectInsertCandidateStrategies: candidateStrategies,
-        objectInsertCandidatePromptHints: buildObjectInsertCandidatePromptHints(candidateStrategies),
+        batchCount: 1,
+        objectInsertCandidateStrategy: 'natural-fit',
+        objectInsertCandidateStrategies: ['natural-fit'],
+        objectInsertCandidatePromptHints: buildObjectInsertCandidatePromptHints(['natural-fit']),
       };
       setExportResult({ preview: placementPreview, mask: placementPreview, placement: previewFusionObjectItemConfigs[0]?.placement || emptyPlacement });
       setObjectItems(objectItems.map(item => {
@@ -1209,6 +1224,8 @@ export function ObjectInsertPanel({
         objectItemsReferenceCount: previewFusionObjectItemConfigs.reduce((sum, item) => sum + item.referenceAssetIds.length, 0),
         providerImageCount: 2,
         sendsFurnitureReferencesToProvider: false,
+        placementConstraintMode: 'soft-anchor',
+        cleanPlacementPreview: true,
       });
       console.info('[ObjectInsert] preview fusion generation job payload prepared', {
         inputAssetIds: [previewFusionSourceUpload.assetId, placementPreviewAsset.id],
@@ -1217,6 +1234,7 @@ export function ObjectInsertPanel({
         placementPreviewAssetId: placementPreviewAsset.id,
         placementPreview: omitDataUrl(placementPreview),
         objectItems: previewFusionObjectItemConfigs,
+        placementConstraintMode: 'soft-anchor',
       });
       setMessage(`已导出 ${placementPreview.width}x${placementPreview.height} placement preview，将以原图 + 示意图模式融合。`);
       onGenerate({
@@ -2226,6 +2244,7 @@ function buildObjectInsertSubmitPreview(input: {
   const objectIncluded = objectInsertIncludesObject(input.mode);
   const previewIncluded = objectInsertIncludesPreview(input.mode);
   const maskIncluded = objectInsertIncludesMask(input.mode);
+  const cleanPreviewMode = input.mode === 'source_placement_preview';
   return {
     extraPrompt: input.extraPrompt,
     items: [
@@ -2239,14 +2258,14 @@ function buildObjectInsertSubmitPreview(input: {
       {
         id: 'object',
         label: '物体参考图',
-        included: objectIncluded,
+        included: objectIncluded && !cleanPreviewMode,
         imageUrl: input.objectImage ? readImageSrc(input.objectImage) : undefined,
         detail: input.objectImage?.assetId || input.objectImage?.id || '尚未上传',
       },
       {
         id: 'preview',
-        label: 'placement guide',
-        included: previewIncluded,
+        label: cleanPreviewMode ? '干净摆放示意图' : 'placement guide',
+        included: previewIncluded || cleanPreviewMode,
         imageUrl: input.exportResult?.preview.dataUrl,
         detail: input.exportResult ? `${input.exportResult.preview.width} x ${input.exportResult.preview.height}` : '生成时会自动导出',
       },
@@ -2314,10 +2333,12 @@ function readObjectInsertAutoAdjust(
 }
 
 function objectInsertIncludesObject(mode: ObjectInsertDebugMode): boolean {
+  if (mode === 'source_placement_preview') return false;
   return mode !== 'source_prompt';
 }
 
 function objectInsertIncludesPreview(mode: ObjectInsertDebugMode): boolean {
+  if (mode === 'source_placement_preview') return true;
   return mode === 'full' || mode === 'source_object_preview';
 }
 

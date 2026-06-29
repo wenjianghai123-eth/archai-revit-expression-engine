@@ -2427,8 +2427,38 @@ function readObjectInsertPreviewFusionUserPromptForJob(job: GenerationJob): stri
     typeof job.config.customPrompt === 'string' ? job.config.customPrompt : '',
     job.prompt,
   ];
-  return values.map(value => value.trim()).find(value => value.length > 0 && !looksLikeLegacyObjectInsertPrompt(value))
-    || 'Naturally integrate the furniture arrangement shown in the placement preview.';
+  const userPrompt = values.map(value => value.trim()).find(value => value.length > 0 && !looksLikeLegacyObjectInsertPrompt(value)) || '';
+  const objectItems = readObjectInsertItemsFromJob(job);
+  return buildObjectInsertSoftAnchorPrompt(userPrompt, objectItems.length);
+}
+
+function buildObjectInsertSoftAnchorPrompt(userPrompt: string, objectCount: number): string {
+  return [
+    'Image 1 is the original scene.',
+    'Image 2 is the clean placement preview. It shows the object type, approximate location, approximate size, and approximate orientation intended by the user.',
+    '',
+    'Insert the object into the original scene near the position indicated in Image 2.',
+    'The overlay position is a soft anchor, not a rigid bounding box.',
+    'Small local adjustments are allowed for realism, perspective, floor contact, circulation, and composition, but the object must stay in the same nearby area.',
+    'Keep the final placement close to the user-indicated overlay position. Do not move the object to a far-away area of the scene. Do not relocate it to a different side of the room.',
+    '',
+    'Prioritize:',
+    '1. natural integration,',
+    '2. realistic lighting and shadows,',
+    '3. correct scale,',
+    '4. coherent perspective,',
+    '5. believable contact with floor / wall / support surface,',
+    '6. placement near the user-indicated layer position.',
+    '',
+    objectCount > 1
+      ? 'For multiple objects, keep every object near its own overlay position. Do not omit objects and do not swap their positions.'
+      : '',
+    'The result should look like the object is naturally placed near the indicated overlay position, not rigidly pasted, and not relocated far away.',
+    'Do not redesign the whole room. Do not move unrelated furniture. Do not add extra copies of the object. Do not create a collage or split-screen.',
+    '',
+    '中文补充：用户拖动图层所示的位置是主要参考位置。请将物体自然融合到该位置附近，允许为了真实感做小范围微调，但不要偏离过远，不要移动到画面其他区域。重点保证自然摆放、真实光影、统一透视和合理尺度。',
+    userPrompt ? `User extra instruction: ${userPrompt}` : '',
+  ].filter(isNonEmptyString).join('\n');
 }
 
 function looksLikeLegacyObjectInsertPrompt(value: string): boolean {
@@ -2597,9 +2627,10 @@ function isObjectInsertJob(job: GenerationJob): boolean {
   return job.step === 'object_insert' || readGenerationJobStep(job.config) === 'object_insert' || isRecord(job.config.objectInsert);
 }
 
-type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview';
+type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview' | 'source_placement_preview';
 type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
 type ObjectInsertPlacementMode = 'strict' | 'natural';
+type ObjectInsertPlacementConstraintMode = 'soft-anchor' | 'strict' | 'natural';
 type ObjectInsertHarmonyPriority = 'layout' | 'style' | 'balance';
 type ObjectInsertFusionPreference = 'conservative' | 'balanced' | 'design';
 type ObjectInsertSurface = 'floor' | 'wall' | 'ceiling' | 'tabletop' | 'outdoor-ground' | 'auto';
@@ -2619,6 +2650,11 @@ interface ObjectInsertItemForJob {
   enforceOcclusion: boolean;
   enforcePerspectiveScale: boolean;
   placementMode: ObjectInsertPlacementMode;
+  placementConstraintMode?: ObjectInsertPlacementConstraintMode;
+  placementAnchorStrength?: number;
+  maxCenterOffsetRatio?: number;
+  maxScaleAdjustmentRatio?: number;
+  maxRotationAdjustmentDeg?: number;
   placementIntent: string;
   extraPrompt: string;
   placement?: Record<string, unknown>;
@@ -2635,6 +2671,7 @@ function readObjectInsertDebugMode(config: Record<string, unknown>): ObjectInser
     || value === 'source_object'
     || value === 'source_object_mask'
     || value === 'source_object_preview'
+    || value === 'source_placement_preview'
     ? value
     : 'full';
 }
@@ -2657,6 +2694,20 @@ function readObjectInsertPlacementMode(config: Record<string, unknown>): ObjectI
       ? config.placementMode
       : '';
   return value === 'strict' || value === 'natural' ? value : 'natural';
+}
+
+function readObjectInsertPlacementConstraintMode(config: Record<string, unknown>): ObjectInsertPlacementConstraintMode {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.placementConstraintMode === 'string'
+    ? nested.placementConstraintMode
+    : typeof config.placementConstraintMode === 'string'
+      ? config.placementConstraintMode
+      : '';
+  return value === 'strict' || value === 'natural' || value === 'soft-anchor' ? value : 'soft-anchor';
+}
+
+function readObjectInsertNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
 function readObjectInsertHarmonyPriority(config: Record<string, unknown>): ObjectInsertHarmonyPriority {
@@ -2776,10 +2827,12 @@ function readObjectInsertBooleanConstraint(
 }
 
 function objectInsertIncludesObject(mode: ObjectInsertDebugMode): boolean {
+  if (mode === 'source_placement_preview') return false;
   return mode !== 'source_prompt';
 }
 
 function objectInsertIncludesPreview(mode: ObjectInsertDebugMode): boolean {
+  if (mode === 'source_placement_preview') return true;
   return mode === 'full' || mode === 'source_object_preview';
 }
 
@@ -2857,6 +2910,11 @@ function readObjectInsertItemsFromJob(job: GenerationJob): ObjectInsertItemForJo
       enforceOcclusion: typeof item.enforceOcclusion === 'boolean' ? item.enforceOcclusion : readObjectInsertBooleanConstraint(job.config, 'enforceOcclusion'),
       enforcePerspectiveScale: typeof item.enforcePerspectiveScale === 'boolean' ? item.enforcePerspectiveScale : readObjectInsertBooleanConstraint(job.config, 'enforcePerspectiveScale'),
       placementMode: item.placementMode === 'strict' ? 'strict' : item.placementMode === 'natural' ? 'natural' : readObjectInsertPlacementMode(job.config),
+      placementConstraintMode: item.placementConstraintMode === 'strict' || item.placementConstraintMode === 'natural' || item.placementConstraintMode === 'soft-anchor' ? item.placementConstraintMode : readObjectInsertPlacementConstraintMode(job.config),
+      placementAnchorStrength: readObjectInsertNumber(item.placementAnchorStrength, readObjectInsertNumber(job.config.placementAnchorStrength, 0.72)),
+      maxCenterOffsetRatio: readObjectInsertNumber(item.maxCenterOffsetRatio, readObjectInsertNumber(job.config.maxCenterOffsetRatio, 0.12)),
+      maxScaleAdjustmentRatio: readObjectInsertNumber(item.maxScaleAdjustmentRatio, readObjectInsertNumber(job.config.maxScaleAdjustmentRatio, 0.18)),
+      maxRotationAdjustmentDeg: readObjectInsertNumber(item.maxRotationAdjustmentDeg, readObjectInsertNumber(job.config.maxRotationAdjustmentDeg, 20)),
       placementIntent: readConfigStringValue(item.placementIntent),
       extraPrompt: readConfigStringValue(item.extraPrompt),
       placement: isRecord(item.placement) ? item.placement : undefined,
@@ -2883,6 +2941,11 @@ function readObjectInsertItemsFromJob(job: GenerationJob): ObjectInsertItemForJo
     enforceOcclusion: legacy.enforceOcclusion,
     enforcePerspectiveScale: legacy.enforcePerspectiveScale,
     placementMode: legacy.placementMode,
+    placementConstraintMode: readObjectInsertPlacementConstraintMode(job.config),
+    placementAnchorStrength: readObjectInsertNumber(job.config.placementAnchorStrength, 0.72),
+    maxCenterOffsetRatio: readObjectInsertNumber(job.config.maxCenterOffsetRatio, 0.12),
+    maxScaleAdjustmentRatio: readObjectInsertNumber(job.config.maxScaleAdjustmentRatio, 0.18),
+    maxRotationAdjustmentDeg: readObjectInsertNumber(job.config.maxRotationAdjustmentDeg, 20),
     placementIntent: legacy.placementIntent,
     extraPrompt: readConfigStringValue(nested.extraPrompt) || readConfigStringValue(job.config.objectInsertExtraPrompt) || readConfigStringValue(job.config.customPrompt),
     placement: legacy.placement,

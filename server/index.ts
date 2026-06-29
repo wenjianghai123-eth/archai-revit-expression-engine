@@ -2215,6 +2215,11 @@ function validateGenerationJobCreateBody(
     const debugMode = readObjectInsertDebugMode(config);
     const positionConstraintStrength = readObjectInsertPositionConstraintStrength(config);
     const placementMode = readObjectInsertPlacementMode(config);
+    const placementConstraintMode = readObjectInsertPlacementConstraintMode(config);
+    const placementAnchorStrength = readObjectInsertRatioValue(config, 'placementAnchorStrength', 0.72);
+    const maxCenterOffsetRatio = readObjectInsertRatioValue(config, 'maxCenterOffsetRatio', 0.12);
+    const maxScaleAdjustmentRatio = readObjectInsertRatioValue(config, 'maxScaleAdjustmentRatio', 0.18);
+    const maxRotationAdjustmentDeg = readObjectInsertRatioValue(config, 'maxRotationAdjustmentDeg', 20);
     const placementIntent = readObjectInsertPlacementIntent(config);
     const harmonyPriority = readObjectInsertHarmonyPriority(config);
     const fusionPreference = readObjectInsertFusionPreference(config);
@@ -2345,6 +2350,11 @@ function validateGenerationJobCreateBody(
     config.objectInsertDebugMode = debugMode;
     config.positionConstraintStrength = positionConstraintStrength;
     config.placementMode = placementMode;
+    config.placementConstraintMode = placementConstraintMode;
+    config.placementAnchorStrength = placementAnchorStrength;
+    config.maxCenterOffsetRatio = maxCenterOffsetRatio;
+    config.maxScaleAdjustmentRatio = maxScaleAdjustmentRatio;
+    config.maxRotationAdjustmentDeg = maxRotationAdjustmentDeg;
     config.placementIntent = placementIntent;
     config.harmonyPriority = harmonyPriority;
     config.objectInsertFusionPreference = fusionPreference;
@@ -2382,6 +2392,11 @@ function validateGenerationJobCreateBody(
       debugMode,
       positionConstraintStrength,
       placementMode,
+      placementConstraintMode,
+      placementAnchorStrength,
+      maxCenterOffsetRatio,
+      maxScaleAdjustmentRatio,
+      maxRotationAdjustmentDeg,
       placementIntent,
       harmonyPriority,
       fusionPreference,
@@ -2750,9 +2765,10 @@ function isObjectInsertStep(step: GenerationJob['step'], config: Record<string, 
   return step === 'object_insert' || config.step === 'object_insert' || isRecord(config.objectInsert);
 }
 
-type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview';
+type ObjectInsertDebugMode = 'full' | 'source_prompt' | 'source_object' | 'source_object_mask' | 'source_object_preview' | 'source_placement_preview';
 type ObjectInsertPositionConstraintStrength = 'low' | 'medium' | 'high';
 type ObjectInsertPlacementMode = 'strict' | 'natural';
+type ObjectInsertPlacementConstraintMode = 'soft-anchor' | 'strict' | 'natural';
 type ObjectInsertHarmonyPriority = 'layout' | 'style' | 'balance';
 type ObjectInsertFusionPreference = 'conservative' | 'balanced' | 'design';
 type ObjectInsertSurface = 'floor' | 'wall' | 'ceiling' | 'tabletop' | 'outdoor-ground' | 'auto';
@@ -2773,6 +2789,11 @@ interface ObjectInsertRequestItem {
   enforcePerspectiveScale: boolean;
   placementMode: ObjectInsertPlacementMode;
   placementIntent?: string;
+  placementConstraintMode?: ObjectInsertPlacementConstraintMode;
+  placementAnchorStrength?: number;
+  maxCenterOffsetRatio?: number;
+  maxScaleAdjustmentRatio?: number;
+  maxRotationAdjustmentDeg?: number;
   extraPrompt?: string;
 }
 
@@ -2787,6 +2808,7 @@ function readObjectInsertDebugMode(config: Record<string, unknown>): ObjectInser
     || value === 'source_object'
     || value === 'source_object_mask'
     || value === 'source_object_preview'
+    || value === 'source_placement_preview'
     ? value
     : 'full';
 }
@@ -2809,6 +2831,26 @@ function readObjectInsertPlacementMode(config: Record<string, unknown>): ObjectI
       ? config.placementMode
       : '';
   return value === 'strict' || value === 'natural' ? value : 'natural';
+}
+
+function readObjectInsertPlacementConstraintMode(config: Record<string, unknown>): ObjectInsertPlacementConstraintMode {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.placementConstraintMode === 'string'
+    ? nested.placementConstraintMode
+    : typeof config.placementConstraintMode === 'string'
+      ? config.placementConstraintMode
+      : '';
+  return value === 'strict' || value === 'natural' || value === 'soft-anchor' ? value : 'soft-anchor';
+}
+
+function readObjectInsertRatioValue(config: Record<string, unknown>, key: string, fallback: number): number {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested[key] === 'number'
+    ? nested[key]
+    : typeof config[key] === 'number'
+      ? config[key]
+      : fallback;
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
 function readObjectInsertHarmonyPriority(config: Record<string, unknown>): ObjectInsertHarmonyPriority {
@@ -2937,10 +2979,12 @@ function readObjectInsertBooleanConstraint(
 }
 
 function objectInsertIncludesObject(mode: ObjectInsertDebugMode): boolean {
+  if (mode === 'source_placement_preview') return false;
   return mode !== 'source_prompt';
 }
 
 function objectInsertIncludesPreview(mode: ObjectInsertDebugMode): boolean {
+  if (mode === 'source_placement_preview') return true;
   return mode === 'full' || mode === 'source_object_preview';
 }
 
@@ -2974,6 +3018,9 @@ function normalizeObjectInsertItemsForRequest(
       const placementMode = item.placementMode === 'strict' || item.placementMode === 'natural'
         ? item.placementMode
         : input.defaultPlacementMode;
+      const placementConstraintMode = item.placementConstraintMode === 'strict' || item.placementConstraintMode === 'natural' || item.placementConstraintMode === 'soft-anchor'
+        ? item.placementConstraintMode
+        : 'soft-anchor';
       const objectType = isNonEmptyString(item.objectType) && objectInsertTypes.has(item.objectType.trim())
         ? item.objectType.trim()
         : input.defaultObjectType;
@@ -2997,6 +3044,11 @@ function normalizeObjectInsertItemsForRequest(
         enforceOcclusion: typeof item.enforceOcclusion === 'boolean' ? item.enforceOcclusion : input.defaultEnforceOcclusion,
         enforcePerspectiveScale: typeof item.enforcePerspectiveScale === 'boolean' ? item.enforcePerspectiveScale : input.defaultEnforcePerspectiveScale,
         placementMode,
+        placementConstraintMode,
+        placementAnchorStrength: typeof item.placementAnchorStrength === 'number' && Number.isFinite(item.placementAnchorStrength) ? item.placementAnchorStrength : 0.72,
+        maxCenterOffsetRatio: typeof item.maxCenterOffsetRatio === 'number' && Number.isFinite(item.maxCenterOffsetRatio) ? item.maxCenterOffsetRatio : 0.12,
+        maxScaleAdjustmentRatio: typeof item.maxScaleAdjustmentRatio === 'number' && Number.isFinite(item.maxScaleAdjustmentRatio) ? item.maxScaleAdjustmentRatio : 0.18,
+        maxRotationAdjustmentDeg: typeof item.maxRotationAdjustmentDeg === 'number' && Number.isFinite(item.maxRotationAdjustmentDeg) ? item.maxRotationAdjustmentDeg : 20,
         placementIntent: isNonEmptyString(item.placementIntent) ? item.placementIntent.trim() : undefined,
         extraPrompt: isNonEmptyString(item.extraPrompt) ? item.extraPrompt.trim() : undefined,
       };
