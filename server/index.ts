@@ -96,7 +96,7 @@ import { createSupabaseAuthUser, resetSupabaseAuthUserPassword, updateSupabaseAu
 import { getModelConversionConfig } from './modelConversionService';
 import { getModelOptimizationConfig } from './modelOptimizationService';
 import { polishPromptText, PromptPolishRequest, PromptPolishResult } from './promptPolishService';
-import { IMAGE_POLISH_NEGATIVE_PROMPT, IMAGE_POLISH_PROMPT } from './prompts/imagePolishPrompt';
+import { resolveImagePolishPrompts } from './prompts/imagePolishPrompt';
 
 export const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -581,6 +581,16 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
         mode: job.mode,
         inputAssetCount: job.inputAssetIds.length,
       });
+      if (job.step === 'image_polish' || job.config.generationStep === 'image_polish') {
+        console.debug({
+          event: 'image_polish_job_create_requested',
+          jobId: job.id,
+          enhanceMaterials: job.config.enhanceMaterials === true,
+          promptMode: typeof job.config.promptMode === 'string' ? job.config.promptMode : undefined,
+          provider: job.provider,
+          inputAssetCount: job.inputAssetIds.length,
+        });
+      }
     }
 
     logGenerationJobCreateStage(req, 'debit credits', { userId: user.id, jobId: job.id, creditsCost });
@@ -2128,22 +2138,31 @@ function validateGenerationJobCreateBody(
     if (!sourceImageAssetId || !inputAssetIds.includes(sourceImageAssetId)) {
       return { ok: false, error: { message: '请先上传原图。', code: 'GENERATION_JOB_IMAGE_POLISH_SOURCE_REQUIRED' } };
     }
+    const enhanceMaterials = config.enhanceMaterials === true;
+    const promptMode = enhanceMaterials ? 'material_enhance' : 'default_polish';
+    const imagePolishPrompts = resolveImagePolishPrompts(enhanceMaterials);
     config.sourceImageAssetId = sourceImageAssetId;
     config.generationStep = 'image_polish';
     config.featureKey = 'image_polish';
     config.featureName = '质感提升';
-    config.promptMode = 'fixed_internal_prompt';
+    config.enhanceMaterials = enhanceMaterials;
+    config.promptMode = promptMode;
     config.batchCount = 1;
     config.targetCount = 1;
-    config.prompt = IMAGE_POLISH_PROMPT;
-    config.negativePrompt = IMAGE_POLISH_NEGATIVE_PROMPT;
-    config.changeStrength = 'weak';
-    config.strength = 'weak';
-    config.styleStrength = 'low';
+    config.prompt = imagePolishPrompts.prompt;
+    config.negativePrompt = imagePolishPrompts.negativePrompt;
+    config.changeStrength = enhanceMaterials ? 'medium' : 'weak';
+    config.strength = enhanceMaterials ? 'balanced' : 'weak';
+    config.styleStrength = enhanceMaterials ? 'medium' : 'low';
     config.preserveStructure = true;
     config.preserveCamera = true;
-    config.preserveColor = true;
-    config.preserveMaterialAppearance = true;
+    if (enhanceMaterials) {
+      delete config.preserveColor;
+      delete config.preserveMaterialAppearance;
+    } else {
+      config.preserveColor = true;
+      config.preserveMaterialAppearance = true;
+    }
     config.preserveGeometry = true;
     config.keepOriginalAspectRatio = true;
     delete config.maskMode;
@@ -2527,7 +2546,9 @@ function validateGenerationJobCreateBody(
   const normalizedInputAssetIds = generationStep === 'image_polish' && isNonEmptyString(config.sourceImageAssetId)
     ? [config.sourceImageAssetId]
     : body.inputAssetIds.map(item => item.trim());
-  const normalizedPrompt = generationStep === 'image_polish' ? IMAGE_POLISH_PROMPT : body.prompt;
+  const normalizedPrompt = generationStep === 'image_polish'
+    ? resolveImagePolishPrompts(config.enhanceMaterials === true).prompt
+    : body.prompt;
 
   return {
     ok: true,

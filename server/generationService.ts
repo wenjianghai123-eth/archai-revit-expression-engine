@@ -16,7 +16,7 @@ import { buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode }
 import { findPlanColorizeStyle, maxPlanColorizeBatchCount, planColorizeStyleOptions, resolvePlanColorizeStyles, type PlanColorizeStyleOption } from '../src/constants/planColorizeStyles';
 import { resolveFloorplanBatchCount, resolveFloorplanVariantPlans, type FloorplanVariantPlan } from '../src/constants/floorplanVariants';
 import { getGenerationOutputCount } from '../src/utils/generationCredits';
-import { IMAGE_POLISH_PROMPT } from './prompts/imagePolishPrompt';
+import { resolveImagePolishPrompts } from './prompts/imagePolishPrompt';
 import {
   adjustCredits,
   createGenerationRecord,
@@ -805,11 +805,17 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
 
   const targetDimensions = resolveQualityTargetDimensions(job.mode, qualityMode, await resolveTargetDimensions(job.mode, job.config, inputImageDataUrl));
   if (isImagePolishMode && process.env.NODE_ENV !== 'production') {
+    const enhanceMaterials = job.config.enhanceMaterials === true;
     console.debug({
       event: 'image_polish_provider_prepare',
+      jobId: job.id,
+      enhanceMaterials,
+      promptMode: typeof job.config.promptMode === 'string'
+        ? job.config.promptMode
+        : enhanceMaterials ? 'material_enhance' : 'default_polish',
+      provider: job.provider,
       mode: job.mode,
       step: job.step ?? readGenerationJobStep(job.config),
-      provider: job.provider,
       inputImageCount: 1,
       usesInternalPrompt: true,
     });
@@ -2378,7 +2384,7 @@ function resolveVariantCompleteProgress(batchCount: number, index: number): numb
 
 function buildProviderPromptForJob(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
   if (job.step === 'image_polish' || readGenerationJobStep(job.config) === 'image_polish') {
-    return IMAGE_POLISH_PROMPT;
+    return resolveImagePolishPrompts(job.config.enhanceMaterials === true).prompt;
   }
 
   if (isObjectInsertJob(job) && readObjectInsertPreviewFusionMode(job.config, job.mode)) {

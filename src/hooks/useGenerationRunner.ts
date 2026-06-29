@@ -3,7 +3,6 @@ import { generateFloorplanTo3D, generateInpainting, generateStyleRender } from '
 import { buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode } from '../promptTemplates/intelligentPromptTemplates';
 import { resolvePlanColorizeStyles } from '../constants/planColorizeStyles';
 import { resolveFloorplanBatchCount, resolveFloorplanVariantPlans } from '../constants/floorplanVariants';
-import { IMAGE_POLISH_NEGATIVE_PROMPT, IMAGE_POLISH_PROMPT } from '../constants/imagePolishPrompt';
 import { saveGenerationRecord } from '../storage/history';
 import {
   createGenerationJob,
@@ -355,6 +354,8 @@ export function useGenerationRunner({
         const isObjectInsertPreviewFusion = isObjectInsert;
         const isFreeReferenceImage = currentStep === GenerationStep.FreeReferenceImage;
         const isImagePolish = currentStep === GenerationStep.ImagePolish;
+        const imagePolishEnhanceMaterials = isImagePolish && stateAtStart.config.enhanceMaterials === true;
+        const imagePolishPromptMode = imagePolishEnhanceMaterials ? 'material_enhance' : 'default_polish';
         const isPlanColorize = currentStep === GenerationStep.PlanColorize;
         const isFloorplanMultiPlan = currentStep === GenerationStep.FloorplanTo3D
           && stateAtStart.config.floorplanOutputMode === 'multi';
@@ -560,6 +561,9 @@ export function useGenerationRunner({
           if (isImagePolish) {
             console.debug({
               event: 'image_polish_submit',
+              sourceImageAssetId: stateAtStart.inputImage.assetId,
+              enhanceMaterials: imagePolishEnhanceMaterials,
+              promptMode: imagePolishPromptMode,
               mode: generationMode,
               step: generationStep,
               generationStep,
@@ -609,6 +613,8 @@ export function useGenerationRunner({
             } : undefined,
             imagePolish: isImagePolish ? {
               sourceImageAssetId: stateAtStart.inputImage.assetId,
+              enhanceMaterials: imagePolishEnhanceMaterials,
+              promptMode: imagePolishPromptMode,
               inputAssetCount: inputAssetIds.length,
               promptRequired: false,
               willCallCreateGenerationJob: true,
@@ -643,7 +649,8 @@ export function useGenerationRunner({
               generationStep,
               featureKey: isImagePolish ? 'image_polish' : undefined,
               featureName: isImagePolish ? '质感提升' : undefined,
-              promptMode: isImagePolish ? 'fixed_internal_prompt' : undefined,
+              enhanceMaterials: isImagePolish ? imagePolishEnhanceMaterials : undefined,
+              promptMode: isImagePolish ? imagePolishPromptMode : undefined,
             qualityMode: stateAtStart.config.qualityMode || 'balanced',
             batchCount: isDesignVariantSingleRetry
               ? 1
@@ -760,11 +767,11 @@ export function useGenerationRunner({
             renderStyle: stateAtStart.config.renderStyle,
             atmosphere: stateAtStart.config.atmosphere,
             smartMaterial: stateAtStart.config.smartMaterial,
-            changeStrength: stateAtStart.config.changeStrength,
-            styleStrength: isImagePolish ? stateAtStart.config.styleStrength || 'low' : undefined,
-            negativePrompt: isImagePolish ? IMAGE_POLISH_NEGATIVE_PROMPT : stateAtStart.config.negativePrompt,
-            preserveColor: isImagePolish ? true : stateAtStart.config.preserveColor,
-            preserveMaterialAppearance: isImagePolish ? true : stateAtStart.config.preserveMaterialAppearance,
+            changeStrength: isImagePolish ? imagePolishEnhanceMaterials ? 'medium' : 'weak' : stateAtStart.config.changeStrength,
+            styleStrength: isImagePolish ? imagePolishEnhanceMaterials ? 'medium' : 'low' : undefined,
+            negativePrompt: isImagePolish ? '' : stateAtStart.config.negativePrompt,
+            preserveColor: isImagePolish ? imagePolishEnhanceMaterials ? undefined : true : stateAtStart.config.preserveColor,
+            preserveMaterialAppearance: isImagePolish ? imagePolishEnhanceMaterials ? undefined : true : stateAtStart.config.preserveMaterialAppearance,
             keepOriginalAspectRatio: isImagePolish ? true : stateAtStart.config.keepOriginalAspectRatio,
             targetCount: isImagePolish ? 1 : stateAtStart.config.targetCount,
             panoramaChangeStrength: stateAtStart.config.panoramaChangeStrength,
@@ -1729,7 +1736,7 @@ function formatGenerationJobError(job: Awaited<ReturnType<typeof getGenerationJo
 
 function buildPromptForGeneration(step: GenerationStep, prompt: string, state?: StepState): string {
   if (step === GenerationStep.ImagePolish) {
-    return IMAGE_POLISH_PROMPT;
+    return '';
   }
   if (step === GenerationStep.FreeReferenceImage) {
     const userPrompt = state ? readSupplementalPromptForGeneration(step, state.config, prompt) : prompt;
@@ -1760,7 +1767,7 @@ function buildPromptForGeneration(step: GenerationStep, prompt: string, state?: 
 }
 
 function readSupplementalPromptForGeneration(step: GenerationStep, config: GenerationConfig, fallback = ''): string {
-  if (step === GenerationStep.ImagePolish) return IMAGE_POLISH_PROMPT;
+  if (step === GenerationStep.ImagePolish) return '';
   if (step === GenerationStep.FreeReferenceImage) return (config.prompt || config.customPrompt || fallback || '').trim();
   return readSmartPromptUserSupplement(getSmartPromptMode(step), config, fallback);
 }
@@ -2099,24 +2106,26 @@ function getAspectRatioString(width: number, height: number): string {
 
 function buildConfigForGeneration(step: GenerationStep, config: GenerationConfig): GenerationConfig {
   if (step === GenerationStep.ImagePolish) {
+    const enhanceMaterials = config.enhanceMaterials === true;
     return {
       ...config,
-      prompt: IMAGE_POLISH_PROMPT,
-      negativePrompt: IMAGE_POLISH_NEGATIVE_PROMPT,
+      prompt: '',
+      negativePrompt: '',
       generationStep: 'image_polish',
       featureKey: 'image_polish',
       featureName: '质感提升',
-      promptMode: 'fixed_internal_prompt',
+      enhanceMaterials,
+      promptMode: enhanceMaterials ? 'material_enhance' : 'default_polish',
       qualityMode: config.qualityMode || 'balanced',
       batchCount: 1,
       targetCount: 1,
-      strength: 'weak',
-      changeStrength: 'weak',
-      styleStrength: 'low',
+      strength: enhanceMaterials ? 'balanced' : 'weak',
+      changeStrength: enhanceMaterials ? 'medium' : 'weak',
+      styleStrength: enhanceMaterials ? 'medium' : 'low',
       preserveStructure: true,
       preserveCamera: true,
-      preserveColor: true,
-      preserveMaterialAppearance: true,
+      preserveColor: enhanceMaterials ? undefined : true,
+      preserveMaterialAppearance: enhanceMaterials ? undefined : true,
       preserveGeometry: true,
       keepOriginalAspectRatio: true,
       materialTextureAssetIds: [],
@@ -2432,7 +2441,7 @@ function readVariantStyleLabel(style: string | undefined): string | undefined {
 }
 
 function readHistoryStyle(step: GenerationStep, config: GenerationConfig): string {
-  if (step === GenerationStep.ImagePolish) return '质感提升';
+  if (step === GenerationStep.ImagePolish) return config.enhanceMaterials ? '质感提升（提升材质）' : '质感提升';
   if (step === GenerationStep.FloorplanTo3D) return '彩平表达';
   if (step === GenerationStep.PlanColorize) return config.template || '图纸智能表达';
   if (step === GenerationStep.ModelSnapshotRender) return config.renderStyle || config.style || '白模快渲';

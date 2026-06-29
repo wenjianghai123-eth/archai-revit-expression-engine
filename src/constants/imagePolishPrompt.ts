@@ -44,3 +44,46 @@ export const IMAGE_POLISH_PROMPT = `请对这张图片进行轻度照片化和�
 最终结果应该看起来像：原图本身被做了一次专业的清晰度、光影和照片质感增强，而不是被重新设计或重新渲染。`;
 
 export const IMAGE_POLISH_NEGATIVE_PROMPT = '不要新增材质，不要替换材质，不要改变颜色，不要改色，不要重新设计，不要改变空间结构，不要改变构图，不要改变镜头角度，不要改变透视，不要移动家具，不要新增家具，不要新增装饰，不要新增木纹，不要新增石纹，不要新增金属质感，不要新增皮革质感，不要新增布艺质感，不要改变墙面，不要改变地面，不要改变柜体，不要改变桌椅，不要过度渲染，不要建筑效果图风格，不要重新生成设计方案，不要强烈风格化，不要高对比滤镜，不要过曝，不要过暗，不要卡通化，不要插画化，不要拼贴，不要文字，不要水印，不要logo。';
+
+export const IMAGE_POLISH_DEFAULT_PROMPT = IMAGE_POLISH_PROMPT;
+export const IMAGE_POLISH_DEFAULT_NEGATIVE_PROMPT = IMAGE_POLISH_NEGATIVE_PROMPT;
+
+export const IMAGE_POLISH_MATERIAL_ENHANCE_PROMPT = `请将这张原始室内 / 建筑空间图转化为高质量、真实自然的效果图。保持原图的空间结构、相机视角、透视关系、构图边界、主要家具布局和核心设计元素不变，不要重新设计空间。
+
+请去除原图中的模型感、线稿感、灰模感、白模感或未完成渲染感，将其转化为真实材质、自然光影和完整空间氛围。整体效果应呈现为专业建筑 / 室内设计效果图。
+
+渲染方向：
+
+- 风格：现代、自然、温暖、高级、低饱和；
+- 材质：根据原图元素合理转化为真实木饰面、石材、涂料、金属、织物、玻璃、地面材质等；
+- 灯光：增强自然光、环境光、间接光和局部灯光效果；
+- 阴影：增加真实接触阴影、柔和阴影和空间层次；
+- 细节：适当优化家具、软装、装饰物、纹理和边缘细节；
+- 氛围：整体统一、舒适、真实、有设计感。
+
+严格要求：
+
+1. 保持原始空间结构不变；
+2. 保持原始镜头角度和透视不变；
+3. 保持主要家具和建筑构件的位置不变；
+4. 不要大幅改变空间功能；
+5. 不要添加过多新家具；
+6. 不要删除原图中的主要设计元素；
+7. 不要改变画面比例和构图边界；
+8. 不要生成文字、水印、logo 或拼贴图；
+9. 不要出现卡通风、插画风、过度锐化或过度曝光；
+10. 最终效果应自然、真实、统一，像专业室内 / 建筑可视化渲染图。`;
+
+export const IMAGE_POLISH_MATERIAL_ENHANCE_NEGATIVE_PROMPT = '不要改变原始空间结构，不要改变相机角度，不要改变透视关系，不要移动主要家具，不要重新设计房间，不要过度添加新家具，不要删除主要元素，不要改变画面比例，不要裁切画面，不要生成拼贴图，不要出现文字、水印、logo，不要卡通风，不要插画风，不要线稿感，不要灰模感，不要白模感，不要未完成模型感，不要扭曲家具，不要错误阴影，不要过曝，不要低清晰度。';
+
+export function resolveImagePolishPrompts(enhanceMaterials: boolean): { prompt: string; negativePrompt: string } {
+  return enhanceMaterials
+    ? {
+        prompt: IMAGE_POLISH_MATERIAL_ENHANCE_PROMPT,
+        negativePrompt: IMAGE_POLISH_MATERIAL_ENHANCE_NEGATIVE_PROMPT,
+      }
+    : {
+        prompt: IMAGE_POLISH_DEFAULT_PROMPT,
+        negativePrompt: IMAGE_POLISH_DEFAULT_NEGATIVE_PROMPT,
+      };
+}

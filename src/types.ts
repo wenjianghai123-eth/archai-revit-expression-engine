@@ -323,6 +323,7 @@ export interface GenerationConfig {
   preserveColor?: boolean;
   preserveMaterialAppearance?: boolean;
   keepOriginalAspectRatio?: boolean;
+  enhanceMaterials?: boolean;
   negativePrompt?: string;
   styleStrength?: 'low' | 'medium' | 'high';
   targetCount?: number;

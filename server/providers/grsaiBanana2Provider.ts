@@ -559,6 +559,10 @@ function buildPrompt(input: GenerateImageInput): string {
     return buildObjectInsertPrompt(input);
   }
 
+  if (isImagePolishInput(input)) {
+    return input.prompt;
+  }
+
   if (isFreeReferenceImageInput(input)) {
     return [
       'Free reference image generation.',
@@ -857,6 +861,13 @@ function readObjectInsertPreviewFusionMode(config: Record<string, unknown>): boo
 function isFreeReferenceImageInput(input: GenerateImageInput): boolean {
   return input.step === 'free_reference_image'
     || input.config.step === 'free_reference_image';
+}
+
+function isImagePolishInput(input: GenerateImageInput): boolean {
+  return input.step === 'image_polish'
+    || input.config.step === 'image_polish'
+    || input.config.generationStep === 'image_polish'
+    || input.config.featureKey === 'image_polish';
 }
 
 function isFloorplanLayoutVariantInput(input: GenerateImageInput): boolean {

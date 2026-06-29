@@ -1,6 +1,5 @@
 import { Download, ExternalLink, ImageUp, Loader2, Sparkles, Upload, X } from 'lucide-react';
 import { useRef, useState } from 'react';
-import { IMAGE_POLISH_NEGATIVE_PROMPT, IMAGE_POLISH_PROMPT } from '../constants/imagePolishPrompt';
 import { uploadImageAsset } from '../lib/api';
 import { GenerationConfig, GenerationRunStateOverride, GenerationStep, ResultSendTargetStep, StepState, UploadedImage } from '../types';
 import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
@@ -47,6 +46,7 @@ export function ImagePolishPanel({
   const resultAssetId = getOriginalResultAssetId(selectedResult);
   const dimensionsText = formatResultDimensions(selectedResult);
   const isBusy = state.isGenerating || isPreparing;
+  const enhanceMaterials = state.config.enhanceMaterials === true;
 
   const handleUpload = async (files: FileList | null) => {
     const selectedFiles = Array.from(files || []);
@@ -77,7 +77,7 @@ export function ImagePolishPanel({
         }
       }
       onUpdateInputImage(image);
-      onUpdateConfig(createImagePolishConfigPatch(image.assetId));
+      onUpdateConfig(createImagePolishConfigPatch(image.assetId, enhanceMaterials));
       setUploadError(null);
       setMessage(null);
       setPreviewMode('original');
@@ -101,12 +101,22 @@ export function ImagePolishPanel({
     setMessage('正在创建质感提升任务...');
     try {
       const imageWithAsset = await ensureUploadedImageAsset(sourceImage, 'image-polish-source');
+      const nextEnhanceMaterials = state.config.enhanceMaterials === true;
       const config: GenerationConfig = {
         ...state.config,
-        ...createImagePolishConfigPatch(imageWithAsset.assetId),
+        ...createImagePolishConfigPatch(imageWithAsset.assetId, nextEnhanceMaterials),
       };
       onUpdateInputImage(imageWithAsset);
       onUpdateConfig(config);
+      if (import.meta.env.DEV) {
+        console.debug({
+          event: 'image_polish_submit',
+          sourceImageAssetId: imageWithAsset.assetId,
+          enhanceMaterials: nextEnhanceMaterials,
+          promptMode: nextEnhanceMaterials ? 'material_enhance' : 'default_polish',
+          provider: config.aiProvider,
+        });
+      }
       onGenerate({
         inputImage: imageWithAsset,
         materialImage: null,
@@ -190,6 +200,21 @@ export function ImagePolishPanel({
             </button>
             {uploadError ? <p className="mt-2 rounded-lg bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">{uploadError}</p> : null}
           </div>
+
+          <label className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white/50 p-3 text-left">
+            <input
+              type="checkbox"
+              checked={enhanceMaterials}
+              onChange={event => onUpdateConfig(createImagePolishConfigPatch(sourceImage?.assetId, event.currentTarget.checked))}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-cyan-700 focus:ring-cyan-600"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm font-black text-slate-900">提升材质</span>
+              <span className="mt-1 block text-xs font-semibold leading-5 text-slate-500">
+                勾选后，将在保持原有空间结构、镜头视角、构图和主要元素不变的前提下，增强真实材质、光影和空间氛围，使画面更接近专业室内 / 建筑效果图。
+              </span>
+            </span>
+          </label>
 
           <button type="button" onClick={() => void handleGenerate()} disabled={isBusy} className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-cyan-700 px-4 text-sm font-black text-white shadow-sm transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:bg-slate-300">
             {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
@@ -300,26 +325,27 @@ function ImageBlock({ title, src }: { title: string; src: string }) {
   );
 }
 
-function createImagePolishConfigPatch(sourceImageAssetId?: string): Partial<GenerationConfig> {
+function createImagePolishConfigPatch(sourceImageAssetId?: string, enhanceMaterials = false): Partial<GenerationConfig> {
   return {
-    prompt: IMAGE_POLISH_PROMPT,
-    negativePrompt: IMAGE_POLISH_NEGATIVE_PROMPT,
+    prompt: '',
+    negativePrompt: '',
     step: 'image_polish',
     generationStep: 'image_polish',
     featureKey: 'image_polish',
     featureName: '质感提升',
-    promptMode: 'fixed_internal_prompt',
+    enhanceMaterials,
+    promptMode: enhanceMaterials ? 'material_enhance' : 'default_polish',
     sourceImageAssetId,
     qualityMode: 'balanced',
     batchCount: 1,
     targetCount: 1,
-    strength: 'weak',
-    changeStrength: 'weak',
-    styleStrength: 'low',
+    strength: enhanceMaterials ? 'balanced' : 'weak',
+    changeStrength: enhanceMaterials ? 'medium' : 'weak',
+    styleStrength: enhanceMaterials ? 'medium' : 'low',
     preserveStructure: true,
     preserveCamera: true,
-    preserveColor: true,
-    preserveMaterialAppearance: true,
+    preserveColor: enhanceMaterials ? undefined : true,
+    preserveMaterialAppearance: enhanceMaterials ? undefined : true,
     preserveGeometry: true,
     keepOriginalAspectRatio: true,
     aspectRatio: 'source',

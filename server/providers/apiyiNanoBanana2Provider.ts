@@ -233,6 +233,10 @@ export function collectApiYiImageSources(input: GenerateImageInput): string[] {
     ].filter(Boolean);
   }
 
+  if (isImagePolish(input)) {
+    return [input.inputImageDataUrl].filter(Boolean);
+  }
+
   return [
     input.inputImageDataUrl,
     input.materialImageDataUrl,
@@ -271,6 +275,12 @@ function buildApiYiPrompt(input: GenerateImageInput): string {
   }
 
   return input.prompt;
+}
+
+function isImagePolish(input: GenerateImageInput): boolean {
+  return input.step === 'image_polish'
+    || input.config.generationStep === 'image_polish'
+    || input.config.featureKey === 'image_polish';
 }
 
 function resolveAspectRatio(input: GenerateImageInput): string {

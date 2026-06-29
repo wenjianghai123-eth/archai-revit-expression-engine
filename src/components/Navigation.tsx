@@ -2,14 +2,12 @@ import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import {
   AlertCircle,
-  ArrowRight,
   Database,
   FolderKanban,
   History,
   LayoutDashboard,
   Layers,
   LogOut,
-  Plus,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -27,6 +25,7 @@ import {
   readStoredVisibleFeatureIds,
   writeStoredVisibleFeatureIds,
 } from '../featureRegistry';
+import { FeatureScrollBar } from './workspace/FeatureScrollBar';
 
 interface SidebarProps {
   activeTab: string;
@@ -85,11 +84,6 @@ export function Sidebar({
           <div className="mt-4 flex gap-2">
             <span className="rounded-full border border-blue-400/30 bg-blue-500/10 px-2.5 py-1 text-[10px] font-bold text-blue-200">AI渲图</span>
             <span className="rounded-full border border-violet-400/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-bold text-violet-200">烛照AI</span>
-          </div>
-          <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-blue-300">当前项目</p>
-            <h2 className="mt-2 text-lg font-bold leading-tight">烛照AI 生成工作台</h2>
-            <p className="mt-2 text-xs leading-5 text-slate-400">面向广田设计流程的 AI 方案表达工具。</p>
           </div>
         </div>
 
@@ -271,6 +265,7 @@ export function Stepper({
   const optionalFeatures = getOptionalFeatures();
   const visibleFeatureIdSet = new Set(visibleFeatures.map(feature => feature.id));
   const selectedProviderInfo = providers.find(provider => provider.value === selectedProvider);
+  const activeFeatureId = visibleFeatures.find(feature => feature.step === currentStep)?.id ?? null;
 
   const handleSelectFeature = (feature: FeatureDefinition) => {
     debugFeatureClick(feature);
@@ -297,8 +292,8 @@ export function Stepper({
             <Sparkles className="h-3.5 w-3.5" />
             ARCHITECTURE AI STUDIO
           </div>
-          <h1 className="mt-1 text-lg font-bold tracking-tight text-slate-950 md:text-xl">AI 设计工作台</h1>
-          <p className="mt-0.5 text-xs text-slate-500">选择功能、上传素材并输入提示词，快速生成建筑与室内设计表达结果。</p>
+          <h1 className="mt-1 text-lg font-bold tracking-tight text-slate-950 md:text-xl">AI 生成</h1>
+          <p className="mt-0.5 text-xs text-slate-500">选择功能、上传素材并生成设计效果。</p>
         </div>
         <div className="hidden items-center gap-3 md:flex">
           <label className="flex items-center gap-2 rounded-2xl border border-white/70 bg-white/60 px-3 py-2 text-xs font-bold text-slate-600 shadow-sm backdrop-blur">
@@ -355,114 +350,12 @@ export function Stepper({
         </div>
       ) : null}
 
-      <div className="workspace-feature-grid grid gap-3 px-4 pb-3 md:grid-cols-3 xl:grid-cols-6 md:px-5">
-        {visibleFeatures.map((feature) => {
-          const isActive = currentStep === feature.step;
-          const Icon = feature.icon;
-          const canRemove = !defaultFeatureIds.includes(feature.id as typeof defaultFeatureIds[number]);
-          return (
-            <button
-              key={feature.id}
-              onClick={() => handleSelectFeature(feature)}
-              className={`workspace-feature-card group relative min-h-20 overflow-hidden border p-3 text-left transition-all ${
-                isActive
-                  ? 'workspace-feature-card-active'
-                  : ''
-              }`}
-            >
-              <img
-                src={feature.image}
-                alt={feature.title}
-                className="absolute inset-0 h-full w-full object-cover opacity-10 transition-transform duration-500 group-hover:scale-105"
-                referrerPolicy="no-referrer"
-              />
-              <div className="absolute inset-0 bg-gradient-to-r from-white via-white/90 to-white/45" />
-              {canRemove ? (
-                <span
-                  role="button"
-                  tabIndex={0}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    handleRemoveFeature(feature.id);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      handleRemoveFeature(feature.id);
-                    }
-                  }}
-                  className="absolute right-2 top-2 z-10 rounded-full bg-white/95 px-2 py-1 text-[10px] font-black text-slate-500 shadow-sm hover:bg-rose-50 hover:text-rose-600"
-                >
-                  隐藏
-                </span>
-              ) : null}
-              <div className="relative flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className={`mb-2 flex h-8 w-8 items-center justify-center rounded-xl ${isActive ? 'bg-gradient-to-br from-teal-600 to-cyan-700 text-white shadow-lg shadow-teal-100' : 'bg-white/70 text-slate-600 shadow-sm'}`}>
-                    <Icon className="h-4 w-4" />
-                  </div>
-                  <h2 className="truncate text-sm font-bold text-slate-950">{feature.title}</h2>
-                  <p className="mt-0.5 line-clamp-1 text-xs text-slate-500">{feature.desc}</p>
-                </div>
-              </div>
-              {isActive && (
-                <motion.div
-                  layoutId="active-step-card"
-                  className="absolute bottom-0 left-0 h-1 w-full bg-gradient-to-r from-teal-500 to-cyan-600"
-                />
-              )}
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          onClick={() => setIsFeaturePickerOpen(true)}
-          className="workspace-feature-card group relative min-h-20 overflow-hidden border border-dashed p-3 text-left transition"
-        >
-          <div className="relative flex h-full items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm">
-              <Plus className="h-5 w-5" />
-            </div>
-            <span className="min-w-0">
-              <span className="block text-sm font-black text-slate-900">+ 添加功能</span>
-              <span className="mt-0.5 block truncate text-xs text-slate-500">选择更多入口</span>
-            </span>
-            <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-blue-600" />
-          </div>
-        </button>
-      </div>
-
-      <div className="hidden items-center justify-end border-t border-slate-100 px-5 py-2 text-xs text-slate-500 md:flex">
-        <button
-          className="rounded-full bg-slate-100 px-3 py-1.5 font-bold text-slate-700 hover:bg-slate-200"
-          type="button"
-        >
-          当前项目
-        </button>
-      </div>
-
-      <div className="flex border-t border-slate-100 lg:hidden">
-        {visibleFeatures.map((feature) => {
-          const isActive = currentStep === feature.step;
-          return (
-            <button
-              key={feature.id}
-              onClick={() => handleSelectFeature(feature)}
-              className={`flex-1 px-2 py-3 text-xs font-bold ${isActive ? 'bg-blue-600 text-white' : 'text-slate-500'}`}
-            >
-              {feature.title}
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          onClick={() => setIsFeaturePickerOpen(true)}
-          className="flex-1 px-2 py-3 text-xs font-bold text-blue-600"
-        >
-          更多
-        </button>
-      </div>
+      <FeatureScrollBar
+        features={visibleFeatures}
+        activeFeatureId={activeFeatureId}
+        onSelectFeature={handleSelectFeature}
+        onAddFeature={() => setIsFeaturePickerOpen(true)}
+      />
 
       {isFeaturePickerOpen ? (
         <FeaturePicker
