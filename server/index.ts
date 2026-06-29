@@ -96,6 +96,7 @@ import { createSupabaseAuthUser, resetSupabaseAuthUserPassword, updateSupabaseAu
 import { getModelConversionConfig } from './modelConversionService';
 import { getModelOptimizationConfig } from './modelOptimizationService';
 import { polishPromptText, PromptPolishRequest, PromptPolishResult } from './promptPolishService';
+import { IMAGE_POLISH_NEGATIVE_PROMPT, IMAGE_POLISH_PROMPT } from './prompts/imagePolishPrompt';
 
 export const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -518,6 +519,16 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
   try {
     const user = getRequiredCurrentUser(req);
     logGenerationJobModeStepDebug('route accepted body', { mode: body.value.mode, step: body.value.step });
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug({
+        event: 'generation_job_create',
+        mode: body.value.mode,
+        step: body.value.step,
+        generationStep: body.value.config.generationStep || body.value.step,
+        provider: body.value.provider,
+        inputAssetCount: body.value.inputAssetIds.length,
+      });
+    }
     logGenerationJobCreateStage(req, 'get project', { userId: user.id, projectId: body.value.projectId, mode: body.value.mode, step: body.value.step });
     const project = await getProject(body.value.projectId, user.id);
     if (!project) {
@@ -1954,11 +1965,6 @@ function validateGenerationJobCreateBody(
     return { ok: false, error: { message: 'projectId is required.', code: 'GENERATION_JOB_PROJECT_REQUIRED' } };
   }
 
-  if (!isGenerationMode(body.mode)) {
-    logGenerationJobModeStepDebug('mode validation failed', { mode: body.mode, step: isRecord(body.config) ? body.step ?? body.config.step : body.step });
-    return { ok: false, error: { message: 'Generation mode is invalid.', code: 'GENERATION_JOB_MODE_INVALID' } };
-  }
-
   if (typeof body.prompt !== 'string') {
     return { ok: false, error: { message: 'prompt must be a string.', code: 'GENERATION_JOB_PROMPT_INVALID' } };
   }
@@ -1966,6 +1972,8 @@ function validateGenerationJobCreateBody(
   if (!isRecord(body.config)) {
     return { ok: false, error: { message: 'config must be an object.', code: 'GENERATION_JOB_CONFIG_INVALID' } };
   }
+
+  let requestedMode = typeof body.mode === 'string' ? body.mode.trim() : body.mode;
 
   if (
     !Array.isArray(body.inputAssetIds) ||
@@ -1975,9 +1983,9 @@ function validateGenerationJobCreateBody(
     return {
       ok: false,
       error: {
-        message: body.mode === 'design-variants'
+        message: requestedMode === 'design-variants'
           ? '请先上传或选择参考图'
-          : body.mode === 'plan-colorize'
+          : requestedMode === 'plan-colorize'
             ? '请先上传或选择一张平面图'
           : 'inputAssetIds must contain at least one asset id.',
         code: 'GENERATION_JOB_INPUTS_INVALID',
@@ -2002,23 +2010,47 @@ function validateGenerationJobCreateBody(
   }
   config.aiProvider = normalizedProvider;
   delete config.selectedProvider;
-  const stepCandidate = body.step !== undefined
+  let stepCandidate = body.step !== undefined
     ? body.step
+    : body.generationStep !== undefined
+      ? body.generationStep
+    : config.generationStep !== undefined
+      ? config.generationStep
     : config.step !== undefined
       ? config.step
       : isRecord(config.objectInsert)
         ? 'object_insert'
         : undefined;
+  if ((requestedMode === 'image_polish' || requestedMode === 'image_enhancement') && (stepCandidate === undefined || stepCandidate === null || stepCandidate === '')) {
+    stepCandidate = 'image_polish';
+  }
   if (stepCandidate !== undefined && stepCandidate !== null && stepCandidate !== '') {
     if (!isGenerationStep(stepCandidate)) {
-      logGenerationJobModeStepDebug('step validation failed', { mode: body.mode, step: stepCandidate });
+      logGenerationJobModeStepDebug('step validation failed', { mode: requestedMode, step: stepCandidate });
       return { ok: false, error: { message: 'Generation step is invalid.', code: 'GENERATION_JOB_STEP_INVALID' } };
     }
     config.step = stepCandidate;
+    config.generationStep = stepCandidate;
   }
   const generationStep = isGenerationStep(config.step) ? config.step : null;
-  logGenerationJobModeStepDebug('validate body mode/step', { mode: body.mode, step: generationStep });
-  if (generationStep === 'object_insert' && body.mode !== 'inpaint') {
+  if (generationStep === 'image_polish' && (requestedMode === 'image_polish' || requestedMode === 'image_enhancement')) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug({
+        event: 'generation_mode_normalized',
+        fromMode: requestedMode,
+        toMode: 'inpaint',
+        step: 'image_polish',
+      });
+    }
+    requestedMode = 'inpaint';
+  }
+  if (!isGenerationMode(requestedMode)) {
+    logGenerationJobModeStepDebug('mode validation failed', { mode: requestedMode, step: generationStep });
+    return { ok: false, error: { message: 'Generation mode is invalid.', code: 'GENERATION_JOB_MODE_INVALID' } };
+  }
+  const generationMode = requestedMode;
+  logGenerationJobModeStepDebug('validate body mode/step', { mode: generationMode, step: generationStep });
+  if (generationStep === 'object_insert' && generationMode !== 'inpaint') {
     return {
       ok: false,
       error: {
@@ -2027,12 +2059,21 @@ function validateGenerationJobCreateBody(
       },
     };
   }
-  if (generationStep === 'free_reference_image' && body.mode !== 'style-render') {
+  if (generationStep === 'free_reference_image' && generationMode !== 'style-render') {
     return {
       ok: false,
       error: {
         message: '自由参考生图应使用 mode=style-render，并通过 step=free_reference_image 标识业务功能。',
         code: 'GENERATION_JOB_FREE_REFERENCE_MODE_INVALID',
+      },
+    };
+  }
+  if (generationStep === 'image_polish' && generationMode !== 'inpaint') {
+    return {
+      ok: false,
+      error: {
+        message: '质感提升应使用 mode=inpaint，并通过 step=image_polish 标识业务功能。',
+        code: 'GENERATION_JOB_IMAGE_POLISH_MODE_INVALID',
       },
     };
   }
@@ -2081,30 +2122,67 @@ function validateGenerationJobCreateBody(
   } else {
     delete config.freeReferenceReferences;
   }
-  if (body.mode === 'material-replace') {
+  if (generationStep === 'image_polish') {
+    const inputAssetIds = body.inputAssetIds.map(item => item.trim());
+    const sourceImageAssetId = isNonEmptyString(config.sourceImageAssetId) ? config.sourceImageAssetId.trim() : inputAssetIds[0] || '';
+    if (!sourceImageAssetId || !inputAssetIds.includes(sourceImageAssetId)) {
+      return { ok: false, error: { message: '请先上传原图。', code: 'GENERATION_JOB_IMAGE_POLISH_SOURCE_REQUIRED' } };
+    }
+    config.sourceImageAssetId = sourceImageAssetId;
+    config.generationStep = 'image_polish';
+    config.featureKey = 'image_polish';
+    config.featureName = '质感提升';
+    config.promptMode = 'fixed_internal_prompt';
+    config.batchCount = 1;
+    config.targetCount = 1;
+    config.prompt = IMAGE_POLISH_PROMPT;
+    config.negativePrompt = IMAGE_POLISH_NEGATIVE_PROMPT;
+    config.changeStrength = 'weak';
+    config.strength = 'weak';
+    config.styleStrength = 'low';
+    config.preserveStructure = true;
+    config.preserveCamera = true;
+    config.preserveColor = true;
+    config.preserveMaterialAppearance = true;
+    config.preserveGeometry = true;
+    config.keepOriginalAspectRatio = true;
+    delete config.maskMode;
+    delete config.maskAssetId;
+    delete config.referenceImageAssetId;
+    delete config.referenceImageAssetIds;
+    delete config.materialReferenceAssetIds;
+    delete config.materialTextureAssetIds;
+    delete config.furnitureReferenceAssetIds;
+    delete config.objectReferenceAssetId;
+    delete config.objectInsert;
+    delete config.placementGuideAssetId;
+    delete config.placementPreviewAssetId;
+    delete config.placementMaskAssetId;
+  }
+  if (generationMode === 'material-replace') {
     const sourceImageAssetId = typeof config.sourceImageAssetId === 'string' ? config.sourceImageAssetId.trim() : '';
     if (!sourceImageAssetId || !body.inputAssetIds.includes(sourceImageAssetId)) {
       return { ok: false, error: { message: '请先上传或选择一张图片。', code: 'GENERATION_JOB_SOURCE_IMAGE_REQUIRED' } };
     }
     config.sourceImageAssetId = sourceImageAssetId;
   }
-  const variantConfig = normalizeDesignVariantConfig(body.mode, config);
+  const variantConfig = normalizeDesignVariantConfig(generationMode, config);
   if (variantConfig.ok === false) {
     return { ok: false, error: variantConfig.error };
   }
-  const floorplanConfig = normalizeFloorplanConfig(body.mode, config);
+  const floorplanConfig = normalizeFloorplanConfig(generationMode, config);
   if (floorplanConfig.ok === false) {
     return { ok: false, error: floorplanConfig.error };
   }
-  const materialReplaceConfig = normalizeMaterialReplaceConfig(body.mode, config);
+  const materialReplaceConfig = normalizeMaterialReplaceConfig(generationMode, config);
   if (materialReplaceConfig.ok === false) {
     return { ok: false, error: materialReplaceConfig.error };
   }
-  const planColorizeConfig = normalizePlanColorizeConfig(body.mode, config);
+  const planColorizeConfig = normalizePlanColorizeConfig(generationMode, config);
   if (planColorizeConfig.ok === false) {
     return { ok: false, error: planColorizeConfig.error };
   }
-  if (body.mode === 'model-render') {
+  if (generationMode === 'model-render') {
     if (!isNonEmptyString(config.sourceImageAssetId) && !isNonEmptyString(config.snapshotAssetId)) {
       return { ok: false, error: { message: 'sourceImageAssetId is required for model-render jobs.', code: 'GENERATION_JOB_SNAPSHOT_ASSET_REQUIRED' } };
     }
@@ -2112,7 +2190,7 @@ function validateGenerationJobCreateBody(
     if (isNonEmptyString(config.snapshotAssetId)) config.snapshotAssetId = config.snapshotAssetId.trim();
     if (isNonEmptyString(config.sourceModelAssetId)) config.sourceModelAssetId = config.sourceModelAssetId.trim();
   }
-  if (body.mode === 'panorama-roam-render') {
+  if (generationMode === 'panorama-roam-render') {
     const panoramaAssetId = isNonEmptyString(config.panoramaAssetId)
       ? config.panoramaAssetId.trim()
       : isNonEmptyString(config.sourceImageAssetId)
@@ -2133,7 +2211,7 @@ function validateGenerationJobCreateBody(
   if (generationStep === 'object_insert') {
     const inputAssetIds = body.inputAssetIds.map(item => item.trim());
     const objectInsertConfig = isRecord(config.objectInsert) ? { ...config.objectInsert } : {};
-    const previewFusionMode = readObjectInsertPreviewFusionMode(config, body.mode);
+    const previewFusionMode = readObjectInsertPreviewFusionMode(config, generationMode);
     const debugMode = readObjectInsertDebugMode(config);
     const positionConstraintStrength = readObjectInsertPositionConstraintStrength(config);
     const placementMode = readObjectInsertPlacementMode(config);
@@ -2206,7 +2284,7 @@ function validateGenerationJobCreateBody(
     const hasObjectItems = objectItems.length > 0;
     if (process.env.NODE_ENV !== 'production') {
       console.debug('[ObjectInsert] generation job validation', {
-        requestMode: body.mode,
+        requestMode: generationMode,
         configMode: typeof config.mode === 'string' ? config.mode : undefined,
         objectInsertMode: previewFusionMode ? 'object_insert_preview_fusion' : 'legacy_object_insert',
         inputAssetIds,
@@ -2368,7 +2446,7 @@ function validateGenerationJobCreateBody(
   if (config.targetAspectRatio !== undefined && typeof config.targetAspectRatio !== 'string') {
     return { ok: false, error: { message: 'targetAspectRatio must be a string.', code: 'GENERATION_JOB_ASPECT_RATIO_INVALID' } };
   }
-  if (usesStandardImageAspectRatio(body.mode)) {
+  if (usesStandardImageAspectRatio(generationMode)) {
     config.targetAspectRatio = '16:9';
     config.aspectRatio = '16:9';
     config.apiyiAspectRatio = '16:9';
@@ -2385,16 +2463,16 @@ function validateGenerationJobCreateBody(
   if (config.materialReferenceAssetIds !== undefined && !isStringArrayWithLimit(config.materialReferenceAssetIds, 3)) {
     return { ok: false, error: { message: 'materialReferenceAssetIds must contain at most 3 asset ids.', code: 'GENERATION_JOB_MATERIAL_REFERENCES_INVALID' } };
   }
-  if (body.mode === 'material-replace') {
+  if (generationMode === 'material-replace') {
     const sourceImageAssetId = typeof config.sourceImageAssetId === 'string' ? config.sourceImageAssetId.trim() : '';
     if (!sourceImageAssetId || !body.inputAssetIds.includes(sourceImageAssetId)) {
       return { ok: false, error: { message: '请先上传或选择一张图片。', code: 'GENERATION_JOB_SOURCE_IMAGE_REQUIRED' } };
     }
     config.sourceImageAssetId = sourceImageAssetId;
   }
-  if (body.mode === 'inpaint' || body.mode === 'material-replace' || generationStep === 'object_insert') {
+  if (generationMode === 'inpaint' || generationMode === 'material-replace' || generationStep === 'object_insert') {
     if (config.maskMode === undefined || config.maskMode === null || config.maskMode === '') {
-      if (body.mode === 'material-replace' && config.editMode === 'mask') {
+      if (generationMode === 'material-replace' && config.editMode === 'mask') {
         return { ok: false, error: { message: '精细涂抹模式下请先选择需要替换的区域', code: 'GENERATION_JOB_MASK_REQUIRED' } };
       }
       delete config.maskMode;
@@ -2431,16 +2509,21 @@ function validateGenerationJobCreateBody(
     delete config.maskAssetId;
   }
 
+  const normalizedInputAssetIds = generationStep === 'image_polish' && isNonEmptyString(config.sourceImageAssetId)
+    ? [config.sourceImageAssetId]
+    : body.inputAssetIds.map(item => item.trim());
+  const normalizedPrompt = generationStep === 'image_polish' ? IMAGE_POLISH_PROMPT : body.prompt;
+
   return {
     ok: true,
     requestedProvider,
     value: {
       projectId: body.projectId.trim(),
-      mode: body.mode,
+      mode: generationMode,
       step: generationStep,
-      prompt: body.prompt,
+      prompt: normalizedPrompt,
       config,
-      inputAssetIds: body.inputAssetIds.map(item => item.trim()),
+      inputAssetIds: normalizedInputAssetIds,
       provider: normalizedProvider,
     },
   };
@@ -2563,6 +2646,7 @@ const allowedGenerationSteps: Array<NonNullable<GenerationJob['step']>> = [
   'panorama_quick_render',
   'object_insert',
   'free_reference_image',
+  'image_polish',
 ];
 
 const allowedPromptTemplateFeatures = [
@@ -2572,6 +2656,7 @@ const allowedPromptTemplateFeatures = [
   'material-replace',
   'object-insert',
   'free-reference-image',
+  'image-polish',
 ];
 
 function readPromptTemplateFilters(query: Request['query']): Parameters<typeof listPromptTemplates>[0] {
@@ -2620,6 +2705,8 @@ function inferPromptTemplateFeature(step: NonNullable<GenerationJob['step']>): P
       return 'object-insert';
     case 'free_reference_image':
       return 'free-reference-image';
+    case 'image_polish':
+      return 'image-polish';
     default:
       return 'floorplan';
   }
@@ -2639,6 +2726,8 @@ function promptTemplateFeatureName(feature: Parameters<typeof createPromptTempla
       return '元素植入';
     case 'free-reference-image':
       return '自由参考生图';
+    case 'image-polish':
+      return '质感提升';
     default:
       return '提示词模板';
   }

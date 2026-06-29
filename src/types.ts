@@ -9,6 +9,7 @@ export enum GenerationStep {
   PanoramaQuickRender = 8,
   ObjectInsert = 9,
   FreeReferenceImage = 10,
+  ImagePolish = 11,
 }
 
 export type GenerationMode = 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render';
@@ -22,7 +23,8 @@ export type GenerationJobStep =
   | 'plan_colorize'
   | 'panorama_quick_render'
   | 'object_insert'
-  | 'free_reference_image';
+  | 'free_reference_image'
+  | 'image_polish';
 export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana' | 'apiyi-nano-banana2-edit';
 export type SelectableImageProvider = 'grsai-banana2' | 'apiyi-nano-banana2-edit';
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
@@ -317,6 +319,12 @@ export interface GenerationConfig {
   keepOriginalMaterial?: boolean;
   preserveStructure?: boolean;
   preserveCamera?: boolean;
+  preserveColor?: boolean;
+  preserveMaterialAppearance?: boolean;
+  keepOriginalAspectRatio?: boolean;
+  negativePrompt?: string;
+  styleStrength?: 'low' | 'medium' | 'high';
+  targetCount?: number;
   feather?: number;
   batchCount?: PlanColorizeBatchCount | DesignVariantBatchCount | FloorplanMultiPlanBatchCount;
   floorplanOutputMode?: FloorplanMultiPlanMode;
@@ -374,6 +382,10 @@ export interface GenerationConfig {
   preserveGeometry?: boolean;
   sourceModelAssetId?: string;
   sourceImageAssetId?: string;
+  featureKey?: string;
+  featureName?: string;
+  promptMode?: 'fixed_internal_prompt' | string;
+  generationStep?: GenerationJobStep;
   snapshotAssetId?: string;
   panoramaAssetId?: string;
   panoramaSourceAssetId?: string;
@@ -620,7 +632,7 @@ export interface PromptTemplate {
   id: string;
   title: string;
   category: string;
-  feature: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render' | 'object-insert' | 'free-reference-image';
+  feature: 'floorplan' | 'style-render' | 'inpaint' | 'model-render' | 'design-variants' | 'material-replace' | 'plan-colorize' | 'panorama-roam-render' | 'object-insert' | 'free-reference-image' | 'image-polish';
   supportedModes?: GenerationStep[] | string[];
   description: string;
   previewImage: string;

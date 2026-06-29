@@ -115,6 +115,21 @@ describe('API易 Nano Banana 2 provider', () => {
     expect(Buffer.from(inlineData.data, 'base64').subarray(1, 4).toString()).toBe('PNG');
   });
 
+  it('uses the detected file header before building APIYi inlineData', async () => {
+    const webp = await sharp({
+      create: {
+        width: 2,
+        height: 2,
+        channels: 3,
+        background: '#ffffff',
+      },
+    }).webp().toBuffer();
+    const inlineData = await loadAssetAsInlineData(`data:image/jpeg;base64,${webp.toString('base64')}`);
+
+    expect(inlineData.mimeType).toBe('image/png');
+    expect(Buffer.from(inlineData.data, 'base64').subarray(1, 4).toString()).toBe('PNG');
+  });
+
   it('fails clearly when APIYI_API_KEY is missing', async () => {
     const provider = createApiYiNanoBanana2Provider({ apiKey: '' });
     const previous = process.env.APIYI_API_KEY;

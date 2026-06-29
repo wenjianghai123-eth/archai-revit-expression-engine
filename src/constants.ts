@@ -1,4 +1,5 @@
 import { GenerationStep, GenerationConfig, MaterialAsset, FurnitureStyle, PromptTemplate } from './types';
+import { IMAGE_POLISH_NEGATIVE_PROMPT, IMAGE_POLISH_PROMPT } from './constants/imagePolishPrompt';
 
 export const MOCK_MATERIALS: MaterialAsset[] = [
   {
@@ -498,6 +499,25 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
     freeReferenceResolution: 1024,
     freeReferenceAspectRatio: '16:9',
     targetAspectRatio: '16:9',
+  },
+  [GenerationStep.ImagePolish]: {
+    prompt: IMAGE_POLISH_PROMPT,
+    negativePrompt: IMAGE_POLISH_NEGATIVE_PROMPT,
+    qualityMode: 'balanced',
+    style: '质感提升',
+    lighting: '匹配原图',
+    materialStrength: 0.2,
+    batchCount: 1,
+    targetCount: 1,
+    preserveStructure: true,
+    preserveCamera: true,
+    preserveColor: true,
+    preserveMaterialAppearance: true,
+    keepOriginalAspectRatio: true,
+    strength: 'weak',
+    changeStrength: 'weak',
+    styleStrength: 'low',
+    aspectRatio: 'source',
   },
 };
 

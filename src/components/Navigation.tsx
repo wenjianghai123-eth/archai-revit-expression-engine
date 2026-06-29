@@ -547,6 +547,7 @@ function FeaturePicker({
 function readStepperFeatureLabel(step: GenerationStep): string {
   if (step === GenerationStep.FloorplanTo3D) return '平面彩平';
   if (step === GenerationStep.FreeReferenceImage) return '自由参考生图';
+  if (step === GenerationStep.ImagePolish) return '质感提升';
   if (step === GenerationStep.MaterialReplace) return '材质软装替换';
   if (step === GenerationStep.ObjectInsert) return '元素植入';
   if (step === GenerationStep.DesignVariants) return '方案变体';

@@ -52,6 +52,13 @@ const coreFeatures = [
     icon: Boxes,
     tone: 'from-violet-500/20 to-fuchsia-300/10 text-violet-900',
   },
+  {
+    title: '质感提升',
+    description: '上传一张原图，在保持原色、原材质倾向、构图和设计不变的基础上提升清晰度、真实感与照片质感。',
+    step: GenerationStep.ImagePolish,
+    icon: Sparkles,
+    tone: 'from-cyan-500/20 to-emerald-300/10 text-cyan-900',
+  },
 ] as const;
 
 const workflowSteps = [
@@ -102,7 +109,7 @@ export function LandingPage({ onStartCreate }: LandingPageProps) {
               description="从图纸表达、参考生图到局部调整与方案推演，把高频工作集中在同一个工作台。"
             />
 
-            <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
               {coreFeatures.map(({ title, description, step, icon: Icon, tone }) => (
                 <button
                   key={title}

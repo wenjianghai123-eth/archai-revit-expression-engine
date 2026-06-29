@@ -1091,7 +1091,8 @@ function isGenerationJobStep(value: unknown): value is NonNullable<GenerationJob
     || value === 'plan_colorize'
     || value === 'panorama_quick_render'
     || value === 'object_insert'
-    || value === 'free_reference_image';
+    || value === 'free_reference_image'
+    || value === 'image_polish';
 }
 
 function mapGenerationResultRow(row: GenerationResultRow): GenerationResult {
@@ -1171,6 +1172,8 @@ function inferPromptTemplateFeature(step: PromptTemplateRecord['generationStep']
       return 'object-insert';
     case 'free_reference_image':
       return 'free-reference-image';
+    case 'image_polish':
+      return 'image-polish';
     default:
       return 'floorplan';
   }

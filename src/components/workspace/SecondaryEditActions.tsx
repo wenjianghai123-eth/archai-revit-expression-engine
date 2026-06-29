@@ -1,6 +1,7 @@
 import { ImagePlus, Layers, Paintbrush, RefreshCw, Send, Settings2, Sparkles, Zap } from 'lucide-react';
 import { GenerationStep, ResultSendTargetStep, SecondaryEditAction } from '../../types';
 import { materialRepairActions, resultSendTargets, secondaryEditActions } from '../../utils/secondaryEdit';
+import { RelatedFeatureChips } from '../common/RelatedFeatureChips';
 
 interface SecondaryEditActionsProps {
   resultId: string;
@@ -79,22 +80,17 @@ export function ResultSendActions({
   const targets = resultSendTargets.filter(item => item.step !== currentStep);
 
   return (
-    <div className="grid grid-cols-2 gap-1.5">
-      {targets.map(item => (
-        <button
-          key={item.step}
-          type="button"
-          onClick={() => onSend(resultId, item.step)}
-          disabled={disabled}
-          title={item.label}
-          aria-label={item.label}
-          className="inline-flex min-w-0 items-center justify-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-bold text-slate-600 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:opacity-50"
-        >
-          <SendIcon step={item.step} />
-          <span className="truncate">{compact ? item.shortLabel : item.label}</span>
-        </button>
-      ))}
-    </div>
+    <RelatedFeatureChips
+      title={compact ? undefined : '相关功能'}
+      items={targets.map(item => ({
+        id: String(item.step),
+        label: readResultSendLabel(item.step),
+        icon: <SendIcon step={item.step} />,
+        disabled,
+      }))}
+      onSelect={id => onSend(resultId, Number(id) as ResultSendTargetStep)}
+      variant="chips"
+    />
   );
 }
 
@@ -113,4 +109,11 @@ function SendIcon({ step }: { step: ResultSendTargetStep }) {
   if (step === GenerationStep.ObjectInsert) return <ImagePlus className="h-3 w-3 shrink-0" />;
   if (step === GenerationStep.DesignVariants) return <Layers className="h-3 w-3 shrink-0" />;
   return <Send className="h-3 w-3 shrink-0" />;
+}
+
+function readResultSendLabel(step: ResultSendTargetStep): string {
+  if (step === GenerationStep.MaterialReplace) return '材质软装替换';
+  if (step === GenerationStep.ObjectInsert) return '元素植入';
+  if (step === GenerationStep.DesignVariants) return '方案变体';
+  return '自由参考生图';
 }

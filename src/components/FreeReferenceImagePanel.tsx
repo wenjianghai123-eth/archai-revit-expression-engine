@@ -321,36 +321,36 @@ export function FreeReferenceImagePanel({
         </aside>
 
         <main className="workspace-canvas min-h-0 overflow-hidden rounded-3xl border border-white/60">
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-            <div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+            <div className="min-w-0">
               <p className="text-sm font-bold text-slate-900">结果图</p>
               <p className="mt-1 text-xs text-slate-500">{readStatusText(state)}</p>
             </div>
-            {originalResultImage ? (
-              <button type="button" onClick={() => void handleDownload()} disabled={isDownloading} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60">
-                <Download className={`h-3.5 w-3.5 ${isDownloading ? 'animate-pulse' : ''}`} />
-                {isDownloading ? '正在下载...' : '保存到本地'}
-              </button>
-            ) : null}
-          </div>
-          {originalResultImage ? (
-            <div className="flex items-center justify-end gap-2 border-b border-slate-100 px-4 py-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               {resultDimensionsText ? <span className="text-xs font-bold text-slate-500">{resultDimensionsText}</span> : null}
-              {selectedResult && onSendResultToStep ? (
-                <div className="min-w-[260px]">
-                  <ResultSendActions resultId={selectedResult.id} currentStep={GenerationStep.FreeReferenceImage} onSend={onSendResultToStep} compact disabled={state.isGenerating} />
-                </div>
+              {originalResultImage ? (
+                <>
+                  <button type="button" onClick={() => window.open(originalResultImage, '_blank', 'noopener,noreferrer')} className="inline-flex h-8 items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 text-xs font-bold text-slate-700 transition hover:bg-white hover:text-cyan-800">
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    查看原图
+                  </button>
+                  <button type="button" onClick={() => void handleDownload()} disabled={isDownloading} className="inline-flex h-8 items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 text-xs font-bold text-slate-700 transition hover:bg-white hover:text-cyan-800 disabled:cursor-not-allowed disabled:opacity-60">
+                    <Download className={`h-3.5 w-3.5 ${isDownloading ? 'animate-pulse' : ''}`} />
+                    {isDownloading ? '正在下载...' : '保存到本地'}
+                  </button>
+                </>
               ) : null}
-              <button type="button" onClick={() => window.open(originalResultImage, '_blank', 'noopener,noreferrer')} className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-slate-700 ring-1 ring-slate-200 hover:text-blue-700">
-                <ExternalLink className="h-3.5 w-3.5" />
-                查看原图
-              </button>
             </div>
-          ) : null}
+          </div>
           {downloadMessage || downloadError ? (
             <div className="border-b border-slate-100 px-4 py-2 text-xs font-semibold">
               {downloadMessage ? <span className="text-emerald-700">{downloadMessage}</span> : null}
               {downloadError ? <span className="text-amber-700">{downloadError}</span> : null}
+            </div>
+          ) : null}
+          {originalResultImage && selectedResult && onSendResultToStep ? (
+            <div className="border-b border-slate-100 bg-white/45 px-4 py-3">
+              <ResultSendActions resultId={selectedResult.id} currentStep={GenerationStep.FreeReferenceImage} onSend={onSendResultToStep} disabled={state.isGenerating} />
             </div>
           ) : null}
           <div className="flex min-h-0 items-start justify-center bg-slate-50 p-4">

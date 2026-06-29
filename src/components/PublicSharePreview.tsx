@@ -207,6 +207,7 @@ function getPublicResultImages(generation: PublicShareGeneration): Array<{ id: s
 }
 
 function modeLabel(mode: PublicShareGeneration['mode'], step?: PublicShareGeneration['step']): string {
+  if (step === 'image_polish') return '质感提升';
   if (step === 'object_insert') return '元素植入';
   if (step === 'free_reference_image') return '自由参考生图';
   if (mode === 'floorplan') return '平面生成';

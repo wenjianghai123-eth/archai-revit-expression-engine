@@ -16,6 +16,7 @@ import { PlanColorizePanel } from './PlanColorizePanel';
 import { MaterialReplaceConfigPanel } from './MaterialReplaceConfigPanel';
 import { ObjectInsertPanel } from './ObjectInsertPanel';
 import { FreeReferenceImagePanel } from './FreeReferenceImagePanel';
+import { ImagePolishPanel } from './ImagePolishPanel';
 import { UploadErrors, UploadTarget, ViewModeOption } from './workspace/workspaceTypes';
 import { getUploadedImageSrc, isLocalInpaintingStep, maxFurnitureReferences, maxMaterialTextures, readGenerationStatusLabel } from './workspace/workspaceUtils';
 import { IMAGE_UPLOAD_ACCEPT, readImageTypeUploadError } from '../utils/imageValidation';
@@ -101,6 +102,7 @@ export function MainWorkspace({
   const isPanoramaQuickRenderStep = step === GenerationStep.PanoramaQuickRender;
   const isObjectInsertStep = step === GenerationStep.ObjectInsert;
   const isFreeReferenceImageStep = step === GenerationStep.FreeReferenceImage;
+  const isImagePolishStep = step === GenerationStep.ImagePolish;
   const materialReplaceEditMode = state.config.editMode === 'mask' ? 'mask' : 'smart-type';
   const hasMaterialReplaceTarget = Boolean(state.config.targetMaterial || state.materialTextures.length > 0 || (state.config.customMaterialPrompt || '').trim());
   const hasMaskSelection = Boolean(state.maskImage?.dataUrl || state.useFullImageMask);
@@ -597,6 +599,19 @@ export function MainWorkspace({
         projectName={projectName || selectedProjectId || 'archai-project'}
         onUpdateInputImage={onUpdateInputImage}
         onUpdateMaterialImage={onUpdateMaterialImage}
+        onUpdateConfig={onUpdateConfig}
+        onGenerate={onGenerate}
+        onSendResultToStep={onSendResultToStep}
+      />
+    );
+  }
+
+  if (isImagePolishStep) {
+    return (
+      <ImagePolishPanel
+        state={state}
+        projectName={projectName || selectedProjectId || 'archai-project'}
+        onUpdateInputImage={onUpdateInputImage}
         onUpdateConfig={onUpdateConfig}
         onGenerate={onGenerate}
         onSendResultToStep={onSendResultToStep}

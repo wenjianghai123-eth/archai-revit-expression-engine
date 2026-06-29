@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Camera, FileImage, Layers, LayoutGrid, Paintbrush, ScanLine, Wand2 } from 'lucide-react';
+import { Box, Camera, FileImage, Layers, LayoutGrid, Paintbrush, ScanLine, Sparkles, Wand2 } from 'lucide-react';
 import { GenerationStep } from './types';
 
 export interface FeatureDefinition {
@@ -23,6 +23,7 @@ export const defaultFeatureIds = [
   'material_replace',
   'object_insert',
   'scheme_variant',
+  'image_polish',
 ] as const;
 
 export const allFeatures: FeatureDefinition[] = [
@@ -80,6 +81,17 @@ export const allFeatures: FeatureDefinition[] = [
     componentName: 'DesignVariantsPanel',
     icon: LayoutGrid,
     image: 'https://images.unsplash.com/photo-1600607688969-a5bfcd646154?auto=format&fit=crop&q=80&w=900',
+  },
+  {
+    id: 'image_polish',
+    title: '质感提升',
+    desc: '上传一张原图，在尽量保持原色、原材质倾向、构图和设计不变的基础上，提升清晰度、真实感、光影层次和照片质感。',
+    input: '输入：1 张原图',
+    output: '输出：增强后的照片质感图',
+    step: GenerationStep.ImagePolish,
+    componentName: 'ImagePolishPanel',
+    icon: Sparkles,
+    image: 'https://images.unsplash.com/photo-1600566753151-384129cf4e3e?auto=format&fit=crop&q=80&w=900',
   },
   {
     id: 'drawing_expression',

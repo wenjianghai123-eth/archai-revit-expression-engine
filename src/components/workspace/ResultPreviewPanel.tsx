@@ -136,6 +136,7 @@ function getGenerationStepDownloadLabel(step: GenerationStep): string {
   if (step === GenerationStep.PanoramaQuickRender) return '全景快渲';
   if (step === GenerationStep.ObjectInsert) return '元素植入';
   if (step === GenerationStep.FreeReferenceImage) return '自由参考生图';
+  if (step === GenerationStep.ImagePolish) return '质感提升';
   return 'AI生成';
 }
 

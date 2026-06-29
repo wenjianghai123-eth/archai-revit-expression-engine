@@ -1028,7 +1028,7 @@ function buildContinuationConfigForTarget(
 }
 
 function readGenerationStepLabel(step: ResultSendTargetStep): string {
-  if (step === GenerationStep.MaterialReplace) return '材质替换';
+  if (step === GenerationStep.MaterialReplace) return '材质软装替换';
   if (step === GenerationStep.ObjectInsert) return '元素植入';
   if (step === GenerationStep.DesignVariants) return '方案变体';
   return '自由参考生图';
@@ -1048,6 +1048,7 @@ function readWorkspaceFeatureStep(): GenerationStep | null {
   const feature = new URLSearchParams(window.location.search).get('feature');
   if (feature === 'floor-plan-color') return GenerationStep.FloorplanTo3D;
   if (feature === 'free-reference-image') return GenerationStep.FreeReferenceImage;
+  if (feature === 'image-polish') return GenerationStep.ImagePolish;
   if (feature === 'material-replace') return GenerationStep.MaterialReplace;
   if (feature === 'object-insert') return GenerationStep.ObjectInsert;
   if (feature === 'design-variants') return GenerationStep.DesignVariants;
@@ -1055,6 +1056,7 @@ function readWorkspaceFeatureStep(): GenerationStep | null {
 }
 
 function readWorkspaceFeatureSlug(step: GenerationStep): string {
+  if (step === GenerationStep.ImagePolish) return 'image-polish';
   if (step === GenerationStep.FreeReferenceImage) return 'free-reference-image';
   if (step === GenerationStep.MaterialReplace) return 'material-replace';
   if (step === GenerationStep.ObjectInsert) return 'object-insert';

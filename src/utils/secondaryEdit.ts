@@ -19,7 +19,7 @@ export const materialRepairActions: Array<{ action: SecondaryEditAction; label: 
 ];
 
 export const resultSendTargets: Array<{ step: ResultSendTargetStep; label: string; shortLabel: string }> = [
-  { step: GenerationStep.MaterialReplace, label: '发送到材质替换', shortLabel: '材质替换' },
+  { step: GenerationStep.MaterialReplace, label: '发送到材质软装替换', shortLabel: '材质软装替换' },
   { step: GenerationStep.ObjectInsert, label: '发送到元素植入', shortLabel: '元素植入' },
   { step: GenerationStep.DesignVariants, label: '基于此图做方案变体', shortLabel: '方案变体' },
   { step: GenerationStep.FreeReferenceImage, label: '发送到自由参考生图', shortLabel: '自由参考' },

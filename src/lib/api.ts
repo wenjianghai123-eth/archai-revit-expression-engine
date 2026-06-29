@@ -53,14 +53,16 @@ export type GenerationJobStep =
   | 'plan_colorize'
   | 'panorama_quick_render'
   | 'object_insert'
-  | 'free_reference_image';
+  | 'free_reference_image'
+  | 'image_polish';
 export type PromptTemplateFeature =
   | 'floorplan'
   | 'style-render'
   | 'design-variants'
   | 'material-replace'
   | 'object-insert'
-  | 'free-reference-image';
+  | 'free-reference-image'
+  | 'image-polish';
 
 export interface GenerationRecord {
   id: string;
@@ -298,6 +300,8 @@ export interface GenerationJobInput {
   step?: GenerationJob['step'];
   provider: 'grsai-banana2' | 'apiyi-nano-banana2-edit';
   prompt: string;
+  generationStep?: GenerationJob['step'];
+  featureName?: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];
 }

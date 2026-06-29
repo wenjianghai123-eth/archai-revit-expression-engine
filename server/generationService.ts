@@ -16,6 +16,7 @@ import { buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode }
 import { findPlanColorizeStyle, maxPlanColorizeBatchCount, planColorizeStyleOptions, resolvePlanColorizeStyles, type PlanColorizeStyleOption } from '../src/constants/planColorizeStyles';
 import { resolveFloorplanBatchCount, resolveFloorplanVariantPlans, type FloorplanVariantPlan } from '../src/constants/floorplanVariants';
 import { getGenerationOutputCount } from '../src/utils/generationCredits';
+import { IMAGE_POLISH_PROMPT } from './prompts/imagePolishPrompt';
 import {
   adjustCredits,
   createGenerationRecord,
@@ -671,6 +672,8 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   const isObjectInsertPreviewFusionMode = isObjectInsertMode && readObjectInsertPreviewFusionMode(job.config, job.mode);
   const isFreeReferenceImageMode = job.step === 'free_reference_image'
     || readGenerationJobStep(job.config) === 'free_reference_image';
+  const isImagePolishMode = job.step === 'image_polish'
+    || readGenerationJobStep(job.config) === 'image_polish';
   const objectInsertConfig = readObjectInsertJobConfig(job);
   const objectInsertDebugMode = isObjectInsertMode ? readObjectInsertDebugMode(job.config) : 'full';
   const objectInsertNeedsObject = isObjectInsertPreviewFusionMode ? false : objectInsertIncludesObject(objectInsertDebugMode);
@@ -680,7 +683,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   const objectReferenceAssetId = isObjectInsertMode ? objectInsertConfig.objectReferenceAssetId : '';
   const placementPreviewAssetId = isObjectInsertMode ? objectInsertConfig.previewAssetId : '';
   const placementMaskAssetId = isObjectInsertMode ? objectInsertConfig.maskAssetId : '';
-  const materialReferenceAssetIds = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode
+  const materialReferenceAssetIds = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode || isImagePolishMode
     ? []
     : Array.from(new Set([
         ...readStringArray(job.config.materialTextureAssetIds),
@@ -717,6 +720,8 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
         ...job.inputAssetIds,
         ...panoramaReferenceAssetIds,
       ].filter(isNonEmptyString))).slice(0, 1 + 6)
+    : isImagePolishMode
+    ? [readConfigStringValue(job.config.sourceImageAssetId) || job.inputAssetIds[0]].filter(isNonEmptyString)
     : isFreeReferenceImageMode
     ? [
         readConfigStringValue(job.config.sourceImageAssetId) || job.inputAssetIds[0],
@@ -732,17 +737,17 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     throw new Error('Input image asset was not found.');
   }
 
-  const ownedMaterialReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode
+  const ownedMaterialReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode || isImagePolishMode
     ? []
     : await getOwnedAssetDataUrls(materialReferenceAssetIds, job.userId, 3, 'material reference');
-  const publicMaterialReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode
+  const publicMaterialReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode || isImagePolishMode
     ? []
     : await getMaterialTextureSourceDataUrls(job.config);
   const materialReferenceImageDataUrls = [
     ...ownedMaterialReferenceImageDataUrls,
     ...publicMaterialReferenceImageDataUrls,
   ].slice(0, 3);
-  const furnitureReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode
+  const furnitureReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode || isImagePolishMode
     ? []
     : await getOwnedAssetDataUrls(readStringArray(job.config.furnitureReferenceAssetIds), job.userId, 3, 'furniture reference');
   const additionalImageDataUrls = imageDataUrls.slice(1).filter(isNonEmptyString);
@@ -752,6 +757,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   const objectReferenceImageDataUrl = isObjectInsertMode && objectInsertNeedsObject ? objectInputDataUrls[0] : undefined;
   const materialImageDataUrl = isObjectInsertMode
     ? objectReferenceImageDataUrl
+    : isImagePolishMode ? undefined
     : isFreeReferenceImageMode ? undefined
     : isPanoramaReferenceMode ? undefined : materialReferenceImageDataUrls[0] || additionalImageDataUrls[0];
   const floorplanTextureUrls = job.mode === 'floorplan' ? await getFloorplanTextureDataUrls(job.config) : [];
@@ -759,6 +765,8 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     ? additionalImageDataUrls.slice(0, 1)
     : isObjectInsertMode
     ? objectInputDataUrls.slice(objectReferenceImageDataUrl ? 1 : 0)
+    : isImagePolishMode
+    ? []
     : isFreeReferenceImageMode
     ? additionalImageDataUrls.slice(0, 6)
     : isPanoramaReferenceMode
@@ -796,6 +804,16 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   const qualityMode = resolveQualityModeForJob(job);
 
   const targetDimensions = resolveQualityTargetDimensions(job.mode, qualityMode, await resolveTargetDimensions(job.mode, job.config, inputImageDataUrl));
+  if (isImagePolishMode && process.env.NODE_ENV !== 'production') {
+    console.debug({
+      event: 'image_polish_provider_prepare',
+      mode: job.mode,
+      step: job.step ?? readGenerationJobStep(job.config),
+      provider: job.provider,
+      inputImageCount: 1,
+      usesInternalPrompt: true,
+    });
+  }
   const rawInput: GenerateImageInput = {
     mode: job.mode,
     step: isObjectInsertMode ? 'object_insert' : job.step ?? readGenerationJobStep(job.config) ?? undefined,
@@ -2359,6 +2377,10 @@ function resolveVariantCompleteProgress(batchCount: number, index: number): numb
 }
 
 function buildProviderPromptForJob(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
+  if (job.step === 'image_polish' || readGenerationJobStep(job.config) === 'image_polish') {
+    return IMAGE_POLISH_PROMPT;
+  }
+
   if (isObjectInsertJob(job) && readObjectInsertPreviewFusionMode(job.config, job.mode)) {
     return readObjectInsertPreviewFusionUserPromptForJob(job);
   }
@@ -2567,7 +2589,8 @@ function isGenerationJobStep(value: unknown): value is NonNullable<GenerationJob
     || value === 'plan_colorize'
     || value === 'panorama_quick_render'
     || value === 'object_insert'
-    || value === 'free_reference_image';
+    || value === 'free_reference_image'
+    || value === 'image_polish';
 }
 
 function isObjectInsertJob(job: GenerationJob): boolean {

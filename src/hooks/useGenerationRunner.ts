@@ -3,6 +3,7 @@ import { generateFloorplanTo3D, generateInpainting, generateStyleRender } from '
 import { buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode } from '../promptTemplates/intelligentPromptTemplates';
 import { resolvePlanColorizeStyles } from '../constants/planColorizeStyles';
 import { resolveFloorplanBatchCount, resolveFloorplanVariantPlans } from '../constants/floorplanVariants';
+import { IMAGE_POLISH_NEGATIVE_PROMPT, IMAGE_POLISH_PROMPT } from '../constants/imagePolishPrompt';
 import { saveGenerationRecord } from '../storage/history';
 import {
   createGenerationJob,
@@ -353,6 +354,7 @@ export function useGenerationRunner({
         const isObjectInsert = currentStep === GenerationStep.ObjectInsert;
         const isObjectInsertPreviewFusion = isObjectInsert;
         const isFreeReferenceImage = currentStep === GenerationStep.FreeReferenceImage;
+        const isImagePolish = currentStep === GenerationStep.ImagePolish;
         const isPlanColorize = currentStep === GenerationStep.PlanColorize;
         const isFloorplanMultiPlan = currentStep === GenerationStep.FloorplanTo3D
           && stateAtStart.config.floorplanOutputMode === 'multi';
@@ -530,6 +532,9 @@ export function useGenerationRunner({
               : [stateAtStart.materialImage?.assetId || stateAtStart.config.referenceImageAssetId]),
           ].filter((assetId): assetId is string => Boolean(assetId));
         }
+        if (isImagePolish) {
+          inputAssetIds = [stateAtStart.inputImage.assetId];
+        }
         if (isFloorplanMultiPlan) {
           await runFloorplanMultiPlanJobs({
             activeProjectId,
@@ -552,6 +557,17 @@ export function useGenerationRunner({
           return;
         }
         if (import.meta.env.DEV) {
+          if (isImagePolish) {
+            console.debug({
+              event: 'image_polish_submit',
+              mode: generationMode,
+              step: generationStep,
+              generationStep,
+              provider: selectedProvider,
+              hasSourceImage: Boolean(stateAtStart.inputImage.assetId),
+              promptRequired: false,
+            });
+          }
           console.debug('[GenerationRunner] POST /api/generation-jobs', {
             mode: generationMode,
             step: generationStep,
@@ -591,6 +607,12 @@ export function useGenerationRunner({
               aspectRatio: '16:9',
               willCallCreateGenerationJob: true,
             } : undefined,
+            imagePolish: isImagePolish ? {
+              sourceImageAssetId: stateAtStart.inputImage.assetId,
+              inputAssetCount: inputAssetIds.length,
+              promptRequired: false,
+              willCallCreateGenerationJob: true,
+            } : undefined,
             willCreateGenerationJob: true,
           });
         }
@@ -608,6 +630,8 @@ export function useGenerationRunner({
           projectId: activeProjectId,
           mode: generationMode,
           step: generationStep,
+          generationStep,
+          featureName: isImagePolish ? '质感提升' : undefined,
           provider: selectedProvider,
           prompt: promptForRequest,
             config: {
@@ -616,6 +640,10 @@ export function useGenerationRunner({
               ...freeReferenceTargetSizeConfig,
               mode: generationMode,
               step: generationStep,
+              generationStep,
+              featureKey: isImagePolish ? 'image_polish' : undefined,
+              featureName: isImagePolish ? '质感提升' : undefined,
+              promptMode: isImagePolish ? 'fixed_internal_prompt' : undefined,
             qualityMode: stateAtStart.config.qualityMode || 'balanced',
             batchCount: isDesignVariantSingleRetry
               ? 1
@@ -722,8 +750,8 @@ export function useGenerationRunner({
             freeReferenceReferences: isFreeReferenceImage ? freeReferenceReferences : undefined,
             freeReferenceResolution: isFreeReferenceImage ? stateAtStart.config.freeReferenceResolution || 1024 : undefined,
             freeReferenceAspectRatio: isFreeReferenceImage ? '16:9' : undefined,
-            aspectRatio: isPanoramaQuickRender ? '2:1' : currentStep === GenerationStep.ModelSnapshotRender ? targetSizeConfig.targetAspectRatio : '16:9',
-            apiyiAspectRatio: isPanoramaQuickRender ? undefined : currentStep === GenerationStep.ModelSnapshotRender ? undefined : '16:9',
+            aspectRatio: isImagePolish ? stateAtStart.config.aspectRatio || targetSizeConfig.targetAspectRatio : isPanoramaQuickRender ? '2:1' : currentStep === GenerationStep.ModelSnapshotRender ? targetSizeConfig.targetAspectRatio : '16:9',
+            apiyiAspectRatio: isImagePolish ? undefined : isPanoramaQuickRender ? undefined : currentStep === GenerationStep.ModelSnapshotRender ? undefined : '16:9',
             inputSource: currentStep === GenerationStep.ModelSnapshotRender ? stateAtStart.config.inputSource : currentStep === GenerationStep.PanoramaQuickRender ? 'panorama-capture' : undefined,
             modelSnapshotMetadata: stateAtStart.config.modelSnapshotMetadata,
             panoramaCapture: currentStep === GenerationStep.PanoramaQuickRender ? stateAtStart.config.panoramaCapture : undefined,
@@ -733,9 +761,15 @@ export function useGenerationRunner({
             atmosphere: stateAtStart.config.atmosphere,
             smartMaterial: stateAtStart.config.smartMaterial,
             changeStrength: stateAtStart.config.changeStrength,
+            styleStrength: isImagePolish ? stateAtStart.config.styleStrength || 'low' : undefined,
+            negativePrompt: isImagePolish ? IMAGE_POLISH_NEGATIVE_PROMPT : stateAtStart.config.negativePrompt,
+            preserveColor: isImagePolish ? true : stateAtStart.config.preserveColor,
+            preserveMaterialAppearance: isImagePolish ? true : stateAtStart.config.preserveMaterialAppearance,
+            keepOriginalAspectRatio: isImagePolish ? true : stateAtStart.config.keepOriginalAspectRatio,
+            targetCount: isImagePolish ? 1 : stateAtStart.config.targetCount,
             panoramaChangeStrength: stateAtStart.config.panoramaChangeStrength,
             panoramaQuality: stateAtStart.config.panoramaQuality,
-            customPrompt: stateAtStart.config.customPrompt,
+            customPrompt: isImagePolish ? '' : stateAtStart.config.customPrompt,
             targetObjectType: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.targetObjectType : undefined,
             targetMaterial: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.targetMaterial : undefined,
             materialPatternScale: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.materialPatternScale || 'medium' : undefined,
@@ -745,21 +779,21 @@ export function useGenerationRunner({
             customMaterialPrompt: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.customMaterialPrompt : undefined,
             preserveLighting: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.preserveLighting ?? true : undefined,
             preserveGeometry: stateAtStart.config.preserveGeometry ?? true,
-            materialTextureAssetIds: stateAtStart.materialTextures
+            materialTextureAssetIds: isImagePolish ? [] : stateAtStart.materialTextures
               .map(texture => texture.assetId)
               .filter((assetId): assetId is string => Boolean(assetId)),
-            materialReferenceAssetIds: stateAtStart.materialTextures
+            materialReferenceAssetIds: isImagePolish ? [] : stateAtStart.materialTextures
               .map(texture => texture.assetId)
               .filter((assetId): assetId is string => Boolean(assetId)),
-            materialTextureSources: stateAtStart.materialTextures.map(texture => ({
+            materialTextureSources: isImagePolish ? [] : stateAtStart.materialTextures.map(texture => ({
               id: texture.id,
               name: texture.name,
               url: texture.url,
               source: texture.source,
               targetObjectType: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.targetObjectType : undefined,
             })),
-            furnitureReferenceAssetIds,
-            furnitureReferenceSources: stateAtStart.furnitureReferences.map(reference => ({
+            furnitureReferenceAssetIds: isImagePolish ? [] : furnitureReferenceAssetIds,
+            furnitureReferenceSources: isImagePolish ? [] : stateAtStart.furnitureReferences.map(reference => ({
               id: reference.id,
               name: reference.name,
               url: reference.url,
@@ -1015,13 +1049,16 @@ export function useGenerationRunner({
         }
 
         if (!isLegacyGenerationFallbackEnabled()) {
+          const jobCreationErrorMessage = currentStep === GenerationStep.ImagePolish
+            ? jobErrorMessage
+            : `异步生成任务不可用：${jobErrorMessage}`;
           setStepStates(prev => ({
             ...prev,
             [currentStep]: {
               ...prev[currentStep],
               isGenerating: false,
               generationStatus: 'error',
-              generationError: `异步生成任务不可用：${jobErrorMessage}`,
+              generationError: jobCreationErrorMessage,
               generationLogs: [...prev[currentStep].generationLogs, 'error: 旧生成接口 fallback 已禁用。'].slice(-8),
             },
           }));
@@ -1093,6 +1130,7 @@ export function useGenerationRunner({
         case GenerationStep.DesignVariants:
         case GenerationStep.ObjectInsert:
         case GenerationStep.FreeReferenceImage:
+        case GenerationStep.ImagePolish:
           throw new Error('该功能需要通过项目任务系统生成，请确认输入图已成功上传为素材。');
       }
 
@@ -1654,6 +1692,7 @@ function getGenerationRecordMode(step: GenerationStep): GenerationMode {
   if (step === GenerationStep.PlanColorize) return 'plan-colorize';
   if (step === GenerationStep.MaterialReplace) return 'material-replace';
   if (step === GenerationStep.ObjectInsert) return 'inpaint';
+  if (step === GenerationStep.ImagePolish) return 'inpaint';
   return 'inpaint';
 }
 
@@ -1667,6 +1706,7 @@ function getGenerationJobStep(step: GenerationStep): GenerationJobStep {
   if (step === GenerationStep.MaterialReplace) return 'material_replace';
   if (step === GenerationStep.ObjectInsert) return 'object_insert';
   if (step === GenerationStep.FreeReferenceImage) return 'free_reference_image';
+  if (step === GenerationStep.ImagePolish) return 'image_polish';
   return 'local_inpainting';
 }
 
@@ -1688,6 +1728,9 @@ function formatGenerationJobError(job: Awaited<ReturnType<typeof getGenerationJo
 }
 
 function buildPromptForGeneration(step: GenerationStep, prompt: string, state?: StepState): string {
+  if (step === GenerationStep.ImagePolish) {
+    return IMAGE_POLISH_PROMPT;
+  }
   if (step === GenerationStep.FreeReferenceImage) {
     const userPrompt = state ? readSupplementalPromptForGeneration(step, state.config, prompt) : prompt;
     const referenceControlPrompt = state ? buildFreeReferenceControlPrompt(state.config) : '';
@@ -1717,6 +1760,7 @@ function buildPromptForGeneration(step: GenerationStep, prompt: string, state?: 
 }
 
 function readSupplementalPromptForGeneration(step: GenerationStep, config: GenerationConfig, fallback = ''): string {
+  if (step === GenerationStep.ImagePolish) return IMAGE_POLISH_PROMPT;
   if (step === GenerationStep.FreeReferenceImage) return (config.prompt || config.customPrompt || fallback || '').trim();
   return readSmartPromptUserSupplement(getSmartPromptMode(step), config, fallback);
 }
@@ -2051,6 +2095,33 @@ function getAspectRatioString(width: number, height: number): string {
 }
 
 function buildConfigForGeneration(step: GenerationStep, config: GenerationConfig): GenerationConfig {
+  if (step === GenerationStep.ImagePolish) {
+    return {
+      ...config,
+      prompt: IMAGE_POLISH_PROMPT,
+      negativePrompt: IMAGE_POLISH_NEGATIVE_PROMPT,
+      generationStep: 'image_polish',
+      featureKey: 'image_polish',
+      featureName: '质感提升',
+      promptMode: 'fixed_internal_prompt',
+      qualityMode: config.qualityMode || 'balanced',
+      batchCount: 1,
+      targetCount: 1,
+      strength: 'weak',
+      changeStrength: 'weak',
+      styleStrength: 'low',
+      preserveStructure: true,
+      preserveCamera: true,
+      preserveColor: true,
+      preserveMaterialAppearance: true,
+      preserveGeometry: true,
+      keepOriginalAspectRatio: true,
+      materialTextureAssetIds: [],
+      materialReferenceAssetIds: [],
+      furnitureReferenceAssetIds: [],
+      customPrompt: '',
+    };
+  }
   if (step !== GenerationStep.FloorplanTo3D) {
     if (step === GenerationStep.PanoramaQuickRender) {
       const panoramaSize = config.panoramaQuality === 'standard'
@@ -2358,6 +2429,7 @@ function readVariantStyleLabel(style: string | undefined): string | undefined {
 }
 
 function readHistoryStyle(step: GenerationStep, config: GenerationConfig): string {
+  if (step === GenerationStep.ImagePolish) return '质感提升';
   if (step === GenerationStep.FloorplanTo3D) return '彩平表达';
   if (step === GenerationStep.PlanColorize) return config.template || '图纸智能表达';
   if (step === GenerationStep.ModelSnapshotRender) return config.renderStyle || config.style || '白模快渲';

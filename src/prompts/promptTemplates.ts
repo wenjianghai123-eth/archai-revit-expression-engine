@@ -31,6 +31,7 @@ export function filterPromptTemplates(input: { templates?: PromptTemplate[]; ste
 }
 
 export function defaultPromptTemplateCategory(step: GenerationStep, editTarget?: string): string {
+  if (step === GenerationStep.ImagePolish) return '质感提升';
   if (step === GenerationStep.FloorplanTo3D) return '平面彩平';
   if (step === GenerationStep.StyleRender) return '风格渲染';
   if (step === GenerationStep.ModelSnapshotRender) return '风格渲染';
@@ -52,6 +53,7 @@ export function mergePromptTemplate(currentPrompt: string, templatePrompt: strin
 }
 
 function stepToFeature(step: GenerationStep): PromptTemplate['feature'] {
+  if (step === GenerationStep.ImagePolish) return 'image-polish';
   if (step === GenerationStep.ModelSnapshotRender) return 'model-render';
   if (step === GenerationStep.DesignVariants) return 'design-variants';
   if (step === GenerationStep.MaterialReplace) return 'material-replace';

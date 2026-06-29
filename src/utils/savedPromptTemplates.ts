@@ -107,6 +107,7 @@ export function promptTemplateRecordToTemplate(record: PromptTemplateRecord): Pr
 }
 
 export function stepToFeatureName(step: GenerationStep): string {
+  if (step === GenerationStep.ImagePolish) return '质感提升';
   if (step === GenerationStep.FloorplanTo3D) return '平面彩平';
   if (step === GenerationStep.FreeReferenceImage) return '自由参考生图';
   if (step === GenerationStep.MaterialReplace) return '材质软装替换';
@@ -222,6 +223,7 @@ function readString(value: unknown): string | undefined {
 }
 
 function stepToTemplateFeature(step: GenerationStep): PromptTemplateFeature {
+  if (step === GenerationStep.ImagePolish) return 'image-polish';
   if (step === GenerationStep.FloorplanTo3D) return 'floorplan';
   if (step === GenerationStep.FreeReferenceImage) return 'free-reference-image';
   if (step === GenerationStep.MaterialReplace) return 'material-replace';
@@ -231,6 +233,7 @@ function stepToTemplateFeature(step: GenerationStep): PromptTemplateFeature {
 }
 
 function stepToJobStep(step: GenerationStep): PromptTemplateRecord['generationStep'] {
+  if (step === GenerationStep.ImagePolish) return 'image_polish';
   if (step === GenerationStep.FloorplanTo3D) return 'floorplan_to_3d';
   if (step === GenerationStep.FreeReferenceImage) return 'free_reference_image';
   if (step === GenerationStep.MaterialReplace) return 'material_replace';
@@ -244,6 +247,7 @@ function stepToJobStep(step: GenerationStep): PromptTemplateRecord['generationSt
 }
 
 function jobStepToGenerationStep(step: PromptTemplateRecord['generationStep']): GenerationStep {
+  if (step === 'image_polish') return GenerationStep.ImagePolish;
   if (step === 'floorplan_to_3d') return GenerationStep.FloorplanTo3D;
   if (step === 'free_reference_image') return GenerationStep.FreeReferenceImage;
   if (step === 'material_replace') return GenerationStep.MaterialReplace;

@@ -50,6 +50,7 @@ function readRecentUsage(): Record<string, string> {
 }
 
 function featureLabel(feature: PromptTemplate['feature']): string {
+  if (feature === 'image-polish') return '质感提升';
   if (feature === 'floorplan') return '平面彩平';
   if (feature === 'free-reference-image') return '自由参考生图';
   if (feature === 'material-replace') return '材质软装替换';

@@ -52,6 +52,7 @@ function createInitialStepStates(): Record<GenerationStep, StepState> {
     [GenerationStep.PanoramaQuickRender]: createInitialStepState(GenerationStep.PanoramaQuickRender),
     [GenerationStep.ObjectInsert]: createInitialStepState(GenerationStep.ObjectInsert),
     [GenerationStep.FreeReferenceImage]: createInitialStepState(GenerationStep.FreeReferenceImage),
+    [GenerationStep.ImagePolish]: createInitialStepState(GenerationStep.ImagePolish),
   };
 }
 
@@ -201,6 +202,8 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
             ? GenerationStep.ObjectInsert
             : template.feature === 'material-replace'
               ? GenerationStep.MaterialReplace
+            : template.feature === 'image-polish'
+              ? GenerationStep.ImagePolish
             : GenerationStep.LocalInpainting;
 
     const nextConfig = targetStep === GenerationStep.FloorplanTo3D

@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
 import { uploadsDir } from '../fileStorage';
+import { normalizeImageMimeType, sniffImageMimeType } from '../imageValidation';
 import { getImageAsset } from '../storage';
 
 export interface ApiYiInlineData {
@@ -28,9 +29,11 @@ export async function loadAssetAsInlineData(assetIdOrUrl: string, options: { use
     ? parseDataUrl(resolvedSource)
     : await readUrlOrUpload(resolvedSource);
 
-  if (parsed.mimeType === 'image/png' || parsed.mimeType === 'image/jpeg') {
+  const mimeType = sniffImageMimeType(parsed.content) || normalizeMimeType(parsed.mimeType);
+
+  if (mimeType === 'image/png' || mimeType === 'image/jpeg') {
     return {
-      mimeType: parsed.mimeType,
+      mimeType,
       data: parsed.content.toString('base64'),
     };
   }
@@ -43,8 +46,8 @@ export async function loadAssetAsInlineData(assetIdOrUrl: string, options: { use
     };
   } catch {
     throw createUnsupportedMimeError(
-      `不支持的图片格式：${parsed.mimeType}`,
-      parsed.mimeType === 'image/webp'
+      `不支持的图片格式：${mimeType}`,
+      mimeType === 'image/webp'
         ? 'API易接口暂不支持直接使用 WEBP，请转换为 JPG/PNG 后重试。'
         : undefined,
     );
@@ -99,10 +102,7 @@ async function readUrlOrUpload(value: string): Promise<{ mimeType: string; conte
 }
 
 function normalizeMimeType(value: string): string {
-  const mimeType = value.split(';')[0].trim().toLowerCase();
-  if (mimeType === 'image/jpg' || mimeType === 'image/pjpeg') return 'image/jpeg';
-  if (mimeType === 'image/x-png') return 'image/png';
-  return mimeType;
+  return normalizeImageMimeType(value);
 }
 
 function inferMimeType(value: string): string {

@@ -13,6 +13,8 @@ export const allowedImageMimeTypes = new Set([
 
 export const allowedImageExtensions = new Set(['.png', '.jpg', '.jpeg', '.webp', '.jfif']);
 
+export type SupportedImageMimeType = 'image/png' | 'image/jpeg' | 'image/webp';
+
 export function normalizeImageMimeType(value: string): string {
   const mimeType = value.split(';')[0].trim().toLowerCase();
   if (mimeType === 'image/jpg' || mimeType === 'image/pjpeg') return 'image/jpeg';
@@ -24,7 +26,7 @@ export function getImageFileExtension(filename: string): string {
   return path.extname(filename.trim()).toLowerCase();
 }
 
-export function inferImageMimeTypeFromFilename(filename: string): string | null {
+export function inferImageMimeTypeFromFilename(filename: string): SupportedImageMimeType | null {
   const extension = getImageFileExtension(filename);
   if (extension === '.png') return 'image/png';
   if (extension === '.jpg' || extension === '.jpeg' || extension === '.jfif') return 'image/jpeg';
@@ -32,7 +34,7 @@ export function inferImageMimeTypeFromFilename(filename: string): string | null 
   return null;
 }
 
-export function sniffImageMimeType(content: Buffer): 'image/png' | 'image/jpeg' | 'image/webp' | null {
+export function sniffImageMimeType(content: Buffer): SupportedImageMimeType | null {
   if (
     content.length >= 8
     && content[0] === 0x89
@@ -59,7 +61,7 @@ export function sniffImageMimeType(content: Buffer): 'image/png' | 'image/jpeg' 
 }
 
 export function describeUnsupportedImageType(filename: string, mimeType: string): string {
-  const actualType = getImageFileExtension(filename) || mimeType;
+  const actualType = getImageFileExtension(filename) || normalizeImageMimeType(mimeType);
   return actualType
     ? `当前文件类型：${actualType}，仅支持 PNG、JPG、JPEG、WEBP。`
     : IMAGE_TYPE_INVALID_MESSAGE;

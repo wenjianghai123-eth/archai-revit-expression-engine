@@ -21,7 +21,8 @@ export type GenerationJobStep =
   | 'plan_colorize'
   | 'panorama_quick_render'
   | 'object_insert'
-  | 'free_reference_image';
+  | 'free_reference_image'
+  | 'image_polish';
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
 export type VariantStyleKey =
   | 'modern-minimal'
@@ -228,7 +229,8 @@ export type PromptTemplateFeature =
   | 'plan-colorize'
   | 'panorama-roam-render'
   | 'object-insert'
-  | 'free-reference-image';
+  | 'free-reference-image'
+  | 'image-polish';
 
 export interface PromptTemplateInputPreview {
   label: string;

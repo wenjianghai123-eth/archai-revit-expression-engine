@@ -529,6 +529,8 @@ function serializeGenerationStep(step: GenerationStep): string {
       return 'panorama_quick_render';
     case GenerationStep.ObjectInsert:
       return 'object_insert';
+    case GenerationStep.ImagePolish:
+      return 'image_polish';
     default:
       return 'style_render';
   }
