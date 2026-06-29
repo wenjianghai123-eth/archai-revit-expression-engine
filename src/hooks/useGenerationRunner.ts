@@ -59,6 +59,39 @@ export function useGenerationRunner({
       }
       : baseState;
     const requiredCredits = getGenerationCreditCost(getGenerationRecordMode(currentStep), stateAtStart.config);
+    const selectedProvider = stateAtStart.config.aiProvider;
+    const disabledReason = !selectedProvider
+      ? '正在读取 AI 接口配置，请稍后重试。'
+      : stateAtStart.isGenerating
+        ? '正在生成中。'
+        : !stateAtStart.inputImage
+          ? selectedProvider === 'apiyi-nano-banana2-edit'
+            ? 'API易图片编辑接口需要至少上传一张图片。'
+            : '请先上传图片。'
+          : creditBalance && creditBalance.balance < requiredCredits
+            ? `剩余额度不足，本次需要 ${requiredCredits} credits。`
+            : null;
+    if (import.meta.env.DEV) {
+      console.debug({
+        action: 'generate_clicked',
+        selectedProvider,
+        currentFeature: currentStep,
+        hasSourceImage: Boolean(stateAtStart.inputImage),
+        promptLength: (stateAtStart.config.prompt || '').trim().length,
+        disabledReason,
+      });
+    }
+    if (!selectedProvider) {
+      setStepStates(prev => ({
+        ...prev,
+        [currentStep]: {
+          ...prev[currentStep],
+          generationStatus: 'error',
+          generationError: disabledReason,
+        },
+      }));
+      return;
+    }
     if (creditBalance && creditBalance.balance < requiredCredits) {
       setStepStates(prev => ({
         ...prev,
@@ -315,7 +348,7 @@ export function useGenerationRunner({
         const promptForRequest = buildPromptForGeneration(currentStep, stateAtStart.config.prompt, stateAtStart);
         const userSupplementPrompt = readSupplementalPromptForGeneration(currentStep, stateAtStart.config);
         const configForRequest = buildConfigForGeneration(currentStep, stateAtStart.config);
-        const targetSizeConfig = buildTargetSizeConfig(stateAtStart.inputImage);
+        const targetSizeConfig = buildTargetSizeConfig(stateAtStart.inputImage, currentStep);
         const isPanoramaQuickRender = currentStep === GenerationStep.PanoramaQuickRender;
         const isObjectInsert = currentStep === GenerationStep.ObjectInsert;
         const isObjectInsertPreviewFusion = isObjectInsert;
@@ -555,16 +588,27 @@ export function useGenerationRunner({
               freeReferenceReferences,
               prompt: userSupplementPrompt,
               resolution: stateAtStart.config.freeReferenceResolution || 1024,
-              aspectRatio: stateAtStart.config.freeReferenceAspectRatio || '1:1',
+              aspectRatio: '16:9',
               willCallCreateGenerationJob: true,
             } : undefined,
             willCreateGenerationJob: true,
+          });
+        }
+        if (import.meta.env.DEV) {
+          console.debug({
+            event: 'generate_submit',
+            feature: generationStep,
+            provider: selectedProvider,
+            aspectRatio: targetSizeConfig.targetAspectRatio || configForRequest.targetAspectRatio,
+            imageSize: selectedProvider === 'apiyi-nano-banana2-edit' ? stateAtStart.config.apiyiImageSize || '2K' : undefined,
+            inputAssetCount: inputAssetIds.length,
           });
         }
         const job = await createGenerationJob({
           projectId: activeProjectId,
           mode: generationMode,
           step: generationStep,
+          provider: selectedProvider,
           prompt: promptForRequest,
             config: {
               ...configForRequest,
@@ -677,7 +721,9 @@ export function useGenerationRunner({
             referenceImageAssetIds: isFreeReferenceImage ? freeReferenceAssetIds : undefined,
             freeReferenceReferences: isFreeReferenceImage ? freeReferenceReferences : undefined,
             freeReferenceResolution: isFreeReferenceImage ? stateAtStart.config.freeReferenceResolution || 1024 : undefined,
-            freeReferenceAspectRatio: isFreeReferenceImage ? stateAtStart.config.freeReferenceAspectRatio || '1:1' : undefined,
+            freeReferenceAspectRatio: isFreeReferenceImage ? '16:9' : undefined,
+            aspectRatio: isPanoramaQuickRender ? '2:1' : currentStep === GenerationStep.ModelSnapshotRender ? targetSizeConfig.targetAspectRatio : '16:9',
+            apiyiAspectRatio: isPanoramaQuickRender ? undefined : currentStep === GenerationStep.ModelSnapshotRender ? undefined : '16:9',
             inputSource: currentStep === GenerationStep.ModelSnapshotRender ? stateAtStart.config.inputSource : currentStep === GenerationStep.PanoramaQuickRender ? 'panorama-capture' : undefined,
             modelSnapshotMetadata: stateAtStart.config.modelSnapshotMetadata,
             panoramaCapture: currentStep === GenerationStep.PanoramaQuickRender ? stateAtStart.config.panoramaCapture : undefined,
@@ -1278,6 +1324,20 @@ async function runFloorplanMultiPlanJobs({
   }
 
   let lastProvider: GenerationProvider | null = null;
+  const selectedProvider = stateAtStart.config.aiProvider;
+  if (!selectedProvider) {
+    const message = '正在读取 AI 接口配置，请稍后重试。';
+    setStepStates(prev => ({
+      ...prev,
+      [currentStep]: {
+        ...prev[currentStep],
+        isGenerating: false,
+        generationStatus: 'error',
+        generationError: message,
+      },
+    }));
+    return;
+  }
 
   for (const plan of plansToRun) {
     const variantFocus = readFloorplanPayloadVariantFocus(stateAtStart.config.floorplanVariantType, stateAtStart.config.floorplanVariantFocus);
@@ -1340,6 +1400,7 @@ async function runFloorplanMultiPlanJobs({
       projectId: activeProjectId,
       mode: generationMode,
       step: generationStep,
+      provider: selectedProvider,
       prompt,
       config: config as unknown as Record<string, unknown>,
       inputAssetIds: [sourceImageAssetId],
@@ -1914,11 +1975,22 @@ function buildObjectInsertInputOrder(
   });
 }
 
-function buildTargetSizeConfig(image: UploadedImage): Pick<GenerationConfig, 'sourceImageWidth' | 'sourceImageHeight' | 'targetWidth' | 'targetHeight' | 'targetAspectRatio'> {
+function buildTargetSizeConfig(image: UploadedImage, step: GenerationStep): Pick<GenerationConfig, 'sourceImageWidth' | 'sourceImageHeight' | 'targetWidth' | 'targetHeight' | 'targetAspectRatio'> {
   if (!image.width || !image.height) {
-    return {};
+    return isStandardImageOutputStep(step)
+      ? { targetWidth: 2048, targetHeight: 1152, targetAspectRatio: '16:9' }
+      : {};
   }
 
+  if (isStandardImageOutputStep(step)) {
+    return {
+      sourceImageWidth: image.width,
+      sourceImageHeight: image.height,
+      targetWidth: 2048,
+      targetHeight: 1152,
+      targetAspectRatio: '16:9',
+    };
+  }
   return {
     sourceImageWidth: image.width,
     sourceImageHeight: image.height,
@@ -1932,7 +2004,7 @@ function buildFreeReferenceTargetSizeConfig(config: GenerationConfig): Pick<Gene
   const resolution = config.freeReferenceResolution === 1536 || config.freeReferenceResolution === 2048
     ? config.freeReferenceResolution
     : 1024;
-  const aspectRatio = config.freeReferenceAspectRatio || '1:1';
+  const aspectRatio = '16:9';
   const [widthRatio, heightRatio] = aspectRatio.split(':').map(Number);
   if (!widthRatio || !heightRatio) {
     return { targetWidth: resolution, targetHeight: resolution, targetAspectRatio: '1:1' };
@@ -1949,6 +2021,17 @@ function buildFreeReferenceTargetSizeConfig(config: GenerationConfig): Pick<Gene
     targetHeight: resolution,
     targetAspectRatio: aspectRatio,
   };
+}
+
+function isStandardImageOutputStep(step: GenerationStep): boolean {
+  return step === GenerationStep.FloorplanTo3D
+    || step === GenerationStep.StyleRender
+    || step === GenerationStep.LocalInpainting
+    || step === GenerationStep.DesignVariants
+    || step === GenerationStep.PlanColorize
+    || step === GenerationStep.MaterialReplace
+    || step === GenerationStep.ObjectInsert
+    || step === GenerationStep.FreeReferenceImage;
 }
 
 function getAspectRatioString(width: number, height: number): string {
@@ -1982,11 +2065,21 @@ function buildConfigForGeneration(step: GenerationStep, config: GenerationConfig
         targetAspectRatio: config.targetAspectRatio || '2:1',
       };
     }
-    return config;
+    return isStandardImageOutputStep(step)
+      ? {
+          ...config,
+          targetAspectRatio: '16:9',
+          apiyiAspectRatio: '16:9',
+        }
+      : config;
   }
 
   const { style: _style, ...floorplanConfig } = config;
-  return floorplanConfig;
+  return {
+    ...floorplanConfig,
+    targetAspectRatio: '16:9',
+    apiyiAspectRatio: '16:9',
+  };
 }
 
 function forceSingleOutputConfig(config: GenerationConfig): GenerationConfig {
@@ -2295,7 +2388,11 @@ function readJobPhaseLabel(phase: string | undefined, status: string): string {
 }
 
 function parseGenerationProvider(value: string): GenerationProvider | null {
-  if (value === 'mock' || value === 'gemini' || value === 'grsai-banana2' || value === 'grsai-nano-banana') {
+  if (value === 'mock'
+    || value === 'gemini'
+    || value === 'grsai-banana2'
+    || value === 'grsai-nano-banana'
+    || value === 'apiyi-nano-banana2-edit') {
     return value;
   }
 

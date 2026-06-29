@@ -1,23 +1,23 @@
 import { UploadedImage } from '../types';
+import {
+  inferImageMimeTypeFromFilename,
+  normalizeImageMimeType,
+  validateImageFileType,
+} from './imageValidation';
 
-const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
 
-export function validateImageFile(file: File): string | null {
-  if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
-    return '仅支持 PNG、JPG 或 WEBP 图片。';
-  }
-
-  if (file.size > MAX_IMAGE_SIZE_BYTES) {
-    return '图片不能超过 10MB，请压缩后重新上传。';
-  }
-
-  return null;
+export function validateImageFile(file: File, feature?: string): string | null {
+  return validateImageFileType(file, { feature, maxSizeBytes: MAX_IMAGE_SIZE_BYTES });
 }
 
 export function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
+    const normalizedMimeType = normalizeImageMimeType(file.type) || inferImageMimeTypeFromFilename(file.name);
+    const readableFile = normalizedMimeType && normalizedMimeType !== file.type
+      ? new Blob([file], { type: normalizedMimeType })
+      : file;
 
     reader.onload = () => {
       if (typeof reader.result === 'string') {
@@ -32,7 +32,7 @@ export function readFileAsDataUrl(file: File): Promise<string> {
       reject(new Error('图片读取失败，请重试。'));
     };
 
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(readableFile);
   });
 }
 
@@ -65,7 +65,7 @@ export async function createUploadedImage(file: File): Promise<UploadedImage> {
   return {
     id: `${Date.now()}-${file.name}`,
     name: file.name,
-    type: file.type,
+    type: normalizeImageMimeType(file.type) || inferImageMimeTypeFromFilename(file.name) || file.type,
     size: file.size,
     dataUrl,
     width: dimensions?.width,

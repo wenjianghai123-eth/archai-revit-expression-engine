@@ -6,6 +6,8 @@ import { createUploadedImage, validateImageFile } from '../utils/file';
 import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { ResultSendActions } from './workspace/SecondaryEditActions';
+import { AspectRatioImage } from './common/AspectRatioImage';
+import { IMAGE_UPLOAD_ACCEPT } from '../utils/imageValidation';
 
 type UploadKind = 'source' | 'reference';
 
@@ -19,9 +21,8 @@ interface FreeReferenceImagePanelProps {
   onSendResultToStep?: (resultId: string, targetStep: ResultSendTargetStep) => void;
 }
 
-const acceptedImageTypes = 'image/png,image/jpeg,image/webp';
 const resolutionOptions = [1024, 1536, 2048] as const;
-const aspectRatioOptions = ['1:1', '4:3', '3:4', '16:9', '9:16'] as const;
+const aspectRatioOptions = ['16:9'] as const;
 const maxReferenceImages = 6;
 const referenceRoleOptions: Array<{ value: FreeReferenceRole; label: string }> = [
   { value: 'style', label: '风格参考' },
@@ -69,7 +70,7 @@ export function FreeReferenceImagePanel({
   const sourceImage = state.inputImage;
   const prompt = state.config.prompt || '';
   const resolution = state.config.freeReferenceResolution || 1024;
-  const aspectRatio = state.config.freeReferenceAspectRatio || '1:1';
+  const aspectRatio = '16:9' as const;
   const selectedResult = state.generationResults.find(result => result.isSelected) || state.generationResults[0];
   const originalResultImage = getOriginalResultImageUrl(selectedResult, state.outputImage);
   const originalResultAssetId = getOriginalResultAssetId(selectedResult);
@@ -87,7 +88,7 @@ export function FreeReferenceImagePanel({
 
     if (kind === 'source') {
       const file = selectedFiles[0];
-      const validation = validateImageFile(file);
+      const validation = validateImageFile(file, 'free-reference:source');
       if (validation) {
         setUploadErrors(prev => ({ ...prev, source: validation }));
         return;
@@ -106,7 +107,7 @@ export function FreeReferenceImagePanel({
     }
 
     const acceptedFiles = selectedFiles.slice(0, remainingSlots);
-    const invalidMessage = acceptedFiles.map(validateImageFile).find(Boolean);
+    const invalidMessage = acceptedFiles.map(file => validateImageFile(file, 'free-reference:reference')).find(Boolean);
     if (invalidMessage) {
       setUploadErrors(prev => ({ ...prev, reference: invalidMessage }));
       return;
@@ -263,10 +264,10 @@ export function FreeReferenceImagePanel({
 
   return (
     <section className="workspace-surface flex min-h-0 flex-1 overflow-hidden p-4">
-      <input ref={sourceInputRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleUpload('source', event.currentTarget.files); event.currentTarget.value = ''; }} />
-      <input ref={referenceInputRef} type="file" accept={acceptedImageTypes} multiple className="hidden" onChange={event => { void handleUpload('reference', event.currentTarget.files); event.currentTarget.value = ''; }} />
+      <input ref={sourceInputRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} className="hidden" onChange={event => { void handleUpload('source', event.currentTarget.files); event.currentTarget.value = ''; }} />
+      <input ref={referenceInputRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} multiple className="hidden" onChange={event => { void handleUpload('reference', event.currentTarget.files); event.currentTarget.value = ''; }} />
 
-      <div className="mx-auto grid w-full max-w-6xl min-h-0 gap-4 lg:grid-cols-[360px_1fr]">
+      <div className="mx-auto grid w-full max-w-[1440px] min-h-0 gap-4 lg:grid-cols-[minmax(320px,380px)_minmax(0,1fr)]">
         <aside className="glass-panel space-y-3 overflow-y-auto rounded-3xl border border-white/60 p-4 custom-scrollbar">
           <div>
             <h2 className="text-lg font-black text-slate-950">自由参考生图</h2>
@@ -352,14 +353,14 @@ export function FreeReferenceImagePanel({
               {downloadError ? <span className="text-amber-700">{downloadError}</span> : null}
             </div>
           ) : null}
-          <div className="flex h-[calc(100%-56px)] min-h-[520px] items-center justify-center bg-slate-50 p-4">
+          <div className="flex min-h-0 items-start justify-center bg-slate-50 p-4">
             {state.isGenerating ? (
               <div className="text-center text-blue-600">
                 <Loader2 className="mx-auto mb-3 h-8 w-8 animate-spin" />
                 <p className="text-sm font-bold">正在生成...</p>
               </div>
             ) : originalResultImage ? (
-              <img src={originalResultImage} alt="自由参考生图结果" className="max-h-full max-w-full object-contain" referrerPolicy="no-referrer" />
+              <AspectRatioImage src={originalResultImage} alt="自由参考生图结果" className="w-full max-w-5xl" />
             ) : (
               <div className="text-center text-sm font-bold text-slate-400">生成完成后将在这里显示结果图</div>
             )}
@@ -383,11 +384,11 @@ function UploadBox({ title, image, error, onUpload, onRemove }: {
         <p className="text-sm font-bold text-slate-900">{title}</p>
         {image ? <button type="button" onClick={onRemove} className="rounded-lg p-1 text-slate-400 hover:bg-white hover:text-rose-600"><X className="h-4 w-4" /></button> : null}
       </div>
-      <button type="button" onClick={onUpload} className="flex w-full items-center gap-3 rounded-xl border border-dashed border-slate-200 bg-white p-2 text-left hover:border-blue-200">
-        <div className="flex h-20 w-24 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-100">
-          {image ? <img src={readImageSrc(image)} alt={title} className="h-full w-full object-cover" /> : <Upload className="h-6 w-6 text-slate-300" />}
-        </div>
-        <div className="min-w-0">
+      <button type="button" onClick={onUpload} className="w-full rounded-xl border border-dashed border-slate-200 bg-white p-2 text-left hover:border-blue-200">
+        {image ? <AspectRatioImage src={readImageSrc(image)} alt={title} enableLightbox={false} /> : (
+          <div className="flex aspect-video items-center justify-center rounded-xl bg-slate-50"><Upload className="h-6 w-6 text-slate-300" /></div>
+        )}
+        <div className="mt-2 min-w-0 px-1">
           <p className="truncate text-sm font-bold text-slate-800">{image?.name || '点击上传'}</p>
           <p className="mt-1 text-xs text-slate-500">{image ? `${image.width || '-'} x ${image.height || '-'} px` : 'PNG / JPG / WEBP'}</p>
         </div>
@@ -421,7 +422,7 @@ function ReferenceUploadBox({ images, settings, error, onUpload, onRemove, onSet
           {images.map((image, index) => (
             <div key={image.id} className="group overflow-hidden rounded-lg border border-slate-200 bg-white">
               <div className="relative">
-                <img src={readImageSrc(image)} alt={`参考图 ${index + 1}`} className="aspect-square w-full object-cover" />
+                <AspectRatioImage src={readImageSrc(image)} alt={`参考图 ${index + 1}`} className="rounded-none border-0 shadow-none" />
                 <span className="absolute left-1 top-1 rounded bg-slate-950/70 px-1.5 py-0.5 text-[10px] font-black text-white">{index + 1}</span>
                 <button type="button" onClick={() => onRemove(index)} className="absolute right-1 top-1 rounded bg-white/90 p-1 text-slate-500 opacity-0 shadow-sm transition group-hover:opacity-100 hover:text-rose-600">
                   <X className="h-3.5 w-3.5" />

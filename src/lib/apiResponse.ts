@@ -41,6 +41,9 @@ export async function parseApiResponseEnvelope<T>(response: Response): Promise<P
 
 export function readApiErrorMessage(value: unknown, fallbackStatus?: number): string | null {
   const code = readApiErrorCode(value);
+  if (code === 'UPLOAD_IMAGE_TYPE_INVALID') {
+    return '图片格式不支持。请上传 PNG、JPG、JPEG 或 WEBP 图片。';
+  }
   const message = readRawApiErrorMessage(value);
   if (message) {
     const detail = readApiErrorDetails(value);

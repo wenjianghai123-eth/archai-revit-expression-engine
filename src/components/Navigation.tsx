@@ -16,8 +16,8 @@ import {
   WalletCards,
   X,
 } from 'lucide-react';
-import { AuthUser, CreditBalance } from '../lib/api';
-import { GenerationStep } from '../types';
+import { AiProviderOption, AuthUser, CreditBalance } from '../lib/api';
+import { GenerationStep, SelectableImageProvider } from '../types';
 import {
   FeatureDefinition,
   debugFeatureClick,
@@ -249,14 +249,28 @@ interface StepperProps {
   onStepChange: (step: GenerationStep) => void;
   estimatedCreditCost?: number | null;
   creditBalance?: number | null;
+  selectedProvider?: SelectableImageProvider;
+  providers?: AiProviderOption[];
+  isProviderLoading?: boolean;
+  onProviderChange?: (provider: SelectableImageProvider) => void;
 }
 
-export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null, creditBalance = null }: StepperProps) {
+export function Stepper({
+  currentStep,
+  onStepChange,
+  estimatedCreditCost = null,
+  creditBalance = null,
+  selectedProvider,
+  providers = [],
+  isProviderLoading = false,
+  onProviderChange = () => undefined,
+}: StepperProps) {
   const [addedFeatureIds, setAddedFeatureIds] = useState<string[]>(() => readStoredVisibleFeatureIds());
   const [isFeaturePickerOpen, setIsFeaturePickerOpen] = useState(false);
   const visibleFeatures = getVisibleFeatures(addedFeatureIds);
   const optionalFeatures = getOptionalFeatures();
   const visibleFeatureIdSet = new Set(visibleFeatures.map(feature => feature.id));
+  const selectedProviderInfo = providers.find(provider => provider.value === selectedProvider);
 
   const handleSelectFeature = (feature: FeatureDefinition) => {
     debugFeatureClick(feature);
@@ -286,18 +300,60 @@ export function Stepper({ currentStep, onStepChange, estimatedCreditCost = null,
           <h1 className="mt-1 text-lg font-bold tracking-tight text-slate-950 md:text-xl">AI 设计工作台</h1>
           <p className="mt-0.5 text-xs text-slate-500">选择功能、上传素材并输入提示词，快速生成建筑与室内设计表达结果。</p>
         </div>
-        <div className="hidden rounded-full border border-white/70 bg-white/55 px-4 py-2 text-xs font-bold text-slate-600 shadow-sm backdrop-blur md:block">
-          <span className="text-teal-700">当前功能：{readStepperFeatureLabel(currentStep)}</span>
-          <span className="mx-2 text-slate-300">/</span>
-          <span>本次消耗：{estimatedCreditCost === null ? '-' : estimatedCreditCost} 算力点</span>
-          {creditBalance !== null ? (
-            <>
-              <span className="mx-2 text-slate-300">/</span>
-              <span>余额：{creditBalance} 算力点</span>
-            </>
-          ) : null}
+        <div className="hidden items-center gap-3 md:flex">
+          <label className="flex items-center gap-2 rounded-2xl border border-white/70 bg-white/60 px-3 py-2 text-xs font-bold text-slate-600 shadow-sm backdrop-blur">
+            <span className="shrink-0 text-teal-700">AI 接口</span>
+            <select
+              value={selectedProvider || ''}
+              onChange={event => onProviderChange(event.currentTarget.value as SelectableImageProvider)}
+              disabled={isProviderLoading}
+              className="min-w-56 border-0 bg-transparent py-0 text-xs font-bold text-slate-800 outline-none"
+            >
+              {isProviderLoading ? <option value="">正在读取接口配置...</option> : null}
+              {providers.map(provider => (
+                <option key={provider.value} value={provider.value} disabled={!provider.enabled}>
+                  {provider.label}{provider.enabled ? '' : '（未配置）'}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="rounded-full border border-white/70 bg-white/55 px-4 py-2 text-xs font-bold text-slate-600 shadow-sm backdrop-blur">
+            <span className="text-teal-700">当前功能：{readStepperFeatureLabel(currentStep)}</span>
+            <span className="mx-2 text-slate-300">/</span>
+            <span>本次消耗：{estimatedCreditCost === null ? '-' : estimatedCreditCost} 算力点</span>
+            {creditBalance !== null ? (
+              <>
+                <span className="mx-2 text-slate-300">/</span>
+                <span>余额：{creditBalance} 算力点</span>
+              </>
+            ) : null}
+          </div>
         </div>
       </div>
+
+      <div className="px-4 pb-3 md:hidden">
+        <label className="block rounded-2xl border border-white/70 bg-white/60 p-3 text-xs font-bold text-slate-600 shadow-sm backdrop-blur">
+          <span className="mb-2 block text-teal-700">AI 接口</span>
+          <select
+            value={selectedProvider || ''}
+            onChange={event => onProviderChange(event.currentTarget.value as SelectableImageProvider)}
+            disabled={isProviderLoading}
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800"
+          >
+            {isProviderLoading ? <option value="">正在读取接口配置...</option> : null}
+            {providers.map(provider => (
+              <option key={provider.value} value={provider.value} disabled={!provider.enabled}>
+                {provider.label}{provider.enabled ? '' : '（未配置）'}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {selectedProviderInfo && !selectedProviderInfo.enabled ? (
+        <div className="mx-4 mb-3 rounded-xl border border-amber-200 bg-amber-50/90 px-3 py-2 text-xs font-semibold text-amber-800 md:mx-5">
+          当前 AI 接口缺少后端配置：{selectedProviderInfo.missingConfig.join('、')}。请配置后重启服务。
+        </div>
+      ) : null}
 
       <div className="workspace-feature-grid grid gap-3 px-4 pb-3 md:grid-cols-3 xl:grid-cols-6 md:px-5">
         {visibleFeatures.map((feature) => {

@@ -28,6 +28,7 @@ import {
 } from '../lib/api';
 import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
+import { AspectRatioImage } from './common/AspectRatioImage';
 import { ResultImageTabs } from './ResultImageTabs';
 
 interface ProjectDetailProps {
@@ -380,7 +381,6 @@ function GenerationCard({
         <ResultImageTabs
           resultImageUrl={getOriginalResultImageUrl(primaryResult, generation.outputImageUrl || generation.outputImageDataPreview)}
           originalImageUrl={inputImage}
-          className="h-[360px]"
           tabListClassName="mb-3 w-fit"
           tabButtonClassName="px-3"
           frameClassName="rounded-xl shadow-none"
@@ -601,9 +601,7 @@ function PrintImage({ src, label }: { src: string | null; label: string }) {
 function PreviewImage({ src, label }: { src: string; label: string }) {
   return (
     <figure className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <div className="aspect-[4/3]">
-        <img src={src} alt={label} className="h-full w-full object-contain" referrerPolicy="no-referrer" />
-      </div>
+      <AspectRatioImage src={src} alt={label} className="rounded-none border-0 shadow-none" />
       <figcaption className="border-t border-slate-100 px-3 py-2 text-xs font-semibold text-slate-500">{label}</figcaption>
     </figure>
   );

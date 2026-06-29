@@ -18,6 +18,7 @@ import { ObjectInsertPanel } from './ObjectInsertPanel';
 import { FreeReferenceImagePanel } from './FreeReferenceImagePanel';
 import { UploadErrors, UploadTarget, ViewModeOption } from './workspace/workspaceTypes';
 import { getUploadedImageSrc, isLocalInpaintingStep, maxFurnitureReferences, maxMaterialTextures, readGenerationStatusLabel } from './workspace/workspaceUtils';
+import { IMAGE_UPLOAD_ACCEPT, readImageTypeUploadError } from '../utils/imageValidation';
 
 const MaterialLibrary = lazy(() => import('./MaterialLibrary').then(module => ({ default: module.MaterialLibrary })));
 const PromptTemplatePanel = lazy(() => import('./PromptTemplatePanel').then(module => ({ default: module.PromptTemplatePanel })));
@@ -48,10 +49,9 @@ interface WorkspaceProps {
   backendProvider: GenerationProvider | null;
   isCreditsInsufficient: boolean;
   estimatedCreditCost: number;
+  providerUnavailableReason?: string | null;
   isAdmin?: boolean;
 }
-
-const acceptedImageTypes = 'image/png,image/jpeg,image/webp';
 
 export function MainWorkspace({
   step,
@@ -79,6 +79,7 @@ export function MainWorkspace({
   backendProvider,
   isCreditsInsufficient,
   estimatedCreditCost,
+  providerUnavailableReason = null,
   isAdmin = false,
 }: WorkspaceProps) {
   const inputFileRef = useRef<HTMLInputElement>(null);
@@ -107,10 +108,22 @@ export function MainWorkspace({
   const canGenerate = Boolean(state.inputImage)
     && !state.isGenerating
     && !isCreditsInsufficient
+    && !providerUnavailableReason
     && (!isMaterialReplaceStep || (
       hasMaterialReplaceTarget
       && (materialReplaceEditMode === 'mask' ? hasMaskSelection : hasMaterialReplaceObject)
     ));
+  const generateDisabledReason = providerUnavailableReason
+    || (state.isGenerating ? '正在生成，请稍候。' : null)
+    || (!state.inputImage
+      ? state.config.aiProvider === 'apiyi-nano-banana2-edit'
+        ? 'API易图片编辑接口需要至少上传一张图片。'
+        : '请先上传原图。'
+      : null)
+    || (isCreditsInsufficient ? '当前算力点余额不足。' : null)
+    || (isMaterialReplaceStep && !hasMaterialReplaceTarget ? '请选择材质、软装或输入替换要求。' : null)
+    || (isMaterialReplaceStep && materialReplaceEditMode === 'mask' && !hasMaskSelection ? '请选择需要替换的区域。' : null)
+    || (isMaterialReplaceStep && materialReplaceEditMode !== 'mask' && !hasMaterialReplaceObject ? '请选择需要替换的对象类型。' : null);
   const providerForStatus = backendProvider || state.generationProvider;
   const originalImageUrl = state.inputImage ? getUploadedImageSrc(state.inputImage) : null;
   const resultOptions = state.generationResults.length > 0
@@ -189,7 +202,7 @@ export function MainWorkspace({
     const file = fileList?.[0];
     if (!file) return;
 
-    const validationError = validateImageFile(file);
+    const validationError = validateImageFile(file, `workspace:${GenerationStep[step]}:${target}`);
     if (validationError) {
       setUploadErrors(prev => ({ ...prev, [target]: validationError }));
       return;
@@ -202,7 +215,12 @@ export function MainWorkspace({
       try {
         const asset = await uploadImageAsset(file, file.name);
         image = { ...localImage, assetId: asset.id, url: asset.url };
-      } catch {
+      } catch (error) {
+        const uploadError = readImageTypeUploadError(error);
+        if (uploadError) {
+          setUploadErrors(prev => ({ ...prev, [target]: uploadError }));
+          return;
+        }
         // Keep dataUrl fallback when backend upload is unavailable.
       }
 
@@ -229,7 +247,7 @@ export function MainWorkspace({
 
     const nextReferences: ReferenceImage[] = [];
     for (const file of files.slice(0, availableSlots)) {
-      const validationError = validateImageFile(file);
+      const validationError = validateImageFile(file, `workspace:${GenerationStep[step]}:furniture-reference`);
       if (validationError) {
         setUploadErrors(prev => ({ ...prev, furniture: validationError }));
         continue;
@@ -243,7 +261,12 @@ export function MainWorkspace({
         const asset = await uploadImageAsset(file, file.name);
         assetId = asset.id;
         url = asset.url;
-      } catch {
+      } catch (error) {
+        const uploadError = readImageTypeUploadError(error);
+        if (uploadError) {
+          setUploadErrors(prev => ({ ...prev, furniture: uploadError }));
+          continue;
+        }
         // Keep the local preview when backend upload is unavailable.
       }
 
@@ -282,7 +305,7 @@ export function MainWorkspace({
 
     const nextTextures: MaterialTexture[] = [];
     for (const file of acceptedFiles) {
-      const validationError = validateImageFile(file);
+      const validationError = validateImageFile(file, `workspace:${GenerationStep[step]}:material-reference`);
       if (validationError) {
         setUploadErrors(prev => ({ ...prev, texture: validationError }));
         continue;
@@ -296,7 +319,12 @@ export function MainWorkspace({
         const asset = await uploadImageAsset(file, file.name);
         assetId = asset.id;
         url = asset.url;
-      } catch {
+      } catch (error) {
+        const uploadError = readImageTypeUploadError(error);
+        if (uploadError) {
+          setUploadErrors(prev => ({ ...prev, texture: uploadError }));
+          continue;
+        }
         // Keep the local preview when backend upload is unavailable.
       }
 
@@ -391,7 +419,7 @@ export function MainWorkspace({
   if (isDesignVariantsStep) {
     return (
       <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden">
-        <input ref={inputFileRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleFileSelected('input', event.currentTarget.files); event.currentTarget.value = ''; }} />
+        <input ref={inputFileRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} className="hidden" onChange={event => { void handleFileSelected('input', event.currentTarget.files); event.currentTarget.value = ''; }} />
         <DesignVariantsPanel
           state={state}
           resultOptions={resultOptions}
@@ -418,6 +446,7 @@ export function MainWorkspace({
           statusLabel={statusLabel}
           elapsedSeconds={elapsedSeconds}
           canGenerate={canGenerate}
+          disabledReason={generateDisabledReason}
           previewImage={previewImage}
           originalImageUrl={originalImageUrl}
           resultOptions={resultOptions}
@@ -444,7 +473,7 @@ export function MainWorkspace({
   if (isPlanColorizeStep) {
     return (
       <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden">
-        <input ref={inputFileRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleFileSelected('input', event.currentTarget.files); event.currentTarget.value = ''; }} />
+        <input ref={inputFileRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} className="hidden" onChange={event => { void handleFileSelected('input', event.currentTarget.files); event.currentTarget.value = ''; }} />
         <PlanColorizePanel
           state={state}
           previewImage={previewImage}
@@ -461,6 +490,7 @@ export function MainWorkspace({
           statusLabel={statusLabel}
           elapsedSeconds={elapsedSeconds}
           canGenerate={canGenerate}
+          disabledReason={generateDisabledReason}
           previewImage={previewImage}
           originalImageUrl={originalImageUrl}
           resultOptions={resultOptions}
@@ -500,6 +530,7 @@ export function MainWorkspace({
           statusLabel={statusLabel}
           elapsedSeconds={elapsedSeconds}
           canGenerate={Boolean(state.inputImage) && !state.isGenerating && !isCreditsInsufficient}
+          disabledReason={generateDisabledReason}
           previewImage={previewImage}
           originalImageUrl={originalImageUrl}
           resultOptions={resultOptions}
@@ -575,10 +606,10 @@ export function MainWorkspace({
 
   return (
     <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden p-3">
-      <input ref={inputFileRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleFileSelected('input', event.currentTarget.files); event.currentTarget.value = ''; }} />
-      <input ref={materialFileRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleFileSelected('material', event.currentTarget.files); event.currentTarget.value = ''; }} />
-      <input ref={materialTextureFileRef} type="file" accept={acceptedImageTypes} multiple className="hidden" onChange={event => { void handleTextureFiles(event.currentTarget.files); event.currentTarget.value = ''; }} />
-      <input ref={furnitureReferenceFileRef} type="file" accept={acceptedImageTypes} multiple className="hidden" onChange={event => { void handleFurnitureReferenceFiles(event.currentTarget.files); event.currentTarget.value = ''; }} />
+      <input ref={inputFileRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} className="hidden" onChange={event => { void handleFileSelected('input', event.currentTarget.files); event.currentTarget.value = ''; }} />
+      <input ref={materialFileRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} className="hidden" onChange={event => { void handleFileSelected('material', event.currentTarget.files); event.currentTarget.value = ''; }} />
+      <input ref={materialTextureFileRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} multiple className="hidden" onChange={event => { void handleTextureFiles(event.currentTarget.files); event.currentTarget.value = ''; }} />
+      <input ref={furnitureReferenceFileRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} multiple className="hidden" onChange={event => { void handleFurnitureReferenceFiles(event.currentTarget.files); event.currentTarget.value = ''; }} />
 
       <aside className="workspace-side-panel glass-panel flex w-80 shrink-0 flex-col overflow-y-auto rounded-l-3xl border border-white/60 p-4 custom-scrollbar">
         <InputImagePanel
@@ -646,6 +677,7 @@ export function MainWorkspace({
         statusLabel={statusLabel}
         elapsedSeconds={elapsedSeconds}
         canGenerate={canGenerate}
+        disabledReason={generateDisabledReason}
         previewImage={previewImage}
         originalImageUrl={originalImageUrl}
         resultOptions={resultOptions}

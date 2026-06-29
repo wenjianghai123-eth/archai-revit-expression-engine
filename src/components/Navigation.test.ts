@@ -26,7 +26,7 @@ describe('Sidebar account panel', () => {
     expect(html).toContain('member@example.com');
     expect(html).toContain('role: member');
     expect(html).toContain('status: active');
-    expect(html).toContain('剩余 credits：88');
+    expect(html).toContain('剩余算力点：88');
     expect(html).toContain('退出登录');
   });
 

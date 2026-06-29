@@ -3,6 +3,7 @@ import { GenerationConfig, GenerationStep, UploadedImage } from '../../types';
 import { UploadErrors, UploadTarget } from './workspaceTypes';
 import { getUploadedImageSrc, isLocalInpaintingStep, modeLabel } from './workspaceUtils';
 import { FurnitureReferencesPanel } from './ReferenceImagesPanel';
+import { AspectRatioImage } from '../common/AspectRatioImage';
 
 interface InputImagePanelProps {
   step: GenerationStep;
@@ -106,11 +107,16 @@ function UploadField({ target, image, title, optional = false, uploadErrors, onU
           event.preventDefault();
           if (event.dataTransfer.files.length > 0) onFileDrop(target, event.dataTransfer.files);
         }}
-        className="relative flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 text-slate-400 transition hover:border-blue-200 hover:bg-blue-50/40"
+        className="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 text-slate-400 transition hover:border-blue-200 hover:bg-blue-50/40"
       >
         {image ? (
           <>
-            <img src={getUploadedImageSrc(image)} alt={image.name} className="h-full w-full object-contain" referrerPolicy="no-referrer" />
+            <AspectRatioImage
+              src={getUploadedImageSrc(image)}
+              alt={image.name}
+              className="h-full border-0 rounded-none shadow-none"
+              enableLightbox={false}
+            />
             <span
               role="button"
               tabIndex={0}

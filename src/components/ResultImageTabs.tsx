@@ -55,7 +55,7 @@ export function ResultImageTabs({
   };
 
   return (
-    <div className={`flex h-full min-h-0 flex-col ${className}`}>
+    <div className={`flex min-h-0 w-full flex-col ${className}`}>
       {showTabs ? (
         <div className={`flex overflow-hidden rounded-lg bg-slate-200 p-0.5 ${tabListClassName}`}>
           {viewModeOptions.map(option => (
@@ -73,7 +73,7 @@ export function ResultImageTabs({
         </div>
       ) : null}
 
-      <div className={`min-h-0 flex-1 overflow-hidden rounded border border-slate-200 bg-white shadow-2xl ${frameClassName}`}>
+      <div className={`aspect-video w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm ${frameClassName}`}>
         {renderViewer({
           viewMode: activeViewMode,
           resultImageUrl,
@@ -113,7 +113,7 @@ function renderViewer({
 }) {
   if (isGenerating) {
     return (
-      <div className="flex h-full min-h-[220px] flex-col items-center justify-center bg-white/80 text-blue-600">
+      <div className="flex h-full flex-col items-center justify-center bg-white/80 text-blue-600">
         <RefreshCw className="mb-3 h-8 w-8 animate-spin" />
         <p className="text-sm font-bold">正在生成预览...</p>
         <p className="mt-2 text-xs text-slate-500">{generationProgress}%</p>
@@ -123,7 +123,7 @@ function renderViewer({
 
   if (viewMode === 'original') {
     return originalImageUrl
-      ? <img src={originalImageUrl} alt="原图" className="h-full min-h-[220px] w-full bg-white object-contain" referrerPolicy="no-referrer" />
+      ? <img src={originalImageUrl} alt="原图" className="h-full w-full bg-white object-contain" referrerPolicy="no-referrer" />
       : <ImageEmptyState message={originalMissingMessage} />;
   }
 
@@ -133,7 +133,7 @@ function renderViewer({
     }
 
     return (
-      <div className="grid h-full min-h-[220px] w-full grid-cols-2 bg-white">
+      <div className="grid h-full w-full grid-cols-2 bg-white">
         <img src={originalImageUrl} alt="原图" className="h-full w-full border-r border-slate-200 object-contain" referrerPolicy="no-referrer" />
         <img src={resultImageUrl} alt="结果图" className="h-full w-full object-contain" referrerPolicy="no-referrer" />
       </div>
@@ -149,13 +149,13 @@ function renderViewer({
   }
 
   return resultImageUrl
-    ? <img src={resultImageUrl} alt="结果图" className="h-full min-h-[220px] w-full bg-white object-contain" referrerPolicy="no-referrer" />
+    ? <img src={resultImageUrl} alt="结果图" className="h-full w-full bg-white object-contain" referrerPolicy="no-referrer" />
     : <ImageEmptyState title={resultMissingMessage} message="上传图片并完成生成后，结果会显示在这里。" />;
 }
 
 function ImageEmptyState({ title, message }: { title?: string; message: string }) {
   return (
-    <div className="flex h-full min-h-[220px] flex-col items-center justify-center bg-slate-50 px-4 text-center text-slate-400">
+    <div className="flex h-full flex-col items-center justify-center bg-slate-50 px-4 text-center text-slate-400">
       <ImageIcon className="mb-4 h-10 w-10 opacity-40" />
       {title ? <h3 className="text-base font-bold text-slate-800">{title}</h3> : null}
       <p className="mt-2 max-w-sm text-sm leading-6">{message}</p>

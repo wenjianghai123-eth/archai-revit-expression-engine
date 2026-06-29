@@ -55,6 +55,80 @@ afterAll(async () => {
 });
 
 describe('POST /api/generation-jobs asset ownership', () => {
+  it('returns the environment-derived provider list', async () => {
+    const previousGenerationProvider = process.env.GENERATION_PROVIDER;
+    const previousAiProvider = process.env.AI_PROVIDER;
+    const previousApiKey = process.env.APIYI_API_KEY;
+    process.env.GENERATION_PROVIDER = 'apiyi';
+    process.env.AI_PROVIDER = 'apiyi-nano-banana2-edit';
+    process.env.APIYI_API_KEY = 'test-key';
+
+    const response = await request(app).get('/api/ai-providers');
+
+    if (previousGenerationProvider === undefined) delete process.env.GENERATION_PROVIDER;
+    else process.env.GENERATION_PROVIDER = previousGenerationProvider;
+    if (previousAiProvider === undefined) delete process.env.AI_PROVIDER;
+    else process.env.AI_PROVIDER = previousAiProvider;
+    if (previousApiKey === undefined) delete process.env.APIYI_API_KEY;
+    else process.env.APIYI_API_KEY = previousApiKey;
+    expect(response.status).toBe(200);
+    expect(response.body.data.defaultProvider).toBe('apiyi-nano-banana2-edit');
+    expect(response.body.data.providers).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        value: 'apiyi-nano-banana2-edit',
+        enabled: true,
+        missingConfig: [],
+      }),
+    ]));
+  });
+
+  it('persists the per-job API易 provider selection', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'APIYi provider selection' });
+    const inputAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'style-render',
+        step: 'free_reference_image',
+        provider: 'apiyi',
+        prompt: 'APIYi provider selection',
+        config: {
+          step: 'free_reference_image',
+          sourceImageAssetId: inputAsset.id,
+        },
+        inputAssetIds: [inputAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.provider).toBe('apiyi-nano-banana2-edit');
+    expect(response.body.data.job.config.aiProvider).toBe('apiyi-nano-banana2-edit');
+    expect(response.body.data.job.config.targetAspectRatio).toBe('16:9');
+    expect(response.body.data.job.config.aspectRatio).toBe('16:9');
+    expect(response.body.data.job.config.apiyiAspectRatio).toBe('16:9');
+  });
+
+  it('returns PROVIDER_NOT_REGISTERED for an unknown provider', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Unknown provider' });
+    const inputAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'style-render',
+        provider: 'missing-provider',
+        prompt: 'unknown provider',
+        config: {},
+        inputAssetIds: [inputAsset.id],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('PROVIDER_NOT_REGISTERED');
+    expect(response.body.error.message).toContain('missing-provider');
+  });
+
   it.each([
     'floorplan',
     'style-render',
@@ -96,9 +170,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
   it('creates an object_insert step job using inpaint mode', async () => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Object insert step' });
     const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
-    const objectAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
     const previewAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
-    const maskAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
     const placement = { x: 12, y: 24, width: 120, height: 80, rotation: 0 };
 
     const response = await request(app)
@@ -112,13 +184,12 @@ describe('POST /api/generation-jobs asset ownership', () => {
           step: 'object_insert',
           sourceImageAssetId: sourceAsset.id,
           objectInsert: {
-            objectReferenceAssetId: objectAsset.id,
+            mode: 'object_insert_preview_fusion',
             previewAssetId: previewAsset.id,
-            maskAssetId: maskAsset.id,
             placement,
           },
         },
-        inputAssetIds: [sourceAsset.id, objectAsset.id, previewAsset.id, maskAsset.id],
+        inputAssetIds: [sourceAsset.id, previewAsset.id],
       });
 
     expect(response.status).toBe(201);
@@ -128,22 +199,18 @@ describe('POST /api/generation-jobs asset ownership', () => {
       mode: 'inpaint',
       step: 'object_insert',
       status: 'queued',
-      inputAssetIds: [sourceAsset.id, objectAsset.id, previewAsset.id, maskAsset.id],
+      inputAssetIds: [sourceAsset.id, previewAsset.id],
       config: {
         step: 'object_insert',
         sourceImageAssetId: sourceAsset.id,
-        objectReferenceAssetId: objectAsset.id,
+        objectInsertMode: 'object_insert_preview_fusion',
         placementPreviewAssetId: previewAsset.id,
-        placementMaskAssetId: maskAsset.id,
-        maskMode: 'asset-mask',
-        maskAssetId: maskAsset.id,
         editTarget: 'furniture',
         objectPlacement: placement,
         objectInsert: {
+          mode: 'object_insert_preview_fusion',
           sourceImageAssetId: sourceAsset.id,
-          objectReferenceAssetId: objectAsset.id,
           previewAssetId: previewAsset.id,
-          maskAssetId: maskAsset.id,
           placement,
         },
       },
@@ -1607,6 +1674,32 @@ describe('asset uploads', () => {
     });
   });
 
+  it.each([
+    ['UPPER.JPG', 'application/octet-stream'],
+    ['legacy.jfif', 'image/pjpeg'],
+    ['alias.PNG', 'image/x-png'],
+  ])('accepts an image named %s with MIME %s based on its file header', async (filename, contentType) => {
+    const content = filename.toLowerCase().endsWith('.png')
+      ? tinyPngBuffer()
+      : Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    const response = await request(app)
+      .post('/api/assets/images')
+      .attach('file', content, { filename, contentType });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.asset.mimeType).toBe(filename.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg');
+  });
+
+  it('uses the detected file header when declared MIME and extension disagree', async () => {
+    const response = await request(app)
+      .post('/api/assets/images')
+      .attach('file', tinyPngBuffer(), { filename: 'mismatch.jpg', contentType: 'image/jpeg' });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.asset.mimeType).toBe('image/png');
+    expect(response.body.data.asset.filename).toMatch(/\.png$/u);
+  });
+
   it('rejects non-image content disguised as an image', async () => {
     const response = await request(app)
       .post('/api/assets/images')
@@ -1617,6 +1710,7 @@ describe('asset uploads', () => {
       ok: false,
       error: { code: 'UPLOAD_IMAGE_TYPE_INVALID' },
     });
+    expect(response.body.error.message).toContain('仅支持 PNG、JPG、JPEG、WEBP');
   });
 
   it('rejects an oversized image upload', async () => {

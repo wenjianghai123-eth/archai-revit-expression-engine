@@ -23,7 +23,8 @@ export type GenerationJobStep =
   | 'panorama_quick_render'
   | 'object_insert'
   | 'free_reference_image';
-export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
+export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana' | 'apiyi-nano-banana2-edit';
+export type SelectableImageProvider = 'grsai-banana2' | 'apiyi-nano-banana2-edit';
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
 export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
 export type QualityMode = 'draft' | 'fast' | 'balanced' | 'high';
@@ -288,6 +289,9 @@ export interface ModelOptimizationMetadata {
 
 export interface GenerationConfig {
   prompt: string;
+  aiProvider?: SelectableImageProvider;
+  apiyiAspectRatio?: '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '5:4' | '4:5' | '3:2' | '2:3' | '21:9';
+  apiyiImageSize?: '512' | '1K' | '2K' | '4K';
   step?: GenerationJobStep;
   style?: string;
   lighting: string;
@@ -299,6 +303,7 @@ export interface GenerationConfig {
   targetWidth?: number;
   targetHeight?: number;
   targetAspectRatio?: string;
+  aspectRatio?: string;
   materialTextureAssetIds?: string[];
   materialReferenceAssetIds?: string[];
   materialTextureSources?: unknown[];

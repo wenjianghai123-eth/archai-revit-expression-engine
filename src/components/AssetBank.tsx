@@ -31,6 +31,7 @@ import { Box3, Vector3 } from 'three';
 import { AssetModel } from '../types';
 import { downloadUrl } from '../utils/download';
 import { convertModelAsset, deleteModelAsset, listModelAssets, ModelAssetRecord, uploadModelAsset } from '../lib/api';
+import { AspectRatioImage } from './common/AspectRatioImage';
 
 type ModelCategory = NonNullable<AssetModel['category']>;
 type StatusFilter = '全部' | '可用' | '待优化' | '失败';
@@ -956,9 +957,7 @@ export function AssetBank() {
                 </div>
 
                 {detailAsset.sourceImageDataUrl ? (
-                  <div className="mt-4 overflow-hidden rounded-xl border border-slate-100">
-                    <img src={detailAsset.sourceImageDataUrl} alt={detailAsset.sourceImageName || '来源参考图'} className="h-40 w-full object-cover" />
-                  </div>
+                  <AspectRatioImage src={detailAsset.sourceImageDataUrl} alt={detailAsset.sourceImageName || '来源参考图'} className="mt-4" />
                 ) : (
                   <div className="mt-4 flex items-center gap-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3">
                     <Image className="h-5 w-5 text-slate-300" />

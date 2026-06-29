@@ -3,6 +3,7 @@ import { Clock, Download, Image as ImageIcon, Loader2, RotateCcw, Trash2, XCircl
 import { GenerationHistoryItem, GenerationStep } from '../types';
 import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
 import { getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
+import { ResultCard } from './common/ResultCard';
 
 interface HistoryViewProps {
   items: GenerationHistoryItem[];
@@ -81,19 +82,29 @@ export function HistoryView({ items, onReuse, onDelete, onClear }: HistoryViewPr
           </div>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          <div className="result-grid">
             {items.map((item) => (
-              <article key={item.id} className="arch-card">
-                <div className="h-32 bg-slate-100">
-                  {readHistoryOutputImage(item) ? (
-                    <img src={readHistoryOutputImage(item) || ''} alt="历史生成结果" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
-                  ) : (
-                    <div className="flex h-full items-center justify-center">
-                      <ImageIcon className="h-8 w-8 text-slate-300" />
-                    </div>
-                  )}
-                </div>
-                <div className="space-y-2 p-3">
+              <ResultCard
+                key={item.id}
+                image={readHistoryOutputImage(item)}
+                title={item.style}
+                subtitle={item.prompt}
+                status={<span className="arch-pill uppercase">{item.provider}</span>}
+                actions={(
+                  <>
+                    <button onClick={() => onReuse(item)} disabled={!readHistoryOutputImage(item)} className="flex-1 bg-slate-900 text-white">
+                      <RotateCcw className="h-3.5 w-3.5" />打开结果
+                    </button>
+                    <button onClick={() => void handleDownload(item)} disabled={!readHistoryOutputImage(item) || Boolean(downloadingId)} className="border border-slate-200 bg-white text-slate-600">
+                      {downloadingId === item.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                      保存
+                    </button>
+                    <button onClick={() => onDelete(item.id)} className="border border-slate-200 bg-white text-rose-500" title="删除记录">
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </>
+                )}
+              >
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                       <span className="arch-pill bg-blue-50 text-blue-700">{stepLabels[item.step] || '方案变体'}</span>
@@ -104,46 +115,15 @@ export function HistoryView({ items, onReuse, onDelete, onClear }: HistoryViewPr
                     </div>
                     <time className="text-[10px] font-mono text-slate-400">{item.createdAt}</time>
                   </div>
-                  <div>
-                    <p className="text-xs font-bold text-slate-900">{item.style}</p>
-                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{item.prompt}</p>
-                    {(item.inputImageName || item.storageWarning) && (
+                  {(item.inputImageName || item.storageWarning) && (
                       <p className="mt-2 line-clamp-2 text-[10px] leading-4 text-slate-400">
                         {item.inputImageName ? `输入: ${item.inputImageName}` : ''}
                         {item.storageWarning ? ` ${item.storageWarning}` : ''}
                       </p>
                     )}
-                  </div>
-                  <div className="grid grid-cols-[1fr_auto_auto] gap-2">
-                    <button
-                      onClick={() => onReuse(item)}
-                      disabled={!readHistoryOutputImage(item)}
-                      className="arch-button-primary py-2 text-xs"
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                      打开结果
-                    </button>
-                    <button
-                      onClick={() => void handleDownload(item)}
-                      disabled={!readHistoryOutputImage(item) || Boolean(downloadingId)}
-                      className="flex h-9 items-center justify-center gap-1.5 rounded-xl border border-slate-200/80 bg-white px-3 text-xs font-bold text-slate-500 transition-colors hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      title="保存到本地"
-                    >
-                      {downloadingId === item.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                      <span>{downloadingId === item.id ? '正在下载...' : '保存到本地'}</span>
-                    </button>
-                    <button
-                      onClick={() => onDelete(item.id)}
-                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200/80 bg-white text-slate-400 transition-colors hover:text-red-600"
-                      title="删除记录"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
                   {downloadMessage && downloadingId === null ? <p className="text-xs font-semibold text-emerald-700">{downloadMessage}</p> : null}
                   {downloadError ? <p className="text-xs font-semibold text-amber-700">{downloadError}</p> : null}
-                </div>
-              </article>
+              </ResultCard>
             ))}
           </div>
           </div>

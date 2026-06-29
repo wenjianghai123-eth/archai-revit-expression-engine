@@ -10,6 +10,7 @@ import { PreviewContent } from './ResultPreviewPanel';
 import { MaterialRepairActions, ResultSendActions, SecondaryEditActions } from './SecondaryEditActions';
 import { SavePromptTemplateModal } from '../SavePromptTemplateModal';
 import { canSavePromptTemplate } from '../../utils/savedPromptTemplates';
+import { AspectRatioImage } from '../common/AspectRatioImage';
 
 interface GenerationStatusPanelProps {
   step: GenerationStep;
@@ -18,6 +19,7 @@ interface GenerationStatusPanelProps {
   statusLabel: string;
   elapsedSeconds: number;
   canGenerate: boolean;
+  disabledReason?: string | null;
   previewImage: string | null | undefined;
   originalImageUrl: string | null;
   resultOptions: GenerationResultOption[];
@@ -46,6 +48,7 @@ export function GenerationStatusPanel({
   statusLabel,
   elapsedSeconds,
   canGenerate,
+  disabledReason = null,
   previewImage,
   originalImageUrl,
   resultOptions,
@@ -124,6 +127,9 @@ export function GenerationStatusPanel({
           {state.isGenerating ? <RefreshCw className="mx-auto h-4 w-4 animate-spin" /> : previewImage ? '完成并导出' : <><Zap className="mr-1 inline h-4 w-4 text-blue-300" />生成预览</>}
         </button>
         </div>
+        {!canGenerate && !previewImage && disabledReason ? (
+          <p className="mt-2 text-center text-xs font-semibold text-amber-700">{disabledReason}</p>
+        ) : null}
       </div>
     </aside>
   );
@@ -277,7 +283,7 @@ function ResultActions({
       {originalPreviewImage ? (
         <>
           {state.generationBatchItems && state.generationBatchItems.length > 0 ? (
-            <div className="grid grid-cols-2 gap-2">
+            <div className="result-grid">
               {state.generationBatchItems.map(item => (
                 <BatchItemCard key={item.variantIndex} item={item} projectName={projectName} onRetry={() => onRetryBatchItem?.(item.variantIndex)} />
               ))}
@@ -290,7 +296,7 @@ function ResultActions({
                   className={`relative overflow-hidden rounded-lg border bg-white ${result.id === selectedResultId ? 'border-blue-600 ring-2 ring-blue-100' : 'border-slate-200'}`}
                 >
                   <button type="button" onClick={() => onSelectGenerationResult(result.id)} className="relative block w-full overflow-hidden">
-                    <img src={result.imageUrl} alt={`方案 ${index + 1}`} className="h-20 w-full object-cover" referrerPolicy="no-referrer" />
+                    <AspectRatioImage src={result.imageUrl} alt={`方案 ${index + 1}`} className="rounded-none border-0 shadow-none" enableLightbox={false} />
                   </button>
                   <span className="absolute left-1 top-1 max-w-[calc(100%-2rem)] truncate rounded bg-white/90 px-1.5 py-0.5 text-[9px] font-bold text-slate-700">{readResultLabel(result, resultOptions)}</span>
                   <button
@@ -322,7 +328,7 @@ function ResultActions({
               ))}
             </div>
           )}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="action-row">
             {canSaveTemplate && activeResult ? (
               <button
                 type="button"
@@ -394,7 +400,9 @@ function ContinuationSourceBanner({ state }: { state: StepState }) {
   return (
     <div className="rounded-xl border border-blue-100 bg-blue-50 p-3">
       <div className="flex gap-3">
-        <img src={source.imageUrl} alt="二次编辑来源图" className="h-14 w-14 shrink-0 rounded-lg object-cover ring-1 ring-blue-100" referrerPolicy="no-referrer" />
+        <div className="w-24 shrink-0">
+          <AspectRatioImage src={source.imageUrl} alt="二次编辑来源图" className="rounded-lg" />
+        </div>
         <div className="min-w-0 flex-1">
           <p className="text-[10px] font-bold uppercase tracking-widest text-blue-500">继续生成来源</p>
           <p className="mt-1 truncate text-xs font-bold text-slate-900">由 {source.label} 继续生成</p>
@@ -437,11 +445,11 @@ function BatchItemCard({ item, projectName, onRetry }: { item: GenerationBatchIt
 
   return (
     <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-      <div className="relative flex h-24 items-center justify-center bg-slate-50">
+      <div className="relative flex items-center justify-center bg-slate-50">
         {originalImageUrl ? (
-          <img src={originalImageUrl} alt={item.variantName} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+          <AspectRatioImage src={originalImageUrl} alt={item.variantName} className="rounded-none border-0 shadow-none" />
         ) : (
-          <span className="text-xs font-bold text-slate-400">{readBatchItemStatusLabel(item.status)}</span>
+          <div className="flex aspect-video w-full items-center justify-center text-xs font-bold text-slate-400">{readBatchItemStatusLabel(item.status)}</div>
         )}
         <span className="absolute left-1 top-1 max-w-[calc(100%-0.5rem)] truncate rounded bg-white/90 px-1.5 py-0.5 text-[9px] font-bold text-slate-700">{item.variantName}</span>
       </div>

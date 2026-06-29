@@ -60,7 +60,56 @@
 }
 
 .arch-empty {
-  @apply flex min-h-[280px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200/80 bg-white p-6 text-center shadow-sm;
+  @apply flex min-h-52 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200/80 bg-white p-6 text-center shadow-sm;
+}
+
+.image-frame {
+  @apply relative flex w-full items-center justify-center overflow-hidden rounded-2xl border border-slate-200/80 shadow-inner;
+  background-color: #f8fafc;
+  background-image:
+    linear-gradient(45deg, rgba(148, 163, 184, 0.08) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(148, 163, 184, 0.08) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(148, 163, 184, 0.08) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(148, 163, 184, 0.08) 75%);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
+
+.image-frame-state {
+  @apply flex h-full w-full flex-col items-center justify-center gap-2 px-4 text-center text-xs font-semibold text-slate-400;
+}
+
+.result-card {
+  @apply flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm transition;
+}
+
+.result-card:hover {
+  @apply -translate-y-0.5 border-teal-200 shadow-lg;
+}
+
+.result-card-active {
+  @apply border-teal-500 ring-2 ring-teal-100;
+}
+
+.result-grid {
+  @apply grid items-stretch gap-4;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+}
+
+.action-row,
+.card-footer-actions {
+  @apply flex flex-wrap items-center gap-2;
+}
+
+.action-row > button,
+.action-row > a,
+.card-footer-actions > button,
+.card-footer-actions > a {
+  @apply inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-3 text-xs font-bold;
+}
+
+.compact-section {
+  @apply space-y-3 rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm;
 }
 
 .landing-gradient-fallback {
@@ -212,7 +261,7 @@
 
   .pdf-report-image-frame {
     align-items: center;
-    aspect-ratio: 4 / 3;
+    aspect-ratio: 16 / 9;
     background: #f8fafc;
     border: 1px solid #e2e8f0;
     border-radius: 8px;

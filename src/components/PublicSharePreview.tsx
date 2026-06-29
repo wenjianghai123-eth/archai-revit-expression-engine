@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Clock, ImageIcon, Loader2, Lock, Share2 } from 'lucide-react';
 import { getPublicShare, PublicShareGeneration, PublicSharePayload } from '../lib/api';
 import { PanoramaViewer } from './PanoramaViewer';
+import { AspectRatioImage } from './common/AspectRatioImage';
 
 interface PublicSharePreviewProps {
   token: string;
@@ -175,7 +176,7 @@ function PublicGenerationCard({
           ))}
         </div>
       ) : (
-        <div className="flex aspect-[4/3] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-300">
+        <div className="flex aspect-video items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-300">
           <AlertCircle className="h-8 w-8" />
         </div>
       )}
@@ -186,9 +187,7 @@ function PublicGenerationCard({
 function PreviewImage({ src, label }: { src: string; label: string }) {
   return (
     <figure className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
-      <div className="aspect-[4/3]">
-        <img src={src} alt={label} className="h-full w-full object-contain" referrerPolicy="no-referrer" />
-      </div>
+      <AspectRatioImage src={src} alt={label} className="rounded-none border-0 shadow-none" />
       <figcaption className="border-t border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-500">{label}</figcaption>
     </figure>
   );

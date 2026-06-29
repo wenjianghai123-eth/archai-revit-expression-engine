@@ -29,6 +29,8 @@ import {
 import { PanoramaViewer } from './PanoramaViewer';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
+import { IMAGE_UPLOAD_ACCEPT } from '../utils/imageValidation';
+import { validateImageFile } from '../utils/file';
 
 interface PanoramaQuickRenderPanelProps {
   state: StepState;
@@ -808,7 +810,7 @@ export function PanoramaQuickRenderPanel({
       <input
         ref={referenceFileInputRef}
         type="file"
-        accept="image/png,image/jpeg,image/webp"
+        accept={IMAGE_UPLOAD_ACCEPT}
         multiple
         className="hidden"
         onChange={event => {
@@ -1617,14 +1619,14 @@ function buildPanoramaReferenceConfig(
 
 function providerSupportsPanoramaReferences(provider: GenerationProvider | null): boolean {
   if (!provider || provider === 'mock') return true;
-  return provider === 'gemini' || provider === 'grsai-banana2' || provider === 'grsai-nano-banana';
+  return provider === 'gemini'
+    || provider === 'grsai-banana2'
+    || provider === 'grsai-nano-banana'
+    || provider === 'apiyi-nano-banana2-edit';
 }
 
 function isSupportedReferenceImageFile(file: File): boolean {
-  return file.type === 'image/png'
-    || file.type === 'image/jpeg'
-    || file.type === 'image/webp'
-    || /\.(png|jpe?g|webp)$/iu.test(file.name);
+  return validateImageFile(file, 'panorama:reference') === null;
 }
 
 function createShareId(): string {

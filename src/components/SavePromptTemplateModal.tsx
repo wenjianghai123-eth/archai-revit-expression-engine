@@ -8,6 +8,7 @@ import {
   stepToFeatureName,
 } from '../utils/savedPromptTemplates';
 import { getOriginalResultImageUrl } from '../utils/resultImage';
+import { AspectRatioImage } from './common/AspectRatioImage';
 
 interface SavePromptTemplateModalProps {
   step: GenerationStep;
@@ -119,7 +120,7 @@ export function SavePromptTemplateModal({
 
             <aside className="space-y-4">
               <InfoBlock title="本次生成结果图">
-                <img src={outputUrl} alt="生成结果图" className="h-56 w-full rounded-xl object-cover" referrerPolicy="no-referrer" />
+                <AspectRatioImage src={outputUrl} alt="生成结果图" />
                 <div className="mt-2 space-y-1 text-[11px] font-semibold text-slate-500">
                   <p>outputAssetId: {payloadPreview.outputAssetId || '未记录'}</p>
                   <p>createdFromJobId: {payloadPreview.createdFromJobId || '未记录'}</p>
@@ -131,7 +132,7 @@ export function SavePromptTemplateModal({
                   <div className="grid grid-cols-2 gap-2">
                     {payloadPreview.inputPreviews.map((item, index) => (
                       <div key={`${item.assetId || item.url}-${index}`} className="overflow-hidden rounded-lg border border-slate-100 bg-slate-50">
-                        <img src={item.url} alt={item.label} className="h-20 w-full object-cover" referrerPolicy="no-referrer" />
+                        <AspectRatioImage src={item.url} alt={item.label} className="rounded-lg" />
                         <p className="truncate px-2 py-1 text-[10px] font-bold text-slate-600">{item.label}</p>
                       </div>
                     ))}
@@ -159,7 +160,7 @@ export function SavePromptTemplateModal({
             {message ? <span className="text-emerald-700">{message}</span> : null}
             {error ? <span className="text-rose-600">{error}</span> : null}
           </div>
-          <div className="flex gap-2">
+          <div className="action-row">
             <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50">
               取消
             </button>

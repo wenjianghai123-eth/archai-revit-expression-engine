@@ -6,6 +6,7 @@ import { isProviderFallbackEnabled } from './providers/fallback';
 import { createGeminiProvider } from './providers/geminiProvider';
 import { createGrsaiBanana2Provider } from './providers/grsaiBanana2Provider';
 import { createGrsaiNanoBananaProvider } from './providers/grsaiNanoBananaProvider';
+import { collectApiYiImageSources, createApiYiNanoBanana2Provider } from './providers/apiyiNanoBanana2Provider';
 import { createMockGeneration, mockProvider } from './providers/mockProvider';
 import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider, MaskMode, ProviderName, QualityMode } from './providers/types';
 import { getImageSizeFromDataUrl, isValidTargetDimension, parseImageDataUrl as parseRawImageDataUrl } from './image/imageMetadata';
@@ -43,7 +44,7 @@ export interface GenerateResponseBody {
 }
 
 const maxImageMb = Number(process.env.MAX_IMAGE_MB || 10);
-const provider = selectProvider();
+const defaultProvider = selectProvider();
 const queuedGenerationJobIds: string[] = [];
 const activeGenerationJobIds = new Set<string>();
 let isGenerationWorkerScheduling = false;
@@ -111,8 +112,56 @@ interface ProviderBatchFailure {
 
 type ProviderBatchResult = ProviderBatchSuccess | ProviderBatchFailure;
 
-export function getGenerationProviderName(): ProviderName {
-  return provider.name;
+export function getGenerationProviderName(config?: Record<string, unknown>): ProviderName {
+  return resolveGenerationProviderName(config);
+}
+
+export interface SelectableGenerationProviderInfo {
+  value: 'grsai-banana2' | 'apiyi-nano-banana2-edit';
+  label: string;
+  enabled: boolean;
+  missingConfig: string[];
+}
+
+export function getSelectableGenerationProviders(): {
+  defaultProvider: 'grsai-banana2' | 'apiyi-nano-banana2-edit';
+  providers: SelectableGenerationProviderInfo[];
+} {
+  const configuredDefault = normalizeProviderName(readRequestedProviderName());
+  const defaultProvider = configuredDefault === 'apiyi-nano-banana2-edit'
+    ? configuredDefault
+    : 'grsai-banana2';
+  const apiYiEnabled = process.env.APIYI_IMAGE_PROVIDER_ENABLED !== 'false' && Boolean(process.env.APIYI_API_KEY);
+
+  return {
+    defaultProvider,
+    providers: [
+      {
+        value: 'grsai-banana2',
+        label: 'Grsai Banana2',
+        enabled: Boolean(process.env.GRSAI_API_KEY),
+        missingConfig: process.env.GRSAI_API_KEY ? [] : ['GRSAI_API_KEY'],
+      },
+      {
+        value: 'apiyi-nano-banana2-edit',
+        label: 'API易 Nano Banana 2 图片编辑',
+        enabled: apiYiEnabled,
+        missingConfig: apiYiEnabled ? [] : [
+          ...(process.env.APIYI_API_KEY ? [] : ['APIYI_API_KEY']),
+          ...(process.env.APIYI_IMAGE_PROVIDER_ENABLED === 'false' ? ['APIYI_IMAGE_PROVIDER_ENABLED'] : []),
+        ],
+      },
+    ],
+  };
+}
+
+export function normalizeGenerationProviderName(value: unknown): ProviderName | null {
+  if (typeof value !== 'string' || value.trim().length === 0) return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'apiyi' || normalized === 'apiyi-nano-banana2-edit') return 'apiyi-nano-banana2-edit';
+  if (normalized === 'grsai' || normalized === 'grsai-banana2') return 'grsai-banana2';
+  if (isProviderName(normalized)) return normalized;
+  return null;
 }
 
 export async function refundGenerationJobCredits(jobId: string): Promise<void> {
@@ -217,7 +266,7 @@ export function removeQueuedGenerationJob(jobId: string): void {
 }
 
 export async function generateWithFallbackResponse(input: GenerateImageInput, userId?: string): Promise<GenerateResponseBody> {
-  const output = await generateWithFallback(input);
+  const output = await generateWithFallback(input, defaultProvider);
   let outputImageUrl: string | null = null;
   if (userId) {
     const asset = await saveGeneratedDataUrl(userId, output.dataUrl, `legacy-generation-${output.id}`);
@@ -261,6 +310,7 @@ async function runGenerationWorker(): Promise<void> {
 async function processGenerationJob(jobId: string): Promise<void> {
   const job = await getGenerationJob(jobId);
   if (!job || job.status === 'cancelled' || job.status === 'succeeded' || job.status === 'failed' || job.status === 'timeout') return;
+  const selectedProvider = selectProviderByName(resolveGenerationProviderName(job.config, job.provider));
   const isObjectInsert = isObjectInsertJob(job);
   const diagnostics: GenerationJobDiagnostics = {
     ...job.diagnostics,
@@ -273,6 +323,15 @@ async function processGenerationJob(jobId: string): Promise<void> {
   };
 
   try {
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug({
+        event: 'generation_provider_dispatch',
+        jobId: job.id,
+        provider: selectedProvider.name,
+        model: readProviderModelName(selectedProvider.name),
+        step: job.step ?? readGenerationJobStep(job.config),
+      });
+    }
     await updateGenerationJob(job.id, {
       status: 'running',
       progress: 10,
@@ -309,7 +368,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
         const floorplanPlan = floorplanVariantPlans[index];
         try {
           const providerInput = buildProviderInputForVariant(job, input, index, batchCount, variantStyle, planStyle, floorplanPlan);
-          const providerOutput = await generateWithFallback(providerInput);
+          const providerOutput = await generateWithFallback(providerInput, selectedProvider);
           await updateGenerationJob(job.id, {
             progress: job.mode === 'design-variants' || job.mode === 'plan-colorize' || isFloorplanMultiPlanJob(job) ? resolveVariantCompleteProgress(batchCount, index) : 75,
             diagnostics,
@@ -576,7 +635,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
     if (providerError.userMessage || providerError.providerError || providerError.providerStatus || providerError.statusCode || providerError.rawSnippet) {
       diagnostics.provider = {
         ...diagnostics.provider,
-        name: providerError.provider || diagnostics.provider?.name || provider.name,
+        name: providerError.provider || diagnostics.provider?.name || selectedProvider.name,
         providerError: providerError.providerError,
         providerStatus: providerError.providerStatus,
         userMessage: providerError.userMessage,
@@ -751,9 +810,13 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     config: isObjectInsertMode
       ? {
           ...removeInternalConfig(job.config),
+          __generationJobId: job.id,
           objectInsertInputOrder: isObjectInsertPreviewFusionMode ? undefined : buildObjectInsertInputOrder(objectInsertItems, objectInsertNeedsObject, objectInsertNeedsPreview, objectInsertNeedsMask),
         }
-      : removeInternalConfig(job.config),
+      : {
+          ...removeInternalConfig(job.config),
+          __generationJobId: job.id,
+        },
     targetWidth: targetDimensions.targetWidth,
     targetHeight: targetDimensions.targetHeight,
     targetAspectRatio: targetDimensions.targetAspectRatio,
@@ -790,7 +853,9 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
         },
       }
     : rawInput;
-  const prepared = await prepareGenerateInputForProvider(providerInput);
+  const prepared = selectedJobProviderName(job) === 'apiyi-nano-banana2-edit'
+    ? await prepareGenerateInputForApiYi(providerInput)
+    : await prepareGenerateInputForProvider(providerInput);
   prepared.imageDiagnostics.localInpaintEnabled = Boolean(localInpaint);
   if (localInpaint) {
     prepared.imageDiagnostics.maskBbox = localInpaint.bbox;
@@ -938,6 +1003,47 @@ async function maybeCreateLocalInpaintContext(input: GenerateImageInput): Promis
       ? Number(process.env.OBJECT_INSERT_LOCAL_CROP_MAX_AREA_RATIO || 0.85)
       : Number(process.env.LOCAL_INPAINT_MAX_AREA_RATIO || 0.65),
   });
+}
+
+async function prepareGenerateInputForApiYi(input: GenerateImageInput): Promise<{ input: GenerateImageInput; imageDiagnostics: NonNullable<GenerationJobDiagnostics['images']> }> {
+  const sources = collectApiYiImageSources(input);
+  const metadata = await Promise.all(sources.map(async (dataUrl, index) => {
+    const parsed = parseRawImageDataUrl(dataUrl);
+    const size = await getImageSizeFromDataUrl(dataUrl);
+    return {
+      role: index === 0 ? 'input' : 'reference',
+      width: size.width,
+      height: size.height,
+      originalWidth: size.width,
+      originalHeight: size.height,
+      originalBytes: parsed.content.length,
+      outputBytes: parsed.content.length,
+      mime: parsed.mimeType,
+    };
+  }));
+  const inputMetadata = metadata[0];
+  const references = metadata.slice(1);
+  const payloadBytesApprox = metadata.reduce((total, item) => total + item.outputBytes, 0);
+
+  return {
+    input,
+    imageDiagnostics: {
+      qualityMode: input.qualityMode,
+      inputImages: inputMetadata ? 1 : 0,
+      referenceImages: references.length,
+      referenceCount: references.length,
+      inputBytesBefore: inputMetadata?.originalBytes,
+      inputBytesAfter: inputMetadata?.outputBytes,
+      inputWidthBefore: inputMetadata?.originalWidth,
+      inputHeightBefore: inputMetadata?.originalHeight,
+      inputWidthAfter: inputMetadata?.width,
+      inputHeightAfter: inputMetadata?.height,
+      referenceBytesBefore: references.reduce((total, item) => total + item.originalBytes, 0),
+      referenceBytesAfter: references.reduce((total, item) => total + item.outputBytes, 0),
+      payloadBytesApprox,
+      prepared: metadata,
+    },
+  };
 }
 
 function readObjectInsertLocalCropScale(config?: Record<string, unknown>): number {
@@ -1259,21 +1365,21 @@ function isRemoteImageUrl(url: string): boolean {
   return /^https?:\/\//iu.test(url);
 }
 
-async function generateWithFallback(input: GenerateImageInput): Promise<GenerateImageOutput> {
-  if (provider.name === 'mock') {
+async function generateWithFallback(input: GenerateImageInput, activeProvider: ImageGenerationProvider): Promise<GenerateImageOutput> {
+  if (activeProvider.name === 'mock') {
     const startedAt = Date.now();
-    return withProviderDuration(await normalizeProviderOutput(await provider.generateImage(input), provider.name), startedAt);
+    return withProviderDuration(await normalizeProviderOutput(await activeProvider.generateImage(input), activeProvider.name), startedAt);
   }
 
   const startedAt = Date.now();
   try {
-    return withProviderDuration(await normalizeProviderOutput(await provider.generateImage(input), provider.name), startedAt);
+    return withProviderDuration(await normalizeProviderOutput(await activeProvider.generateImage(input), activeProvider.name), startedAt);
   } catch (error) {
     const fallbackProvider = createConfiguredFallbackProvider(error);
     if (fallbackProvider) {
-      const message = error instanceof Error ? error.message : `${provider.name} provider failed.`;
+      const message = error instanceof Error ? error.message : `${activeProvider.name} provider failed.`;
       console.warn('Generation provider fallback activated', {
-        from: provider.name,
+        from: activeProvider.name,
         to: fallbackProvider.name,
         reason: message,
       });
@@ -1288,7 +1394,7 @@ async function generateWithFallback(input: GenerateImageInput): Promise<Generate
       }, fallbackProvider.name), startedAt);
     }
 
-    if (isMissingProviderSecretError(error) || isGrsaiProvider(provider.name)) {
+    if (isMissingProviderSecretError(error) || isGrsaiProvider(activeProvider.name) || activeProvider.name === 'apiyi-nano-banana2-edit') {
       throw error;
     }
 
@@ -1296,9 +1402,9 @@ async function generateWithFallback(input: GenerateImageInput): Promise<Generate
       throw error;
     }
 
-    const message = error instanceof Error ? error.message : `${provider.name} provider failed.`;
+    const message = error instanceof Error ? error.message : `${activeProvider.name} provider failed.`;
     return withProviderDuration(await normalizeProviderOutput(createMockGeneration(input, [
-      `${provider.name} provider failed to complete this generation: ${message}`,
+      `${activeProvider.name} provider failed to complete this generation: ${message}`,
       '已自动回退到 mock provider，避免请求中断。',
     ]), 'mock'), startedAt);
   }
@@ -1500,7 +1606,11 @@ function sanitizeProviderSnippet(value: unknown): string {
 }
 
 function isProviderName(value: unknown): value is ProviderName {
-  return value === 'mock' || value === 'gemini' || value === 'grsai-banana2' || value === 'grsai-nano-banana';
+  return value === 'mock'
+    || value === 'gemini'
+    || value === 'grsai-banana2'
+    || value === 'grsai-nano-banana'
+    || value === 'apiyi-nano-banana2-edit';
 }
 
 function createConfiguredFallbackProvider(error: unknown): ImageGenerationProvider | null {
@@ -1595,11 +1705,14 @@ function isValidImageDataUrl(value: unknown): value is string {
 }
 
 function selectProvider(): ImageGenerationProvider {
-  const requestedProvider = readRequestedProviderName();
+  return selectProviderByName(normalizeProviderName(readRequestedProviderName()));
+}
+
+function selectProviderByName(requestedProvider: ProviderName): ImageGenerationProvider {
   const geminiApiKey = process.env.GEMINI_API_KEY;
   const grsaiApiKey = process.env.GRSAI_API_KEY;
 
-  if (requestedProvider === 'grsai-banana2' || requestedProvider === 'grsai') {
+  if (requestedProvider === 'grsai-banana2') {
     if (!grsaiApiKey) {
       console.warn(`${readRequestedProviderVariableName()}=${requestedProvider} but GRSAI_API_KEY is missing; generation calls will fail clearly.`);
     }
@@ -1622,7 +1735,40 @@ function selectProvider(): ImageGenerationProvider {
     return createMissingSecretProvider('gemini', 'GEMINI_API_KEY');
   }
 
+  if (requestedProvider === 'apiyi-nano-banana2-edit') {
+    return createApiYiNanoBanana2Provider();
+  }
+
   return mockProvider;
+}
+
+function resolveGenerationProviderName(config?: Record<string, unknown>, persistedProvider?: string): ProviderName {
+  const requested = config?.aiProvider ?? config?.selectedProvider ?? persistedProvider;
+  if (typeof requested === 'string' && requested.trim().length > 0) {
+    return normalizeProviderName(requested);
+  }
+  return defaultProvider.name;
+}
+
+function selectedJobProviderName(job: GenerationJob): ProviderName {
+  return resolveGenerationProviderName(job.config, job.provider);
+}
+
+function normalizeProviderName(value: string): ProviderName {
+  const normalized = normalizeGenerationProviderName(value);
+  if (normalized) return normalized;
+  return 'mock';
+}
+
+function readProviderModelName(provider: ProviderName): string {
+  if (provider === 'apiyi-nano-banana2-edit') {
+    return process.env.APIYI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview';
+  }
+  if (provider === 'grsai-banana2') {
+    return process.env.GRSAI_MODEL || process.env.GRSAI_BANANA2_MODEL || 'banana2';
+  }
+  if (provider === 'gemini') return process.env.GEMINI_IMAGE_MODEL || 'gemini';
+  return provider;
 }
 
 function createMissingSecretProvider(name: ProviderName, envVarName: string): ImageGenerationProvider {
@@ -1645,11 +1791,11 @@ function createMissingSecretProvider(name: ProviderName, envVarName: string): Im
 }
 
 function readRequestedProviderName(): string {
-  return process.env.GENERATION_PROVIDER || process.env.AI_PROVIDER || 'mock';
+  return process.env.AI_PROVIDER || process.env.GENERATION_PROVIDER || 'mock';
 }
 
 function readRequestedProviderVariableName(): string {
-  return process.env.GENERATION_PROVIDER ? 'GENERATION_PROVIDER' : 'AI_PROVIDER';
+  return process.env.AI_PROVIDER ? 'AI_PROVIDER' : 'GENERATION_PROVIDER';
 }
 
 function removeInternalConfig(config: Record<string, unknown>): Record<string, unknown> {
@@ -2391,6 +2537,7 @@ function isMissingProviderSecretError(error: unknown): boolean {
 function isTimeoutGenerationFailure(error: unknown, statusCode?: number): boolean {
   if (statusCode === 408 || statusCode === 504) return true;
   if (!(error instanceof Error)) return false;
+  if (readErrorStringField(error, 'providerError') === 'APIYI_TIMEOUT') return true;
   const message = error.message.toLowerCase();
   return message.includes('timed out')
     || message.includes('timeout')

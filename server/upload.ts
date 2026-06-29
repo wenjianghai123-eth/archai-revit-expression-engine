@@ -3,6 +3,15 @@ import Busboy from 'busboy';
 import { Request } from 'express';
 import { ApiError } from './http';
 import { ModelAsset } from './storage';
+import {
+  allowedImageExtensions,
+  allowedImageMimeTypes,
+  describeUnsupportedImageType,
+  getImageFileExtension,
+  inferImageMimeTypeFromFilename,
+  normalizeImageMimeType,
+  sniffImageMimeType,
+} from './imageValidation';
 
 export async function readMultipartImage(
   req: Request,
@@ -23,13 +32,46 @@ export async function readMultipartImage(
     };
   }
 
+  const declaredMimeType = normalizeImageMimeType(parsed.value.mimeType);
+  const extension = getImageFileExtension(parsed.value.originalFilename);
+  const extensionMimeType = inferImageMimeTypeFromFilename(parsed.value.originalFilename);
   const sniffedMimeType = sniffImageMimeType(parsed.value.content);
-  if (!sniffedMimeType || sniffedMimeType !== parsed.value.mimeType) {
+  if (!sniffedMimeType) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug({
+        event: 'upload_image_type_invalid',
+        feature: 'asset_upload',
+        fileName: parsed.value.originalFilename,
+        fileType: parsed.value.mimeType,
+        extension,
+        fileSize: parsed.value.content.length,
+        detectedMimeType: null,
+      });
+    }
     return {
       ok: false,
       status: 400,
-      error: { message: 'Only PNG, JPG, JPEG, and WEBP images are supported.', code: 'UPLOAD_IMAGE_TYPE_INVALID' },
+      error: {
+        message: describeUnsupportedImageType(parsed.value.originalFilename, parsed.value.mimeType),
+        code: 'UPLOAD_IMAGE_TYPE_INVALID',
+      },
     };
+  }
+
+  const declaredTypeAccepted = !declaredMimeType
+    || declaredMimeType === 'application/octet-stream'
+    || allowedImageMimeTypes.has(parsed.value.mimeType.trim().toLowerCase());
+  const extensionAccepted = !extension || allowedImageExtensions.has(extension);
+  if (process.env.NODE_ENV !== 'production' && (!declaredTypeAccepted || !extensionAccepted || extensionMimeType !== sniffedMimeType)) {
+    console.debug({
+      event: 'upload_image_type_normalized',
+      feature: 'asset_upload',
+      fileName: parsed.value.originalFilename,
+      fileType: parsed.value.mimeType,
+      extension,
+      fileSize: parsed.value.content.length,
+      detectedMimeType: sniffedMimeType,
+    });
   }
 
   return {
@@ -294,9 +336,7 @@ export function sniffModelFile(fileType: ModelAsset['fileType'], content: Buffer
 }
 
 function normalizeUploadMimeType(mimeType: string): string {
-  const normalized = mimeType.trim().toLowerCase();
-  if (normalized === 'image/jpg') return 'image/jpeg';
-  return normalized;
+  return normalizeImageMimeType(mimeType);
 }
 
 function sanitizeUploadFilename(filename: string): string {
@@ -315,34 +355,4 @@ function repairLatin1DecodedUtf8(value: string): string {
   } catch {
     return value;
   }
-}
-
-function sniffImageMimeType(content: Buffer): string | null {
-  if (
-    content.length >= 8 &&
-    content[0] === 0x89 &&
-    content[1] === 0x50 &&
-    content[2] === 0x4e &&
-    content[3] === 0x47 &&
-    content[4] === 0x0d &&
-    content[5] === 0x0a &&
-    content[6] === 0x1a &&
-    content[7] === 0x0a
-  ) {
-    return 'image/png';
-  }
-
-  if (content.length >= 3 && content[0] === 0xff && content[1] === 0xd8 && content[2] === 0xff) {
-    return 'image/jpeg';
-  }
-
-  if (
-    content.length >= 12 &&
-    content.slice(0, 4).toString('ascii') === 'RIFF' &&
-    content.slice(8, 12).toString('ascii') === 'WEBP'
-  ) {
-    return 'image/webp';
-  }
-
-  return null;
 }

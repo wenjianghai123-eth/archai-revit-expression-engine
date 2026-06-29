@@ -7,7 +7,7 @@ describe('AdminPage', () => {
 
     expect(message).toContain('new-user@example.com');
     expect(message).toContain('创建成功');
-    expect(message).toContain('120 credits');
+    expect(message).toContain('120 算力点');
     expect(message).toContain('安全渠道');
     expect(message).not.toContain('strong-password-1');
   });

@@ -10,7 +10,7 @@ export type GenerationJobStep =
   | 'panorama_quick_render'
   | 'object_insert'
   | 'free_reference_image';
-export type ProviderName = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana';
+export type ProviderName = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana' | 'apiyi-nano-banana2-edit';
 export type MaskMode = 'asset-mask' | 'full-image';
 export type QualityMode = 'draft' | 'fast' | 'balanced' | 'high';
 

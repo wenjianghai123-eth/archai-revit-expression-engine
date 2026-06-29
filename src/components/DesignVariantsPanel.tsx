@@ -7,6 +7,7 @@ import { getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/re
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 import { ResultSendActions } from './workspace/SecondaryEditActions';
+import { AspectRatioImage } from './common/AspectRatioImage';
 
 interface DesignVariantsPanelProps {
   state: StepState;
@@ -232,14 +233,14 @@ export function DesignVariantsPanel({
               <p className="text-xs font-bold text-slate-500">原图</p>
               {state.inputImage ? (
                 <div className="mt-3 overflow-hidden rounded-lg border border-slate-200">
-                  <img src={state.inputImage.dataUrl || state.inputImage.url} alt="原图" className="h-44 w-full object-cover" />
+                  <AspectRatioImage src={state.inputImage.dataUrl || state.inputImage.url} alt="原图" className="rounded-none border-0 shadow-none" />
                   <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-slate-500">
                     <span className="truncate font-semibold">{state.inputImage.name}</span>
                     <button type="button" onClick={() => onUpdateInputImage(null)} className="font-bold text-slate-700">移除</button>
                   </div>
                 </div>
               ) : (
-                <button type="button" onClick={onUploadInput} className="mt-3 flex h-44 w-full flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 text-sm font-bold text-slate-500 hover:border-blue-300 hover:bg-blue-50">
+                <button type="button" onClick={onUploadInput} className="mt-3 flex aspect-video w-full flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-sm font-bold text-slate-500 hover:border-blue-300 hover:bg-blue-50">
                   <ImagePlus className="mb-2 h-7 w-7" />
                   上传原图
                 </button>
@@ -341,11 +342,13 @@ export function DesignVariantsPanel({
                   {previewDownloadError ? <span className="text-amber-700">{previewDownloadError}</span> : null}
                 </div>
               ) : null}
-              <div className="flex h-[360px] items-center justify-center bg-slate-50">
-                {previewImage ? <img src={previewImage} alt="当前方案" className="h-full w-full object-contain" /> : (
+              <div className="bg-slate-50 p-3">
+                {previewImage ? <AspectRatioImage src={previewImage} alt="当前方案" /> : (
+                  <div className="flex aspect-video items-center justify-center">
                   <div className="text-center text-sm font-bold text-slate-400">
                     <LayoutGrid className="mx-auto mb-3 h-10 w-10 text-slate-300" />
                     方案矩阵结果区
+                  </div>
                   </div>
                 )}
               </div>
@@ -385,7 +388,7 @@ export function DesignVariantsPanel({
 
 function PlaceholderCard({ index, style, name, note, onNameChange, onStyleChange, onNoteChange }: { index: number; style: VariantStyleKey; name: string; note: string; onNameChange: (name: string) => void; onStyleChange: (style: VariantStyleKey) => void; onNoteChange: (note: string) => void }) {
   return (
-    <div className="space-y-3 rounded-lg border border-dashed border-slate-200 bg-white p-3">
+    <div className="flex h-full flex-col space-y-3 rounded-xl border border-dashed border-slate-200 bg-white p-3">
       <input value={name} onChange={event => onNameChange(event.currentTarget.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm font-bold text-slate-900 outline-none focus:border-blue-300" />
       <select value={style} onChange={event => onStyleChange(event.currentTarget.value as VariantStyleKey)} className="w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
         {variantStyleOptions.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}
@@ -397,7 +400,7 @@ function PlaceholderCard({ index, style, name, note, onNameChange, onStyleChange
         placeholder="方案备注，例如：更暖的木色、增强展示墙、减少金属感"
         className="h-20 w-full resize-none rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 outline-none focus:border-blue-300"
       />
-      <div className="flex min-h-48 items-center justify-center rounded-md bg-slate-50 text-sm font-bold text-slate-300">{readVariantLabel(index)}</div>
+      <div className="flex aspect-video items-center justify-center rounded-xl bg-slate-50 text-sm font-bold text-slate-300">{readVariantLabel(index)}</div>
     </div>
   );
 }
@@ -451,14 +454,14 @@ function VariantCard({ result, index, active, style, fallbackName, projectName, 
   };
 
   return (
-    <article className={`overflow-hidden rounded-lg border bg-white shadow-sm ${active ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200'}`}>
+    <article className={`flex h-full flex-col overflow-hidden rounded-xl border bg-white shadow-sm ${active ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200'}`}>
       <button type="button" onClick={onSelect} className="block w-full text-left">
-        <div className="relative h-52 bg-slate-100">
-          <img src={originalImageUrl || result.imageUrl} alt={label} className="h-full w-full object-cover" />
+        <div className="relative bg-slate-100">
+          <AspectRatioImage src={originalImageUrl || result.imageUrl} alt={label} className="rounded-none border-0 shadow-none" enableLightbox={false} />
           {result.isSelected ? <span className="absolute left-3 top-3 rounded-full bg-blue-600 px-2.5 py-1 text-[11px] font-bold text-white">已设为主方案</span> : null}
         </div>
       </button>
-      <div className="space-y-3 p-3">
+      <div className="flex flex-1 flex-col space-y-3 p-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <input value={label} onChange={event => onRename(event.currentTarget.value)} className="w-full rounded-md border border-transparent px-2 py-1 text-sm font-bold text-slate-900 outline-none hover:border-slate-200 focus:border-blue-300" />
@@ -478,7 +481,7 @@ function VariantCard({ result, index, active, style, fallbackName, projectName, 
         <p className="rounded-md border border-slate-100 bg-white px-3 py-2 text-xs leading-5 text-slate-600">
           <span className="font-bold text-slate-800">方案说明：</span>{designDescription}
         </p>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="action-row mt-auto">
           <button type="button" onClick={onSelect} className="rounded-md bg-slate-900 px-2 py-2 text-xs font-bold text-white">{result.isSelected ? '已设为主方案' : '设为主方案'}</button>
           <button type="button" onClick={onFavorite} className="rounded-md bg-slate-100 px-2 py-2 text-xs font-bold text-slate-700">收藏</button>
           <button type="button" onClick={() => void handleDownload()} disabled={isDownloading} className="rounded-md bg-slate-100 px-2 py-2 text-xs font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60">{isDownloading ? '正在下载...' : '保存到本地'}</button>
@@ -530,7 +533,7 @@ function DesignVariantCompareSheet({ payload }: { payload: { inputImage: Uploade
         <p className="text-2xl font-bold text-slate-950">项目方案对比</p>
         <p className="mt-1 text-sm text-slate-500">生成时间：{payload.createdAt}</p>
       </header>
-      {payload.inputImage ? <img src={payload.inputImage.dataUrl || payload.inputImage.url} alt="原图" className="mb-5 h-52 w-full rounded-lg object-cover" /> : null}
+      {payload.inputImage ? <AspectRatioImage src={payload.inputImage.dataUrl || payload.inputImage.url} alt="原图" className="mb-5" /> : null}
       <div className={`grid gap-4 ${payload.results.length > 4 ? 'md:grid-cols-4' : 'md:grid-cols-2'}`}>
         {payload.results.map((result, index) => <PrintVariant key={result.id} result={result} name={result.variantName || payload.variantNames[index]} style={result.variantStyle || payload.styles[index]} />)}
       </div>
@@ -547,8 +550,8 @@ function DesignVariantReportPage({ payload }: { payload: { inputImage: UploadedI
         <p className="mt-2 text-sm text-slate-300">{payload.createdAt}</p>
       </header>
       <div className="grid gap-5 md:grid-cols-2">
-        {payload.inputImage ? <img src={payload.inputImage.dataUrl || payload.inputImage.url} alt="现状图" className="h-72 w-full rounded-lg object-cover" /> : null}
-        {primary ? <img src={primary.imageUrl} alt="主推方案" className="h-72 w-full rounded-lg object-cover" /> : null}
+        {payload.inputImage ? <AspectRatioImage src={payload.inputImage.dataUrl || payload.inputImage.url} alt="现状图" /> : null}
+        {primary ? <AspectRatioImage src={primary.imageUrl} alt="主推方案" /> : null}
       </div>
       <div>
         <h4 className="mb-3 text-lg font-bold text-slate-950">方案矩阵</h4>
@@ -566,7 +569,7 @@ function PrintVariant({ result, name, style, showDescription }: { result: Genera
   const strategyNote = result.strategyNote || readMetadataString(result.metadata, 'strategyNote');
   return (
     <article className="break-inside-avoid overflow-hidden rounded-lg border border-slate-200">
-      <img src={result.imageUrl} alt={name} className="h-52 w-full object-cover" />
+      <AspectRatioImage src={result.imageUrl} alt={name} className="rounded-none border-0 shadow-none" />
       <div className="p-3">
         <p className="font-bold text-slate-950">{name}</p>
         <p className="text-xs text-slate-500">{readVariantStyleLabel(style)}</p>

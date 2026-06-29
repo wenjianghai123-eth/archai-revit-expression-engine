@@ -68,7 +68,7 @@ export function ResultPreviewPanel({
   };
 
   return (
-    <main className={className || 'workspace-canvas mx-3 flex min-w-0 flex-1 flex-col overflow-hidden'}>
+    <main className={className || 'workspace-canvas flex min-w-0 flex-1 flex-col overflow-y-auto'}>
       {showToolbar ? (
         <div className="flex h-12 items-center justify-between border-b border-slate-200 bg-white/70 px-4">
           <div className="flex overflow-hidden rounded-lg bg-slate-200 p-0.5">
@@ -90,8 +90,8 @@ export function ResultPreviewPanel({
         </div>
       ) : null}
 
-      <div className={showToolbar ? 'min-h-0 flex-1 p-5' : 'h-full'}>
-        <div className={`relative ${showToolbar ? 'workspace-result-frame h-full overflow-hidden border bg-white shadow-2xl' : 'h-full'}`}>
+      <div className={showToolbar ? 'flex min-h-0 flex-1 items-start justify-center p-4' : 'flex h-full items-start justify-center'}>
+        <div className={`relative aspect-video w-full ${showToolbar ? 'workspace-result-frame max-w-[1200px] overflow-hidden border bg-white shadow-2xl' : 'overflow-hidden rounded-2xl'}`}>
           {originalPreviewImage && !state.isGenerating ? (
             <div className="absolute right-3 top-3 z-10 flex flex-col items-end gap-1">
               {dimensionsText ? (
@@ -157,12 +157,12 @@ export function PreviewContent({ state, originalImageUrl, previewImage }: Previe
   }
 
   if (state.viewMode === 'original' && originalImageUrl) {
-    return <img src={originalImageUrl} alt="原图" className="h-full w-full object-contain bg-white" referrerPolicy="no-referrer" />;
+    return <img src={originalImageUrl} alt="原图" className="h-full w-full object-contain bg-slate-50" referrerPolicy="no-referrer" />;
   }
 
   if (!previewImage) {
     return (
-      <div className="flex h-full flex-col items-center justify-center bg-slate-50 text-center text-slate-400">
+      <div className="flex h-full flex-col items-center justify-center bg-slate-50 p-6 text-center text-slate-400">
         <ImageIcon className="mb-4 h-10 w-10 opacity-40" />
         <h3 className="text-base font-bold text-slate-800">暂无生成结果</h3>
         <p className="mt-2 max-w-sm text-sm">上传图片并点击生成后，结果会显示在这里。</p>
@@ -183,5 +183,5 @@ export function PreviewContent({ state, originalImageUrl, previewImage }: Previe
     return <OverlayCompareViewer originalImageUrl={originalImageUrl} generatedImageUrl={previewImage} className="h-full" />;
   }
 
-  return <img src={previewImage || ''} alt="生成结果" className="h-full w-full object-contain bg-white" referrerPolicy="no-referrer" />;
+  return <img src={previewImage || ''} alt="生成结果" className="h-full w-full object-contain bg-slate-50" referrerPolicy="no-referrer" />;
 }

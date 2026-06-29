@@ -1,6 +1,7 @@
 import { AlertCircle, BookOpen, Trash2, Upload } from 'lucide-react';
 import { GenerationConfig, MaterialTexture, ReferenceImage } from '../../types';
 import { UploadErrors } from './workspaceTypes';
+import { AspectRatioImage } from '../common/AspectRatioImage';
 import { maxFurnitureReferences, maxMaterialTextures, styleOptions } from './workspaceUtils';
 
 interface MaterialTexturesPanelProps {
@@ -53,8 +54,8 @@ export function MaterialTexturesPanel({
 
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
         {textures.map(texture => (
-          <div key={texture.id} className="group relative aspect-square overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-            <img src={texture.url} alt={texture.name || '材质贴图'} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+          <div key={texture.id} className="group relative aspect-video overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+            <AspectRatioImage src={texture.url} alt={texture.name || '材质贴图'} className="h-full rounded-none border-0 shadow-none" />
             <div className="absolute inset-x-0 bottom-0 bg-slate-900/70 px-2 py-1 text-[9px] font-bold text-white">
               <span className="block truncate">{texture.name || (texture.source === 'upload' ? '本地贴图' : '材质库')}</span>
             </div>
@@ -73,7 +74,7 @@ export function MaterialTexturesPanel({
             key={`empty-texture-${index}`}
             type="button"
             onClick={onUploadTexture}
-            className="flex aspect-square items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-slate-300 transition hover:border-blue-200 hover:bg-blue-50/40 hover:text-blue-500"
+            className="flex aspect-video items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-slate-300 transition hover:border-blue-200 hover:bg-blue-50/40 hover:text-blue-500"
             title="上传材质贴图"
           >
             <Upload className="h-5 w-5" />
@@ -126,8 +127,8 @@ export function FurnitureReferencesPanel({
 
       <div className="grid grid-cols-3 gap-2">
         {references.map(reference => (
-          <div key={reference.id} className="group relative aspect-square overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-            <img src={reference.url} alt={reference.name || '家具参考图'} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+          <div key={reference.id} className="group relative aspect-video overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+            <AspectRatioImage src={reference.url} alt={reference.name || '家具参考图'} className="h-full rounded-none border-0 shadow-none" />
             <button
               type="button"
               onClick={() => onRemoveFurnitureReference(reference.id)}

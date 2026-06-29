@@ -285,6 +285,8 @@ export const MOCK_FURNITURE_STYLES: FurnitureStyle[] = [
 export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   [GenerationStep.FloorplanTo3D]: {
     prompt: "",
+    targetAspectRatio: '16:9',
+    aspectRatio: '16:9',
     qualityMode: 'balanced',
     lighting: "黄金时刻 (室外)",
     materialStrength: 0.8,
@@ -307,6 +309,8 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   },
   [GenerationStep.StyleRender]: {
     prompt: "",
+    targetAspectRatio: '16:9',
+    aspectRatio: '16:9',
     qualityMode: 'balanced',
     style: "现代建筑可视化",
     lighting: "自然均匀日光",
@@ -320,6 +324,8 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   },
   [GenerationStep.LocalInpainting]: {
     prompt: "",
+    targetAspectRatio: '16:9',
+    aspectRatio: '16:9',
     qualityMode: 'balanced',
     style: "匹配原图",
     lighting: "匹配原图",
@@ -354,6 +360,8 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   },
   [GenerationStep.DesignVariants]: {
     prompt: "",
+    targetAspectRatio: '16:9',
+    aspectRatio: '16:9',
     qualityMode: 'balanced',
     style: "方案变体",
     lighting: "匹配原图",
@@ -377,6 +385,8 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   },
   [GenerationStep.PlanColorize]: {
     prompt: "",
+    targetAspectRatio: '16:9',
+    aspectRatio: '16:9',
     qualityMode: 'balanced',
     style: "图纸智能表达",
     lighting: "匹配原图",
@@ -401,6 +411,8 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   },
   [GenerationStep.MaterialReplace]: {
     prompt: "",
+    targetAspectRatio: '16:9',
+    aspectRatio: '16:9',
     qualityMode: 'balanced',
     style: "材质软装替换",
     lighting: "匹配原图",
@@ -444,6 +456,8 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   },
   [GenerationStep.ObjectInsert]: {
     prompt: "",
+    targetAspectRatio: '16:9',
+    aspectRatio: '16:9',
     qualityMode: 'balanced',
     style: "元素植入",
     lighting: "匹配原图",
@@ -472,6 +486,7 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
   },
   [GenerationStep.FreeReferenceImage]: {
     prompt: "",
+    aspectRatio: '16:9',
     qualityMode: 'balanced',
     style: "自由参考生图",
     lighting: "匹配原图",
@@ -481,7 +496,8 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
     preserveCamera: true,
     freeReferenceReferences: [],
     freeReferenceResolution: 1024,
-    freeReferenceAspectRatio: '1:1',
+    freeReferenceAspectRatio: '16:9',
+    targetAspectRatio: '16:9',
   },
 };
 

@@ -59,7 +59,7 @@ describe('PlanColorizePanel', () => {
     expect(html).toContain('生成图纸表达');
   });
 
-  it('uses a vertical full-width before and after preview layout', () => {
+  it('uses compact 16:9 before and after preview cards', () => {
     const html = renderToStaticMarkup(
       <PlanColorizePanel
         state={createState()}
@@ -72,10 +72,9 @@ describe('PlanColorizePanel', () => {
       />,
     );
 
-    expect(html).toContain('space-y-6');
-    expect(html).toContain('min-h-[520px]');
-    expect(html).toContain('max-h-[760px]');
-    expect(html).not.toContain('lg:grid-cols-2');
+    expect(html).toContain('2xl:grid-cols-2');
+    expect(html).toContain('aspect-video');
+    expect(html).not.toContain('min-h-[520px]');
   });
 
   it('allows generation without custom prompt after a source plan is selected', () => {

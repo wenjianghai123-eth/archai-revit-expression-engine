@@ -9,7 +9,9 @@ import {
 
 function createInitialStepState(step: GenerationStep): StepState {
   return {
-    config: DEFAULT_CONFIGS[step],
+    config: {
+      ...DEFAULT_CONFIGS[step],
+    },
     inputImage: null,
     materialImage: null,
     materialTextures: [],

@@ -6,6 +6,8 @@ import { ModelViewer, ModelViewerHandle } from './ModelViewer';
 import { mapModelAssetRecordToAssetModel, mapModelToOriginalSource } from './modelAssetUtils';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
+import { IMAGE_UPLOAD_ACCEPT } from '../utils/imageValidation';
+import { validateImageFile } from '../utils/file';
 
 interface ModelSnapshotRenderPanelProps {
   state: StepState;
@@ -93,8 +95,9 @@ export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputI
     const file = fileList?.[0];
     if (!file) return;
 
-    if (!/^image\/(png|jpe?g|webp)$/iu.test(file.type)) {
-      setMessage('请上传 jpg、png 或 webp 格式的模型截图。');
+    const validationError = validateImageFile(file, 'model-snapshot:image');
+    if (validationError) {
+      setMessage(validationError);
       return;
     }
 
@@ -219,7 +222,7 @@ export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputI
       <input
         ref={snapshotInputRef}
         type="file"
-        accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+        accept={IMAGE_UPLOAD_ACCEPT}
         className="hidden"
         onChange={event => {
           void handleSnapshotUpload(event.currentTarget.files);

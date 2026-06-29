@@ -15,7 +15,9 @@ import {
   cancelGenerationJob,
   createAutoProject,
   deleteProject,
+  getAiProviders,
   listPromptTemplates,
+  type AiProviderOption,
   updateGenerationResult,
 } from './lib/api';
 import { useCurrentUser } from './hooks/useCurrentUser';
@@ -28,6 +30,7 @@ import { clearGenerationHistory, deleteGenerationRecord, listGenerationRecords }
 import { buildSecondaryEditConfigPatch } from './utils/secondaryEdit';
 import { getOriginalResultAssetId, getOriginalResultImageUrl } from './utils/resultImage';
 import { promptTemplateRecordToTemplate } from './utils/savedPromptTemplates';
+import { readSelectedImageProvider, writeSelectedImageProvider } from './utils/aiProviderPreference';
 import { motion, AnimatePresence } from 'motion/react';
 
 const MainWorkspace = lazy(() => import('./components/MainWorkspace').then(module => ({ default: module.MainWorkspace })));
@@ -76,6 +79,10 @@ export default function App() {
     resetWorkflow,
   } = useGenerationWorkflow(() => setActiveTab('generate'));
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [selectedImageProvider, setSelectedImageProvider] = useState<AiProviderOption['value'] | undefined>(undefined);
+  const [defaultImageProvider, setDefaultImageProvider] = useState<AiProviderOption['value'] | null>(null);
+  const [imageProviders, setImageProviders] = useState<AiProviderOption[]>([]);
+  const [isProviderConfigLoading, setIsProviderConfigLoading] = useState(true);
   const [historyItems, setHistoryItems] = useState<GenerationHistoryItem[]>(() => listGenerationRecords());
   const [promptTemplates, setPromptTemplates] = useState(() => [] as ReturnType<typeof promptTemplateRecordToTemplate>[]);
   const [queuedSecondaryGenerationId, setQueuedSecondaryGenerationId] = useState<string | null>(null);
@@ -84,6 +91,14 @@ export default function App() {
   const panoramaShareId = readPanoramaShareId();
   const publicShareToken = readPublicShareToken();
   const isAdminPath = currentPath === '/admin';
+  const selectedProviderInfo = imageProviders.find(provider => provider.value === selectedImageProvider);
+  const providerUnavailableReason = selectedProviderInfo && !selectedProviderInfo.enabled
+    ? selectedImageProvider === 'apiyi-nano-banana2-edit'
+      ? '未配置 API易 API Key，请在后端 .env 中配置 APIYI_API_KEY。'
+      : `当前 AI 接口缺少配置：${selectedProviderInfo.missingConfig.join('、')}。`
+    : isProviderConfigLoading
+      ? '正在读取 AI 接口配置。'
+      : null;
 
   const refreshPromptTemplates = useCallback(async () => {
     try {
@@ -200,6 +215,58 @@ export default function App() {
     setQueuedSecondaryGenerationId(null);
     void handleGenerate();
   }, [handleGenerate, queuedSecondaryGenerationId]);
+
+  useEffect(() => {
+    let isActive = true;
+    void getAiProviders()
+      .then(config => {
+        if (!isActive) return;
+        const selectedProvider = readSelectedImageProvider(
+          config.defaultProvider,
+          config.providers.map(provider => provider.value),
+        );
+        setDefaultImageProvider(config.defaultProvider);
+        setImageProviders(config.providers);
+        setSelectedImageProvider(selectedProvider);
+      })
+      .catch(() => {
+        if (!isActive) return;
+        const fallbackProvider = 'grsai-banana2' as const;
+        setDefaultImageProvider(fallbackProvider);
+        setImageProviders([{ value: fallbackProvider, label: 'Grsai Banana2', enabled: true, missingConfig: [] }]);
+        setSelectedImageProvider(fallbackProvider);
+      })
+      .finally(() => {
+        if (isActive) setIsProviderConfigLoading(false);
+      });
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedImageProvider) return;
+    setStepStates(previous => {
+      const next = { ...previous };
+      for (const step of Object.values(GenerationStep).filter((value): value is GenerationStep => typeof value === 'number')) {
+        next[step] = {
+          ...previous[step],
+          config: {
+            ...previous[step].config,
+            aiProvider: selectedImageProvider,
+          },
+        };
+      }
+      return next;
+    });
+  }, [selectedImageProvider, setStepStates]);
+
+  const handleImageProviderChange = useCallback((provider: AiProviderOption['value']) => {
+    setSelectedImageProvider(provider);
+    if (defaultImageProvider) {
+      writeSelectedImageProvider(provider, defaultImageProvider);
+    }
+  }, [defaultImageProvider]);
 
   useEffect(() => {
     const handlePopState = () => setCurrentPath(window.location.pathname);
@@ -728,6 +795,10 @@ export default function App() {
                 onStepChange={setCurrentStep}
                 estimatedCreditCost={estimatedCreditCost}
                 creditBalance={creditBalance?.balance ?? null}
+                selectedProvider={selectedImageProvider}
+                providers={imageProviders}
+                isProviderLoading={isProviderConfigLoading}
+                onProviderChange={handleImageProviderChange}
               />
               
               <div className="relative min-h-0 flex-1 overflow-hidden">
@@ -767,6 +838,7 @@ export default function App() {
                         backendProvider={backendHealth.data?.provider || null}
                         isCreditsInsufficient={isCreditsInsufficient}
                         estimatedCreditCost={estimatedCreditCost}
+                        providerUnavailableReason={providerUnavailableReason}
                         isAdmin={currentUser.role === 'admin'}
                       />
                     </Suspense>
@@ -827,7 +899,12 @@ export default function App() {
         isOpen={isSettingsOpen}
         providerMode={backendHealth.data?.provider || '未知'}
         backendHealth={backendHealth.message}
-        providerSource={backendHealth.data?.provider === 'gemini' || backendHealth.data?.provider === 'grsai-banana2' || backendHealth.data?.provider === 'grsai-nano-banana' ? 'Real provider' : backendHealth.data?.provider === 'mock' ? 'Mock provider' : '未知（后端未连接）'}
+        providerSource={backendHealth.data?.provider === 'gemini'
+          || backendHealth.data?.provider === 'grsai-banana2'
+          || backendHealth.data?.provider === 'grsai-nano-banana'
+          || backendHealth.data?.provider === 'apiyi-nano-banana2-edit'
+          ? 'Real provider'
+          : backendHealth.data?.provider === 'mock' ? 'Mock provider' : '未知（后端未连接）'}
         currentUser={currentUser}
         currentUserStatus={isUserLoading ? '正在读取当前用户' : currentUserError || creditError || `剩余额度：${creditBalance?.balance ?? '读取中'} credits`}
         onSignOut={handleSignOut}

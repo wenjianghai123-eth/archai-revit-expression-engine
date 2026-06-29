@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, Clipboard, Eye, Heart, History, Layers, Search, Sparkles, Star, Wand2, X } from 'lucide-react';
 import { GenerationConfig, PromptTemplate } from '../types';
+import { AspectRatioImage } from './common/AspectRatioImage';
 
 type FeatureFilter = 'all' | PromptTemplate['feature'];
 
@@ -290,7 +291,9 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                     className="group overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md"
                   >
                     <div className="flex gap-3 p-3">
-                      <img src={template.previewImage} alt={template.title} className="h-20 w-24 rounded-lg object-cover" referrerPolicy="no-referrer" />
+                      <div className="w-32 shrink-0">
+                        <AspectRatioImage src={template.previewImage} alt={template.title} className="rounded-lg" />
+                      </div>
                       <div className="min-w-0 flex-1">
                         <p className="text-[10px] font-bold text-blue-600">{featureLabel(template.feature)}</p>
                         <h3 className="mt-1 truncate text-sm font-bold text-slate-900">{template.title}</h3>
@@ -343,12 +346,12 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                   return (
                     <article
                       key={template.id}
-                      className={`arch-card flex min-h-[390px] flex-col p-2 ${
+                      className={`arch-card flex h-full min-h-[400px] flex-col p-2 ${
                         isActive ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200'
                       }`}
                     >
-                      <div className="relative h-28 shrink-0 overflow-hidden rounded-xl bg-slate-100 sm:h-32">
-                        <img src={template.previewImage} alt={template.title} className="h-full w-full object-cover transition-transform duration-500 hover:scale-105" referrerPolicy="no-referrer" />
+                      <div className="relative shrink-0 overflow-hidden rounded-xl bg-slate-100">
+                        <AspectRatioImage src={template.previewImage} alt={template.title} className="rounded-xl border-0 shadow-none" />
                         <div className="absolute left-2 top-2 flex gap-1.5">
                           <span className="rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-bold text-slate-700 backdrop-blur">
                             {featureLabel(template.feature)}
@@ -406,7 +409,9 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                         {template.inputPreviews?.length ? (
                           <div className="mt-2 flex gap-1.5 overflow-hidden">
                             {template.inputPreviews.slice(0, 4).map((item, index) => (
-                              <img key={`${item.assetId || item.url}-${index}`} src={item.url} alt={item.label} title={item.label} className="h-9 w-9 shrink-0 rounded-lg object-cover ring-1 ring-slate-100" referrerPolicy="no-referrer" />
+                              <div key={`${item.assetId || item.url}-${index}`} className="w-24 shrink-0">
+                                <AspectRatioImage src={item.url} alt={item.label} className="rounded-lg" />
+                              </div>
                             ))}
                           </div>
                         ) : null}
@@ -459,9 +464,7 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
               </div>
 
               <div className="flex-1 overflow-y-auto p-5 custom-scrollbar">
-                <div className="overflow-hidden rounded-xl border border-slate-100 bg-slate-100">
-                  <img src={selectedTemplate.previewImage} alt={selectedTemplate.title} className="h-72 w-full object-cover" referrerPolicy="no-referrer" />
-                </div>
+                <AspectRatioImage src={selectedTemplate.previewImage} alt={selectedTemplate.title} />
 
                 <div className="mt-5 flex flex-wrap gap-2">
                   <TemplateTag>{selectedTemplate.category}</TemplateTag>
@@ -499,7 +502,7 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
                     <div className="mt-3 grid grid-cols-3 gap-2">
                       {selectedTemplate.inputPreviews.map((item, index) => (
                         <div key={`${item.assetId || item.url}-${index}`} className="overflow-hidden rounded-lg border border-slate-100 bg-slate-50">
-                          <img src={item.url} alt={item.label} className="h-20 w-full object-cover" referrerPolicy="no-referrer" />
+                          <AspectRatioImage src={item.url} alt={item.label} className="rounded-lg" />
                           <p className="truncate px-2 py-1 text-[10px] font-bold text-slate-600">{item.label}</p>
                         </div>
                       ))}

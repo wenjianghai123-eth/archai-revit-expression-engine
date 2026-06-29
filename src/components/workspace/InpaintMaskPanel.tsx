@@ -33,8 +33,8 @@ export function InpaintMaskPanel({
         <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{providerForStatus || 'provider 待连接'}</span>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5 custom-scrollbar">
-        <div className="flex min-h-[360px] flex-1 lg:min-h-[560px] lg:h-[60vh]">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 custom-scrollbar">
+        <div className="flex min-h-72 flex-1 lg:min-h-[420px] lg:h-[52vh]">
           {inputImage ? (
             <MaskEditor
               imageDataUrl={inputImage.dataUrl}
@@ -47,7 +47,7 @@ export function InpaintMaskPanel({
             <button
               type="button"
               onClick={onUploadInput}
-              className="flex min-h-[360px] w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 bg-white text-slate-400 transition hover:border-blue-200 hover:bg-blue-50/40"
+              className="flex aspect-video w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 bg-white text-slate-400 transition hover:border-blue-200 hover:bg-blue-50/40"
             >
               <Upload className="mb-3 h-9 w-9" />
               <span className="text-sm font-bold text-slate-700">上传参考图开始局部修改</span>

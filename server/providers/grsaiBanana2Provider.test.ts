@@ -28,6 +28,7 @@ describe('Grsai Banana2 provider timing, timeout and retry', () => {
     delete process.env.GRSAI_MAX_RETRIES;
     delete process.env.GRSAI_RETRY_BACKOFF_MS;
     delete process.env.GRSAI_TIMEOUT_MS;
+    delete process.env.GRSAI_ASPECT_RATIO;
   });
 
   it('returns provider timing metadata on success', async () => {
@@ -45,6 +46,22 @@ describe('Grsai Banana2 provider timing, timeout and retry', () => {
       imageCount: 1,
     });
     expect(typeof output.metadata?.providerDurationMs).toBe('number');
+  });
+
+  it('sends the requested 16:9 aspect ratio instead of the environment auto fallback', async () => {
+    process.env.GRSAI_ASPECT_RATIO = 'auto';
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: 'task-16x9' }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { id: 'task-16x9', status: 'succeeded', progress: 100, results: [{ url: tinyPngDataUrl }] } }));
+    globalThis.fetch = fetchMock;
+
+    await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage({
+      ...input,
+      targetAspectRatio: '16:9',
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as { aspectRatio: string };
+    expect(body.aspectRatio).toBe('16:9');
   });
 
   it('retries a retryable 5xx response', async () => {

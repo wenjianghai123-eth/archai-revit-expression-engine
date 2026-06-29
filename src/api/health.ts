@@ -50,5 +50,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isGenerationProvider(value: unknown): value is GenerationProvider {
-  return value === 'mock' || value === 'gemini' || value === 'grsai-banana2' || value === 'grsai-nano-banana';
+  return value === 'mock'
+    || value === 'gemini'
+    || value === 'grsai-banana2'
+    || value === 'grsai-nano-banana'
+    || value === 'apiyi-nano-banana2-edit';
 }

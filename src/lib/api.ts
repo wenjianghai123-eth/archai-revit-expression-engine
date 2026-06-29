@@ -296,9 +296,22 @@ export interface GenerationJobInput {
   projectId: string;
   mode: GenerationJob['mode'];
   step?: GenerationJob['step'];
+  provider: 'grsai-banana2' | 'apiyi-nano-banana2-edit';
   prompt: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];
+}
+
+export interface AiProviderOption {
+  value: 'grsai-banana2' | 'apiyi-nano-banana2-edit';
+  label: string;
+  enabled: boolean;
+  missingConfig: string[];
+}
+
+export interface AiProvidersConfig {
+  defaultProvider: AiProviderOption['value'];
+  providers: AiProviderOption[];
 }
 
 export interface ShareLink {
@@ -733,6 +746,10 @@ function readApiError(value: unknown): string | null {
   return null;
 }
 
+export async function getAiProviders(): Promise<AiProvidersConfig> {
+  return request<AiProvidersConfig>('/api/ai-providers');
+}
+
 export async function convertModelAsset(id: string): Promise<ModelAssetRecord> {
   const response = await request<{ asset: ModelAssetRecord }>(`/api/assets/models/${encodeURIComponent(id)}/convert`, {
     method: 'POST',
@@ -741,6 +758,9 @@ export async function convertModelAsset(id: string): Promise<ModelAssetRecord> {
 }
 
 function formatApiError(error: ApiErrorResponse): string {
+  if (error.code === 'UPLOAD_IMAGE_TYPE_INVALID') {
+    return '图片格式不支持。请上传 PNG、JPG、JPEG 或 WEBP 图片。';
+  }
   const parts = [error.code ? `${error.code}: ${error.message}` : error.message];
   if (error.provider) parts.push(`provider=${error.provider}`);
   if (typeof error.statusCode === 'number') parts.push(`statusCode=${error.statusCode}`);

@@ -24,6 +24,8 @@ import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from
 import { createUploadedImage, validateImageFile } from '../utils/file';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
+import { AspectRatioImage } from './common/AspectRatioImage';
+import { IMAGE_UPLOAD_ACCEPT, readImageTypeUploadError } from '../utils/imageValidation';
 
 type UploadKind = 'source' | 'object';
 type InteractionMode = 'move' | 'resize' | 'rotate';
@@ -79,7 +81,6 @@ interface ExportResult {
 
 type ObjectInsertConfigPatch = Partial<NonNullable<GenerationConfig['objectInsert']>>;
 
-const acceptedImageTypes = 'image/png,image/jpeg,image/webp';
 const minObjectSize = 24;
 const emptyPlacement: ObjectPlacement = { x: 0, y: 0, width: 0, height: 0, rotation: 0 };
 const objectInsertDebugModeOptions: Array<{ value: ObjectInsertDebugMode; label: string }> = [
@@ -541,7 +542,7 @@ export function ObjectInsertPanel({
     const file = fileList?.[0];
     if (!file) return;
 
-    const validationError = validateImageFile(file);
+    const validationError = validateImageFile(file, `object-insert:${kind}`);
     if (validationError) {
       setUploadErrors(prev => ({ ...prev, [kind]: validationError }));
       return;
@@ -554,7 +555,12 @@ export function ObjectInsertPanel({
       try {
         const asset = await uploadImageAsset(file, file.name);
         image = { ...localImage, assetId: asset.id, url: asset.url };
-      } catch {
+      } catch (error) {
+        const uploadError = readImageTypeUploadError(error);
+        if (uploadError) {
+          setUploadErrors(prev => ({ ...prev, [kind]: uploadError }));
+          return;
+        }
         setMessage('图片已用于本地画布预览，素材上传暂不可用。');
       }
 
@@ -632,7 +638,7 @@ export function ObjectInsertPanel({
     try {
       const newItems: ObjectInsertDraftItem[] = [];
       for (const file of selectedFiles) {
-        const validationError = validateImageFile(file);
+        const validationError = validateImageFile(file, 'object-insert:object-reference');
         if (validationError) {
           setUploadErrors(prev => ({ ...prev, object: validationError }));
           return;
@@ -642,7 +648,12 @@ export function ObjectInsertPanel({
         try {
           const asset = await uploadImageAsset(file, file.name);
           image = { ...localImage, assetId: asset.id, url: asset.url };
-        } catch {
+        } catch (error) {
+          const uploadError = readImageTypeUploadError(error);
+          if (uploadError) {
+            setUploadErrors(prev => ({ ...prev, object: uploadError }));
+            return;
+          }
           setMessage('图片已用于本地预览，素材上传暂不可用。');
         }
         const itemIndex = baseItems.length + newItems.length;
@@ -1471,8 +1482,8 @@ export function ObjectInsertPanel({
 
   return (
     <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden p-3">
-      <input ref={sourceInputRef} type="file" accept={acceptedImageTypes} className="hidden" onChange={event => { void handleUploadImage('source', event.currentTarget.files); event.currentTarget.value = ''; }} />
-      <input ref={objectInputRef} type="file" accept={acceptedImageTypes} multiple className="hidden" onChange={event => { void handleUploadObjectReferences(event.currentTarget.files); event.currentTarget.value = ''; }} />
+      <input ref={sourceInputRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} className="hidden" onChange={event => { void handleUploadImage('source', event.currentTarget.files); event.currentTarget.value = ''; }} />
+      <input ref={objectInputRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} multiple className="hidden" onChange={event => { void handleUploadObjectReferences(event.currentTarget.files); event.currentTarget.value = ''; }} />
 
       <aside className="workspace-side-panel glass-panel flex w-80 shrink-0 flex-col gap-3 overflow-y-auto rounded-l-3xl border border-white/60 p-4 custom-scrollbar">
         <div>
@@ -1882,7 +1893,7 @@ export function ObjectInsertPanel({
                         style={{ ...getObjectPlacementStyle(item.placement), zIndex: 10 + index }}
                         onPointerDown={event => startInteraction(item.id, 'move', event)}
                       >
-                        <img src={readImageSrc(itemImage)} alt={item.objectLabel || `家具 ${index + 1}`} className="h-full w-full select-none object-fill" draggable={false} />
+                        <img src={readImageSrc(itemImage)} alt={item.objectLabel || `家具 ${index + 1}`} className="h-full w-full select-none object-contain" draggable={false} />
                         {isActive && isSelected ? (
                           <>
                             <button
@@ -1983,11 +1994,12 @@ export function ObjectInsertPanel({
                   </span>
                   {resultDimensionsText ? <span className="text-[11px] font-bold text-slate-500">{resultDimensionsText}</span> : null}
                 </div>
-                <img src={originalResultImage} alt="元素植入生成结果" className="h-32 w-full rounded-xl border border-slate-100 object-cover" />
+                <AspectRatioImage src={originalResultImage} alt="元素植入生成结果" />
+                <div className="action-row">
                 <button
                   type="button"
                   onClick={() => window.open(originalResultImage, '_blank', 'noopener,noreferrer')}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:border-blue-200 hover:text-blue-700"
+                  className="flex-1 border border-slate-200 bg-white text-slate-700 transition hover:border-blue-200 hover:text-blue-700"
                 >
                   <ExternalLink className="mr-1 inline h-3.5 w-3.5" />
                   查看原图
@@ -1996,11 +2008,12 @@ export function ObjectInsertPanel({
                   type="button"
                   onClick={() => void handleDownloadResult()}
                   disabled={isDownloadingResult}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="flex-1 border border-slate-200 bg-white text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Download className={`mr-1 inline h-3.5 w-3.5 ${isDownloadingResult ? 'animate-pulse' : ''}`} />
                   {isDownloadingResult ? '正在下载...' : '保存到本地'}
                 </button>
+                </div>
                 {downloadMessage ? <p className="text-xs font-semibold text-emerald-700">{downloadMessage}</p> : null}
                 {downloadError ? <p className="text-xs font-semibold text-amber-700">{downloadError}</p> : null}
                 <div className="grid grid-cols-2 gap-2">
@@ -2072,16 +2085,16 @@ function UploadCard({
       <button
         type="button"
         onClick={onUpload}
-        className="mt-3 flex w-full items-center gap-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-2 text-left transition hover:border-blue-200 hover:bg-blue-50"
+        className="mt-3 w-full rounded-xl border border-dashed border-slate-200 bg-slate-50 p-2 text-left transition hover:border-blue-200 hover:bg-blue-50"
       >
-        <div className="flex h-16 w-20 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white">
+        <div className="flex aspect-video items-center justify-center overflow-hidden rounded-xl bg-white">
           {image ? (
-            <img src={readImageSrc(image)} alt={title} className="h-full w-full object-cover" />
+            <AspectRatioImage src={readImageSrc(image)} alt={title} className="h-full rounded-none border-0 shadow-none" enableLightbox={false} />
           ) : (
             <Upload className="h-6 w-6 text-slate-300" />
           )}
         </div>
-        <div className="min-w-0">
+        <div className="mt-2 min-w-0 px-1">
           <p className="truncate text-sm font-bold text-slate-800">{image?.name || '点击上传图片'}</p>
           <p className="mt-1 text-xs text-slate-500">{image ? `${image.width || '-'} x ${image.height || '-'} px` : 'PNG / JPG / WEBP'}</p>
         </div>
@@ -2157,8 +2170,8 @@ function ObjectItemsPanel({
               {item.referenceImages.length > 0 ? (
                 <div className="mt-2 grid grid-cols-3 gap-1.5">
                   {item.referenceImages.map(image => (
-                    <div key={image.id} className="group relative aspect-square overflow-hidden rounded-lg border border-slate-100 bg-slate-100">
-                      <img src={readImageSrc(image)} alt={image.name} className="h-full w-full object-cover" />
+                    <div key={image.id} className="group relative overflow-hidden rounded-lg border border-slate-100 bg-slate-100">
+                      <AspectRatioImage src={readImageSrc(image)} alt={image.name} className="rounded-none border-0 shadow-none" />
                       <button type="button" onClick={() => onRemoveReference(item.id, image.id)} className="absolute right-1 top-1 hidden rounded bg-white/90 p-1 text-rose-600 shadow group-hover:block" aria-label="删除参考图">
                         <X className="h-3 w-3" />
                       </button>
@@ -2189,7 +2202,7 @@ function DebugSubmitItem({ item }: { item: DebugSubmitPreviewItem }) {
     }`}>
       <div className="flex h-12 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100">
         {item.imageUrl ? (
-          <img src={item.imageUrl} alt={item.label} className="h-full w-full object-cover" />
+          <img src={item.imageUrl} alt={item.label} className="h-full w-full object-contain" />
         ) : (
           <span className="text-[10px] font-bold">N/A</span>
         )}
@@ -2374,7 +2387,7 @@ function ExportPreview({ title, info }: { title: string; info: ExportedImageInfo
         <p className="text-xs font-bold text-slate-800">{title}</p>
         <span className="text-[10px] font-bold text-slate-400">{formatBytes(info.bytesApprox)}</span>
       </div>
-      <img src={info.dataUrl} alt={title} className="h-28 w-full rounded-xl border border-slate-100 object-cover" />
+      <AspectRatioImage src={info.dataUrl} alt={title} />
       <p className="mt-2 text-[10px] font-bold text-slate-400">{info.width} x {info.height} px</p>
     </div>
   );

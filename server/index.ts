@@ -80,8 +80,10 @@ import {
   enqueueGenerationJob,
   generateWithFallbackResponse,
   getGenerationProviderName,
+  getSelectableGenerationProviders,
   isGenerationWorkerDisabled,
   isLegacyGenerationEndpointEnabled,
+  normalizeGenerationProviderName,
   refundGenerationJobCredits,
   removeQueuedGenerationJob,
   restorePendingGenerationJobs,
@@ -174,6 +176,10 @@ app.use(attachAuthUser);
 
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ ok: true, version, provider: getGenerationProviderName() });
+});
+
+app.get('/api/ai-providers', (_req: Request, res: Response) => {
+  res.json(apiOk(getSelectableGenerationProviders()));
 });
 
 app.get('/api/auth/me', (req: Request, res: Response) => {
@@ -543,11 +549,27 @@ app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, asyn
       step: body.value.step,
       creditsCost,
     });
-    const job = await createGenerationJob({ ...body.value, userId: user.id, provider: getGenerationProviderName(), creditCost: creditsCost });
+    const job = await createGenerationJob({
+      ...body.value,
+      userId: user.id,
+      creditCost: creditsCost,
+    });
     if (!job) {
       logGenerationJobCreateStage(req, 'create generation job failed', { userId: user.id, projectId: body.value.projectId });
       res.status(404).json(apiError('Project not found.', 'PROJECT_NOT_FOUND'));
       return;
+    }
+
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug({
+        event: 'generation_job_created',
+        jobId: job.id,
+        requestedProvider: body.requestedProvider,
+        normalizedProvider: job.provider,
+        step: job.step,
+        mode: job.mode,
+        inputAssetCount: job.inputAssetIds.length,
+      });
     }
 
     logGenerationJobCreateStage(req, 'debit credits', { userId: user.id, jobId: job.id, creditsCost });
@@ -1919,7 +1941,11 @@ function readFiniteNumber(value: unknown): number | null {
 
 function validateGenerationJobCreateBody(
   body: unknown,
-): { ok: true; value: Omit<Parameters<typeof createGenerationJob>[0], 'provider' | 'userId'> } | { ok: false; error: ApiError } {
+): {
+  ok: true;
+  value: Omit<Parameters<typeof createGenerationJob>[0], 'userId'>;
+  requestedProvider: string | null;
+} | { ok: false; error: ApiError } {
   if (!isRecord(body)) {
     return { ok: false, error: { message: 'Request body must be a JSON object.', code: 'INVALID_REQUEST_BODY' } };
   }
@@ -1960,6 +1986,22 @@ function validateGenerationJobCreateBody(
   }
 
   const config: Record<string, unknown> = { ...body.config };
+  const requestedProviderValue = body.provider ?? body.selectedProvider ?? config.aiProvider ?? config.selectedProvider;
+  const requestedProvider = typeof requestedProviderValue === 'string' ? requestedProviderValue.trim() : null;
+  const normalizedProvider = requestedProvider
+    ? normalizeGenerationProviderName(requestedProvider)
+    : getGenerationProviderName();
+  if (!normalizedProvider) {
+      return {
+        ok: false,
+        error: {
+          message: `当前 AI 接口未注册：${requestedProvider}`,
+          code: 'PROVIDER_NOT_REGISTERED',
+        },
+      };
+  }
+  config.aiProvider = normalizedProvider;
+  delete config.selectedProvider;
   const stepCandidate = body.step !== undefined
     ? body.step
     : config.step !== undefined
@@ -2326,6 +2368,14 @@ function validateGenerationJobCreateBody(
   if (config.targetAspectRatio !== undefined && typeof config.targetAspectRatio !== 'string') {
     return { ok: false, error: { message: 'targetAspectRatio must be a string.', code: 'GENERATION_JOB_ASPECT_RATIO_INVALID' } };
   }
+  if (usesStandardImageAspectRatio(body.mode)) {
+    config.targetAspectRatio = '16:9';
+    config.aspectRatio = '16:9';
+    config.apiyiAspectRatio = '16:9';
+    config.targetWidth = 2048;
+    config.targetHeight = 1152;
+    if (generationStep === 'free_reference_image') config.freeReferenceAspectRatio = '16:9';
+  }
   if (config.furnitureReferenceAssetIds !== undefined && !isStringArrayWithLimit(config.furnitureReferenceAssetIds, 3)) {
     return { ok: false, error: { message: 'furnitureReferenceAssetIds must contain at most 3 asset ids.', code: 'GENERATION_JOB_FURNITURE_REFERENCES_INVALID' } };
   }
@@ -2383,6 +2433,7 @@ function validateGenerationJobCreateBody(
 
   return {
     ok: true,
+    requestedProvider,
     value: {
       projectId: body.projectId.trim(),
       mode: body.mode,
@@ -2390,6 +2441,7 @@ function validateGenerationJobCreateBody(
       prompt: body.prompt,
       config,
       inputAssetIds: body.inputAssetIds.map(item => item.trim()),
+      provider: normalizedProvider,
     },
   };
 }
@@ -2540,6 +2592,10 @@ function readQueryString(value: unknown): string {
 
 function isGenerationMode(value: unknown): value is GenerationRecord['mode'] {
   return allowedGenerationModes.includes(value as GenerationRecord['mode']);
+}
+
+function usesStandardImageAspectRatio(mode: GenerationRecord['mode']): boolean {
+  return mode !== 'panorama-roam-render' && mode !== 'model-render';
 }
 
 function isGenerationStep(value: unknown): value is NonNullable<GenerationJob['step']> {

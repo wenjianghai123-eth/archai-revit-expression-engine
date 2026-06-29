@@ -10,6 +10,7 @@ import {
 import { GenerationConfig, GenerationStep, PlanDrawingType, PlanExpressionTemplate, StepState, UploadedImage } from '../types';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
+import { AspectRatioImage } from './common/AspectRatioImage';
 
 interface PlanColorizePanelProps {
   state: StepState;
@@ -139,7 +140,7 @@ export function PlanColorizePanel({
 
             {state.inputImage ? (
               <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
-                <img src={sourceImage} alt="原始图纸" className="h-44 w-full object-cover" />
+                <AspectRatioImage src={sourceImage} alt="原始图纸" className="rounded-none border-0 shadow-none" />
                 <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-slate-500">
                   <span className="truncate font-semibold">{state.inputImage.name}</span>
                   <button type="button" onClick={() => onUpdateInputImage(null)} className="font-bold text-slate-700">
@@ -151,7 +152,7 @@ export function PlanColorizePanel({
               <button
                 type="button"
                 onClick={onUploadInput}
-                className="mt-4 flex h-44 w-full flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 text-sm font-bold text-slate-500 hover:border-blue-300 hover:bg-blue-50"
+                className="mt-4 flex aspect-video w-full flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-sm font-bold text-slate-500 hover:border-blue-300 hover:bg-blue-50"
               >
                 <ImagePlus className="mb-2 h-7 w-7" />
                 上传平面图
@@ -294,7 +295,7 @@ export function PlanColorizePanel({
           </button>
         </aside>
 
-        <main className="min-h-[560px] space-y-6">
+        <main className="grid min-w-0 content-start gap-4 2xl:grid-cols-2">
           <PreviewCard title="原始图纸" image={sourceImage} empty="请先上传或选择一张平面图" />
           <PreviewCard title="表达结果" image={previewImage || undefined} empty="生成后在这里查看彩色表达图" />
         </main>
@@ -328,8 +329,8 @@ function PreviewCard({ title, image, empty }: { title: string; image?: string | 
         <p className="text-sm font-bold text-slate-900">{title}</p>
         <ArrowRight className="h-4 w-4 text-slate-300" />
       </div>
-      <div className="flex min-h-[520px] items-center justify-center bg-slate-50 p-4">
-        {image ? <img src={image} alt={title} className="max-h-[760px] w-full max-w-full object-contain" /> : <p className="px-6 text-center text-sm font-bold text-slate-400">{empty}</p>}
+      <div className="p-3">
+        <AspectRatioImage src={image} alt={title} placeholder={empty} />
       </div>
     </div>
   );

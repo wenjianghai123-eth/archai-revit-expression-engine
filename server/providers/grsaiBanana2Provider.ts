@@ -74,6 +74,16 @@ export function createGrsaiBanana2Provider(options: GrsaiBanana2ProviderOptions 
       validateObjectInsertImageIndexes(input, prompt, urls, providerName);
       const payloadBytesApprox = urls.reduce((sum, url) => sum + estimateDataUrlBytes(url), 0);
       const aspectRatio = input.targetAspectRatio || configuredAspectRatio || defaultAspectRatio;
+      if (process.env.NODE_ENV !== 'production') {
+        console.debug({
+          event: 'provider_request_prepare',
+          provider: providerName,
+          step: input.step,
+          aspectRatio,
+          imageSize,
+          inputImageCount: urls.length,
+        });
+      }
       const requestStartedAt = Date.now();
       const diagnostics = {
         retryCount: 0,
