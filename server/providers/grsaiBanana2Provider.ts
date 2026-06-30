@@ -14,6 +14,15 @@ const defaultMaxRetries = 1;
 const defaultRetryBackoffMs = 1500;
 const modelMaintenanceUserMessage = '当前生成模型正在维护，请稍后重试，或切换其他生成模型。';
 
+const floorplanTextLanguageRequirement = [
+  'Text language requirement:',
+  'All visible text, labels, legends, room names, annotations, and material notes in the generated image must be in English only.',
+  'Do not use Chinese characters. Do not mix Chinese and English.',
+  'If room labels are needed, use concise English labels such as Living Room, Bedroom, Master Bedroom, Kitchen, Dining Area, Bathroom, Balcony, Entrance, Foyer, Corridor, Storage, Study, Guest Room, Laundry, Closet, Terrace, Open Area, Service Area.',
+  'If a legend is generated, all legend entries must be in English, such as Legend, Furniture, Wall, Door, Window, Floor Finish, Wood Floor, Tile Floor, Carpet, Stone, Planting, Water Area, Circulation, Private Area, Public Area, Service Area.',
+  'If the input plan contains Chinese room names or Chinese annotations, translate them into concise English labels in the output image. Do not copy Chinese text from the input plan.',
+].join(' ');
+
 interface GrsaiBanana2ProviderOptions {
   apiKey?: string;
   name?: Extract<ProviderName, 'grsai-banana2' | 'grsai-nano-banana'>;
@@ -642,7 +651,12 @@ function buildPrompt(input: GenerateImageInput): string {
 
   pieces.push(input.prompt);
   pieces.push(`Generation config JSON: ${JSON.stringify(input.config)}`);
-  pieces.push('不要添加文字、水印、标签、边框或界面元素。');
+  if (input.mode === 'floorplan') {
+    pieces.push('Do not add watermarks, borders, UI elements, title bars, or unrelated explanatory text.');
+    pieces.push(floorplanTextLanguageRequirement);
+  } else {
+    pieces.push('不要添加文字、水印、标签、边框或界面元素。');
+  }
 
   return pieces.filter(Boolean).join('\n');
 }

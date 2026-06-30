@@ -1,6 +1,7 @@
 import { buildApiUrl } from '../lib/apiBaseUrl';
 import { parseApiResponse } from '../lib/apiResponse';
 import { GenerationProvider } from '../types';
+import { isAbortError } from '../utils/apiConnectionStatus';
 
 export interface BackendHealth {
   ok: boolean;
@@ -8,12 +9,13 @@ export interface BackendHealth {
   provider: GenerationProvider;
 }
 
-export async function getBackendHealth(): Promise<BackendHealth> {
+export async function getBackendHealth(signal?: AbortSignal): Promise<BackendHealth> {
   let response: Response;
   try {
-    response = await fetch(buildApiUrl('/api/health'));
-  } catch {
-    throw new Error('无法连接后端服务，请确认后端服务已启动，并检查 VITE_API_BASE_URL 是否指向后端域名。');
+    response = await fetch(buildApiUrl('/api/health'), { signal });
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    throw new Error('无法连接后端服务，请确认本地服务已启动或刷新重试。');
   }
 
   const body = await parseApiResponse<unknown>(response);

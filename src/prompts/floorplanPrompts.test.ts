@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildFloorplanColorPrompt, DEFAULT_FLOORPLAN_COLOR_PROMPT } from './floorplanPrompts';
-import { buildSmartPrompt } from '../promptTemplates/intelligentPromptTemplates';
+import { FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT, buildSmartPrompt } from '../promptTemplates/intelligentPromptTemplates';
 
 describe('buildFloorplanColorPrompt', () => {
   it('builds a complete interior colored floorplan default prompt', () => {
     const prompt = buildFloorplanColorPrompt();
 
-    expect(prompt).toBe(DEFAULT_FLOORPLAN_COLOR_PROMPT);
+    expect(prompt).toBe(`${DEFAULT_FLOORPLAN_COLOR_PROMPT}\n\n${FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT}`);
+    expect(prompt).toContain('All visible text, labels, legends, room names, annotations, and material notes');
+    expect(prompt).toContain('Do not use Chinese characters');
     expect(prompt).toContain('室内平面彩平图');
     expect(prompt).toContain('户型结构');
     expect(prompt).toContain('墙体');
@@ -24,7 +26,7 @@ describe('buildFloorplanColorPrompt', () => {
   it('does not emit undefined or null text when user prompt is empty', () => {
     const prompt = buildFloorplanColorPrompt({ userPrompt: '   ' });
 
-    expect(prompt).toBe(DEFAULT_FLOORPLAN_COLOR_PROMPT);
+    expect(prompt).toBe(`${DEFAULT_FLOORPLAN_COLOR_PROMPT}\n\n${FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT}`);
     expect(prompt).not.toContain('undefined');
     expect(prompt).not.toContain('null');
   });
@@ -74,9 +76,10 @@ describe('floorplan expression controls', () => {
     expect(prompt).toContain('pure flat colored plan expression');
     expect(prompt).toContain('Linework preservation: strict.');
     expect(prompt).toContain('Extremely strictly preserve the original linework');
-    expect(prompt).toContain('Add a concise graphic legend');
-    expect(prompt).toContain('Add clear area or functional text labels');
-    expect(prompt).toContain('Add a material legend');
+    expect(prompt).toContain('Add a concise graphic legend with English entries only');
+    expect(prompt).toContain('Add clear English area or functional text labels');
+    expect(prompt).toContain('Add an English material legend');
+    expect(prompt).toContain('If a legend is generated, all legend entries must be in English');
   });
 
   it('adds floorplan template and manual room labels to prompt', () => {
@@ -91,9 +94,9 @@ describe('floorplan expression controls', () => {
     expect(prompt).toContain('彩平模板：办公空间彩平');
     expect(prompt).toContain('Floorplan color template: office workspace.');
     expect(prompt).toContain('Room label guidance');
-    expect(prompt).toContain('开放办公区 = office area');
-    expect(prompt).toContain('洽谈区 = client meeting area');
-    expect(prompt).toContain('location: 入口右侧');
+    expect(prompt).toContain('Office Area = Office Area');
+    expect(prompt).toContain('client meeting area = client meeting area');
+    expect(prompt).not.toContain('location: 入口右侧');
   });
 
   it('keeps smart floorplan defaults stable while adding explicit controls', () => {
@@ -115,7 +118,8 @@ describe('floorplan expression controls', () => {
     expect(controlledPrompt).toContain('Floor plan render mode: presentation.');
     expect(controlledPrompt).toContain('Strengthen presentation-board quality');
     expect(controlledPrompt).toContain('Linework preservation: medium.');
-    expect(controlledPrompt).toContain('Add a concise graphic legend');
+    expect(defaultPrompt).toContain('Text language requirement:');
+    expect(controlledPrompt).toContain('Add a concise graphic legend with English entries only');
   });
 
   it('adds template and room labels to smart floorplan prompt', () => {
@@ -131,6 +135,7 @@ describe('floorplan expression controls', () => {
 
     expect(prompt).toContain('Floorplan color template: commercial presentation.');
     expect(prompt).toContain('Manual room labels');
-    expect(prompt).toContain('展示区 = commercial area');
+    expect(prompt).toContain('Do not copy Chinese text from the input plan');
+    expect(prompt).toContain('Commercial Area = Commercial Area');
   });
 });

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, lazy, useState, useCallback, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useCallback, useEffect, useRef } from 'react';
 import { Sidebar, Stepper } from './components/Navigation';
 import { HistoryView } from './components/HistoryView';
 import { SettingsModal } from './components/SettingsModal';
@@ -31,6 +31,12 @@ import { buildSecondaryEditConfigPatch } from './utils/secondaryEdit';
 import { getOriginalResultAssetId, getOriginalResultImageUrl } from './utils/resultImage';
 import { promptTemplateRecordToTemplate } from './utils/savedPromptTemplates';
 import { readSelectedImageProvider, writeSelectedImageProvider } from './utils/aiProviderPreference';
+import {
+  ApiConnectionStatus,
+  getReadableApiConnectionError,
+  isAbortError,
+  sleep,
+} from './utils/apiConnectionStatus';
 import { motion, AnimatePresence } from 'motion/react';
 
 const MainWorkspace = lazy(() => import('./components/MainWorkspace').then(module => ({ default: module.MainWorkspace })));
@@ -41,6 +47,8 @@ const ProjectDetail = lazy(() => import('./components/ProjectDetail').then(modul
 const PublicSharePreview = lazy(() => import('./components/PublicSharePreview').then(module => ({ default: module.PublicSharePreview })));
 const PanoramaSharePage = lazy(() => import('./components/PanoramaSharePage').then(module => ({ default: module.PanoramaSharePage })));
 const AdminPage = lazy(() => import('./components/AdminPage').then(module => ({ default: module.AdminPage })));
+const apiStatusRetryDelays = [300, 800, 1500];
+const fallbackAiProvider: AiProviderOption = { value: 'grsai-banana2', label: 'Grsai Banana2', enabled: true, missingConfig: [] };
 
 export default function App() {
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
@@ -79,13 +87,15 @@ export default function App() {
     resetWorkflow,
   } = useGenerationWorkflow(() => setActiveTab('generate'));
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [selectedImageProvider, setSelectedImageProvider] = useState<AiProviderOption['value'] | undefined>(undefined);
-  const [defaultImageProvider, setDefaultImageProvider] = useState<AiProviderOption['value'] | null>(null);
-  const [imageProviders, setImageProviders] = useState<AiProviderOption[]>([]);
-  const [isProviderConfigLoading, setIsProviderConfigLoading] = useState(true);
+  const [selectedImageProvider, setSelectedImageProvider] = useState<AiProviderOption['value'] | undefined>(fallbackAiProvider.value);
+  const [defaultImageProvider, setDefaultImageProvider] = useState<AiProviderOption['value'] | null>(fallbackAiProvider.value);
+  const [imageProviders, setImageProviders] = useState<AiProviderOption[]>([fallbackAiProvider]);
+  const [apiConnectionStatus, setApiConnectionStatus] = useState<ApiConnectionStatus>('checking');
+  const [apiConnectionError, setApiConnectionError] = useState<string | null>(null);
   const [historyItems, setHistoryItems] = useState<GenerationHistoryItem[]>(() => listGenerationRecords());
   const [promptTemplates, setPromptTemplates] = useState(() => [] as ReturnType<typeof promptTemplateRecordToTemplate>[]);
   const [queuedSecondaryGenerationId, setQueuedSecondaryGenerationId] = useState<string | null>(null);
+  const apiProviderRequestIdRef = useRef(0);
   const { backendHealth, refreshBackendHealth } = useBackendHealth(isSettingsOpen);
   const { creditBalance, creditError, refreshCreditBalance } = useCreditBalance(Boolean(currentUser));
   const panoramaShareId = readPanoramaShareId();
@@ -96,9 +106,10 @@ export default function App() {
     ? selectedImageProvider === 'apiyi-nano-banana2-edit'
       ? '未配置 API易 API Key，请在后端 .env 中配置 APIYI_API_KEY。'
       : `当前 AI 接口缺少配置：${selectedProviderInfo.missingConfig.join('、')}。`
-    : isProviderConfigLoading
-      ? '正在读取 AI 接口配置。'
+    : apiConnectionStatus === 'failed'
+      ? apiConnectionError || '无法连接后端服务，请确认本地服务已启动或刷新重试。'
       : null;
+  const isProviderConfigLoading = apiConnectionStatus === 'checking';
 
   const refreshPromptTemplates = useCallback(async () => {
     try {
@@ -217,30 +228,56 @@ export default function App() {
   }, [handleGenerate, queuedSecondaryGenerationId]);
 
   useEffect(() => {
-    let isActive = true;
-    void getAiProviders()
-      .then(config => {
-        if (!isActive) return;
-        const selectedProvider = readSelectedImageProvider(
-          config.defaultProvider,
-          config.providers.map(provider => provider.value),
-        );
-        setDefaultImageProvider(config.defaultProvider);
-        setImageProviders(config.providers);
-        setSelectedImageProvider(selectedProvider);
-      })
-      .catch(() => {
-        if (!isActive) return;
-        const fallbackProvider = 'grsai-banana2' as const;
-        setDefaultImageProvider(fallbackProvider);
-        setImageProviders([{ value: fallbackProvider, label: 'Grsai Banana2', enabled: true, missingConfig: [] }]);
-        setSelectedImageProvider(fallbackProvider);
-      })
-      .finally(() => {
-        if (isActive) setIsProviderConfigLoading(false);
-      });
+    const controller = new AbortController();
+    const requestId = ++apiProviderRequestIdRef.current;
+
+    const loadProviders = async () => {
+      console.debug('[api-status] checking');
+      setApiConnectionStatus('checking');
+      setApiConnectionError(null);
+
+      for (let attempt = 0; attempt < apiStatusRetryDelays.length; attempt += 1) {
+        try {
+          const config = await getAiProviders({ signal: controller.signal });
+          if (requestId !== apiProviderRequestIdRef.current) return;
+          const selectedProvider = readSelectedImageProvider(
+            config.defaultProvider,
+            config.providers.map(provider => provider.value),
+          );
+          const hasDisabledProvider = config.providers.some(provider => !provider.enabled);
+          setDefaultImageProvider(config.defaultProvider);
+          setImageProviders(config.providers);
+          setSelectedImageProvider(selectedProvider);
+          setApiConnectionStatus(hasDisabledProvider ? 'degraded' : 'connected');
+          setApiConnectionError(null);
+          console.debug(hasDisabledProvider ? '[api-status] connected: degraded provider config' : '[api-status] connected');
+          return;
+        } catch (error) {
+          if (requestId !== apiProviderRequestIdRef.current) return;
+          if (isAbortError(error)) {
+            console.debug('[api-status] request aborted, ignored');
+            return;
+          }
+
+          if (attempt < apiStatusRetryDelays.length - 1) {
+            console.warn('[api-status] retry', { attempt: attempt + 1, message: getReadableApiConnectionError(error) });
+            await sleep(apiStatusRetryDelays[attempt]);
+            continue;
+          }
+
+          console.error('[api-status] failed', error);
+          setDefaultImageProvider(fallbackAiProvider.value);
+          setImageProviders([fallbackAiProvider]);
+          setSelectedImageProvider(fallbackAiProvider.value);
+          setApiConnectionStatus('failed');
+          setApiConnectionError('无法连接后端服务，请确认本地服务已启动或刷新重试。');
+        }
+      }
+    };
+
+    void loadProviders();
     return () => {
-      isActive = false;
+      controller.abort();
     };
   }, []);
 

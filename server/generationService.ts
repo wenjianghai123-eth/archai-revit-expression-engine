@@ -12,7 +12,7 @@ import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider, MaskM
 import { getImageSizeFromDataUrl, isValidTargetDimension, parseImageDataUrl as parseRawImageDataUrl } from './image/imageMetadata';
 import { prepareImageForProvider, prepareMaskForProvider, PreparedProviderImage } from './image/prepareProviderImage';
 import { composeLocalInpaintResult, createLocalInpaintContext, cropImageDataUrlToBox, LocalInpaintContext } from './image/localInpaint';
-import { buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode } from '../src/promptTemplates/intelligentPromptTemplates';
+import { FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT, buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode } from '../src/promptTemplates/intelligentPromptTemplates';
 import { findPlanColorizeStyle, maxPlanColorizeBatchCount, planColorizeStyleOptions, resolvePlanColorizeStyles, type PlanColorizeStyleOption } from '../src/constants/planColorizeStyles';
 import { resolveFloorplanBatchCount, resolveFloorplanVariantPlans, type FloorplanVariantPlan } from '../src/constants/floorplanVariants';
 import { getGenerationOutputCount } from '../src/utils/generationCredits';
@@ -621,7 +621,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
       jobId: job.id,
       mode: job.mode,
       step: isObjectInsert ? 'object_insert' : job.step ?? readGenerationJobStep(job.config) ?? null,
-      prompt: typeof job.config.userPrompt === 'string' ? job.config.userPrompt : job.prompt,
+      prompt: resolveGenerationRecordPrompt(job),
       inputImageUrl: await getInputAssetUrl(job.inputAssetIds[0], job.userId),
       outputImageUrl: firstOutputAsset.url,
       provider: firstOutput.provider,
@@ -2061,6 +2061,7 @@ function buildFloorplanMultiPlanPrompt(
   pieces.push(job.config.enableLegend === true || job.config.enableAreaText === true || job.config.enableMaterialLegend === true
     ? 'Do not output a collage, comparison sheet, watermark, dimensions, or UI elements. Any legend or labels must be minimal, useful, and part of the floor plan presentation.'
     : 'Do not output a collage, comparison sheet, text, labels, watermark, dimensions, or UI elements.');
+  pieces.push(FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT);
   return pieces.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
 }
 
@@ -2098,12 +2099,12 @@ function buildFloorplanRoomLabelsPrompt(config: Record<string, unknown>): string
   return [
     'Manual room labels: express each functional zone according to the following room labels. Keep room labels subtle and integrated with the plan; do not move walls, openings, room boundaries, or furniture outlines.',
     ...labels.map((label, index) => {
-      const name = typeof label.name === 'string' && label.name.trim() ? label.name.trim() : `Area ${index + 1}`;
       const type = readFloorplanRoomTypeLabel(label);
+      const name = readFloorplanEnglishRoomName(typeof label.name === 'string' ? label.name : '', type || `Area ${index + 1}`);
       const position = typeof label.positionDescription === 'string' && label.positionDescription.trim()
-        ? `, location: ${label.positionDescription.trim()}`
+        ? readEnglishPromptValue(label.positionDescription.trim(), '')
         : '';
-      return `Room ${index + 1}: ${name} = ${type}${position}.`;
+      return `Room ${index + 1}: ${name} = ${type}${position ? `, location: ${position}` : ''}.`;
     }),
   ].join(' ');
 }
@@ -2111,23 +2112,56 @@ function buildFloorplanRoomLabelsPrompt(config: Record<string, unknown>): string
 function readFloorplanRoomTypeLabel(label: Record<string, unknown>): string {
   const type = typeof label.roomType === 'string' ? label.roomType : 'custom';
   if (type === 'custom') {
-    return typeof label.customTypeLabel === 'string' && label.customTypeLabel.trim()
-      ? label.customTypeLabel.trim()
-      : 'custom room';
+    return readEnglishPromptValue(typeof label.customTypeLabel === 'string' ? label.customTypeLabel : '', 'Custom Room');
   }
   const labels: Record<string, string> = {
-    'living-room': 'living room',
-    'dining-room': 'dining room',
-    bedroom: 'bedroom',
-    kitchen: 'kitchen',
-    bathroom: 'bathroom',
-    balcony: 'balcony',
-    entry: 'entry foyer',
-    study: 'study',
-    office: 'office area',
-    commercial: 'commercial area',
+    'living-room': 'Living Room',
+    'dining-room': 'Dining Area',
+    bedroom: 'Bedroom',
+    kitchen: 'Kitchen',
+    bathroom: 'Bathroom',
+    balcony: 'Balcony',
+    entry: 'Entrance',
+    study: 'Study',
+    office: 'Office Area',
+    commercial: 'Commercial Area',
   };
-  return labels[type] || 'room';
+  return labels[type] || 'Room';
+}
+
+function readFloorplanEnglishRoomName(value: string, fallback: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  if (!containsCjk(trimmed)) return trimmed;
+
+  const translations: Array<[RegExp, string]> = [
+    [/\u4e3b\u5367/u, 'Master Bedroom'],
+    [/\u5ba2\u5385|\u8d77\u5c45/u, 'Living Room'],
+    [/\u5367\u5ba4|\u6b21\u5367/u, 'Bedroom'],
+    [/\u53a8\u623f/u, 'Kitchen'],
+    [/\u536b\u751f\u95f4|\u6d17\u624b\u95f4|\u6d74\u5ba4/u, 'Bathroom'],
+    [/\u9910\u5385|\u9910\u533a/u, 'Dining Area'],
+    [/\u9633\u53f0/u, 'Balcony'],
+    [/\u7384\u5173|\u95e8\u5385|\u5165\u53e3/u, 'Entrance'],
+    [/\u50a8\u7269|\u50a8\u85cf/u, 'Storage'],
+    [/\u4e66\u623f/u, 'Study'],
+    [/\u5ba2\u623f/u, 'Guest Room'],
+    [/\u6d17\u8863/u, 'Laundry'],
+    [/\u8863\u5e3d/u, 'Closet'],
+    [/\u9732\u53f0/u, 'Terrace'],
+    [/\u8d70\u5eca|\u8fc7\u9053/u, 'Corridor'],
+  ];
+  return translations.find(([pattern]) => pattern.test(trimmed))?.[1] || fallback;
+}
+
+function readEnglishPromptValue(value: string, fallback: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  return containsCjk(trimmed) ? fallback : trimmed;
+}
+
+function containsCjk(value: string): boolean {
+  return /[\u3400-\u9fff\uf900-\ufaff]/u.test(value);
 }
 
 function buildFloorplanExpressionControlPrompt(config: Record<string, unknown>): string {
@@ -2140,9 +2174,9 @@ function buildFloorplanExpressionControlPrompt(config: Record<string, unknown>):
   return [
     floorplanRenderModePromptMap[renderMode],
     lineworkPreservationPromptMap[lineworkPreservation],
-    config.enableLegend === true ? 'Add a concise graphic legend where appropriate, without covering important plan content.' : '',
-    config.enableAreaText === true ? 'Add clear area or functional text labels where appropriate; keep text minimal, legible, and aligned with the plan.' : '',
-    config.enableMaterialLegend === true ? 'Add a material legend that explains key floor, wall, soft furnishing, and finish categories where appropriate.' : '',
+    config.enableLegend === true ? 'Add a concise graphic legend with English entries only where appropriate, without covering important plan content.' : '',
+    config.enableAreaText === true ? 'Add clear English area or functional text labels where appropriate; keep text minimal, legible, and aligned with the plan.' : '',
+    config.enableMaterialLegend === true ? 'Add an English material legend that explains key floor, wall, soft furnishing, and finish categories where appropriate.' : '',
   ].filter(part => part.trim().length > 0).join(' ');
 }
 
@@ -2401,6 +2435,14 @@ function buildProviderPromptForJob(job: GenerationJob, qualityMode: QualityMode 
   }
 
   return buildSmartPromptForJob(job, qualityMode);
+}
+
+function resolveGenerationRecordPrompt(job: GenerationJob): string {
+  if (job.mode === 'floorplan') {
+    return buildProviderPromptForJob(job, resolveQualityModeForJob(job));
+  }
+
+  return typeof job.config.userPrompt === 'string' ? job.config.userPrompt : job.prompt;
 }
 
 function buildSmartPromptForJob(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job), overrides: Partial<BuildSmartPromptInputForJob> = {}): string {

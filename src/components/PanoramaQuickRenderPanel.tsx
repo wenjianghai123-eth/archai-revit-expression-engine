@@ -29,6 +29,7 @@ import {
 import { PanoramaViewer } from './PanoramaViewer';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
+import { GenerationImageViewer } from './common/GenerationImageViewer';
 import { IMAGE_UPLOAD_ACCEPT } from '../utils/imageValidation';
 import { validateImageFile } from '../utils/file';
 
@@ -1131,6 +1132,10 @@ export function PanoramaQuickRenderPanel({
               assetId={panoramaPreviewKind === 'rendered'
                 ? getOriginalResultAssetId(selectedGenerationResult)
                 : config.panoramaAssetId}
+              sourceImageUrl={currentRawPanoramaUrl}
+              resultImageUrl={currentRenderedPanoramaUrl}
+              sourceImageAssetId={getSlotRawAssetId(activeSlot) || config.panoramaAssetId || state.inputImage?.assetId}
+              resultImageAssetId={getOriginalResultAssetId(selectedGenerationResult)}
               onPreviewKindChange={setPanoramaPreviewKind}
               previewMode={previewMode}
               onPreviewModeChange={setPreviewMode}
@@ -1377,6 +1382,10 @@ function ResultPreview({
   canShowRendered,
   projectName,
   assetId,
+  sourceImageUrl,
+  resultImageUrl,
+  sourceImageAssetId,
+  resultImageAssetId,
   onPreviewKindChange,
   previewMode,
   onPreviewModeChange,
@@ -1386,6 +1395,10 @@ function ResultPreview({
   canShowRendered: boolean;
   projectName?: string | null;
   assetId?: string | null;
+  sourceImageUrl?: string | null;
+  resultImageUrl?: string | null;
+  sourceImageAssetId?: string | null;
+  resultImageAssetId?: string | null;
   onPreviewKindChange: (kind: 'raw' | 'rendered') => void;
   previewMode: 'image' | '360';
   onPreviewModeChange: (mode: 'image' | '360') => void;
@@ -1470,11 +1483,21 @@ function ResultPreview({
           {downloadError ? <span className="text-amber-700">{downloadError}</span> : null}
         </div>
       ) : null}
+      <GenerationImageViewer
+        sourceImageUrl={sourceImageUrl}
+        sourceImageAssetId={sourceImageAssetId}
+        resultImageUrl={resultImageUrl}
+        resultImageAssetId={resultImageAssetId}
+        aspectRatio="2:1"
+        featureName="全景快渲"
+        step={GenerationStep.PanoramaQuickRender}
+        frameClassName="rounded-none border-0 shadow-none"
+        tabListClassName="m-3 mb-2"
+        sourceMissingMessage="暂无原图，无法对比。"
+      />
       {previewMode === '360' ? (
-        <PanoramaViewer imageUrl={imageUrl} className="h-64" minHeight={256} />
-      ) : (
-        <img src={imageUrl} alt="全景普通图片" className="aspect-[2/1] w-full object-cover" />
-      )}
+        <PanoramaViewer imageUrl={imageUrl} className="h-64 border-t border-slate-200" minHeight={256} />
+      ) : null}
     </div>
   );
 }

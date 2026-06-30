@@ -9,6 +9,7 @@ import {
 } from '../utils/savedPromptTemplates';
 import { getOriginalResultImageUrl } from '../utils/resultImage';
 import { AspectRatioImage } from './common/AspectRatioImage';
+import { GenerationImageViewer } from './common/GenerationImageViewer';
 
 interface SavePromptTemplateModalProps {
   step: GenerationStep;
@@ -120,7 +121,15 @@ export function SavePromptTemplateModal({
 
             <aside className="space-y-4">
               <InfoBlock title="本次生成结果图">
-                <AspectRatioImage src={outputUrl} alt="生成结果图" />
+                <GenerationImageViewer
+                  sourceImageUrl={payloadPreview.inputPreviews[0]?.url}
+                  sourceImageAssetId={payloadPreview.inputPreviews[0]?.assetId || payloadPreview.sourceAssetId}
+                  resultImageUrl={outputUrl}
+                  resultImageAssetId={payloadPreview.outputAssetId}
+                  featureName="保存提示词模板"
+                  step={step}
+                  sourceMissingMessage="暂无原图，无法对比。"
+                />
                 <div className="mt-2 space-y-1 text-[11px] font-semibold text-slate-500">
                   <p>outputAssetId: {payloadPreview.outputAssetId || '未记录'}</p>
                   <p>createdFromJobId: {payloadPreview.createdFromJobId || '未记录'}</p>

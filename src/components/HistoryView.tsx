@@ -88,9 +88,15 @@ export function HistoryView({ items, onReuse, onDelete, onClear }: HistoryViewPr
               <ResultCard
                 key={item.id}
                 image={readHistoryOutputImage(item)}
+                sourceImage={item.inputImageUrl || item.inputImageDataPreview}
+                imageAssetId={getOriginalResultAssetId(item.generationResults?.find(result => result.isSelected) || item.generationResults?.[0])}
+                sourceImageAssetId={item.inputImageAssetId}
                 title={item.style}
                 subtitle={item.prompt}
                 status={<span className="arch-pill uppercase">{item.provider}</span>}
+                aspectRatio={item.step === GenerationStep.PanoramaQuickRender ? '2:1' : '16:9'}
+                featureName={stepLabels[item.step] || item.style}
+                step={item.step}
                 actions={(
                   <>
                     <button onClick={() => onReuse(item)} disabled={!readHistoryOutputImage(item)} className="flex-1 bg-slate-900 text-white">

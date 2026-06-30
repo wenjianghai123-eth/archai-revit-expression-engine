@@ -2,6 +2,15 @@ import crypto from 'node:crypto';
 import { GoogleGenAI, Modality, type Part } from '@google/genai';
 import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider } from './types';
 
+const floorplanTextLanguageRequirement = [
+  'Text language requirement:',
+  'All visible text, labels, legends, room names, annotations, and material notes in the generated image must be in English only.',
+  'Do not use Chinese characters. Do not mix Chinese and English.',
+  'If room labels are needed, use concise English labels such as Living Room, Bedroom, Master Bedroom, Kitchen, Dining Area, Bathroom, Balcony, Entrance, Foyer, Corridor, Storage, Study, Guest Room, Laundry, Closet, Terrace, Open Area, Service Area.',
+  'If a legend is generated, all legend entries must be in English, such as Legend, Furniture, Wall, Door, Window, Floor Finish, Wood Floor, Tile Floor, Carpet, Stone, Planting, Water Area, Circulation, Private Area, Public Area, Service Area.',
+  'If the input plan contains Chinese room names or Chinese annotations, translate them into concise English labels in the output image. Do not copy Chinese text from the input plan.',
+].join(' ');
+
 interface DataUrlParts {
   mimeType: string;
   base64Data: string;
@@ -184,6 +193,7 @@ function buildPrompt(input: GenerateImageInput): string {
     'Return an image as the primary output.',
     `User prompt: ${input.prompt}`,
     `Generation config JSON: ${JSON.stringify(input.config)}`,
+    ...(input.mode === 'floorplan' ? [floorplanTextLanguageRequirement] : []),
   ].join('\n');
 }
 

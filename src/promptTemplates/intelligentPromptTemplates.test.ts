@@ -19,6 +19,25 @@ describe('intelligent prompt templates', () => {
     expect(prompt).toContain('Building type: residential.');
     expect(prompt).toContain('Space type: living room.');
     expect(prompt).toContain('Main material direction: light wood.');
+    expect(prompt).toContain('Text language requirement:');
+    expect(prompt).toContain('Do not use Chinese characters');
+  });
+
+  it('translates Chinese floorplan room labels into English prompt labels', () => {
+    const prompt = buildSmartPrompt({
+      mode: 'floorplan',
+      config: {
+        floorplanRoomLabels: [
+          { id: 'r1', name: '客厅', roomType: 'living-room', positionDescription: '平面中部' },
+          { id: 'r2', name: '主卧', roomType: 'bedroom', positionDescription: '右下角' },
+        ],
+      },
+    });
+
+    expect(prompt).toContain('Living Room = Living Room');
+    expect(prompt).toContain('Master Bedroom = Bedroom');
+    expect(prompt).not.toContain('location: 平面中部');
+    expect(prompt).toContain('Do not copy Chinese text from the input plan');
   });
 
   it('treats visible text as supplemental requirements', () => {

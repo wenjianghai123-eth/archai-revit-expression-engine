@@ -45,6 +45,56 @@ const floorplanBasePrompt = [
   '保持俯视平面图表达，不要生成透视效果图、立面图、三维鸟瞰图、室内效果图或改变建筑布局。',
 ].join('\n');
 
+const floorplanEnglishRoomLabelExamples = [
+  'Living Room',
+  'Bedroom',
+  'Master Bedroom',
+  'Kitchen',
+  'Dining Area',
+  'Bathroom',
+  'Balcony',
+  'Entrance',
+  'Foyer',
+  'Corridor',
+  'Storage',
+  'Study',
+  'Guest Room',
+  'Laundry',
+  'Closet',
+  'Terrace',
+  'Open Area',
+  'Service Area',
+].join(', ');
+
+const floorplanEnglishLegendExamples = [
+  'Legend',
+  'Furniture',
+  'Wall',
+  'Door',
+  'Window',
+  'Floor Finish',
+  'Wood Floor',
+  'Tile Floor',
+  'Carpet',
+  'Stone',
+  'Planting',
+  'Water Area',
+  'Circulation',
+  'Private Area',
+  'Public Area',
+  'Service Area',
+].join(', ');
+
+export const FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT = [
+  'Text language requirement:',
+  'All visible text, labels, legends, room names, annotations, and material notes in the generated image must be in English only.',
+  'Do not use Chinese characters. Do not mix Chinese and English.',
+  `If room labels are needed, use concise English labels such as ${floorplanEnglishRoomLabelExamples}.`,
+  `If a legend is generated, all legend entries must be in English, such as ${floorplanEnglishLegendExamples}.`,
+  'If the input plan contains Chinese room names or Chinese annotations, translate them into concise English labels in the output image. Do not copy Chinese text from the input plan.',
+  'All text visible in the generated plan must be English only, including room labels, legends, annotations, symbols, material names, and any explanatory notes.',
+].join(' ');
+
 const styleRenderBasePrompt = [
   'The input image is an architectural or interior reference image. Create a polished design rendering while preserving the original camera angle, perspective, spatial layout, major openings, composition, and object scale.',
   'Do not crop, add borders, add text, add watermarks, or change the core structure.',
@@ -279,6 +329,7 @@ function buildFloorplanPrompt(input: BuildSmartPromptInput, userPrompt: string):
     userPrompt ? `用户补充要求：${userPrompt}` : '用户未输入补充要求，请根据结构化参数生成稳定、克制、专业的默认彩平效果。',
     '如补充要求与保持原始平面结构冲突，以保持结构、墙体、门窗、家具位置和画布比例为准。',
   ];
+  parts.push(FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT);
   return joinPrompt(parts);
 }
 
@@ -307,9 +358,9 @@ function buildFloorplanRoomLabelsPrompt(config: object | undefined): string | un
   const labels = Array.isArray(value) ? value.filter(isRecord).slice(0, 20) : [];
   if (labels.length === 0) return undefined;
   const lines = labels.map((label, index) => {
-    const name = readConfigString(label, 'name') || `Area ${index + 1}`;
     const type = readFloorplanRoomTypeLabel(label);
-    const position = readConfigString(label, 'positionDescription');
+    const name = readFloorplanEnglishRoomName(readConfigString(label, 'name'), type || `Area ${index + 1}`);
+    const position = readEnglishPromptValue(readConfigString(label, 'positionDescription'), '');
     return `Room ${index + 1}: ${name} = ${type}${position ? `, location: ${position}` : ''}.`;
   });
   return joinPrompt([
@@ -320,20 +371,55 @@ function buildFloorplanRoomLabelsPrompt(config: object | undefined): string | un
 
 function readFloorplanRoomTypeLabel(label: Record<string, unknown>): string {
   const type = readConfigString(label, 'roomType') || 'custom';
-  if (type === 'custom') return readConfigString(label, 'customTypeLabel') || 'custom room';
+  if (type === 'custom') return readEnglishPromptValue(readConfigString(label, 'customTypeLabel'), 'Custom Room');
   const labels: Record<string, string> = {
-    'living-room': 'living room',
-    'dining-room': 'dining room',
-    bedroom: 'bedroom',
-    kitchen: 'kitchen',
-    bathroom: 'bathroom',
-    balcony: 'balcony',
-    entry: 'entry foyer',
-    study: 'study',
-    office: 'office area',
-    commercial: 'commercial area',
+    'living-room': 'Living Room',
+    'dining-room': 'Dining Area',
+    bedroom: 'Bedroom',
+    kitchen: 'Kitchen',
+    bathroom: 'Bathroom',
+    balcony: 'Balcony',
+    entry: 'Entrance',
+    study: 'Study',
+    office: 'Office Area',
+    commercial: 'Commercial Area',
   };
-  return labels[type] || 'room';
+  return labels[type] || 'Room';
+}
+
+function readFloorplanEnglishRoomName(value: string, fallback: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  if (!containsCjk(trimmed)) return trimmed;
+
+  const translations: Array<[RegExp, string]> = [
+    [/\u4e3b\u5367/u, 'Master Bedroom'],
+    [/\u5ba2\u5385|\u8d77\u5c45/u, 'Living Room'],
+    [/\u5367\u5ba4|\u6b21\u5367/u, 'Bedroom'],
+    [/\u53a8\u623f/u, 'Kitchen'],
+    [/\u536b\u751f\u95f4|\u6d17\u624b\u95f4|\u6d74\u5ba4/u, 'Bathroom'],
+    [/\u9910\u5385|\u9910\u533a/u, 'Dining Area'],
+    [/\u9633\u53f0/u, 'Balcony'],
+    [/\u7384\u5173|\u95e8\u5385|\u5165\u53e3/u, 'Entrance'],
+    [/\u50a8\u7269|\u50a8\u85cf/u, 'Storage'],
+    [/\u4e66\u623f/u, 'Study'],
+    [/\u5ba2\u623f/u, 'Guest Room'],
+    [/\u6d17\u8863/u, 'Laundry'],
+    [/\u8863\u5e3d/u, 'Closet'],
+    [/\u9732\u53f0/u, 'Terrace'],
+    [/\u8d70\u5eca|\u8fc7\u9053/u, 'Corridor'],
+  ];
+  return translations.find(([pattern]) => pattern.test(trimmed))?.[1] || fallback;
+}
+
+function readEnglishPromptValue(value: string, fallback: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  return containsCjk(trimmed) ? fallback : trimmed;
+}
+
+function containsCjk(value: string): boolean {
+  return /[\u3400-\u9fff\uf900-\ufaff]/u.test(value);
 }
 
 const lineworkPreservationPrompts: Record<string, string> = {
@@ -348,9 +434,9 @@ function buildFloorplanExpressionControlPrompt(config: object | undefined): stri
   return joinPrompt([
     floorplanRenderModePrompts[renderMode] || floorplanRenderModePrompts['semi-3d'],
     lineworkPreservationPrompts[lineworkPreservation] || lineworkPreservationPrompts.high,
-    readConfigValue(config, 'enableLegend') === true ? 'Add a concise graphic legend where appropriate, without covering important plan content.' : undefined,
-    readConfigValue(config, 'enableAreaText') === true ? 'Add clear area or functional text labels where appropriate; keep text minimal, legible, and aligned with the plan.' : undefined,
-    readConfigValue(config, 'enableMaterialLegend') === true ? 'Add a material legend that explains key floor, wall, soft furnishing, and finish categories where appropriate.' : undefined,
+    readConfigValue(config, 'enableLegend') === true ? 'Add a concise graphic legend with English entries only where appropriate, without covering important plan content.' : undefined,
+    readConfigValue(config, 'enableAreaText') === true ? 'Add clear English area or functional text labels where appropriate; keep text minimal, legible, and aligned with the plan.' : undefined,
+    readConfigValue(config, 'enableMaterialLegend') === true ? 'Add an English material legend that explains key floor, wall, soft furnishing, and finish categories where appropriate.' : undefined,
   ]);
 }
 
@@ -875,7 +961,11 @@ function buildCompactSmartPrompt(input: BuildSmartPromptInput): string {
   const strength = changeStrengthInstruction(readSmartPromptChangeStrength(input.config, input.mode), input.mode);
   const note = input.userPrompt ? `Note: ${input.userPrompt}` : undefined;
 
-  if (input.mode === 'floorplan' || input.mode === 'plan-colorize') {
+  if (input.mode === 'floorplan') {
+    return joinPrompt(['Quick colored architectural plan. Preserve layout, walls, openings, linework, furniture positions, canvas ratio, and top-down plan view.', context, strength, note, FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT]);
+  }
+
+  if (input.mode === 'plan-colorize') {
     return joinPrompt(['Quick colored architectural plan. Preserve layout, walls, openings, linework, furniture positions, canvas ratio, and top-down plan view.', context, strength, note]);
   }
 

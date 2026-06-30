@@ -7,6 +7,7 @@ import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { ResultSendActions } from './workspace/SecondaryEditActions';
 import { AspectRatioImage } from './common/AspectRatioImage';
+import { GenerationImageViewer } from './common/GenerationImageViewer';
 import { IMAGE_UPLOAD_ACCEPT } from '../utils/imageValidation';
 
 type UploadKind = 'source' | 'reference';
@@ -360,7 +361,16 @@ export function FreeReferenceImagePanel({
                 <p className="text-sm font-bold">正在生成...</p>
               </div>
             ) : originalResultImage ? (
-              <AspectRatioImage src={originalResultImage} alt="自由参考生图结果" className="w-full max-w-5xl" />
+              <GenerationImageViewer
+                sourceImageUrl={sourceImage ? readImageSrc(sourceImage) : null}
+                sourceImageAssetId={sourceImage?.assetId}
+                resultImageUrl={originalResultImage}
+                resultImageAssetId={originalResultAssetId}
+                featureName="自由参考生图"
+                step={GenerationStep.FreeReferenceImage}
+                className="w-full max-w-5xl"
+                sourceMissingMessage="暂无原图，无法对比。"
+              />
             ) : (
               <div className="text-center text-sm font-bold text-slate-400">生成完成后将在这里显示结果图</div>
             )}

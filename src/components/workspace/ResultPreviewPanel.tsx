@@ -1,11 +1,10 @@
-import { lazy, useState } from 'react';
-import { Download, ExternalLink, Image as ImageIcon, RefreshCw } from 'lucide-react';
+import { useState } from 'react';
+import { Download, ExternalLink } from 'lucide-react';
 import { GenerationStep, StepState } from '../../types';
 import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../../utils/downloadAsset';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../../utils/resultImage';
 import { ViewModeOption } from './workspaceTypes';
-
-const OverlayCompareViewer = lazy(() => import('../OverlayCompareViewer').then(module => ({ default: module.OverlayCompareViewer })));
+import { GenerationImageViewer, type ViewMode } from '../common/GenerationImageViewer';
 
 interface ResultPreviewPanelProps {
   state: StepState;
@@ -44,6 +43,9 @@ export function ResultPreviewPanel({
   const originalPreviewImage = getOriginalResultImageUrl(activeResult, previewImage);
   const originalAssetId = getOriginalResultAssetId(activeResult, resultAssetId);
   const dimensionsText = formatResultDimensions(activeResult);
+  const featureLabel = step ? getGenerationStepDownloadLabel(step) : 'AI生成';
+  const aspectRatio = step === GenerationStep.PanoramaQuickRender ? '2:1' : '16:9';
+  const frameAspectClass = aspectRatio === '2:1' ? 'aspect-[2/1]' : 'aspect-video';
 
   const handleDownload = async () => {
     if (!originalPreviewImage || isDownloading) return;
@@ -56,7 +58,7 @@ export function ResultPreviewPanel({
         assetId: originalAssetId,
       }, buildResultImageFilename({
         projectName,
-        featureLabel: step ? getGenerationStepDownloadLabel(step) : 'AI生成',
+        featureLabel,
       }));
       setDownloadMessage('已开始下载');
     } catch (error) {
@@ -71,29 +73,15 @@ export function ResultPreviewPanel({
     <main className={className || 'workspace-canvas flex min-w-0 flex-1 flex-col overflow-y-auto'}>
       {showToolbar ? (
         <div className="flex h-12 items-center justify-between border-b border-slate-200 bg-white/70 px-4">
-          <div className="flex overflow-hidden rounded-lg bg-slate-200 p-0.5">
-            {viewModeOptions.map(({ value, label, disabled }) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => onSetViewMode?.(value)}
-                disabled={disabled}
-                className={`rounded-md px-4 py-1.5 text-[10px] font-bold uppercase disabled:opacity-40 ${
-                  state.viewMode === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{viewModeOptions.length > 0 ? '结果查看' : ''}</span>
           <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{providerLabel}</span>
         </div>
       ) : null}
 
       <div className={showToolbar ? 'flex min-h-0 flex-1 items-start justify-center p-4' : 'flex h-full items-start justify-center'}>
-        <div className={`relative aspect-video w-full ${showToolbar ? 'workspace-result-frame max-w-[1200px] overflow-hidden border bg-white shadow-2xl' : 'overflow-hidden rounded-2xl'}`}>
+        <div className={`relative ${frameAspectClass} w-full ${showToolbar ? 'workspace-result-frame max-w-[1200px] overflow-hidden border bg-white shadow-2xl' : 'overflow-hidden rounded-2xl'}`}>
           {originalPreviewImage && !state.isGenerating ? (
-            <div className="absolute right-3 top-3 z-10 flex flex-col items-end gap-1">
+            <div className="absolute right-3 top-3 z-20 flex flex-col items-end gap-1">
               {dimensionsText ? (
                 <span className="rounded-full bg-white/95 px-2.5 py-1 text-[10px] font-bold text-slate-600 shadow-sm ring-1 ring-slate-200">{dimensionsText}</span>
               ) : null}
@@ -103,7 +91,7 @@ export function ResultPreviewPanel({
                 className="inline-flex items-center gap-1.5 rounded-full bg-white/95 px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:text-blue-700"
               >
                 <ExternalLink className="h-3.5 w-3.5" />
-                查看原图
+                查看大图
               </button>
               <button
                 type="button"
@@ -118,7 +106,15 @@ export function ResultPreviewPanel({
               {downloadError ? <span className="max-w-56 rounded-lg bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-700 shadow-sm">{downloadError}</span> : null}
             </div>
           ) : null}
-          <PreviewContent state={state} originalImageUrl={originalImageUrl} previewImage={originalPreviewImage} />
+          <PreviewContent
+            state={state}
+            originalImageUrl={originalImageUrl}
+            previewImage={originalPreviewImage}
+            onViewModeChange={onSetViewMode}
+            featureName={featureLabel}
+            step={step}
+            aspectRatio={aspectRatio}
+          />
         </div>
       </div>
     </main>
@@ -126,7 +122,7 @@ export function ResultPreviewPanel({
 }
 
 function getGenerationStepDownloadLabel(step: GenerationStep): string {
-  if (step === GenerationStep.FloorplanTo3D) return '平面生成';
+  if (step === GenerationStep.FloorplanTo3D) return '平面彩平';
   if (step === GenerationStep.StyleRender) return '风格渲染';
   if (step === GenerationStep.LocalInpainting) return '局部修饰';
   if (step === GenerationStep.ModelSnapshotRender) return '白模快渲';
@@ -144,45 +140,41 @@ interface PreviewContentProps {
   state: StepState;
   originalImageUrl: string | null;
   previewImage: string | null | undefined;
+  onViewModeChange?: (viewMode: StepState['viewMode']) => void;
+  featureName?: string;
+  step?: GenerationStep;
+  aspectRatio?: '16:9' | '2:1' | '1:1';
 }
 
-export function PreviewContent({ state, originalImageUrl, previewImage }: PreviewContentProps) {
-  if (state.isGenerating) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center bg-white/80 text-blue-600">
-        <RefreshCw className="mb-3 h-8 w-8 animate-spin" />
-        <p className="text-sm font-bold">正在生成预览...</p>
-        <p className="mt-2 text-xs text-slate-500">{state.generationProgress}%</p>
-      </div>
-    );
-  }
+export function PreviewContent({ state, originalImageUrl, previewImage, onViewModeChange, featureName, step, aspectRatio }: PreviewContentProps) {
+  return (
+    <GenerationImageViewer
+      sourceImageUrl={originalImageUrl}
+      resultImageUrl={previewImage}
+      aspectRatio={aspectRatio}
+      viewMode={legacyToViewMode(state.viewMode)}
+      onViewModeChange={nextMode => onViewModeChange?.(viewModeToLegacy(nextMode))}
+      isGenerating={state.isGenerating}
+      generationProgress={state.generationProgress}
+      featureName={featureName}
+      step={step}
+      className="h-full"
+      frameClassName="h-full rounded-none border-0 shadow-none"
+      sourceMissingMessage="暂无原图，无法对比。"
+    />
+  );
+}
 
-  if (state.viewMode === 'original' && originalImageUrl) {
-    return <img src={originalImageUrl} alt="原图" className="h-full w-full object-contain bg-slate-50" referrerPolicy="no-referrer" />;
-  }
+function legacyToViewMode(viewMode: StepState['viewMode']): ViewMode {
+  if (viewMode === 'after') return 'result';
+  if (viewMode === 'original') return 'source';
+  if (viewMode === 'compare') return 'side-by-side';
+  return 'overlay';
+}
 
-  if (!previewImage) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center bg-slate-50 p-6 text-center text-slate-400">
-        <ImageIcon className="mb-4 h-10 w-10 opacity-40" />
-        <h3 className="text-base font-bold text-slate-800">暂无生成结果</h3>
-        <p className="mt-2 max-w-sm text-sm">上传图片并点击生成后，结果会显示在这里。</p>
-      </div>
-    );
-  }
-
-  if (state.viewMode === 'compare' && originalImageUrl && previewImage) {
-    return (
-      <div className="grid h-full w-full grid-cols-2 bg-white">
-        <img src={originalImageUrl} alt="原图" className="h-full w-full border-r border-slate-200 object-contain" referrerPolicy="no-referrer" />
-        <img src={previewImage} alt="结果图" className="h-full w-full object-contain" referrerPolicy="no-referrer" />
-      </div>
-    );
-  }
-
-  if (state.viewMode === 'overlay') {
-    return <OverlayCompareViewer originalImageUrl={originalImageUrl} generatedImageUrl={previewImage} className="h-full" />;
-  }
-
-  return <img src={previewImage || ''} alt="生成结果" className="h-full w-full object-contain bg-slate-50" referrerPolicy="no-referrer" />;
+function viewModeToLegacy(viewMode: ViewMode): StepState['viewMode'] {
+  if (viewMode === 'result') return 'after';
+  if (viewMode === 'source') return 'original';
+  if (viewMode === 'side-by-side') return 'compare';
+  return 'overlay';
 }

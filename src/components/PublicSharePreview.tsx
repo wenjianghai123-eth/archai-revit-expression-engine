@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Clock, ImageIcon, Loader2, Lock, Share2 } from 'lucide-react';
 import { getPublicShare, PublicShareGeneration, PublicSharePayload } from '../lib/api';
 import { PanoramaViewer } from './PanoramaViewer';
-import { AspectRatioImage } from './common/AspectRatioImage';
+import { GenerationImageViewer } from './common/GenerationImageViewer';
 
 interface PublicSharePreviewProps {
   token: string;
@@ -167,12 +167,18 @@ function PublicGenerationCard({
       ) : isComparing && inputImage && primaryResult ? (
         <div className="grid gap-3 md:grid-cols-2">
           <PreviewImage src={inputImage} label="原图" />
-          <PreviewImage src={primaryResult.imageUrl} label="结果图" />
+          <PreviewImage src={primaryResult.imageUrl} sourceImageUrl={inputImage} label="结果图" generation={generation} />
         </div>
       ) : resultImages.length > 0 ? (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {resultImages.map(result => (
-            <PreviewImage key={result.id} src={result.imageUrl} label={result.isSelected ? '当前方案' : '备选方案'} />
+            <PreviewImage
+              key={result.id}
+              src={result.imageUrl}
+              sourceImageUrl={inputImage}
+              label={result.isSelected ? '当前方案' : '备选方案'}
+              generation={generation}
+            />
           ))}
         </div>
       ) : (
@@ -184,10 +190,29 @@ function PublicGenerationCard({
   );
 }
 
-function PreviewImage({ src, label }: { src: string; label: string }) {
+function PreviewImage({
+  src,
+  sourceImageUrl,
+  label,
+  generation,
+}: {
+  src: string;
+  sourceImageUrl?: string | null;
+  label: string;
+  generation?: PublicShareGeneration;
+}) {
   return (
     <figure className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
-      <AspectRatioImage src={src} alt={label} className="rounded-none border-0 shadow-none" />
+      <GenerationImageViewer
+        sourceImageUrl={sourceImageUrl}
+        resultImageUrl={src}
+        aspectRatio={generation?.mode === 'panorama-roam-render' ? '2:1' : '16:9'}
+        featureName={generation ? modeLabel(generation.mode, generation.step) : label}
+        step={generation?.step || generation?.mode}
+        frameClassName="rounded-none border-0 shadow-none"
+        tabListClassName="m-2 mb-2"
+        sourceMissingMessage="暂无原图，无法对比。"
+      />
       <figcaption className="border-t border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-500">{label}</figcaption>
     </figure>
   );

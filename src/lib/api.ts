@@ -1,6 +1,7 @@
 import { buildApiUrl, isApiBaseUrlMissingInProduction, isRelativeApiPath } from './apiBaseUrl';
 import { parseApiResponse, readApiErrorMessage } from './apiResponse';
 import { getSupabaseAccessToken } from './supabase';
+import { isAbortError } from '../utils/apiConnectionStatus';
 
 const MISSING_API_BASE_URL_MESSAGE = '后端 API 未配置或不可访问，请配置 VITE_API_BASE_URL。';
 
@@ -699,11 +700,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       ...init,
       headers,
     });
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) throw error;
     if (isMissingProductionApi(path)) {
       throw new Error(MISSING_API_BASE_URL_MESSAGE);
     }
-    throw new Error('无法连接后端服务，请确认 npm run dev:server 已启动。');
+    throw new Error('无法连接后端服务，请确认本地服务已启动或刷新重试。');
   }
 
   if (response.status === 404 && isMissingProductionApi(path)) {
@@ -750,8 +752,8 @@ function readApiError(value: unknown): string | null {
   return null;
 }
 
-export async function getAiProviders(): Promise<AiProvidersConfig> {
-  return request<AiProvidersConfig>('/api/ai-providers');
+export async function getAiProviders(init: RequestInit = {}): Promise<AiProvidersConfig> {
+  return request<AiProvidersConfig>('/api/ai-providers', init);
 }
 
 export async function convertModelAsset(id: string): Promise<ModelAssetRecord> {

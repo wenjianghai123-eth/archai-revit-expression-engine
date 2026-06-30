@@ -8,6 +8,7 @@ import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 import { ResultSendActions } from './workspace/SecondaryEditActions';
 import { AspectRatioImage } from './common/AspectRatioImage';
+import { GenerationImageViewer } from './common/GenerationImageViewer';
 
 interface DesignVariantsPanelProps {
   state: StepState;
@@ -343,7 +344,17 @@ export function DesignVariantsPanel({
                 </div>
               ) : null}
               <div className="bg-slate-50 p-3">
-                {previewImage ? <AspectRatioImage src={previewImage} alt="当前方案" /> : (
+                {previewImage ? (
+                  <GenerationImageViewer
+                    sourceImageUrl={state.inputImage?.dataUrl || state.inputImage?.url}
+                    sourceImageAssetId={state.inputImage?.assetId}
+                    resultImageUrl={previewImage}
+                    resultImageAssetId={getOriginalResultAssetId(selectedResult)}
+                    featureName="方案变体"
+                    step={GenerationStep.DesignVariants}
+                    sourceMissingMessage="暂无原图，无法对比。"
+                  />
+                ) : (
                   <div className="flex aspect-video items-center justify-center">
                   <div className="text-center text-sm font-bold text-slate-400">
                     <LayoutGrid className="mx-auto mb-3 h-10 w-10 text-slate-300" />
@@ -366,6 +377,7 @@ export function DesignVariantsPanel({
                     style={selectedStyles[variantIndex] || selectedStyles[index]}
                     fallbackName={variantNames[variantIndex] || variantNames[index]}
                     projectName={projectName}
+                    sourceImage={state.inputImage}
                     onSelect={() => onSelectGenerationResult(result.id)}
                     onFavorite={() => onToggleGenerationFavorite(result.id)}
                     onContinueEdit={() => onSecondaryEditResult?.(result.id, 'continue-edit')}
@@ -410,7 +422,7 @@ function readMetadataString(metadata: Record<string, unknown> | undefined, key: 
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
-function VariantCard({ result, index, active, style, fallbackName, projectName, onSelect, onFavorite, onContinueEdit, onSend, onRetry, onRename }: { result: GenerationResultOption; index: number; active: boolean; style: VariantStyleKey | undefined; fallbackName: string; projectName?: string | null; onSelect: () => void; onFavorite: () => void; onContinueEdit: () => void; onSend?: (targetStep: ResultSendTargetStep) => void; onRetry?: () => void; onRename: (name: string) => void }) {
+function VariantCard({ result, index, active, style, fallbackName, projectName, sourceImage, onSelect, onFavorite, onContinueEdit, onSend, onRetry, onRename }: { result: GenerationResultOption; index: number; active: boolean; style: VariantStyleKey | undefined; fallbackName: string; projectName?: string | null; sourceImage: UploadedImage | null; onSelect: () => void; onFavorite: () => void; onContinueEdit: () => void; onSend?: (targetStep: ResultSendTargetStep) => void; onRetry?: () => void; onRename: (name: string) => void }) {
   const label = result.variantName || result.variantLabel || fallbackName || readVariantLabel(index);
   const styleLabel = result.variantStyleLabel || readVariantStyleLabel(result.variantStyle || style);
   const designDirection = result.designDirection || readMetadataString(result.metadata, 'designDirection') || styleLabel;
@@ -455,12 +467,22 @@ function VariantCard({ result, index, active, style, fallbackName, projectName, 
 
   return (
     <article className={`flex h-full flex-col overflow-hidden rounded-xl border bg-white shadow-sm ${active ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200'}`}>
-      <button type="button" onClick={onSelect} className="block w-full text-left">
+      <div className="block w-full text-left">
         <div className="relative bg-slate-100">
-          <AspectRatioImage src={originalImageUrl || result.imageUrl} alt={label} className="rounded-none border-0 shadow-none" enableLightbox={false} />
+          <GenerationImageViewer
+            sourceImageUrl={sourceImage?.dataUrl || sourceImage?.url}
+            sourceImageAssetId={sourceImage?.assetId}
+            resultImageUrl={originalImageUrl || result.imageUrl}
+            resultImageAssetId={originalAssetId}
+            featureName="方案变体"
+            step={GenerationStep.DesignVariants}
+            frameClassName="rounded-none border-0 shadow-none"
+            tabListClassName="m-2 mb-2"
+            sourceMissingMessage="暂无原图，无法对比。"
+          />
           {result.isSelected ? <span className="absolute left-3 top-3 rounded-full bg-blue-600 px-2.5 py-1 text-[11px] font-bold text-white">已设为主方案</span> : null}
         </div>
-      </button>
+      </div>
       <div className="flex flex-1 flex-col space-y-3 p-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">

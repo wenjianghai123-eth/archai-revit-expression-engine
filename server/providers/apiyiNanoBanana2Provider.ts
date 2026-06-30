@@ -8,6 +8,14 @@ const defaultModel = 'gemini-3.1-flash-image-preview';
 const defaultTimeoutMs = 300_000;
 const supportedAspectRatios = new Set(['1:1', '4:3', '3:4', '16:9', '9:16', '5:4', '4:5', '3:2', '2:3', '21:9']);
 const supportedImageSizes = new Set(['512', '1K', '2K', '4K']);
+const floorplanTextLanguageRequirement = [
+  'Text language requirement:',
+  'All visible text, labels, legends, room names, annotations, and material notes in the generated image must be in English only.',
+  'Do not use Chinese characters. Do not mix Chinese and English.',
+  'If room labels are needed, use concise English labels such as Living Room, Bedroom, Master Bedroom, Kitchen, Dining Area, Bathroom, Balcony, Entrance, Foyer, Corridor, Storage, Study, Guest Room, Laundry, Closet, Terrace, Open Area, Service Area.',
+  'If a legend is generated, all legend entries must be in English, such as Legend, Furniture, Wall, Door, Window, Floor Finish, Wood Floor, Tile Floor, Carpet, Stone, Planting, Water Area, Circulation, Private Area, Public Area, Service Area.',
+  'If the input plan contains Chinese room names or Chinese annotations, translate them into concise English labels in the output image. Do not copy Chinese text from the input plan.',
+].join(' ');
 
 interface ApiYiProviderOptions {
   apiKey?: string;
@@ -272,6 +280,10 @@ function buildApiYiPrompt(input: GenerateImageInput): string {
       'Generate one coherent final image. Do not create a collage or split-screen comparison.',
       input.prompt,
     ].join('\n');
+  }
+
+  if (input.mode === 'floorplan') {
+    return [input.prompt, floorplanTextLanguageRequirement].filter(Boolean).join('\n');
   }
 
   return input.prompt;

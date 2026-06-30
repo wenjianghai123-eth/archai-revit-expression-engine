@@ -101,6 +101,49 @@ describe('API易 Nano Banana 2 provider', () => {
     ]);
   });
 
+  it('adds the floorplan English text requirement to APIYi floorplan prompts', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(url), init });
+      return new Response(JSON.stringify({
+        responseId: 'apiyi-floorplan-response',
+        candidates: [{
+          content: {
+            parts: [{
+              inlineData: {
+                mimeType: 'image/png',
+                data: onePixelPng.replace(/^data:image\/png;base64,/u, ''),
+              },
+            }],
+          },
+        }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    const provider = createApiYiNanoBanana2Provider({
+      apiKey: 'test-key',
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    await provider.generateImage(createInput({
+      mode: 'floorplan',
+      step: 'floorplan_to_3d',
+      referenceImageDataUrls: [],
+      prompt: 'Convert to a colored floor plan.',
+      config: {
+        generationStep: 'floorplan_to_3d',
+        floorplanOutputMode: 'single',
+      },
+    }));
+
+    const body = JSON.parse(String(requests[0].init?.body)) as {
+      contents: Array<{ parts: Array<{ text?: string }> }>;
+    };
+    const text = body.contents[0].parts[0].text || '';
+    expect(text).toContain('Convert to a colored floor plan.');
+    expect(text).toContain('All visible text, labels, legends, room names, annotations, and material notes');
+    expect(text).toContain('Do not use Chinese characters');
+  });
+
   it('converts webp input to png inlineData', async () => {
     const webp = await sharp({
       create: {

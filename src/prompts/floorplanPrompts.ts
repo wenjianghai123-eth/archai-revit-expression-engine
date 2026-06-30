@@ -1,4 +1,5 @@
 import { findFloorplanColorTemplate } from '../constants/floorplanVariants';
+import { FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT } from '../promptTemplates/intelligentPromptTemplates';
 import { FloorplanRoomLabel, FloorplanTemplateId } from '../types';
 
 interface FloorplanPromptInput {
@@ -55,9 +56,9 @@ export function buildFloorplanColorPrompt(input?: string | FloorplanPromptInput)
       FLOORPLAN_RENDER_MODE_PROMPTS[normalizedInput.floorplanRenderMode || 'semi-3d'],
       LINEWORK_PRESERVATION_PROMPTS[normalizedInput.lineworkPreservation || 'high'],
     );
-    if (normalizedInput.enableLegend) pieces.push('Add a concise graphic legend where appropriate, without covering important plan content.');
-    if (normalizedInput.enableAreaText) pieces.push('Add clear area or functional text labels where appropriate; keep text minimal, legible, and aligned with the plan.');
-    if (normalizedInput.enableMaterialLegend) pieces.push('Add a material legend that explains key floor, wall, soft furnishing, and finish categories where appropriate.');
+    if (normalizedInput.enableLegend) pieces.push('Add a concise graphic legend with English entries only where appropriate, without covering important plan content.');
+    if (normalizedInput.enableAreaText) pieces.push('Add clear English area or functional text labels where appropriate; keep text minimal, legible, and aligned with the plan.');
+    if (normalizedInput.enableMaterialLegend) pieces.push('Add an English material legend that explains key floor, wall, soft furnishing, and finish categories where appropriate.');
   }
 
   const template = normalizedInput.floorplanTemplateId ? findFloorplanColorTemplate(normalizedInput.floorplanTemplateId) : undefined;
@@ -86,15 +87,17 @@ export function buildFloorplanColorPrompt(input?: string | FloorplanPromptInput)
     );
   }
 
+  pieces.push('', FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT);
+
   return pieces.join('\n');
 }
 
 function buildFloorplanRoomLabelsPrompt(labels: FloorplanRoomLabel[]): string {
   const sanitized = labels
     .map(label => ({
-      name: label.name.trim(),
       type: readFloorplanRoomTypeLabel(label),
-      position: label.positionDescription.trim(),
+      name: readFloorplanEnglishRoomName(label.name.trim(), readFloorplanRoomTypeLabel(label)),
+      position: readEnglishPromptValue(label.positionDescription.trim(), ''),
     }))
     .filter(label => label.name || label.type || label.position)
     .slice(0, 20);
@@ -106,19 +109,52 @@ function buildFloorplanRoomLabelsPrompt(labels: FloorplanRoomLabel[]): string {
 }
 
 function readFloorplanRoomTypeLabel(label: FloorplanRoomLabel): string {
-  if (label.roomType === 'custom') return label.customTypeLabel?.trim() || 'custom room';
+  if (label.roomType === 'custom') return readEnglishPromptValue(label.customTypeLabel?.trim() || '', 'Custom Room');
   const labels: Record<FloorplanRoomLabel['roomType'], string> = {
-    'living-room': 'living room',
-    'dining-room': 'dining room',
-    bedroom: 'bedroom',
-    kitchen: 'kitchen',
-    bathroom: 'bathroom',
-    balcony: 'balcony',
-    entry: 'entry foyer',
-    study: 'study',
-    office: 'office area',
-    commercial: 'commercial area',
-    custom: 'custom room',
+    'living-room': 'Living Room',
+    'dining-room': 'Dining Area',
+    bedroom: 'Bedroom',
+    kitchen: 'Kitchen',
+    bathroom: 'Bathroom',
+    balcony: 'Balcony',
+    entry: 'Entrance',
+    study: 'Study',
+    office: 'Office Area',
+    commercial: 'Commercial Area',
+    custom: 'Custom Room',
   };
-  return labels[label.roomType] || 'room';
+  return labels[label.roomType] || 'Room';
+}
+
+function readFloorplanEnglishRoomName(value: string, fallback: string): string {
+  if (!value) return fallback;
+  if (!containsCjk(value)) return value;
+
+  const translations: Array<[RegExp, string]> = [
+    [/\u4e3b\u5367/u, 'Master Bedroom'],
+    [/\u5ba2\u5385|\u8d77\u5c45/u, 'Living Room'],
+    [/\u5367\u5ba4|\u6b21\u5367/u, 'Bedroom'],
+    [/\u53a8\u623f/u, 'Kitchen'],
+    [/\u536b\u751f\u95f4|\u6d17\u624b\u95f4|\u6d74\u5ba4/u, 'Bathroom'],
+    [/\u9910\u5385|\u9910\u533a/u, 'Dining Area'],
+    [/\u9633\u53f0/u, 'Balcony'],
+    [/\u7384\u5173|\u95e8\u5385|\u5165\u53e3/u, 'Entrance'],
+    [/\u50a8\u7269|\u50a8\u85cf/u, 'Storage'],
+    [/\u4e66\u623f/u, 'Study'],
+    [/\u5ba2\u623f/u, 'Guest Room'],
+    [/\u6d17\u8863/u, 'Laundry'],
+    [/\u8863\u5e3d/u, 'Closet'],
+    [/\u9732\u53f0/u, 'Terrace'],
+    [/\u8d70\u5eca|\u8fc7\u9053/u, 'Corridor'],
+  ];
+  return translations.find(([pattern]) => pattern.test(value))?.[1] || fallback;
+}
+
+function readEnglishPromptValue(value: string, fallback: string): string {
+  if (!value) return fallback;
+  return containsCjk(value) ? fallback : value;
+}
+
+function containsCjk(value: string): boolean {
+  return /[\u3400-\u9fff\uf900-\ufaff]/u.test(value);
 }

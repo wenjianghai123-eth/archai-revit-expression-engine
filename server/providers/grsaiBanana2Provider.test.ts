@@ -120,6 +120,26 @@ describe('Grsai Banana2 provider timing, timeout and retry', () => {
     expect(body.aspectRatio).toBe('auto');
   });
 
+  it('adds the floorplan English text requirement to floorplan prompts', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: 'task-floorplan' }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { id: 'task-floorplan', status: 'succeeded', progress: 100, results: [{ url: tinyPngDataUrl }] } }));
+    globalThis.fetch = fetchMock;
+
+    await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage({
+      mode: 'floorplan',
+      inputImageDataUrl: tinyPngDataUrl,
+      prompt: 'Convert to a colored floor plan.',
+      config: { floorplanOutputMode: 'single' },
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as { prompt: string };
+    expect(body.prompt).toContain('Convert to a colored floor plan.');
+    expect(body.prompt).toContain('All visible text, labels, legends, room names, annotations, and material notes');
+    expect(body.prompt).toContain('Do not use Chinese characters');
+    expect(body.prompt).toContain('Do not add watermarks, borders, UI elements');
+  });
+
   it('maps model maintenance task failures to a user-facing message with metadata', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ code: 0, data: 'task-1' }))

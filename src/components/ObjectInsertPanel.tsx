@@ -1,5 +1,5 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Crosshair, Download, ExternalLink, ImagePlus, Move, RotateCcw, RotateCw, Trash2, Upload, X } from 'lucide-react';
+import { BookOpen, Crosshair, Download, ExternalLink, ImagePlus, Move, RotateCcw, RotateCw, Trash2, Upload, X } from 'lucide-react';
 import {
   GenerationConfig,
   GenerationResultOption,
@@ -25,7 +25,10 @@ import { createUploadedImage, validateImageFile } from '../utils/file';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { AspectRatioImage } from './common/AspectRatioImage';
+import { GenerationImageViewer } from './common/GenerationImageViewer';
 import { IMAGE_UPLOAD_ACCEPT, readImageTypeUploadError } from '../utils/imageValidation';
+import { SavePromptTemplateModal } from './SavePromptTemplateModal';
+import { canSavePromptTemplate } from '../utils/savedPromptTemplates';
 
 type UploadKind = 'source' | 'object';
 type InteractionMode = 'move' | 'resize' | 'rotate';
@@ -207,6 +210,7 @@ export function ObjectInsertPanel({
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [isSafetyDebugEnabled, setIsSafetyDebugEnabled] = useState(false);
   const [debugInputMode, setDebugInputMode] = useState<ObjectInsertDebugMode>('full');
+  const [isSaveTemplateOpen, setIsSaveTemplateOpen] = useState(false);
 
   const sourceWidth = sourceImage?.width || 1200;
   const sourceHeight = sourceImage?.height || 800;
@@ -236,6 +240,7 @@ export function ObjectInsertPanel({
   const originalResultImage = getOriginalResultImageUrl(selectedResult, state.outputImage);
   const originalResultAssetId = getOriginalResultAssetId(selectedResult);
   const resultDimensionsText = formatResultDimensions(selectedResult);
+  const canSaveTemplate = canSavePromptTemplate(GenerationStep.ObjectInsert, state, selectedResult, originalResultImage);
   const placementIntent = activeObjectItem?.placementIntent || readObjectInsertPlacementIntent(state.config);
   const harmonyPriority = readObjectInsertHarmonyPriority(state.config);
   const allowAutoAdjustPosition = readObjectInsertAutoAdjust(state.config, 'allowAutoAdjustPosition');
@@ -1887,6 +1892,86 @@ export function ObjectInsertPanel({
           </div>
         </div>
 
+        {originalResultImage ? (
+          <section className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-blue-600">Generated Result</p>
+                <h3 className="mt-1 text-base font-black text-slate-950">最终植入效果图</h3>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-black text-slate-700">
+                  {placementMode === 'strict' ? '精确摆放' : '自然摆放'}
+                </span>
+                {resultDimensionsText ? <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-500">{resultDimensionsText}</span> : null}
+              </div>
+            </div>
+            <div className="bg-slate-50 p-3">
+              <GenerationImageViewer
+                sourceImageUrl={sourceImage ? readImageSrc(sourceImage) : null}
+                sourceImageAssetId={sourceImage?.assetId}
+                resultImageUrl={originalResultImage}
+                resultImageAssetId={originalResultAssetId}
+                aspectRatio="16:9"
+                featureName="元素植入"
+                step={GenerationStep.ObjectInsert}
+                sourceMissingMessage="暂无原图，无法对比。"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 bg-white px-4 py-3">
+              <button
+                type="button"
+                onClick={() => window.open(originalResultImage, '_blank', 'noopener,noreferrer')}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:border-blue-200 hover:text-blue-700"
+              >
+                <ExternalLink className="mr-1 inline h-3.5 w-3.5" />
+                查看大图
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDownloadResult()}
+                disabled={isDownloadingResult}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Download className={`mr-1 inline h-3.5 w-3.5 ${isDownloadingResult ? 'animate-pulse' : ''}`} />
+                {isDownloadingResult ? '正在下载...' : '保存到本地'}
+              </button>
+              {canSaveTemplate && selectedResult ? (
+                <button
+                  type="button"
+                  onClick={() => setIsSaveTemplateOpen(true)}
+                  className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-black text-white transition hover:bg-blue-700"
+                >
+                  <BookOpen className="mr-1 inline h-3.5 w-3.5" />
+                  保存为提示词模板
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={handleRetryNatural}
+                disabled={!sourceImage || !objectImage || state.isGenerating || isPreparingGeneration}
+                className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                再试一次（更自然）
+              </button>
+              <button
+                type="button"
+                onClick={handleContinueTuning}
+                disabled={state.isGenerating || isPreparingGeneration}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+              >
+                继续微调
+              </button>
+            </div>
+            {(downloadMessage || downloadError) ? (
+              <div className="border-t border-slate-100 px-4 py-2 text-xs font-semibold">
+                {downloadMessage ? <span className="text-emerald-700">{downloadMessage}</span> : null}
+                {downloadError ? <span className="text-amber-700">{downloadError}</span> : null}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
         <div className="min-h-0 flex-1 overflow-auto rounded-2xl border border-slate-200 bg-white p-3 custom-scrollbar">
           {sourceImage ? (
             <div className="mx-auto max-h-full max-w-5xl">
@@ -2012,46 +2097,9 @@ export function ObjectInsertPanel({
                   </span>
                   {resultDimensionsText ? <span className="text-[11px] font-bold text-slate-500">{resultDimensionsText}</span> : null}
                 </div>
-                <AspectRatioImage src={originalResultImage} alt="元素植入生成结果" />
-                <div className="action-row">
-                <button
-                  type="button"
-                  onClick={() => window.open(originalResultImage, '_blank', 'noopener,noreferrer')}
-                  className="flex-1 border border-slate-200 bg-white text-slate-700 transition hover:border-blue-200 hover:text-blue-700"
-                >
-                  <ExternalLink className="mr-1 inline h-3.5 w-3.5" />
-                  查看原图
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleDownloadResult()}
-                  disabled={isDownloadingResult}
-                  className="flex-1 border border-slate-200 bg-white text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <Download className={`mr-1 inline h-3.5 w-3.5 ${isDownloadingResult ? 'animate-pulse' : ''}`} />
-                  {isDownloadingResult ? '正在下载...' : '保存到本地'}
-                </button>
-                </div>
-                {downloadMessage ? <p className="text-xs font-semibold text-emerald-700">{downloadMessage}</p> : null}
-                {downloadError ? <p className="text-xs font-semibold text-amber-700">{downloadError}</p> : null}
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={handleRetryNatural}
-                    disabled={!sourceImage || !objectImage || state.isGenerating || isPreparingGeneration}
-                    className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-black text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                  >
-                    再试一次（更自然）
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleContinueTuning}
-                    disabled={state.isGenerating || isPreparingGeneration}
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                  >
-                    继续微调
-                  </button>
-                </div>
+                <p className="rounded-xl bg-white px-3 py-2 text-[11px] font-semibold text-slate-500">
+                  最终效果图已显示在中央结果区，可在中央切换结果图、原图、对比和叠加对比。
+                </p>
               </div>
             ) : null}
           </div>
@@ -2068,6 +2116,16 @@ export function ObjectInsertPanel({
           </div>
         )}
       </aside>
+
+      {isSaveTemplateOpen && selectedResult ? (
+        <SavePromptTemplateModal
+          step={GenerationStep.ObjectInsert}
+          state={state}
+          result={selectedResult}
+          previewImage={originalResultImage}
+          onClose={() => setIsSaveTemplateOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

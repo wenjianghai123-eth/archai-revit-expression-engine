@@ -1,8 +1,11 @@
 import type { ReactNode } from 'react';
-import { AspectRatioImage } from './AspectRatioImage';
+import { GenerationImageViewer } from './GenerationImageViewer';
 
 interface ResultCardProps {
   image?: string | null;
+  sourceImage?: string | null;
+  imageAssetId?: string | null;
+  sourceImageAssetId?: string | null;
   title: string;
   subtitle?: string;
   status?: ReactNode;
@@ -11,10 +14,16 @@ interface ResultCardProps {
   active?: boolean;
   loading?: boolean;
   onImageClick?: () => void;
+  aspectRatio?: '16:9' | '2:1' | '1:1';
+  featureName?: string;
+  step?: unknown;
 }
 
 export function ResultCard({
   image,
+  sourceImage,
+  imageAssetId,
+  sourceImageAssetId,
   title,
   subtitle,
   status,
@@ -23,10 +32,27 @@ export function ResultCard({
   active = false,
   loading = false,
   onImageClick,
+  aspectRatio,
+  featureName,
+  step,
 }: ResultCardProps) {
   return (
     <article className={`result-card ${active ? 'result-card-active' : ''}`}>
-      <AspectRatioImage src={image} alt={title} loading={loading} onClick={onImageClick} />
+      <div onDoubleClick={onImageClick}>
+        <GenerationImageViewer
+          sourceImageUrl={sourceImage}
+          sourceImageAssetId={sourceImageAssetId}
+          resultImageUrl={image}
+          resultImageAssetId={imageAssetId}
+          isGenerating={loading}
+          aspectRatio={aspectRatio}
+          featureName={featureName || title}
+          step={step}
+          frameClassName="rounded-none border-0 shadow-none"
+          tabListClassName="m-2 mb-2"
+          sourceMissingMessage="暂无原图，无法对比。"
+        />
+      </div>
       <div className="flex min-h-0 flex-1 flex-col p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">

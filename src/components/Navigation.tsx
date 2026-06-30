@@ -304,13 +304,14 @@ export function Stepper({
               disabled={isProviderLoading}
               className="min-w-56 border-0 bg-transparent py-0 text-xs font-bold text-slate-800 outline-none"
             >
-              {isProviderLoading ? <option value="">正在读取接口配置...</option> : null}
+              {isProviderLoading ? <option value="">正在连接API...</option> : null}
               {providers.map(provider => (
                 <option key={provider.value} value={provider.value} disabled={!provider.enabled}>
                   {provider.label}{provider.enabled ? '' : '（未配置）'}
                 </option>
               ))}
             </select>
+            {isProviderLoading ? <span className="shrink-0 text-[10px] font-bold text-slate-400">正在连接API...</span> : null}
           </label>
           <div className="rounded-full border border-white/70 bg-white/55 px-4 py-2 text-xs font-bold text-slate-600 shadow-sm backdrop-blur">
             <span className="text-teal-700">当前功能：{readStepperFeatureLabel(currentStep)}</span>
@@ -335,13 +336,14 @@ export function Stepper({
             disabled={isProviderLoading}
             className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800"
           >
-            {isProviderLoading ? <option value="">正在读取接口配置...</option> : null}
+            {isProviderLoading ? <option value="">正在连接API...</option> : null}
             {providers.map(provider => (
               <option key={provider.value} value={provider.value} disabled={!provider.enabled}>
                 {provider.label}{provider.enabled ? '' : '（未配置）'}
               </option>
             ))}
           </select>
+          {isProviderLoading ? <span className="mt-1 block text-[10px] font-bold text-slate-400">正在连接API...</span> : null}
         </label>
       </div>
       {selectedProviderInfo && !selectedProviderInfo.enabled ? (

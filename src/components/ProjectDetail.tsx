@@ -418,10 +418,14 @@ function GenerationCard({
                   </button>
                   <PreviewImage
                     src={getOriginalResultImageUrl(result, result.imageUrl) || result.imageUrl}
+                    sourceImageUrl={inputImage}
                     label={[
                       readObjectInsertPlacementModeLabel(result.metadata) || (result.isFavorite ? '已收藏方案' : result.isSelected ? '当前方案' : '备选方案'),
                       formatResultDimensions(result),
                     ].filter(Boolean).join(' · ')}
+                    aspectRatio={generation.step === 'panorama_quick_render' ? '2:1' : '16:9'}
+                    featureName={modeLabel(generation.mode, generation.step)}
+                    step={generation.step}
                   />
                 </div>
               );
@@ -598,10 +602,32 @@ function PrintImage({ src, label }: { src: string | null; label: string }) {
   );
 }
 
-function PreviewImage({ src, label }: { src: string; label: string }) {
+function PreviewImage({
+  src,
+  sourceImageUrl,
+  label,
+  aspectRatio,
+  featureName,
+  step,
+}: {
+  src: string;
+  sourceImageUrl?: string | null;
+  label: string;
+  aspectRatio?: '16:9' | '2:1' | '1:1';
+  featureName?: string;
+  step?: string | null;
+}) {
   return (
     <figure className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <AspectRatioImage src={src} alt={label} className="rounded-none border-0 shadow-none" />
+      <ResultImageTabs
+        resultImageUrl={src}
+        originalImageUrl={sourceImageUrl}
+        aspectRatio={aspectRatio}
+        featureName={featureName}
+        step={step}
+        frameClassName="rounded-none border-0 shadow-none"
+        tabListClassName="m-2 mb-2"
+      />
       <figcaption className="border-t border-slate-100 px-3 py-2 text-xs font-semibold text-slate-500">{label}</figcaption>
     </figure>
   );

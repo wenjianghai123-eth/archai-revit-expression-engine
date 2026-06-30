@@ -7,6 +7,7 @@ import { createUploadedImage, validateImageFile } from '../utils/file';
 import { IMAGE_UPLOAD_ACCEPT, readImageTypeUploadError } from '../utils/imageValidation';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { AspectRatioImage } from './common/AspectRatioImage';
+import { GenerationImageViewer } from './common/GenerationImageViewer';
 import { ResultSendActions } from './workspace/SecondaryEditActions';
 
 interface ImagePolishPanelProps {
@@ -34,7 +35,6 @@ export function ImagePolishPanel({
   const [isPreparing, setIsPreparing] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const [previewMode, setPreviewMode] = useState<PreviewMode>('result');
 
   const sourceImage = state.inputImage;
   const sourceImageUrl = sourceImage ? readImageSrc(sourceImage) : null;
@@ -80,7 +80,6 @@ export function ImagePolishPanel({
       onUpdateConfig(createImagePolishConfigPatch(image.assetId, enhanceMaterials));
       setUploadError(null);
       setMessage(null);
-      setPreviewMode('original');
     } catch (error) {
       setUploadError(error instanceof Error ? error.message : '图片读取失败，请重试。');
     }
@@ -125,7 +124,6 @@ export function ImagePolishPanel({
         config,
       });
       setMessage('正在提升质感...');
-      setPreviewMode('result');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '质感提升失败，请稍后重试或更换图片。');
     } finally {
@@ -232,7 +230,6 @@ export function ImagePolishPanel({
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
               {dimensionsText ? <span className="text-xs font-bold text-slate-500">{dimensionsText}</span> : null}
-              <PreviewSwitch value={previewMode} hasResult={Boolean(resultImageUrl)} hasOriginal={Boolean(sourceImageUrl)} onChange={setPreviewMode} />
               {sourceImageUrl ? (
                 <button type="button" onClick={() => window.open(sourceImageUrl, '_blank', 'noopener,noreferrer')} className="inline-flex h-8 items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 text-xs font-bold text-slate-700 transition hover:bg-white hover:text-cyan-800">
                   <ExternalLink className="h-3.5 w-3.5" />
@@ -267,15 +264,16 @@ export function ImagePolishPanel({
                   <p className="text-sm font-bold">正在提升质感...</p>
                 </div>
               </div>
-            ) : previewMode === 'compare' && sourceImageUrl && resultImageUrl ? (
-              <div className="grid gap-3 lg:grid-cols-2">
-                <ImageBlock title="原图" src={sourceImageUrl} />
-                <ImageBlock title="提升后" src={resultImageUrl} />
-              </div>
-            ) : previewMode === 'original' && sourceImageUrl ? (
-              <ImageBlock title="原图" src={sourceImageUrl} />
             ) : resultImageUrl ? (
-              <ImageBlock title="提升后" src={resultImageUrl} />
+              <GenerationImageViewer
+                sourceImageUrl={sourceImageUrl}
+                sourceImageAssetId={sourceImage?.assetId}
+                resultImageUrl={resultImageUrl}
+                resultImageAssetId={resultAssetId}
+                featureName="质感提升"
+                step={GenerationStep.ImagePolish}
+                sourceMissingMessage="暂无原图，无法对比。"
+              />
             ) : (
               <div className="flex aspect-video w-full items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-white/70 text-center text-sm font-bold text-slate-400">
                 质感提升完成后将在这里显示结果图

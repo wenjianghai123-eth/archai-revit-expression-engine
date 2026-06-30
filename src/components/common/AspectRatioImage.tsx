@@ -1,7 +1,7 @@
 import { AlertCircle, Expand, Image as ImageIcon, Loader2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
-type ImageRatio = '16:9' | '1:1' | '2:1';
+type ImageRatio = '16:9' | '4:3' | '1:1' | '2:1';
 
 export interface AspectRatioImageProps {
   src?: string | null;
@@ -19,6 +19,7 @@ export interface AspectRatioImageProps {
 
 const ratioClassNames: Record<ImageRatio, string> = {
   '16:9': 'aspect-video',
+  '4:3': 'aspect-[4/3]',
   '1:1': 'aspect-square',
   '2:1': 'aspect-[2/1]',
 };

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, Clipboard, Eye, Heart, History, Layers, Search, Sparkles, Star, Wand2, X } from 'lucide-react';
 import { GenerationConfig, PromptTemplate } from '../types';
 import { AspectRatioImage } from './common/AspectRatioImage';
+import { GenerationImageViewer } from './common/GenerationImageViewer';
 
 type FeatureFilter = 'all' | PromptTemplate['feature'];
 
@@ -465,7 +466,15 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
               </div>
 
               <div className="flex-1 overflow-y-auto p-5 custom-scrollbar">
-                <AspectRatioImage src={selectedTemplate.previewImage} alt={selectedTemplate.title} />
+                <GenerationImageViewer
+                  sourceImageUrl={selectedTemplate.inputPreviews?.[0]?.url}
+                  sourceImageAssetId={selectedTemplate.inputPreviews?.[0]?.assetId || selectedTemplate.sourceAssetId}
+                  resultImageUrl={selectedTemplate.outputUrl || selectedTemplate.previewImage || selectedTemplate.coverUrl}
+                  resultImageAssetId={selectedTemplate.outputAssetId || selectedTemplate.coverAssetId}
+                  featureName="提示词模板详情"
+                  step={selectedTemplate.generationStep}
+                  sourceMissingMessage="暂无原图，无法对比。"
+                />
 
                 <div className="mt-5 flex flex-wrap gap-2">
                   <TemplateTag>{selectedTemplate.category}</TemplateTag>

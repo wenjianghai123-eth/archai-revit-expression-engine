@@ -11,6 +11,7 @@ import { MaterialRepairActions, ResultSendActions, SecondaryEditActions } from '
 import { SavePromptTemplateModal } from '../SavePromptTemplateModal';
 import { canSavePromptTemplate } from '../../utils/savedPromptTemplates';
 import { AspectRatioImage } from '../common/AspectRatioImage';
+import { GenerationImageViewer } from '../common/GenerationImageViewer';
 
 interface GenerationStatusPanelProps {
   step: GenerationStep;
@@ -257,7 +258,14 @@ function ResultActions({
         ))}
       </div>
       <div className="h-56 overflow-hidden rounded-2xl border border-white/70 bg-white shadow-sm">
-        <PreviewContent state={state} originalImageUrl={originalImageUrl} previewImage={originalPreviewImage} />
+        <PreviewContent
+          state={state}
+          originalImageUrl={originalImageUrl}
+          previewImage={originalPreviewImage}
+          featureName={getGenerationStepDownloadLabel(step)}
+          step={step}
+          aspectRatio={step === GenerationStep.PanoramaQuickRender ? '2:1' : '16:9'}
+        />
       </div>
       {originalPreviewImage && activeResult ? (
         <div className="rounded-xl border border-slate-100 bg-slate-50 p-2">
@@ -285,19 +293,30 @@ function ResultActions({
           {state.generationBatchItems && state.generationBatchItems.length > 0 ? (
             <div className="result-grid">
               {state.generationBatchItems.map(item => (
-                <BatchItemCard key={item.variantIndex} item={item} projectName={projectName} onRetry={() => onRetryBatchItem?.(item.variantIndex)} />
+                <BatchItemCard key={item.variantIndex} item={item} projectName={projectName} sourceImageUrl={originalImageUrl} onRetry={() => onRetryBatchItem?.(item.variantIndex)} />
               ))}
             </div>
           ) : resultOptions.length > 1 && (
             <div className="grid grid-cols-2 gap-2">
-              {resultOptions.map((result, index) => (
+              {resultOptions.map(result => (
                 <div
                   key={result.id}
                   className={`relative overflow-hidden rounded-lg border bg-white ${result.id === selectedResultId ? 'border-blue-600 ring-2 ring-blue-100' : 'border-slate-200'}`}
                 >
-                  <button type="button" onClick={() => onSelectGenerationResult(result.id)} className="relative block w-full overflow-hidden">
-                    <AspectRatioImage src={result.imageUrl} alt={`方案 ${index + 1}`} className="rounded-none border-0 shadow-none" enableLightbox={false} />
-                  </button>
+                  <div className="relative block w-full overflow-hidden">
+                    <GenerationImageViewer
+                      sourceImageUrl={originalImageUrl}
+                      resultImageUrl={getOriginalResultImageUrl(result, result.imageUrl) || result.imageUrl}
+                      resultImageAssetId={getOriginalResultAssetId(result)}
+                      aspectRatio={step === GenerationStep.PanoramaQuickRender ? '2:1' : '16:9'}
+                      featureName={readResultLabel(result, resultOptions)}
+                      step={step}
+                      frameClassName="rounded-none border-0 shadow-none"
+                      tabListClassName="m-1.5 mb-1.5"
+                      tabButtonClassName="px-2"
+                      sourceMissingMessage="暂无原图，无法对比。"
+                    />
+                  </div>
                   <span className="absolute left-1 top-1 max-w-[calc(100%-2rem)] truncate rounded bg-white/90 px-1.5 py-0.5 text-[9px] font-bold text-slate-700">{readResultLabel(result, resultOptions)}</span>
                   <button
                     type="button"
@@ -413,7 +432,7 @@ function ContinuationSourceBanner({ state }: { state: StepState }) {
   );
 }
 
-function BatchItemCard({ item, projectName, onRetry }: { item: GenerationBatchItem; projectName?: string | null; onRetry: () => void }) {
+function BatchItemCard({ item, projectName, sourceImageUrl, onRetry }: { item: GenerationBatchItem; projectName?: string | null; sourceImageUrl: string | null; onRetry: () => void }) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -447,7 +466,16 @@ function BatchItemCard({ item, projectName, onRetry }: { item: GenerationBatchIt
     <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
       <div className="relative flex items-center justify-center bg-slate-50">
         {originalImageUrl ? (
-          <AspectRatioImage src={originalImageUrl} alt={item.variantName} className="rounded-none border-0 shadow-none" />
+          <GenerationImageViewer
+            sourceImageUrl={sourceImageUrl}
+            resultImageUrl={originalImageUrl}
+            resultImageAssetId={originalAssetId}
+            featureName="平面彩平批量结果"
+            step={GenerationStep.FloorplanTo3D}
+            frameClassName="rounded-none border-0 shadow-none"
+            tabListClassName="m-2 mb-2"
+            sourceMissingMessage="暂无原图，无法对比。"
+          />
         ) : (
           <div className="flex aspect-video w-full items-center justify-center text-xs font-bold text-slate-400">{readBatchItemStatusLabel(item.status)}</div>
         )}
