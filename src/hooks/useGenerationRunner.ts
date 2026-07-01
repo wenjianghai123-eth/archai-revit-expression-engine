@@ -65,9 +65,7 @@ export function useGenerationRunner({
       : stateAtStart.isGenerating
         ? '正在生成中。'
         : !stateAtStart.inputImage
-          ? selectedProvider === 'apiyi-nano-banana2-edit'
-            ? 'API易图片编辑接口需要至少上传一张图片。'
-            : '请先上传图片。'
+          ? '请先上传图片。'
           : creditBalance && creditBalance.balance < requiredCredits
             ? `剩余额度不足，本次需要 ${requiredCredits} credits。`
             : null;

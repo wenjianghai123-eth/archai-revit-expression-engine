@@ -211,7 +211,7 @@ export default function App() {
     }
   }, [selectedProjectId, setSelectedProjectId]);
 
-  const { estimatedCreditCost, isCreditsInsufficient, handleGenerate } = useGenerationRunner({
+  const { isCreditsInsufficient, handleGenerate } = useGenerationRunner({
     currentStep,
     ensureActiveProject,
     stepStates,
@@ -830,7 +830,6 @@ export default function App() {
               <Stepper
                 currentStep={currentStep}
                 onStepChange={setCurrentStep}
-                estimatedCreditCost={estimatedCreditCost}
                 creditBalance={creditBalance?.balance ?? null}
                 selectedProvider={selectedImageProvider}
                 providers={imageProviders}
@@ -874,7 +873,6 @@ export default function App() {
                         onHistoryRecord={record => setHistoryItems(items => [record, ...items.filter(item => item.id !== record.id)])}
                         backendProvider={backendHealth.data?.provider || null}
                         isCreditsInsufficient={isCreditsInsufficient}
-                        estimatedCreditCost={estimatedCreditCost}
                         providerUnavailableReason={providerUnavailableReason}
                         isAdmin={currentUser.role === 'admin'}
                       />

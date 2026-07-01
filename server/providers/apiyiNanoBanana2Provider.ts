@@ -73,8 +73,8 @@ export function createApiYiNanoBanana2Provider(options: ApiYiProviderOptions = {
       if (imageSources.length === 0) {
         throw createApiYiError(
           'APIYI_REQUEST_FAILED',
-          'API易图片编辑至少需要一张输入图片。',
-          'API易图片编辑至少需要上传一张输入图片。',
+          'APIYI_INPUT_IMAGE_REQUIRED',
+          '请先上传图片。',
         );
       }
       const inlineImages = await Promise.all(imageSources.map(source => loadAssetAsInlineData(source)));

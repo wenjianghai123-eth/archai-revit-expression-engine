@@ -27,7 +27,6 @@ interface GenerationStatusPanelProps {
   selectedResultId: string | null;
   viewModeOptions: ViewModeOption[];
   topPanels: ReactNode;
-  estimatedCreditCost: number;
   projectName?: string | null;
   onGenerate: () => void;
   onRegenerate: () => void;
@@ -56,7 +55,6 @@ export function GenerationStatusPanel({
   selectedResultId,
   viewModeOptions,
   topPanels,
-  estimatedCreditCost,
   projectName,
   onGenerate,
   onRegenerate,
@@ -104,9 +102,6 @@ export function GenerationStatusPanel({
       </div>
 
       <div className="mt-auto border-t border-slate-100 pt-4">
-        <div className="mb-2 rounded-lg bg-slate-50 px-3 py-2 text-center text-[11px] font-bold text-slate-500">
-          本次预计消耗 {estimatedCreditCost} 算力点
-        </div>
         <div className="grid grid-cols-3 gap-2">
         <button type="button" onClick={onReset} disabled={state.isGenerating} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-500 disabled:opacity-40">
           重置

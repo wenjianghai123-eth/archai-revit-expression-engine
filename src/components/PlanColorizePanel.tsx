@@ -242,10 +242,6 @@ export function PlanColorizePanel({
               })}
             </div>
 
-            <div className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700">
-              预计生成 {outputCount} 张，预计消耗 {outputCount} 点
-              {batchEnabled && selectedStyleIds.length === 0 ? '；未选择风格时将使用默认风格生成 1 张。' : null}
-            </div>
           </OptionGroup>
 
           <SmartPromptAssistant mode="plan-colorize" config={state.config} compact onUpdateConfig={onUpdateConfig} />

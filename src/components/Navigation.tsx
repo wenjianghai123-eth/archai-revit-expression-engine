@@ -241,7 +241,6 @@ function NavItem({
 interface StepperProps {
   currentStep: GenerationStep;
   onStepChange: (step: GenerationStep) => void;
-  estimatedCreditCost?: number | null;
   creditBalance?: number | null;
   selectedProvider?: SelectableImageProvider;
   providers?: AiProviderOption[];
@@ -252,7 +251,6 @@ interface StepperProps {
 export function Stepper({
   currentStep,
   onStepChange,
-  estimatedCreditCost = null,
   creditBalance = null,
   selectedProvider,
   providers = [],
@@ -315,8 +313,6 @@ export function Stepper({
           </label>
           <div className="rounded-full border border-white/70 bg-white/55 px-4 py-2 text-xs font-bold text-slate-600 shadow-sm backdrop-blur">
             <span className="text-teal-700">当前功能：{readStepperFeatureLabel(currentStep)}</span>
-            <span className="mx-2 text-slate-300">/</span>
-            <span>本次消耗：{estimatedCreditCost === null ? '-' : estimatedCreditCost} 算力点</span>
             {creditBalance !== null ? (
               <>
                 <span className="mx-2 text-slate-300">/</span>

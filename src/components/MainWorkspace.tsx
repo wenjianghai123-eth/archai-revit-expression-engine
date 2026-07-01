@@ -49,7 +49,6 @@ interface WorkspaceProps {
   onHistoryRecord?: (record: GenerationHistoryItem) => void;
   backendProvider: GenerationProvider | null;
   isCreditsInsufficient: boolean;
-  estimatedCreditCost: number;
   providerUnavailableReason?: string | null;
   isAdmin?: boolean;
 }
@@ -79,7 +78,6 @@ export function MainWorkspace({
   onHistoryRecord,
   backendProvider,
   isCreditsInsufficient,
-  estimatedCreditCost,
   providerUnavailableReason = null,
   isAdmin = false,
 }: WorkspaceProps) {
@@ -118,9 +116,7 @@ export function MainWorkspace({
   const generateDisabledReason = providerUnavailableReason
     || (state.isGenerating ? '正在生成，请稍候。' : null)
     || (!state.inputImage
-      ? state.config.aiProvider === 'apiyi-nano-banana2-edit'
-        ? 'API易图片编辑接口需要至少上传一张图片。'
-        : '请先上传原图。'
+      ? '请先上传原图。'
       : null)
     || (isCreditsInsufficient ? '当前算力点余额不足。' : null)
     || (isMaterialReplaceStep && !hasMaterialReplaceTarget ? '请选择材质、软装或输入替换要求。' : null)
@@ -428,7 +424,6 @@ export function MainWorkspace({
           selectedResultId={selectedResult?.id || null}
           previewImage={previewImage}
           uploadError={uploadErrors.input}
-          estimatedCreditCost={estimatedCreditCost}
           projectName={projectName || selectedProjectId || 'archai-project'}
           onUploadInput={() => handleUploadClick('input')}
           onUpdateInputImage={onUpdateInputImage}
@@ -455,7 +450,6 @@ export function MainWorkspace({
           selectedResultId={selectedResult?.id || null}
           viewModeOptions={viewModeOptions}
           topPanels={null}
-          estimatedCreditCost={estimatedCreditCost}
           projectName={projectName || selectedProjectId || 'archai-project'}
           onGenerate={onGenerate}
           onRegenerate={onRegenerate}
@@ -499,7 +493,6 @@ export function MainWorkspace({
           selectedResultId={selectedResult?.id || null}
           viewModeOptions={viewModeOptions}
           topPanels={null}
-          estimatedCreditCost={estimatedCreditCost}
           projectName={projectName || selectedProjectId || 'archai-project'}
           onGenerate={onGenerate}
           onRegenerate={onRegenerate}
@@ -539,7 +532,6 @@ export function MainWorkspace({
           selectedResultId={selectedResult?.id || null}
           viewModeOptions={viewModeOptions}
           topPanels={null}
-          estimatedCreditCost={estimatedCreditCost}
           projectName={projectName || selectedProjectId || 'archai-project'}
           onGenerate={onGenerate}
           onRegenerate={onRegenerate}
@@ -704,7 +696,6 @@ export function MainWorkspace({
             {isFloorplanStep || isMaterialReplaceStep ? materialTexturesPanel : null}
           </>
         )}
-        estimatedCreditCost={estimatedCreditCost}
         projectName={projectName || selectedProjectId || 'archai-project'}
         onGenerate={onGenerate}
         onRegenerate={onRegenerate}

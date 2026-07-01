@@ -105,7 +105,6 @@ function FloorplanMultiPlanControls({ config, onUpdateConfig }: FloorplanMultiPl
   const floorplanTemplateId = config.floorplanTemplateId || 'residential-warm-wood';
   const roomLabels = Array.isArray(config.floorplanRoomLabels) ? config.floorplanRoomLabels : [];
   const batchCount = resolveFloorplanBatchCount(config.batchCount);
-  const count = outputMode === 'multi' ? batchCount : 1;
 
   const updateMultiPlan = (patch: Partial<GenerationConfig>) => {
     const nextConfig = {
@@ -154,7 +153,6 @@ function FloorplanMultiPlanControls({ config, onUpdateConfig }: FloorplanMultiPl
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-xs font-black text-slate-900">平面彩平模式</p>
-          <p className="mt-0.5 text-[11px] font-semibold text-slate-500">彩平表达、三维彩平表达和多方案输出统一在此入口内完成；预计生成 {count} 张，消耗 {count} 点</p>
         </div>
       </div>
 
