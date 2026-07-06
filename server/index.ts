@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { NextFunction, Request, Response } from 'express';
-import { attachAuthUser, getCurrentUser, getRequiredCurrentUser, readAuthMode, requireAuth } from './auth';
+import { attachAuthUser, getAuthFailure, getCurrentUser, getRequiredCurrentUser, readAuthMode, requireAuth } from './auth';
 import { createStoredFilename, fileStorageProvider, uploadsDir } from './fileStorage';
 import {
   cancelGenerationJob,
@@ -186,7 +186,11 @@ app.get('/api/ai-providers', (_req: Request, res: Response) => {
 app.get('/api/auth/me', (req: Request, res: Response) => {
   const user = getCurrentUser(req);
   if (!user) {
-    res.status(401).json(apiError('Authentication is required.', 'AUTH_REQUIRED'));
+    const authFailure = getAuthFailure(req);
+    res.status(authFailure?.status || 401).json(apiError(
+      authFailure?.message || 'Authentication is required.',
+      authFailure?.code || 'AUTH_REQUIRED',
+    ));
     return;
   }
 

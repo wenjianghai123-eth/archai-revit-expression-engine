@@ -41,6 +41,18 @@ export async function parseApiResponseEnvelope<T>(response: Response): Promise<P
 
 export function readApiErrorMessage(value: unknown, fallbackStatus?: number): string | null {
   const code = readApiErrorCode(value);
+  if (code === 'AUTH_REQUIRED') {
+    return '登录状态已失效，请重新登录。';
+  }
+  if (code === 'AUTH_INVALID') {
+    return '登录已过期，请重新登录。';
+  }
+  if (code === 'AUTH_PROFILE_REQUIRED') {
+    return '账号尚未由管理员激活，请联系管理员。';
+  }
+  if (code === 'AUTH_USER_DISABLED') {
+    return '账号已停用，请联系管理员。';
+  }
   if (code === 'UPLOAD_IMAGE_TYPE_INVALID') {
     return '图片格式不支持。请上传 PNG、JPG、JPEG 或 WEBP 图片。';
   }

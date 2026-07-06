@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AuthUser, getCurrentUser } from '../lib/api';
-import { getSupabaseClient, isSupabaseConfigured } from '../lib/supabase';
+import { getSupabaseClient, getSupabaseSession, isSupabaseConfigured } from '../lib/supabase';
 
 export function useCurrentUser() {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -13,17 +13,24 @@ export function useCurrentUser() {
     setIsLoading(true);
     setError(null);
 
-    if (import.meta.env.PROD && !isSupabaseConfigured()) {
+    if (!isSupabaseConfigured()) {
       setUser(null);
       setIsLoading(false);
       return;
     }
 
     try {
-      setUser(await getCurrentUser());
+      const session = await getSupabaseSession();
+      if (!session?.access_token) {
+        setUser(null);
+        return;
+      }
+
+      const currentUser = await getCurrentUser(session.access_token);
+      setUser(currentUser);
     } catch (err) {
       setUser(null);
-      setError(err instanceof Error ? err.message : '无法读取当前用户。');
+      setError(readAuthErrorMessage(err, '无法读取当前用户。'));
     } finally {
       setIsLoading(false);
     }
@@ -41,7 +48,7 @@ export function useCurrentUser() {
     setAuthMessage(null);
 
     try {
-      const { error: signInError } = await supabase.auth.signInWithPassword({
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
@@ -50,11 +57,28 @@ export function useCurrentUser() {
         throw signInError;
       }
 
-      await refresh();
+      const accessToken = data.session?.access_token;
+      if (!accessToken) {
+        throw new Error('登录状态验证失败，请重新登录。');
+      }
+
+      if (import.meta.env.DEV) {
+        console.debug('[auth] login success', {
+          hasUser: Boolean(data.user),
+          hasAccessToken: Boolean(accessToken),
+          userId: data.user?.id,
+        });
+      }
+
+      const currentUser = await getCurrentUser(accessToken);
+      setUser(currentUser);
+      setAuthMessage(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '登录失败，请检查邮箱和密码。');
+      setUser(null);
+      setError(readAuthErrorMessage(err, '账号或密码错误'));
     } finally {
       setIsSigningIn(false);
+      setIsLoading(false);
     }
   }, [refresh]);
 
@@ -92,4 +116,24 @@ export function useCurrentUser() {
     signInWithEmail,
     signOut,
   };
+}
+
+function readAuthErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (/invalid login credentials|invalid email or password|email not confirmed|invalid credentials/iu.test(message)) {
+    return '账号或密码错误';
+  }
+  if (/AUTH_REQUIRED|Authentication is required|AUTH_INVALID|JWT|expired|invalid token/iu.test(message)) {
+    return '登录状态已失效，请重新登录。';
+  }
+  if (/AUTH_PROFILE_REQUIRED/iu.test(message)) {
+    return '账号尚未由管理员激活，请联系管理员。';
+  }
+  if (/AUTH_USER_DISABLED/iu.test(message)) {
+    return '账号已停用，请联系管理员。';
+  }
+  if (/后端服务暂不可用|VITE_API_BASE_URL/iu.test(message)) {
+    return '后端服务暂不可用，请检查部署配置。';
+  }
+  return message.trim() || fallback;
 }

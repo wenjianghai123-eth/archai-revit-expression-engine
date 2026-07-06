@@ -233,6 +233,7 @@ Complete AI generation deployment requires the Express backend to be deployed wi
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `SUPABASE_STORAGE_BUCKET`
+- `CORS_ORIGIN=https://guangtian123-eth.netlify.app` or a comma-separated list that includes the Netlify frontend origin.
 - `APIYI_API_KEY` when using API易 Nano Banana2.
 - `GRSAI_API_KEY` when using Grsai Banana2.
 

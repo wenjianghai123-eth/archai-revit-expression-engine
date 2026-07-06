@@ -176,7 +176,7 @@ export function isJsonParseError(error: unknown): boolean {
 function readAllowedCorsOrigins(): string[] {
   const rawValue = process.env.CORS_ORIGIN || process.env.CORS_ORIGINS;
   if (!rawValue || rawValue.trim().length === 0) {
-    return ['http://localhost:3000', 'http://127.0.0.1:3000'];
+    return ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://guangtian123-eth.netlify.app'];
   }
 
   return rawValue.split(',').map(item => item.trim()).filter(Boolean);

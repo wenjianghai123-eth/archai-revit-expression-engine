@@ -65,18 +65,33 @@ export async function attachAuthUser(req: Request, _res: Response, next: NextFun
   try {
     const token = readBearerToken(req);
     if (!token) {
+      (req as RequestWithUser).authFailure = {
+        status: 401,
+        message: 'Authentication is required.',
+        code: 'AUTH_REQUIRED',
+      };
       next();
       return;
     }
 
     const supabase = getSupabaseAdminClient();
     if (!supabase) {
+      (req as RequestWithUser).authFailure = {
+        status: 401,
+        message: 'Login expired, please sign in again.',
+        code: 'AUTH_INVALID',
+      };
       next();
       return;
     }
 
     const { data, error } = await supabase.auth.getUser(token);
     if (error || !data.user) {
+      (req as RequestWithUser).authFailure = {
+        status: 401,
+        message: 'Login expired, please sign in again.',
+        code: 'AUTH_INVALID',
+      };
       next();
       return;
     }
@@ -146,6 +161,10 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 
 export function getCurrentUser(req: Request): AuthUser | null {
   return (req as RequestWithUser).authUser ?? null;
+}
+
+export function getAuthFailure(req: Request): AuthFailure | null {
+  return (req as RequestWithUser).authFailure ?? null;
 }
 
 export function getRequiredCurrentUser(req: Request): AuthUser {

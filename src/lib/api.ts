@@ -434,8 +434,8 @@ export async function polishPrompt(input: PromptPolishInput): Promise<PromptPoli
   });
 }
 
-export async function getCurrentUser(): Promise<AuthUser> {
-  const response = await request<{ user: AuthUser }>('/api/auth/me');
+export async function getCurrentUser(accessToken?: string): Promise<AuthUser> {
+  const response = await request<{ user: AuthUser }>('/api/auth/me', {}, accessToken);
   return response.user;
 }
 
@@ -681,9 +681,9 @@ export async function getPublicShare(token: string): Promise<PublicSharePayload>
   return response.share;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}, authTokenOverride?: string): Promise<T> {
   let response: Response;
-  const accessToken = await getSupabaseAccessToken();
+  const accessToken = authTokenOverride || await getSupabaseAccessToken();
   const headers = new Headers(init.headers);
   const url = buildApiUrl(path);
 
@@ -761,6 +761,18 @@ export async function convertModelAsset(id: string): Promise<ModelAssetRecord> {
 }
 
 function formatApiError(error: ApiErrorResponse): string {
+  if (error.code === 'AUTH_REQUIRED') {
+    return '登录状态已失效，请重新登录。';
+  }
+  if (error.code === 'AUTH_INVALID') {
+    return '登录已过期，请重新登录。';
+  }
+  if (error.code === 'AUTH_PROFILE_REQUIRED') {
+    return '账号尚未由管理员激活，请联系管理员。';
+  }
+  if (error.code === 'AUTH_USER_DISABLED') {
+    return '账号已停用，请联系管理员。';
+  }
   if (error.code === 'UPLOAD_IMAGE_TYPE_INVALID') {
     return '图片格式不支持。请上传 PNG、JPG、JPEG 或 WEBP 图片。';
   }
