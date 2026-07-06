@@ -7,6 +7,45 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      (function () {
+        function sanitize(message) {
+          return String(message || '未知错误')
+            .replace(/(api[_-]?key|token|secret|password|authorization)=?[^&\s]*/giu, '$1=***')
+            .replace(/[A-Za-z0-9_-]{32,}/gu, '***')
+            .slice(0, 240);
+        }
+
+        function escapeHtml(value) {
+          return sanitize(value).replace(/[&<>"']/g, function (character) {
+            return {
+              '&': '&amp;',
+              '<': '&lt;',
+              '>': '&gt;',
+              '"': '&quot;',
+              "'": '&#39;',
+            }[character] || character;
+          });
+        }
+
+        function renderStartupError(error) {
+          var root = document.getElementById('root');
+          if (!root || root.children.length > 0 || root.textContent.trim()) return;
+          var message = error && (error.message || error.reason && error.reason.message || error.reason || error.error && error.error.message);
+          root.innerHTML = '<main style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f1f5f9;color:#0f172a;font-family:system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:24px;">'
+            + '<section style="max-width:560px;width:100%;background:white;border:1px solid #e2e8f0;border-radius:8px;padding:24px;box-shadow:0 12px 30px rgba(15,23,42,.08);">'
+            + '<p style="margin:0 0 12px;color:#dc2626;font-size:12px;font-weight:800;">页面初始化失败</p>'
+            + '<h1 style="margin:0;font-size:24px;line-height:1.3;">页面暂时无法正常加载</h1>'
+            + '<p style="margin:14px 0 0;color:#475569;font-size:14px;line-height:1.7;">请刷新页面重试；如果问题持续存在，请检查 Netlify 构建配置、静态资源和环境变量。</p>'
+            + '<p style="margin:16px 0 0;padding:12px;border-radius:8px;background:#fef2f2;color:#7f1d1d;font-size:13px;font-weight:700;word-break:break-word;">错误摘要：'
+            + escapeHtml(message) + '</p>'
+            + '</section></main>';
+        }
+
+        window.addEventListener('error', renderStartupError);
+        window.addEventListener('unhandledrejection', renderStartupError);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -102,6 +102,7 @@ Backend/runtime variables, never expose with a `VITE_` prefix:
 - `SUPABASE_URL`: server-side Supabase project URL for backend adapters. This URL is not a secret, but keep service-role keys backend-only.
 - `SUPABASE_STORAGE_BUCKET`: Supabase Storage bucket name used when `FILE_STORAGE=supabase`.
 - `SUPABASE_SERVICE_ROLE_KEY`: backend-only Supabase service role key used to validate JWTs. Never expose this in frontend code.
+- `APIYI_API_KEY`: backend-only API易 model API key. Required only when using `apiyi-nano-banana2-edit`. Do not expose this in frontend code.
 - `GRSAI_API_KEY`: backend-only model API key. Required only when `GENERATION_PROVIDER=grsai`, `AI_PROVIDER=grsai-banana2`, or `AI_PROVIDER=grsai-nano-banana`. Do not expose this in frontend code.
 - `GRSAI_BASE_URL`: optional Grsai API base URL. Defaults to `https://grsai.dakka.com.cn` for China direct access. Overseas deployments can use `https://grsaiapi.com`.
 - `GRSAI_MODEL`: optional Grsai model name. Defaults to `nano-banana-2`.
@@ -207,7 +208,7 @@ Frontend deployment checklist:
 
 ### Netlify Frontend Deployment
 
-Netlify deploys this Vite app as static frontend files only. It does not run the Express backend from `server/index.ts`, so `/api/...` on the Netlify domain will return 404 unless you deploy the backend separately and point the frontend at it.
+Netlify deploys this Vite app as static frontend files only. It is suitable for showing the landing page and frontend shell, but full AI generation requires an independently deployed Express backend. Netlify does not run the Express backend from `server/index.ts`, so `/api/...` on the Netlify domain will return the SPA fallback or fail unless you deploy the backend separately and point the frontend at it.
 
 Deploy the Express backend to a server platform such as Render or Railway, then configure the browser-facing variables in Netlify, not only in local `.env` files or the backend service:
 
@@ -218,10 +219,28 @@ Deploy the Express backend to a server platform such as Render or Railway, then 
 - Make sure the Production deploy context has values for these variables; branch deploy or deploy-preview values do not fix a Production deploy unless Production also has values.
 - Set Build command to `npm run build`.
 - Set Publish directory to `dist`.
+- Keep `netlify.toml` publish set to `dist`; `public/_redirects` is copied into `dist/_redirects` during `npm run build` for SPA routing.
 - After changing any `VITE_*` value, use Clear cache and deploy site so Netlify rebuilds the browser bundle with the new values.
 - To confirm the Netlify build environment before building, run `npm run check:env` in the build log or temporarily set the build command to `npm run check:env && npm run build`.
 
 Keep backend-only secrets such as `SUPABASE_SERVICE_ROLE_KEY` and `GRSAI_API_KEY` on the Render/Railway backend service. Do not add them to Netlify with a `VITE_` prefix.
+
+Complete AI generation deployment requires the Express backend to be deployed with:
+
+- `Supabase` tables and storage configured.
+- `DATA_BACKEND=supabase`
+- `FILE_STORAGE=supabase`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_STORAGE_BUCKET`
+- `APIYI_API_KEY` when using API易 Nano Banana2.
+- `GRSAI_API_KEY` when using Grsai Banana2.
+
+The Netlify frontend build environment then needs:
+
+- `VITE_API_BASE_URL=https://your-backend.example.com`
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
 
 ## Storage
 

@@ -1,9 +1,9 @@
-import { buildApiUrl, isApiBaseUrlMissingInProduction, isRelativeApiPath } from './apiBaseUrl';
+import { buildApiUrl, isRelativeApiPath } from './apiBaseUrl';
 import { parseApiResponse, readApiErrorMessage } from './apiResponse';
 import { getSupabaseAccessToken } from './supabase';
 import { isAbortError } from '../utils/apiConnectionStatus';
 
-const MISSING_API_BASE_URL_MESSAGE = '后端 API 未配置或不可访问，请配置 VITE_API_BASE_URL。';
+const BACKEND_UNAVAILABLE_MESSAGE = '后端服务暂不可用，请稍后重试或检查 VITE_API_BASE_URL 是否指向已部署的 Express 后端。';
 
 export interface AuthUser {
   id: string;
@@ -702,14 +702,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     });
   } catch (error) {
     if (isAbortError(error)) throw error;
-    if (isMissingProductionApi(path)) {
-      throw new Error(MISSING_API_BASE_URL_MESSAGE);
-    }
-    throw new Error('无法连接后端服务，请确认本地服务已启动或刷新重试。');
+    throw new Error(BACKEND_UNAVAILABLE_MESSAGE);
   }
 
-  if (response.status === 404 && isMissingProductionApi(path)) {
-    throw new Error(MISSING_API_BASE_URL_MESSAGE);
+  if (isRelativeApiPath(path) && isLikelySpaFallbackResponse(response)) {
+    throw new Error(BACKEND_UNAVAILABLE_MESSAGE);
   }
 
   const body = await parseApiResponse<unknown>(response);
@@ -774,10 +771,11 @@ function formatApiError(error: ApiErrorResponse): string {
   return parts.join(' | ');
 }
 
-function isMissingProductionApi(path: string): boolean {
-  return isApiBaseUrlMissingInProduction() && isRelativeApiPath(path);
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isLikelySpaFallbackResponse(response: Response): boolean {
+  const contentType = response.headers.get('Content-Type') || '';
+  return response.ok && contentType.toLowerCase().includes('text/html');
 }

@@ -3,6 +3,8 @@ import { parseApiResponse } from '../lib/apiResponse';
 import { GenerationProvider } from '../types';
 import { isAbortError } from '../utils/apiConnectionStatus';
 
+const backendUnavailableMessage = '后端服务暂不可用，请稍后重试或检查 VITE_API_BASE_URL 是否指向已部署的 Express 后端。';
+
 export interface BackendHealth {
   ok: boolean;
   version: string;
@@ -15,7 +17,11 @@ export async function getBackendHealth(signal?: AbortSignal): Promise<BackendHea
     response = await fetch(buildApiUrl('/api/health'), { signal });
   } catch (error) {
     if (isAbortError(error)) throw error;
-    throw new Error('无法连接后端服务，请确认本地服务已启动或刷新重试。');
+    throw new Error(backendUnavailableMessage);
+  }
+
+  if (isLikelySpaFallbackResponse(response)) {
+    throw new Error(backendUnavailableMessage);
   }
 
   const body = await parseApiResponse<unknown>(response);
@@ -57,4 +63,9 @@ function isGenerationProvider(value: unknown): value is GenerationProvider {
     || value === 'grsai-banana2'
     || value === 'grsai-nano-banana'
     || value === 'apiyi-nano-banana2-edit';
+}
+
+function isLikelySpaFallbackResponse(response: Response): boolean {
+  const contentType = response.headers.get('Content-Type') || '';
+  return response.ok && contentType.toLowerCase().includes('text/html');
 }

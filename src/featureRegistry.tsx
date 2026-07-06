@@ -170,7 +170,11 @@ export function readStoredVisibleFeatureIds(): string[] {
 
 export function writeStoredVisibleFeatureIds(featureIds: string[]) {
   if (typeof window === 'undefined') return;
-  window.localStorage.setItem(visibleFeatureIdsStorageKey, JSON.stringify(sanitizeAddedFeatureIds(featureIds)));
+  try {
+    window.localStorage.setItem(visibleFeatureIdsStorageKey, JSON.stringify(sanitizeAddedFeatureIds(featureIds)));
+  } catch {
+    // Feature visibility is optional UI state and should not break startup.
+  }
 }
 
 export function getVisibleFeatures(addedFeatureIds: string[]): FeatureDefinition[] {

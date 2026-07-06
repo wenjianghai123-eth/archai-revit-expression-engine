@@ -12,7 +12,7 @@ export function readSelectedImageProvider(
   availableProviders: SelectableImageProvider[],
 ): SelectableImageProvider {
   if (typeof window === 'undefined') return defaultProvider;
-  const stored = parseStoredSelection(window.localStorage.getItem(storageKey));
+  const stored = parseStoredSelection(readStorageValue(storageKey));
   if (stored && stored.defaultProvider === defaultProvider && availableProviders.includes(stored.provider)) {
     return stored.provider;
   }
@@ -25,7 +25,11 @@ export function writeSelectedImageProvider(
 ): void {
   if (typeof window === 'undefined') return;
   const value: StoredProviderSelection = { provider, defaultProvider };
-  window.localStorage.setItem(storageKey, JSON.stringify(value));
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(value));
+  } catch {
+    // Provider preference should never block app startup or generation.
+  }
 }
 
 export function isSelectableImageProvider(value: unknown): value is SelectableImageProvider {
@@ -38,6 +42,14 @@ function parseStoredSelection(value: string | null): StoredProviderSelection | n
     const parsed = JSON.parse(value) as Partial<StoredProviderSelection>;
     if (!isSelectableImageProvider(parsed.provider) || !isSelectableImageProvider(parsed.defaultProvider)) return null;
     return { provider: parsed.provider, defaultProvider: parsed.defaultProvider };
+  } catch {
+    return null;
+  }
+}
+
+function readStorageValue(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
   } catch {
     return null;
   }

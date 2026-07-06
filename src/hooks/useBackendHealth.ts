@@ -53,7 +53,7 @@ export function useBackendHealth(isSettingsOpen: boolean) {
           await sleep(delays[attempt]);
           continue;
         }
-        console.error('[api-status] failed', error);
+        console.warn('[api-status] failed', getReadableApiConnectionError(error));
         setBackendHealth({
           status: 'failed',
           data: null,

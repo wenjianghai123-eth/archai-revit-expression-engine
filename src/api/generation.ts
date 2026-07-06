@@ -2,6 +2,8 @@ import { buildApiUrl } from '../lib/apiBaseUrl';
 import { parseApiResponse } from '../lib/apiResponse';
 import { GenerationConfig, GenerationProvider } from '../types';
 
+const backendUnavailableMessage = '后端服务暂不可用，请稍后重试或检查 VITE_API_BASE_URL 是否指向已部署的 Express 后端。';
+
 interface GenerationRequest {
   inputImageDataUrl: string;
   materialImageDataUrl?: string;
@@ -43,7 +45,11 @@ async function postGeneration(endpoint: string, request: GenerationRequest): Pro
       body: JSON.stringify(request),
     });
   } catch {
-    throw new Error('无法连接后端服务，请确认后端服务已启动，并检查 VITE_API_BASE_URL 是否指向后端域名。');
+    throw new Error(backendUnavailableMessage);
+  }
+
+  if (isLikelySpaFallbackResponse(response)) {
+    throw new Error(backendUnavailableMessage);
   }
 
   const body = await parseApiResponse<unknown>(response);
@@ -108,4 +114,9 @@ function isGenerationProvider(value: unknown): value is GenerationProvider {
     || value === 'grsai-banana2'
     || value === 'grsai-nano-banana'
     || value === 'apiyi-nano-banana2-edit';
+}
+
+function isLikelySpaFallbackResponse(response: Response): boolean {
+  const contentType = response.headers.get('Content-Type') || '';
+  return response.ok && contentType.toLowerCase().includes('text/html');
 }

@@ -49,6 +49,7 @@ const PanoramaSharePage = lazy(() => import('./components/PanoramaSharePage').th
 const AdminPage = lazy(() => import('./components/AdminPage').then(module => ({ default: module.AdminPage })));
 const apiStatusRetryDelays = [300, 800, 1500];
 const fallbackAiProvider: AiProviderOption = { value: 'grsai-banana2', label: 'Grsai Banana2', enabled: true, missingConfig: [] };
+const backendUnavailableMessage = '后端服务暂不可用，请稍后重试或检查部署配置。';
 
 export default function App() {
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
@@ -207,7 +208,7 @@ export default function App() {
       setSelectedProjectId(project.id);
       return { projectId: project.id, projectName: project.name, wasCreated: true };
     } catch {
-      throw new Error('自动创建项目失败，请稍后重试或手动创建项目。');
+      throw new Error(backendUnavailableMessage);
     }
   }, [selectedProjectId, setSelectedProjectId]);
 
@@ -265,12 +266,12 @@ export default function App() {
             continue;
           }
 
-          console.error('[api-status] failed', error);
+          console.warn('[api-status] failed', getReadableApiConnectionError(error));
           setDefaultImageProvider(fallbackAiProvider.value);
           setImageProviders([fallbackAiProvider]);
           setSelectedImageProvider(fallbackAiProvider.value);
           setApiConnectionStatus('failed');
-          setApiConnectionError('无法连接后端服务，请确认本地服务已启动或刷新重试。');
+          setApiConnectionError(backendUnavailableMessage);
         }
       }
     };
