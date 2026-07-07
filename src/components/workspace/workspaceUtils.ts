@@ -1,4 +1,5 @@
 import { GenerationStep, StepState, UploadedImage } from '../../types';
+import { resolveAssetUrl } from '../../utils/assetUrl';
 
 export const maxMaterialTextures = 3;
 export const maxFurnitureReferences = 3;
@@ -53,7 +54,7 @@ export function isLocalInpaintingStep(step: GenerationStep): boolean {
 }
 
 export function getUploadedImageSrc(image: UploadedImage): string {
-  return image.url || image.dataUrl;
+  return resolveAssetUrl(image.url || image.dataUrl);
 }
 
 export function getDataUrlExtension(dataUrl: string): string {

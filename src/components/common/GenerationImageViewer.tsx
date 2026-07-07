@@ -6,6 +6,7 @@ import {
   normalizeGenerationViewerImages,
   type GenerationViewerAspectRatio,
 } from '../../utils/normalizeGenerationViewerImages';
+import { readAssetImageUrl, resolveAssetUrl, warnImageLoadFailure } from '../../utils/assetUrl';
 import { ImageOverlayCompare } from './ImageOverlayCompare';
 
 export type ViewMode = 'result' | 'source' | 'side-by-side' | 'overlay';
@@ -78,6 +79,8 @@ export function GenerationImageViewer({
   const [internalViewMode, setInternalViewMode] = useState<ViewMode>(defaultViewMode);
   const activeViewMode = viewMode ?? internalViewMode;
   const effectiveAspectRatio = aspectRatio || normalized.aspectRatio || '16:9';
+  const displaySourceUrl = resolveAssetUrl(resolvedSourceUrl);
+  const displayResultUrl = resolveAssetUrl(resolvedResultUrl);
 
   useEffect(() => {
     setResolvedSourceUrl(normalized.sourceImageUrl);
@@ -95,13 +98,17 @@ export function GenerationImageViewer({
       event: 'generation_viewer_images_normalized',
       featureName,
       step,
-      hasSourceImage: Boolean(resolvedSourceUrl),
-      hasResultImage: Boolean(resolvedResultUrl),
+      hasSourceImage: Boolean(displaySourceUrl),
+      hasResultImage: Boolean(displayResultUrl),
+      sourceImageUrl: resolvedSourceUrl,
+      resultImageUrl: resolvedResultUrl,
+      resolvedSourceUrl: displaySourceUrl,
+      resolvedResultUrl: displayResultUrl,
       sourceImageAssetId: normalized.sourceImageAssetId,
       resultImageAssetId: normalized.resultImageAssetId,
       aspectRatio: effectiveAspectRatio,
     });
-  }, [effectiveAspectRatio, featureName, normalized.resultImageAssetId, normalized.sourceImageAssetId, resolvedResultUrl, resolvedSourceUrl, step]);
+  }, [displayResultUrl, displaySourceUrl, effectiveAspectRatio, featureName, normalized.resultImageAssetId, normalized.sourceImageAssetId, resolvedResultUrl, resolvedSourceUrl, step]);
 
   const setMode = (nextMode: ViewMode) => {
     setInternalViewMode(nextMode);
@@ -136,8 +143,10 @@ export function GenerationImageViewer({
       <div className={`${readAspectRatioClass(effectiveAspectRatio)} w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm ${frameClassName}`}>
         {renderViewer({
           viewMode: activeViewMode,
-          sourceImageUrl: resolvedSourceUrl,
-          resultImageUrl: resolvedResultUrl,
+          sourceImageUrl: displaySourceUrl,
+          resultImageUrl: displayResultUrl,
+          rawSourceImageUrl: resolvedSourceUrl,
+          rawResultImageUrl: resolvedResultUrl,
           isGenerating,
           generationProgress,
           resultMissingMessage,
@@ -153,6 +162,8 @@ function renderViewer({
   viewMode,
   sourceImageUrl,
   resultImageUrl,
+  rawSourceImageUrl,
+  rawResultImageUrl,
   isGenerating,
   generationProgress,
   resultMissingMessage,
@@ -162,6 +173,8 @@ function renderViewer({
   viewMode: ViewMode;
   sourceImageUrl?: string;
   resultImageUrl?: string;
+  rawSourceImageUrl?: string;
+  rawResultImageUrl?: string;
   isGenerating: boolean;
   generationProgress: number;
   resultMissingMessage: string;
@@ -180,7 +193,7 @@ function renderViewer({
 
   if (viewMode === 'source') {
     return sourceImageUrl
-      ? <img src={sourceImageUrl} alt="原图" className="h-full w-full bg-white object-contain" referrerPolicy="no-referrer" />
+      ? <img src={sourceImageUrl} alt="原图" className="h-full w-full bg-white object-contain" referrerPolicy="no-referrer" onError={() => warnImageLoadFailure(rawSourceImageUrl, sourceImageUrl)} />
       : <ImageEmptyState message={sourceMissingMessage} />;
   }
 
@@ -188,8 +201,8 @@ function renderViewer({
     if (!sourceImageUrl || !resultImageUrl) return <ImageEmptyState message={compareMissingMessage} />;
     return (
       <div className="grid h-full w-full bg-white md:grid-cols-2">
-        <img src={sourceImageUrl} alt="原图" className="h-full w-full border-b border-slate-200 object-contain md:border-b-0 md:border-r" referrerPolicy="no-referrer" />
-        <img src={resultImageUrl} alt="结果图" className="h-full w-full object-contain" referrerPolicy="no-referrer" />
+        <img src={sourceImageUrl} alt="原图" className="h-full w-full border-b border-slate-200 object-contain md:border-b-0 md:border-r" referrerPolicy="no-referrer" onError={() => warnImageLoadFailure(rawSourceImageUrl, sourceImageUrl)} />
+        <img src={resultImageUrl} alt="结果图" className="h-full w-full object-contain" referrerPolicy="no-referrer" onError={() => warnImageLoadFailure(rawResultImageUrl, resultImageUrl)} />
       </div>
     );
   }
@@ -201,7 +214,7 @@ function renderViewer({
   }
 
   return resultImageUrl
-    ? <img src={resultImageUrl} alt="结果图" className="h-full w-full bg-white object-contain" referrerPolicy="no-referrer" />
+    ? <img src={resultImageUrl} alt="结果图" className="h-full w-full bg-white object-contain" referrerPolicy="no-referrer" onError={() => warnImageLoadFailure(rawResultImageUrl, resultImageUrl)} />
     : <ImageEmptyState title={resultMissingMessage} message="生成完成后，结果图会显示在这里。" />;
 }
 
@@ -221,7 +234,7 @@ async function resolveMissingAssetUrl(assetId: string | undefined, currentUrl: s
   if (!assetId || currentUrl) return;
   try {
     const asset = await getImageAsset(assetId);
-    setUrl(asset.url || buildImageAssetUrl(assetId));
+    setUrl(readAssetImageUrl(asset) || buildImageAssetUrl(assetId));
   } catch {
     setUrl(buildImageAssetUrl(assetId));
   }

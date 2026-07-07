@@ -23,6 +23,7 @@ import { uploadImageAsset } from '../lib/api';
 import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
 import { createUploadedImage, validateImageFile } from '../utils/file';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
+import { resolveAssetUrl } from '../utils/assetUrl';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { AspectRatioImage } from './common/AspectRatioImage';
 import { GenerationImageViewer } from './common/GenerationImageViewer';
@@ -2473,7 +2474,7 @@ function ExportPreview({ title, info }: { title: string; info: ExportedImageInfo
 }
 
 function readImageSrc(image: UploadedImage): string {
-  return image.dataUrl || image.url || '';
+  return resolveAssetUrl(image.dataUrl || image.url);
 }
 
 function createObjectItemId(): string {

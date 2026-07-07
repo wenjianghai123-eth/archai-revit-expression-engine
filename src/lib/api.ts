@@ -2,6 +2,7 @@ import { buildApiUrl, isRelativeApiPath } from './apiBaseUrl';
 import { parseApiResponse, readApiErrorMessage } from './apiResponse';
 import { getAccessToken } from './authToken';
 import { isAbortError } from '../utils/apiConnectionStatus';
+import { logAssetUploadSuccess } from '../utils/assetUrl';
 
 const BACKEND_UNAVAILABLE_MESSAGE = '后端服务暂不可用，请稍后重试或检查 VITE_API_BASE_URL 是否指向已部署的 Express 后端。';
 
@@ -120,6 +121,9 @@ export interface ImageAsset {
   id: string;
   userId: string;
   url: string;
+  publicUrl?: string;
+  path?: string;
+  storageProvider?: 'local' | 'supabase';
   filename: string;
   mimeType: string;
   size: number;
@@ -581,6 +585,7 @@ export async function uploadImageAsset(file: Blob, filename = 'image.png'): Prom
     method: 'POST',
     body: formData,
   });
+  logAssetUploadSuccess(response.asset);
   return response.asset;
 }
 

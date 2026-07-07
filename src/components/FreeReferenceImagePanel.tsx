@@ -5,6 +5,7 @@ import { uploadImageAsset } from '../lib/api';
 import { createUploadedImage, validateImageFile } from '../utils/file';
 import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
+import { resolveAssetUrl } from '../utils/assetUrl';
 import { ResultSendActions } from './workspace/SecondaryEditActions';
 import { AspectRatioImage } from './common/AspectRatioImage';
 import { GenerationImageViewer } from './common/GenerationImageViewer';
@@ -559,5 +560,5 @@ function readGenerateDisabledReason({
 }
 
 function readImageSrc(image: UploadedImage): string {
-  return image.url || image.dataUrl;
+  return resolveAssetUrl(image.url || image.dataUrl);
 }

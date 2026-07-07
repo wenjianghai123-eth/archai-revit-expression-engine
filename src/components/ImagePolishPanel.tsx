@@ -5,6 +5,7 @@ import { GenerationConfig, GenerationRunStateOverride, GenerationStep, ResultSen
 import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
 import { createUploadedImage, validateImageFile } from '../utils/file';
 import { IMAGE_UPLOAD_ACCEPT, readImageTypeUploadError } from '../utils/imageValidation';
+import { resolveAssetUrl } from '../utils/assetUrl';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { AspectRatioImage } from './common/AspectRatioImage';
 import { GenerationImageViewer } from './common/GenerationImageViewer';
@@ -377,7 +378,7 @@ function dataUrlToFile(dataUrl: string, filename: string): File {
 }
 
 function readImageSrc(image: UploadedImage): string {
-  return image.url || image.dataUrl;
+  return resolveAssetUrl(image.url || image.dataUrl);
 }
 
 function readStatusText(state: StepState): string {

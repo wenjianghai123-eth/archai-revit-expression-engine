@@ -279,7 +279,9 @@ The Netlify frontend build environment then needs:
 
 Metadata storage is selected with `DATA_BACKEND`. Local development uses `DATA_BACKEND=json`, which writes metadata to `data/app-db.json`. Production can use `DATA_BACKEND=supabase` after creating the tables in `docs/SUPABASE_SETUP.md`.
 
-File storage is selected with `FILE_STORAGE`. Local development uses `FILE_STORAGE=local`, which writes files under `uploads/` and serves them from `/uploads/...`. Production can use `FILE_STORAGE=supabase`, which uploads images, models, and generated results to `SUPABASE_STORAGE_BUCKET` using the backend-only service role key.
+File storage is selected with `FILE_STORAGE`. Local development uses `FILE_STORAGE=local`, which writes files under `uploads/` and serves them from `/uploads/...`. Production can use `FILE_STORAGE=supabase`, which uploads images, models, and generated results to `SUPABASE_STORAGE_BUCKET` using the backend-only service role key. For the current MVP public-preview flow, configure that Supabase bucket with `public = true`; otherwise image previews need signed URL support before using a private bucket.
+
+Image asset responses include `url`, `publicUrl`, `path`, and `storageProvider`. With `FILE_STORAGE=supabase`, `url`/`publicUrl` are Supabase public URLs. With local storage, they remain `/uploads/...`, and the frontend resolves those relative asset paths against `VITE_API_BASE_URL` when Netlify and Render are deployed separately.
 
 ## NPM Scripts
 

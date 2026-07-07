@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { resolveAssetUrl, warnImageLoadFailure } from '../utils/assetUrl';
 
 interface PanoramaViewerProps {
   imageUrl: string;
@@ -10,10 +11,11 @@ interface PanoramaViewerProps {
 export function PanoramaViewer({ imageUrl, className = '', minHeight = 360 }: PanoramaViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const resolvedImageUrl = resolveAssetUrl(imageUrl);
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || !imageUrl) return;
+    if (!container || !resolvedImageUrl) return;
 
     setLoadError(null);
     const scene = new THREE.Scene();
@@ -44,7 +46,7 @@ export function PanoramaViewer({ imageUrl, className = '', minHeight = 360 }: Pa
     const loader = new THREE.TextureLoader();
     loader.setCrossOrigin('anonymous');
     loader.load(
-      imageUrl,
+      resolvedImageUrl,
       texture => {
         if (disposed) {
           texture.dispose();
@@ -56,7 +58,8 @@ export function PanoramaViewer({ imageUrl, className = '', minHeight = 360 }: Pa
       },
       undefined,
       error => {
-        console.error('Panorama texture failed to load', { imageUrl, error });
+        warnImageLoadFailure(imageUrl, resolvedImageUrl);
+        console.error('Panorama texture failed to load', { imageUrl, resolvedImageUrl, error });
         if (!disposed) setLoadError('全景图加载失败。');
       },
     );
@@ -166,7 +169,7 @@ export function PanoramaViewer({ imageUrl, className = '', minHeight = 360 }: Pa
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [imageUrl, minHeight]);
+  }, [imageUrl, minHeight, resolvedImageUrl]);
 
   return (
     <div ref={containerRef} className={`relative overflow-hidden bg-slate-950 ${className}`} style={{ minHeight }}>

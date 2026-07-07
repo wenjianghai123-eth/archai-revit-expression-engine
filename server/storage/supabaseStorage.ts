@@ -1112,10 +1112,14 @@ function mapGenerationResultRow(row: GenerationResultRow): GenerationResult {
 }
 
 function mapImageAssetRow(row: ImageAssetRow): ImageAsset {
+  const storageProvider = /^https?:\/\//iu.test(row.url) ? 'supabase' : 'local';
   return {
     id: row.id,
     userId: row.user_id,
     url: row.url,
+    publicUrl: row.url,
+    path: row.filename,
+    storageProvider,
     filename: row.filename,
     mimeType: row.mime_type,
     size: row.size,

@@ -9,6 +9,9 @@ export const generatedUploadsDir = path.join(uploadsDir, 'generated');
 
 export interface StoredFile {
   url: string;
+  publicUrl: string;
+  path: string;
+  storageProvider: 'local' | 'supabase';
   filename: string;
   mimeType: string;
   size: number;
@@ -44,6 +47,9 @@ export class LocalFileStorageProvider implements FileStorageProvider {
 
     return {
       url: this.getPublicUrl(filename),
+      publicUrl: this.getPublicUrl(filename),
+      path: filename.replace(/\\/g, '/'),
+      storageProvider: 'local',
       filename,
       mimeType: input.mimeType,
       size: input.content.length,
@@ -58,6 +64,9 @@ export class LocalFileStorageProvider implements FileStorageProvider {
 
     return {
       url: this.getPublicUrl(filename),
+      publicUrl: this.getPublicUrl(filename),
+      path: filename.replace(/\\/g, '/'),
+      storageProvider: 'local',
       filename,
       mimeType: input.mimeType,
       size: input.content.length,
@@ -144,6 +153,9 @@ export class SupabaseFileStorageProvider implements FileStorageProvider {
 
     return {
       url: this.getPublicUrl(filename),
+      publicUrl: this.getPublicUrl(filename),
+      path: filename,
+      storageProvider: 'supabase',
       filename,
       mimeType: input.mimeType,
       size: input.content.length,

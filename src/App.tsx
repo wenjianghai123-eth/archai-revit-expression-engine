@@ -29,6 +29,7 @@ import { useProjectSelection } from './hooks/useProjectSelection';
 import { clearGenerationHistory, deleteGenerationRecord, listGenerationRecords } from './storage/history';
 import { buildSecondaryEditConfigPatch } from './utils/secondaryEdit';
 import { getOriginalResultAssetId, getOriginalResultImageUrl } from './utils/resultImage';
+import { resolveAssetUrl } from './utils/assetUrl';
 import { promptTemplateRecordToTemplate } from './utils/savedPromptTemplates';
 import { readSelectedImageProvider, writeSelectedImageProvider } from './utils/aiProviderPreference';
 import {
@@ -636,7 +637,7 @@ export default function App() {
             parentResultId: source.resultId || '',
             parentJobId: previous.generationJobId,
             parentRecordId: previous.generationResultId,
-            imageUrl: image.url || image.dataUrl,
+            imageUrl: resolveAssetUrl(image.url || image.dataUrl),
             assetId: image.assetId,
             label: source.label,
             action: 'continue-edit',

@@ -1,5 +1,6 @@
 import { AlertCircle, Expand, Image as ImageIcon, Loader2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { logAssetImageRender, resolveAssetUrl, warnImageLoadFailure } from '../../utils/assetUrl';
 
 type ImageRatio = '16:9' | '4:3' | '1:1' | '2:1';
 
@@ -39,14 +40,19 @@ export function AspectRatioImage({
 }: AspectRatioImageProps) {
   const [hasError, setHasError] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
+  const resolvedSrc = resolveAssetUrl(src);
 
   useEffect(() => {
     setHasError(false);
   }, [src]);
 
+  useEffect(() => {
+    if (src) logAssetImageRender(src, resolvedSrc);
+  }, [resolvedSrc, src]);
+
   const handleClick = () => {
     onClick?.();
-    if (!onClick && enableLightbox && src && !hasError) setIsOpen(true);
+    if (!onClick && enableLightbox && resolvedSrc && !hasError) setIsOpen(true);
   };
 
   return (
@@ -59,7 +65,7 @@ export function AspectRatioImage({
             <Loader2 className="h-6 w-6 animate-spin text-teal-600" />
             <span>正在加载图片...</span>
           </div>
-        ) : src && !hasError ? (
+        ) : resolvedSrc && !hasError ? (
           <div
             role={enableLightbox || onClick ? 'button' : undefined}
             tabIndex={enableLightbox || onClick ? 0 : undefined}
@@ -71,11 +77,14 @@ export function AspectRatioImage({
             aria-label={enableLightbox || onClick ? `查看${alt}` : undefined}
           >
             <img
-              src={src}
+              src={resolvedSrc}
               alt={alt}
               className={`h-full w-full ${fit === 'cover' ? 'object-cover' : 'object-contain'} ${imageClassName}`}
               referrerPolicy="no-referrer"
-              onError={() => setHasError(true)}
+              onError={() => {
+                warnImageLoadFailure(src, resolvedSrc);
+                setHasError(true);
+              }}
             />
             {enableLightbox || onClick ? (
               <span className="absolute bottom-2 right-2 flex h-8 w-8 items-center justify-center rounded-lg bg-slate-950/65 text-white opacity-0 shadow transition group-hover:opacity-100">
@@ -86,17 +95,17 @@ export function AspectRatioImage({
         ) : showPlaceholder ? (
           <div className="image-frame-state">
             {hasError ? <AlertCircle className="h-6 w-6 text-rose-400" /> : <ImageIcon className="h-6 w-6 text-slate-300" />}
-            <span>{hasError ? '图片加载失败' : placeholder}</span>
+            <span>{hasError ? '图片加载失败，请检查文件地址或存储权限' : src ? '图片地址为空' : placeholder}</span>
           </div>
         ) : null}
       </div>
 
-      {isOpen && src ? (
+      {isOpen && resolvedSrc ? (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/85 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
           <button type="button" onClick={() => setIsOpen(false)} className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20" aria-label="关闭大图">
             <X className="h-5 w-5" />
           </button>
-          <img src={src} alt={alt} className="max-h-[92vh] max-w-[94vw] object-contain" referrerPolicy="no-referrer" />
+          <img src={resolvedSrc} alt={alt} className="max-h-[92vh] max-w-[94vw] object-contain" referrerPolicy="no-referrer" />
         </div>
       ) : null}
     </>

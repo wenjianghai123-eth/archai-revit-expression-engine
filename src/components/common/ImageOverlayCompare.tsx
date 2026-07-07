@@ -1,4 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
+import { resolveAssetUrl, warnImageLoadFailure } from '../../utils/assetUrl';
 
 interface ImageOverlayCompareProps {
   sourceImageUrl?: string | null;
@@ -19,6 +20,8 @@ export function ImageOverlayCompare({
 }: ImageOverlayCompareProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState(50);
+  const resolvedSourceImageUrl = resolveAssetUrl(sourceImageUrl);
+  const resolvedResultImageUrl = resolveAssetUrl(resultImageUrl);
 
   const updatePosition = useCallback((clientX: number) => {
     const rect = containerRef.current?.getBoundingClientRect();
@@ -46,7 +49,7 @@ export function ImageOverlayCompare({
     }
   };
 
-  if (!sourceImageUrl || !resultImageUrl) {
+  if (!resolvedSourceImageUrl || !resolvedResultImageUrl) {
     return (
       <div className={`flex h-full min-h-[220px] items-center justify-center bg-slate-50 px-4 text-center text-sm font-bold text-slate-400 ${className}`}>
         {emptyMessage}
@@ -68,9 +71,9 @@ export function ImageOverlayCompare({
       onPointerMove={handlePointerMove}
       onKeyDown={handleKeyDown}
     >
-      <img src={sourceImageUrl} alt={sourceLabel} className="absolute inset-0 h-full w-full object-contain" referrerPolicy="no-referrer" />
+      <img src={resolvedSourceImageUrl} alt={sourceLabel} className="absolute inset-0 h-full w-full object-contain" referrerPolicy="no-referrer" onError={() => warnImageLoadFailure(sourceImageUrl, resolvedSourceImageUrl)} />
       <div className="absolute inset-0 overflow-hidden" style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}>
-        <img src={resultImageUrl} alt={resultLabel} className="h-full w-full object-contain" referrerPolicy="no-referrer" />
+        <img src={resolvedResultImageUrl} alt={resultLabel} className="h-full w-full object-contain" referrerPolicy="no-referrer" onError={() => warnImageLoadFailure(resultImageUrl, resolvedResultImageUrl)} />
       </div>
       <span className="absolute left-3 top-3 rounded-full bg-white/90 px-2 py-1 text-[10px] font-bold text-slate-700 shadow-sm">{resultLabel}</span>
       <span className="absolute right-3 top-3 rounded-full bg-slate-900/80 px-2 py-1 text-[10px] font-bold text-white shadow-sm">{sourceLabel}</span>

@@ -32,6 +32,7 @@ import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 import { GenerationImageViewer } from './common/GenerationImageViewer';
 import { IMAGE_UPLOAD_ACCEPT } from '../utils/imageValidation';
 import { validateImageFile } from '../utils/file';
+import { resolveAssetUrl, warnImageLoadFailure } from '../utils/assetUrl';
 
 interface PanoramaQuickRenderPanelProps {
   state: StepState;
@@ -949,9 +950,10 @@ export function PanoramaQuickRenderPanel({
                         </div>
                         {slot ? (
                           <img
-                            src={slot.rawImage.url || slot.rawImage.dataUrl}
+                            src={resolveAssetUrl(slot.rawImage.url || slot.rawImage.dataUrl)}
                             alt={`位置 ${slotIndex} 原始全景图`}
                             className="mt-2 aspect-[2/1] w-full rounded-md bg-slate-100 object-cover"
+                            onError={() => warnImageLoadFailure(slot.rawImage.url || slot.rawImage.dataUrl, resolveAssetUrl(slot.rawImage.url || slot.rawImage.dataUrl))}
                           />
                         ) : (
                           <div className="mt-2 flex aspect-[2/1] items-center justify-center rounded-md border border-dashed border-slate-200 text-[10px] font-bold text-slate-300">
@@ -1058,7 +1060,7 @@ export function PanoramaQuickRenderPanel({
                 <div className="space-y-2">
                   {referenceImages.map(reference => (
                     <div key={reference.id} className="flex gap-2 rounded-lg border border-slate-200 bg-white p-2">
-                      <img src={reference.url} alt={reference.name} className="h-14 w-20 shrink-0 rounded-md bg-slate-100 object-cover" />
+                      <img src={resolveAssetUrl(reference.url)} alt={reference.name} className="h-14 w-20 shrink-0 rounded-md bg-slate-100 object-cover" onError={() => warnImageLoadFailure(reference.url, resolveAssetUrl(reference.url))} />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-xs font-bold text-slate-800">{reference.name}</p>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -1295,7 +1297,8 @@ export function PanoramaQuickRenderPanel({
 }
 
 function MainPanoramaPreview({ imageUrl, previewMode }: { imageUrl: string; previewMode: 'image' | '360' }) {
-  if (!imageUrl) {
+  const resolvedImageUrl = resolveAssetUrl(imageUrl);
+  if (!resolvedImageUrl) {
     return (
       <div className="flex h-full items-center justify-center bg-slate-50 p-8 text-center">
         <div className="max-w-sm">
@@ -1308,12 +1311,12 @@ function MainPanoramaPreview({ imageUrl, previewMode }: { imageUrl: string; prev
   }
 
   if (previewMode === '360') {
-    return <PanoramaViewer imageUrl={imageUrl} className="h-full w-full bg-slate-950" minHeight={560} />;
+    return <PanoramaViewer imageUrl={resolvedImageUrl} className="h-full w-full bg-slate-950" minHeight={560} />;
   }
 
   return (
     <div className="flex h-full items-center justify-center bg-slate-950 p-4">
-      <img src={imageUrl} alt="全景图大图预览" className="max-h-full w-full max-w-full object-contain" />
+      <img src={resolvedImageUrl} alt="全景图大图预览" className="max-h-full w-full max-w-full object-contain" onError={() => warnImageLoadFailure(imageUrl, resolvedImageUrl)} />
     </div>
   );
 }

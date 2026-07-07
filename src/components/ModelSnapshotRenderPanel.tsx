@@ -8,6 +8,7 @@ import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 import { IMAGE_UPLOAD_ACCEPT } from '../utils/imageValidation';
 import { validateImageFile } from '../utils/file';
+import { resolveAssetUrl, warnImageLoadFailure } from '../utils/assetUrl';
 
 interface ModelSnapshotRenderPanelProps {
   state: StepState;
@@ -56,7 +57,8 @@ export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputI
     return () => window.clearInterval(interval);
   }, [selectedModel?.id, selectedModel?.optimizationStatus]);
 
-  const snapshotUrl = state.inputImage?.dataUrl || state.inputImage?.url || null;
+  const rawSnapshotUrl = state.inputImage?.dataUrl || state.inputImage?.url || null;
+  const snapshotUrl = resolveAssetUrl(rawSnapshotUrl);
   const isSelectedModelBlocked = selectedModel ? isModelPreviewBlocked(selectedModel) && !originalLoadApprovals[selectedModel.id] : false;
   const canCapture = Boolean(selectedModel && selectedModel.previewable && (selectedModel.convertedUrl || selectedModel.modelUrl) && !isSelectedModelBlocked);
 
@@ -268,7 +270,7 @@ export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputI
                 </div>
                 <div className="flex h-[calc(100vh-168px)] min-h-[420px] flex-col items-center justify-center bg-slate-50 p-6 xl:min-h-[560px]">
                   {snapshotUrl ? (
-                    <img src={snapshotUrl} alt="上传的模型截图" className="max-h-full w-full max-w-full object-contain" />
+                    <img src={snapshotUrl} alt="上传的模型截图" className="max-h-full w-full max-w-full object-contain" onError={() => warnImageLoadFailure(rawSnapshotUrl, snapshotUrl)} />
                   ) : (
                     <div className="max-w-sm text-center">
                       <Camera className="mx-auto h-10 w-10 text-slate-300" />
@@ -351,7 +353,7 @@ export function ModelSnapshotRenderPanel({ state, onUpdateConfig, onUpdateInputI
               <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
                 {snapshotUrl ? (
                   <>
-                    <img src={snapshotUrl} alt="模型视角截图预览" className="h-40 w-full object-cover" />
+                    <img src={snapshotUrl} alt="模型视角截图预览" className="h-40 w-full object-cover" onError={() => warnImageLoadFailure(rawSnapshotUrl, snapshotUrl)} />
                     <div className="flex items-center gap-2 px-3 py-2 text-xs font-bold text-emerald-700">
                       <CheckCircle2 className="h-4 w-4" />
                       已截取当前视角

@@ -1,3 +1,6 @@
+import { buildApiUrl } from '../lib/apiBaseUrl';
+import { resolveAssetUrl } from './assetUrl';
+
 export const downloadFallbackMessage = '下载失败，请右键图片另存为。';
 export const downloadRetryMessage = '下载失败，请稍后重试';
 
@@ -26,7 +29,7 @@ export async function downloadAsset(source: string | DownloadAssetSource, filena
 
   if (normalized.assetId) {
     await fetchBlobAndDownload(
-      `/api/assets/${encodeURIComponent(normalized.assetId)}/download?filename=${encodeURIComponent(filename)}`,
+      buildApiUrl(`/api/assets/${encodeURIComponent(normalized.assetId)}/download?filename=${encodeURIComponent(filename)}`),
       filename,
       false,
     );
@@ -39,11 +42,12 @@ export async function downloadAsset(source: string | DownloadAssetSource, filena
   }
 
   if (!normalized.url) throw new Error(downloadRetryMessage);
+  const resolvedUrl = resolveAssetUrl(normalized.url);
 
   try {
-    await fetchBlobAndDownload(normalized.url, filename, true);
+    await fetchBlobAndDownload(resolvedUrl, filename, true);
   } catch {
-    openDownloadFallback(normalized.url);
+    openDownloadFallback(resolvedUrl);
     throw new Error(downloadFallbackMessage);
   }
 }

@@ -28,6 +28,7 @@ import {
 } from '../lib/api';
 import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
+import { resolveAssetUrl } from '../utils/assetUrl';
 import { AspectRatioImage } from './common/AspectRatioImage';
 import { ResultImageTabs } from './ResultImageTabs';
 
@@ -592,10 +593,11 @@ function ProjectReportPrintView({ project, reportOptions }: { project: Project; 
 }
 
 function PrintImage({ src, label }: { src: string | null; label: string }) {
+  const resolvedSrc = resolveAssetUrl(src);
   return (
     <figure>
       <div className="pdf-report-image-frame">
-        {src ? <img src={src} alt={label} referrerPolicy="no-referrer" /> : <span>暂无图片</span>}
+        {resolvedSrc ? <img src={resolvedSrc} alt={label} referrerPolicy="no-referrer" /> : <span>暂无图片</span>}
       </div>
       <figcaption>{label}</figcaption>
     </figure>

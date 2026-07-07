@@ -1,4 +1,5 @@
 import { GenerationBatchItem, GenerationResultOption } from '../types';
+import { resolveAssetUrl } from './assetUrl';
 
 interface ResultLike {
   imageUrl?: string | null;
@@ -7,7 +8,7 @@ interface ResultLike {
 }
 
 export function getOriginalResultImageUrl(result: ResultLike | null | undefined, fallback?: string | null): string | null {
-  return readFirstString(
+  const url = readFirstString(
     result?.metadata?.originalUrl,
     result?.metadata?.outputUrl,
     result?.metadata?.original_url,
@@ -15,6 +16,7 @@ export function getOriginalResultImageUrl(result: ResultLike | null | undefined,
     result?.imageUrl,
     fallback,
   );
+  return url ? resolveAssetUrl(url) : null;
 }
 
 export function getOriginalResultAssetId(result: ResultLike | null | undefined, fallback?: string | null): string | null {

@@ -133,6 +133,9 @@ Uploads an image asset. Request is `multipart/form-data` with one `file` field. 
       "id": "image_123",
       "userId": "user_123",
       "url": "/uploads/1710000000000-id.png",
+      "publicUrl": "/uploads/1710000000000-id.png",
+      "path": "1710000000000-id.png",
+      "storageProvider": "local",
       "filename": "1710000000000-id.png",
       "mimeType": "image/png",
       "size": 102400,
@@ -150,7 +153,7 @@ Common errors: `UPLOAD_CONTENT_TYPE_INVALID`, `UPLOAD_BOUNDARY_MISSING`, `UPLOAD
 | --- | --- | --- |
 | `GET` | `/api/assets/images/:id` | Return one owned image asset record. |
 
-The API returns metadata and the storage URL. It does not provide a separate `/file` endpoint; local files are served from `/uploads/...`, and Supabase Storage returns public bucket URLs.
+The API returns metadata and the storage URL. It does not provide a separate `/file` endpoint; local files are served from `/uploads/...`, and Supabase Storage returns public bucket URLs. Image records include `url`, `publicUrl`, `path`, and `storageProvider`; when `FILE_STORAGE=supabase`, `url` and `publicUrl` should be the Supabase public object URL.
 
 ### Model Assets
 

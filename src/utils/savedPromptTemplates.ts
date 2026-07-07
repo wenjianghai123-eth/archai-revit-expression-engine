@@ -1,5 +1,6 @@
 import { PromptTemplateCreateInput, PromptTemplateFeature, PromptTemplateRecord } from '../lib/api';
 import { GenerationConfig, GenerationResultOption, GenerationStep, PromptTemplate, ReferenceImage, StepState, UploadedImage } from '../types';
+import { resolveAssetUrl } from './assetUrl';
 import { getOriginalResultAssetId, getOriginalResultImageUrl } from './resultImage';
 
 export const templateEnabledSteps = new Set<GenerationStep>([
@@ -176,17 +177,17 @@ function collectInputPreviews(state: StepState): PromptTemplateCreateInput['inpu
   addUploadedPreview(previews, '原图', state.inputImage);
   addUploadedPreview(previews, '材质图', state.materialImage);
   for (const texture of state.materialTextures) {
-    if (texture.url || texture.dataUrl) previews.push({ label: texture.name || '材质贴图', url: texture.url || texture.dataUrl || '', assetId: texture.assetId });
+    if (texture.url || texture.dataUrl) previews.push({ label: texture.name || '材质贴图', url: resolveAssetUrl(texture.url || texture.dataUrl || ''), assetId: texture.assetId });
   }
   for (const reference of state.furnitureReferences) {
-    if (reference.url || reference.dataUrl) previews.push({ label: reference.name || '参考图', url: reference.url || reference.dataUrl || '', assetId: reference.assetId });
+    if (reference.url || reference.dataUrl) previews.push({ label: reference.name || '参考图', url: resolveAssetUrl(reference.url || reference.dataUrl || ''), assetId: reference.assetId });
   }
   return previews.filter(item => item.url);
 }
 
 function addUploadedPreview(previews: PromptTemplateCreateInput['inputPreviews'], label: string, image: UploadedImage | null) {
   if (!image) return;
-  const url = image.url || image.dataUrl;
+  const url = resolveAssetUrl(image.url || image.dataUrl);
   if (!url) return;
   previews.push({ label, url, assetId: image.assetId });
 }

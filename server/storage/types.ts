@@ -213,6 +213,9 @@ export interface ImageAsset {
   id: string;
   userId: string;
   url: string;
+  publicUrl?: string;
+  path?: string;
+  storageProvider?: 'local' | 'supabase';
   filename: string;
   mimeType: string;
   size: number;

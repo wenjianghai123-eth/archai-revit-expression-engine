@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { AlertCircle, ImageIcon } from 'lucide-react';
 import { listPanoramaRecords } from '../storage/panoramas';
 import { PanoramaRecord } from '../types';
+import { resolveAssetUrl, warnImageLoadFailure } from '../utils/assetUrl';
 import { PanoramaViewer } from './PanoramaViewer';
 
 interface PanoramaSharePageProps {
@@ -11,7 +12,8 @@ interface PanoramaSharePageProps {
 export function PanoramaSharePage({ shareId }: PanoramaSharePageProps) {
   const record = useMemo(() => findPanoramaRecord(shareId) || readFallbackRecordFromUrl(shareId), [shareId]);
   const [previewMode, setPreviewMode] = useState<'360' | 'image'>('360');
-  const imageUrl = record?.renderedPanoramaUrl || record?.panoramaUrl || '';
+  const rawImageUrl = record?.renderedPanoramaUrl || record?.panoramaUrl || '';
+  const imageUrl = resolveAssetUrl(rawImageUrl);
 
   if (!record || !imageUrl) {
     return (
@@ -50,7 +52,7 @@ export function PanoramaSharePage({ shareId }: PanoramaSharePageProps) {
           <PanoramaViewer imageUrl={imageUrl} className="h-[calc(100vh-132px)] min-h-[520px] rounded-2xl" minHeight={520} />
         ) : (
           <div className="mx-auto max-w-7xl overflow-hidden rounded-2xl border border-white/10 bg-black">
-            <img src={imageUrl} alt="全景普通图片" className="w-full object-contain" />
+            <img src={imageUrl} alt="全景普通图片" className="w-full object-contain" onError={() => warnImageLoadFailure(rawImageUrl, imageUrl)} />
           </div>
         )}
       </main>
