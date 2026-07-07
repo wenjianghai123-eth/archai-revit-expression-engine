@@ -12,7 +12,7 @@ Production uses an administrator-assigned account model:
 2. Public registration is forbidden. Do not add a public sign-up UI, do not expose a self-serve registration route, and disable or restrict public sign-ups in Supabase Authentication settings.
 3. Seed exactly one first admin after the Supabase schema/RPC/storage setup is ready.
 4. The first admin signs in at `/admin` and creates all other admin/member accounts from the user management page.
-5. Users must have both a Supabase Auth user and an active `profiles` row. A Supabase Auth user without an active profile cannot access business APIs.
+5. Users normally have both a Supabase Auth user and an active `profiles` row. If an administrator-created Auth user is missing its profile row, `POST /api/auth/login` auto-creates a default `role=member`, `status=active` profile after the password is verified. Profiles with `status=disabled` cannot access business APIs.
 
 Legacy generation endpoints (`/api/generate/floorplan`, `/api/generate/style-render`, and `/api/generate/inpaint`) must stay disabled in production with `ENABLE_LEGACY_GENERATION_ENDPOINTS=false`. They are development helpers only; production generation must go through `/api/generation-jobs` so login, ownership checks, job persistence, and credit debits are enforced. Keep `VITE_ENABLE_LEGACY_GENERATION_FALLBACK=false` for production frontend builds.
 
@@ -78,7 +78,25 @@ After seeding, log in at `/admin` with that admin account and create all member/
 
 ## Auth
 
-Use Express JWT auth when `AUTH_MODE=supabase`. Production must use `AUTH_MODE=supabase`; do not deploy production with `AUTH_MODE=dev`. The frontend posts email/password to Express `POST /api/auth/login`; Express verifies the password through Supabase Auth on the server, checks the `profiles` row, then signs an access token with `JWT_SECRET`. The frontend stores that token as `auth_access_token` and attaches it as `Authorization: Bearer ...` on business APIs. Magic link login and public sign-up are intentionally not used.
+Use Express JWT auth when `AUTH_MODE=supabase`. Production must use `AUTH_MODE=supabase`; do not deploy production with `AUTH_MODE=dev`. The frontend posts email/password to Express `POST /api/auth/login`; Express verifies the password through Supabase Auth on the server, checks `public.profiles` by `id = auth.users.id` with an email fallback, auto-creates a missing `member/active` profile, then signs an access token with `JWT_SECRET`. The frontend stores that token as `auth_access_token` and attaches it as `Authorization: Bearer ...` on business APIs. Magic link login and public sign-up are intentionally not used.
+
+Manual activation SQL:
+
+```sql
+insert into public.profiles (id, email, name, role, status)
+select id, email, coalesce(raw_user_meta_data->>'name', split_part(email, '@', 1)), 'member', 'active'
+from auth.users
+where email = 'user@example.com'
+on conflict (id) do update
+set email = excluded.email,
+    name = excluded.name,
+    status = 'active',
+    updated_at = now();
+
+update public.profiles
+set role = 'admin', status = 'active', updated_at = now()
+where email = 'admin@example.com';
+```
 
 For local mock development, keep `AUTH_MODE=dev`; no Supabase project is required.
 

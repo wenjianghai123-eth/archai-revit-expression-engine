@@ -199,7 +199,26 @@ The old `/api/generate/floorplan`, `/api/generate/style-render`, and `/api/gener
 
 Local development defaults to `AUTH_MODE=dev`, which injects a single development user and requires no Supabase configuration. This keeps mock generation and local project workflows available after `npm run dev:client` and `npm run dev:server`.
 
-Production authentication uses Express JWT when `AUTH_MODE=supabase` is set. The frontend posts email/password to `POST /api/auth/login`; Express verifies the password with Supabase Auth on the server, checks the matching `profiles` row, then returns `user`, `accessToken`, and `tokenType=Bearer`. The frontend stores `auth_access_token` in localStorage and sends it on `/api/me`, `/api/projects`, `/api/assets`, `/api/generation-jobs`, prompt templates, credits, and admin APIs. Accounts are created by administrators; public registration and magic-link login are intentionally not used.
+Production authentication uses Express JWT when `AUTH_MODE=supabase` is set. The frontend posts email/password to `POST /api/auth/login`; Express verifies the password with Supabase Auth on the server, checks the matching `public.profiles` row by `id = auth.users.id` with an email fallback, then returns `user`, `accessToken`, and `tokenType=Bearer`. If a Supabase Auth user exists but the profile row is missing, login auto-creates a `role=member`, `status=active` profile so administrator-created Auth users are not blocked by missing business metadata. Disabled profiles still cannot log in. The frontend stores `auth_access_token` in localStorage and sends it on `/api/me`, `/api/projects`, `/api/assets`, `/api/generation-jobs`, prompt templates, credits, and admin APIs. Accounts are created by administrators; public registration and magic-link login are intentionally not used.
+
+Manual profile activation or admin promotion can be done in Supabase SQL editor:
+
+```sql
+insert into public.profiles (id, email, name, role, status)
+select id, email, coalesce(raw_user_meta_data->>'name', split_part(email, '@', 1)), 'member', 'active'
+from auth.users
+where email = 'user@example.com'
+on conflict (id) do update
+set email = excluded.email,
+    name = excluded.name,
+    status = 'active',
+    updated_at = now();
+
+-- Optional: make the first administrator account an admin.
+update public.profiles
+set role = 'admin', status = 'active', updated_at = now()
+where email = 'admin@example.com';
+```
 
 `VITE_*` variables are embedded by Vite at build time. After setting or changing `VITE_API_BASE_URL` on Vercel, Netlify, Render, or another hosting platform, rebuild and redeploy the frontend. Updating only runtime server variables will not change an already-built browser bundle.
 

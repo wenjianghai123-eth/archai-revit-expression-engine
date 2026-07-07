@@ -166,13 +166,16 @@ interface PublicGenerationResult {
   createdAt: string;
 }
 
+type LoginPayload = { user: UserProfile; accessToken: string; tokenType: 'Bearer' };
+type LoginApiResponse = ApiResponse<LoginPayload> | ({ ok: true; data: LoginPayload } & LoginPayload);
+
 const queuedGenerationJobIds: string[] = [];
 let isGenerationWorkerRunning = false;
 const rateLimitGenerationJobCreate = createGenerationJobRateLimiter(generationJobRateLimitPerMinute);
 
 const loginHandler = async (
   req: Request,
-  res: Response<ApiResponse<{ user: UserProfile; accessToken: string; tokenType: 'Bearer' }>>,
+  res: Response<LoginApiResponse>,
   next: NextFunction,
 ) => {
   try {
@@ -190,12 +193,9 @@ const loginHandler = async (
       };
     } else {
       const authUser = await authenticateSupabasePassword(body.value.email, body.value.password);
-      user = await getUserProfile(authUser.id) || await getUserProfileByEmail(authUser.email);
-    }
-
-    if (!user) {
-      res.status(401).json(apiError('账号尚未由管理员激活，请联系管理员。', 'AUTH_PROFILE_REQUIRED'));
-      return;
+      const profileResult = await findOrCreateLoginProfile(authUser);
+      user = profileResult.profile;
+      logLoginProfileCheck(user, { authUserId: authUser.id, created: profileResult.created });
     }
 
     if (user.status === 'disabled') {
@@ -204,7 +204,12 @@ const loginHandler = async (
     }
 
     const accessToken = signAuthToken(user);
-    res.json(apiOk({ user, accessToken, tokenType: 'Bearer' }));
+    const payload: LoginPayload = { user, accessToken, tokenType: 'Bearer' };
+    res.json({
+      ok: true,
+      data: payload,
+      ...payload,
+    });
   } catch (error) {
     if (error instanceof Error && /账号或密码错误|Invalid login credentials|invalid/i.test(error.message)) {
       res.status(401).json(apiError('账号或密码错误', 'AUTH_LOGIN_FAILED'));
@@ -213,6 +218,34 @@ const loginHandler = async (
     next(error);
   }
 };
+
+async function findOrCreateLoginProfile(authUser: { id: string; email: string; name?: string }): Promise<{ profile: UserProfile; created: boolean }> {
+  const existing = await getUserProfile(authUser.id) || await getUserProfileByEmail(authUser.email);
+  if (existing) {
+    return { profile: existing, created: false };
+  }
+
+  const profile = await createUserProfile({
+    id: authUser.id,
+    email: authUser.email,
+    name: authUser.name || authUser.email.split('@')[0] || 'ArchAI User',
+    role: 'member',
+    status: 'active',
+  });
+  return { profile, created: true };
+}
+
+function logLoginProfileCheck(profile: UserProfile, options: { authUserId?: string; created: boolean }): void {
+  console.info('[auth] login profile check', {
+    userId: sanitizeLogText(options.authUserId || profile.id),
+    profileId: sanitizeLogText(profile.id),
+    hasProfile: true,
+    profileCreated: options.created,
+    profileStatus: profile.status,
+    profileIsActive: profile.status === 'active',
+    role: profile.role,
+  });
+}
 
 const currentUserHandler = (req: Request, res: Response<ApiResponse<{ user: UserProfile }>>) => {
   const user = getRequiredCurrentUser(req);

@@ -24,6 +24,7 @@ export interface AdminAuthUser {
 export interface PasswordAuthUser {
   id: string;
   email: string;
+  name?: string;
 }
 
 export function getSupabaseAdminClient(): SupabaseClient {
@@ -80,6 +81,7 @@ export async function authenticateSupabasePassword(email: string, password: stri
   return {
     id: data.user.id,
     email: data.user.email || email.trim().toLowerCase(),
+    name: readAuthUserName(data.user),
   };
 }
 
@@ -176,6 +178,13 @@ function mapAuthUser(user: User): AdminAuthUser {
     email: user.email || '',
     createdAt: user.created_at,
   };
+}
+
+function readAuthUserName(user: User): string | undefined {
+  const metadata = user.user_metadata;
+  const name = metadata && typeof metadata.name === 'string' ? metadata.name.trim() : '';
+  const fullName = metadata && typeof metadata.full_name === 'string' ? metadata.full_name.trim() : '';
+  return name || fullName || undefined;
 }
 
 function formatSupabaseAuthError(message: string): string {

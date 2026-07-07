@@ -28,7 +28,7 @@ Public. Returns backend health status. This endpoint does not require login and 
 
 ### `POST /api/auth/login`
 
-Public. Verifies email/password through the Express backend. In Supabase production mode, Express verifies the password with Supabase Auth server-side, checks the matching `profiles` row, then returns an Express access token.
+Public. Verifies email/password through the Express backend. In Supabase production mode, Express verifies the password with Supabase Auth server-side, checks `public.profiles` by `id = auth.users.id` with an email fallback, auto-creates a missing `member/active` profile, then returns an Express access token.
 
 ```json
 {
