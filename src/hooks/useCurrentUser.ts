@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AuthUser, getCurrentUser } from '../lib/api';
-import { getSupabaseClient, getSupabaseSession, isSupabaseConfigured } from '../lib/supabase';
+import { AuthUser, getCurrentUser, loginWithPassword } from '../lib/api';
+import { clearAuthSession, getAccessToken, readStoredAuthUser, saveAuthSession } from '../lib/authToken';
+import { getConfiguredApiBaseUrl } from '../lib/apiBaseUrl';
 
 export function useCurrentUser() {
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(() => readStoredAuthUser());
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
@@ -13,23 +14,27 @@ export function useCurrentUser() {
     setIsLoading(true);
     setError(null);
 
-    if (!isSupabaseConfigured()) {
+    const accessToken = getAccessToken();
+    if (!accessToken) {
       setUser(null);
       setIsLoading(false);
       return;
     }
 
     try {
-      const session = await getSupabaseSession();
-      if (!session?.access_token) {
-        setUser(null);
-        return;
+      if (import.meta.env.DEV) {
+        console.debug('[auth] verify /api/me', {
+          hasToken: Boolean(accessToken),
+        });
       }
-
-      const currentUser = await getCurrentUser(session.access_token);
+      const currentUser = await getCurrentUser(accessToken);
       setUser(currentUser);
+      saveAuthSession(accessToken, currentUser);
     } catch (err) {
       setUser(null);
+      if (isInvalidTokenError(err)) {
+        clearAuthSession();
+      }
       setError(readAuthErrorMessage(err, '无法读取当前用户。'));
     } finally {
       setIsLoading(false);
@@ -37,40 +42,32 @@ export function useCurrentUser() {
   }, []);
 
   const signInWithEmail = useCallback(async (email: string, password: string) => {
-    const supabase = getSupabaseClient();
-    if (!supabase) {
-      setError('Supabase 尚未配置，无法使用邮箱密码登录。');
-      return;
-    }
-
     setIsSigningIn(true);
+    setIsLoading(true);
     setError(null);
     setAuthMessage(null);
 
     try {
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-      if (signInError) {
-        throw signInError;
-      }
-
-      const accessToken = data.session?.access_token;
-      if (!accessToken) {
-        throw new Error('登录状态验证失败，请重新登录。');
-      }
+      const login = await loginWithPassword({ email, password });
 
       if (import.meta.env.DEV) {
         console.debug('[auth] login success', {
-          hasUser: Boolean(data.user),
-          hasAccessToken: Boolean(accessToken),
-          userId: data.user?.id,
+          hasUser: Boolean(login.user),
+          hasAccessToken: Boolean(login.accessToken),
+          userId: login.user?.id,
         });
       }
 
-      const currentUser = await getCurrentUser(accessToken);
+      saveAuthSession(login.accessToken, login.user);
+
+      if (import.meta.env.DEV) {
+        console.debug('[auth] verify /api/me', {
+          hasToken: Boolean(getAccessToken()),
+        });
+      }
+
+      const currentUser = await getCurrentUser(login.accessToken);
+      saveAuthSession(login.accessToken, currentUser);
       setUser(currentUser);
       setAuthMessage(null);
     } catch (err) {
@@ -80,29 +77,17 @@ export function useCurrentUser() {
       setIsSigningIn(false);
       setIsLoading(false);
     }
-  }, [refresh]);
+  }, []);
 
   const signOut = useCallback(async () => {
-    const supabase = getSupabaseClient();
-    if (supabase) {
-      await supabase.auth.signOut();
-    }
-
+    clearAuthSession();
     setUser(null);
     setAuthMessage(null);
-    await refresh();
+    setIsLoading(false);
   }, [refresh]);
 
   useEffect(() => {
     void refresh();
-    const supabase = getSupabaseClient();
-    const subscription = supabase?.auth.onAuthStateChange(() => {
-      void refresh();
-    }).data.subscription;
-
-    return () => {
-      subscription?.unsubscribe();
-    };
   }, [refresh]);
 
   return {
@@ -111,20 +96,34 @@ export function useCurrentUser() {
     error,
     isSigningIn,
     authMessage,
-    isSupabaseConfigured: isSupabaseConfigured(),
+    isAuthConfigured: isAuthConfigured(),
     refresh,
     signInWithEmail,
     signOut,
   };
 }
 
+function isAuthConfigured(): boolean {
+  return Boolean(getConfiguredApiBaseUrl() || typeof window !== 'undefined');
+}
+
+function isInvalidTokenError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /登录已过期|登录状态已失效|AUTH_INVALID|TOKEN_EXPIRED|expired|invalid token/iu.test(message);
+}
+
 function readAuthErrorMessage(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : String(error || '');
-  if (/invalid login credentials|invalid email or password|email not confirmed|invalid credentials/iu.test(message)) {
+  if (/AUTH_LOGIN_FAILED|账号或密码错误|invalid login credentials|invalid email or password|email not confirmed|invalid credentials/iu.test(message)) {
     return '账号或密码错误';
   }
-  if (/AUTH_REQUIRED|Authentication is required|AUTH_INVALID|JWT|expired|invalid token/iu.test(message)) {
+  if (/AUTH_INVALID|JWT|expired|invalid token|TOKEN_EXPIRED/iu.test(message)) {
     return '登录状态已失效，请重新登录。';
+  }
+  if (/AUTH_REQUIRED|Authentication is required/iu.test(message)) {
+    return getAccessToken()
+      ? '登录凭证未被后端识别，请检查认证配置。'
+      : '请先登录。';
   }
   if (/AUTH_PROFILE_REQUIRED/iu.test(message)) {
     return '账号尚未由管理员激活，请联系管理员。';

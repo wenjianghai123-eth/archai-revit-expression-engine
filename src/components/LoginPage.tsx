@@ -5,17 +5,17 @@ interface LoginPageProps {
   isSigningIn: boolean;
   error: string | null;
   message: string | null;
-  isSupabaseConfigured: boolean;
+  isAuthConfigured: boolean;
   onSignIn: (email: string, password: string) => Promise<void>;
 }
 
-export function LoginPage({ isSigningIn, error, message, isSupabaseConfigured, onSignIn }: LoginPageProps) {
+export function LoginPage({ isSigningIn, error, message, isAuthConfigured, onSignIn }: LoginPageProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!email.trim() || !password || isSigningIn || !isSupabaseConfigured) return;
+    if (!email.trim() || !password || isSigningIn || !isAuthConfigured) return;
     await onSignIn(email.trim(), password);
   };
 
@@ -43,7 +43,7 @@ export function LoginPage({ isSigningIn, error, message, isSupabaseConfigured, o
                 onChange={event => setEmail(event.target.value)}
                 placeholder="name@example.com"
                 className="min-w-0 flex-1 bg-transparent text-sm font-medium text-slate-900 outline-none placeholder:text-slate-400"
-                disabled={isSigningIn || !isSupabaseConfigured}
+                disabled={isSigningIn || !isAuthConfigured}
                 required
               />
             </div>
@@ -59,7 +59,7 @@ export function LoginPage({ isSigningIn, error, message, isSupabaseConfigured, o
                 onChange={event => setPassword(event.target.value)}
                 placeholder="请输入密码"
                 className="min-w-0 flex-1 bg-transparent text-sm font-medium text-slate-900 outline-none placeholder:text-slate-400"
-                disabled={isSigningIn || !isSupabaseConfigured}
+                disabled={isSigningIn || !isAuthConfigured}
                 required
               />
             </div>
@@ -67,7 +67,7 @@ export function LoginPage({ isSigningIn, error, message, isSupabaseConfigured, o
 
           <button
             type="submit"
-            disabled={isSigningIn || !email.trim() || !password || !isSupabaseConfigured}
+            disabled={isSigningIn || !email.trim() || !password || !isAuthConfigured}
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSigningIn ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
@@ -75,9 +75,9 @@ export function LoginPage({ isSigningIn, error, message, isSupabaseConfigured, o
           </button>
         </form>
 
-        {!isSupabaseConfigured && (
+        {!isAuthConfigured && (
           <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
-            Supabase 前端环境变量未配置。生产模式请设置 VITE_SUPABASE_URL 和 VITE_SUPABASE_ANON_KEY；设置后必须重新 build / redeploy。
+            后端认证服务未配置。生产模式请设置 VITE_API_BASE_URL 指向 Express 后端；设置后必须重新 build / redeploy。
           </p>
         )}
 

@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { NextFunction, Request, Response } from 'express';
-import { attachAuthUser, getAuthFailure, getCurrentUser, getRequiredCurrentUser, readAuthMode, requireAuth } from './auth';
+import { attachAuthUser, devAuthUser, getAuthFailure, getCurrentUser, getRequiredCurrentUser, readAuthMode, requireAuth, signAuthToken } from './auth';
 import { createStoredFilename, fileStorageProvider, uploadsDir } from './fileStorage';
 import {
   cancelGenerationJob,
@@ -32,6 +32,7 @@ import {
   getShareLinkByToken,
   getCreditBalance,
   getCreditTransactionByReference,
+  getUserProfile,
   getUserProfileByEmail,
   ImageAsset,
   listGenerationResults,
@@ -92,7 +93,7 @@ import { defaultPlanColorizeStyleId, maxPlanColorizeBatchCount, resolvePlanColor
 import { findFloorplanColorTemplate, resolveFloorplanBatchCount, resolveFloorplanVariantPlans, readFloorplanVariantFocus, readFloorplanVariantType } from '../src/constants/floorplanVariants';
 import { getGenerationCreditCost, getGenerationOutputCount } from '../src/utils/generationCredits';
 import { createAssetsRouter } from './routes/assets';
-import { createSupabaseAuthUser, resetSupabaseAuthUserPassword, updateSupabaseAuthUserMetadata } from './supabaseAdmin';
+import { authenticateSupabasePassword, createSupabaseAuthUser, resetSupabaseAuthUserPassword, updateSupabaseAuthUserMetadata } from './supabaseAdmin';
 import { getModelConversionConfig } from './modelConversionService';
 import { getModelOptimizationConfig } from './modelOptimizationService';
 import { polishPromptText, PromptPolishRequest, PromptPolishResult } from './promptPolishService';
@@ -183,6 +184,46 @@ app.get('/api/ai-providers', (_req: Request, res: Response) => {
   res.json(apiOk(getSelectableGenerationProviders()));
 });
 
+app.post('/api/auth/login', async (req: Request, res: Response<ApiResponse<{ user: UserProfile; accessToken: string; tokenType: 'Bearer' }>>, next: NextFunction) => {
+  try {
+    const body = validateLoginBody(req.body);
+    if (body.ok === false) {
+      res.status(400).json(apiError(body.error.message, body.error.code));
+      return;
+    }
+
+    let user: UserProfile | null = null;
+    if (readAuthMode() === 'dev') {
+      user = {
+        ...devAuthUser,
+        updatedAt: devAuthUser.createdAt,
+      };
+    } else {
+      const authUser = await authenticateSupabasePassword(body.value.email, body.value.password);
+      user = await getUserProfile(authUser.id) || await getUserProfileByEmail(authUser.email);
+    }
+
+    if (!user) {
+      res.status(401).json(apiError('账号尚未由管理员激活，请联系管理员。', 'AUTH_PROFILE_REQUIRED'));
+      return;
+    }
+
+    if (user.status === 'disabled') {
+      res.status(403).json(apiError('账号已停用，请联系管理员。', 'AUTH_USER_DISABLED'));
+      return;
+    }
+
+    const accessToken = signAuthToken(user);
+    res.json(apiOk({ user, accessToken, tokenType: 'Bearer' }));
+  } catch (error) {
+    if (error instanceof Error && /账号或密码错误|Invalid login credentials|invalid/i.test(error.message)) {
+      res.status(401).json(apiError('账号或密码错误', 'AUTH_LOGIN_FAILED'));
+      return;
+    }
+    next(error);
+  }
+});
+
 app.get('/api/auth/me', (req: Request, res: Response) => {
   const user = getCurrentUser(req);
   if (!user) {
@@ -195,6 +236,11 @@ app.get('/api/auth/me', (req: Request, res: Response) => {
   }
 
   res.json(apiOk({ user }));
+});
+
+app.get('/api/me', requireAuth, (req: Request, res: Response<ApiResponse<{ user: UserProfile }>>) => {
+  const user = getRequiredCurrentUser(req);
+  res.json(apiOk({ user: { ...user, updatedAt: user.createdAt } }));
 });
 
 app.post('/api/prompts/polish', requireAuth, async (
@@ -1000,6 +1046,10 @@ export function validateAuthEnvironment(): void {
     throw new Error('AUTH_MODE=dev is not allowed when NODE_ENV=production.');
   }
 
+  if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET?.trim()) {
+    throw new Error('JWT_SECRET is required in production.');
+  }
+
   if (authMode === 'supabase') {
     const missing = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY']
       .filter(name => !process.env[name]);
@@ -1362,6 +1412,30 @@ function validateAdminUserCreateBody(
       password: body.password,
       role,
       initialCredits: initialCreditsValue,
+    },
+  };
+}
+
+function validateLoginBody(
+  body: unknown,
+): { ok: true; value: { email: string; password: string } } | { ok: false; error: ApiError } {
+  if (!isRecord(body)) {
+    return { ok: false, error: { message: 'Request body must be a JSON object.', code: 'INVALID_REQUEST_BODY' } };
+  }
+
+  if (!isEmailString(body.email)) {
+    return { ok: false, error: { message: '邮箱格式不正确。', code: 'AUTH_EMAIL_INVALID' } };
+  }
+
+  if (!isNonEmptyString(body.password)) {
+    return { ok: false, error: { message: '请输入密码。', code: 'AUTH_PASSWORD_REQUIRED' } };
+  }
+
+  return {
+    ok: true,
+    value: {
+      email: body.email.trim().toLowerCase(),
+      password: body.password,
     },
   };
 }

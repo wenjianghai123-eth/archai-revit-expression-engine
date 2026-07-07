@@ -2,6 +2,7 @@ import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
 import { randomUUID } from 'node:crypto';
 
 let client: SupabaseClient | null = null;
+let passwordAuthClient: SupabaseClient | null = null;
 
 export interface AdminAuthUserInput {
   email: string;
@@ -18,6 +19,11 @@ export interface AdminAuthUser {
   id: string;
   email: string;
   createdAt: string;
+}
+
+export interface PasswordAuthUser {
+  id: string;
+  email: string;
 }
 
 export function getSupabaseAdminClient(): SupabaseClient {
@@ -38,6 +44,43 @@ export function getSupabaseAdminClient(): SupabaseClient {
   });
 
   return client;
+}
+
+export function getSupabasePasswordAuthClient(): SupabaseClient {
+  if (passwordAuthClient) return passwordAuthClient;
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const anonKey = process.env.SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !anonKey) {
+    throw new Error('SUPABASE_URL and SUPABASE_ANON_KEY are required for password login.');
+  }
+
+  passwordAuthClient = createClient(supabaseUrl, anonKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+
+  return passwordAuthClient;
+}
+
+export async function authenticateSupabasePassword(email: string, password: string): Promise<PasswordAuthUser> {
+  const supabase = getSupabasePasswordAuthClient();
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: email.trim().toLowerCase(),
+    password,
+  });
+
+  if (error || !data.user) {
+    throw new Error('账号或密码错误');
+  }
+
+  return {
+    id: data.user.id,
+    email: data.user.email || email.trim().toLowerCase(),
+  };
 }
 
 export async function createSupabaseAuthUser(input: AdminAuthUserInput): Promise<AdminAuthUser> {

@@ -1,6 +1,6 @@
 import { buildApiUrl, isRelativeApiPath } from './apiBaseUrl';
 import { parseApiResponse, readApiErrorMessage } from './apiResponse';
-import { getSupabaseAccessToken } from './supabase';
+import { getAccessToken } from './authToken';
 import { isAbortError } from '../utils/apiConnectionStatus';
 
 const BACKEND_UNAVAILABLE_MESSAGE = '后端服务暂不可用，请稍后重试或检查 VITE_API_BASE_URL 是否指向已部署的 Express 后端。';
@@ -124,6 +124,12 @@ export interface ImageAsset {
   mimeType: string;
   size: number;
   createdAt: string;
+}
+
+export interface LoginResponse {
+  user: AuthUser;
+  accessToken: string;
+  tokenType: 'Bearer';
 }
 
 export interface PromptTemplateInputPreview {
@@ -435,8 +441,15 @@ export async function polishPrompt(input: PromptPolishInput): Promise<PromptPoli
 }
 
 export async function getCurrentUser(accessToken?: string): Promise<AuthUser> {
-  const response = await request<{ user: AuthUser }>('/api/auth/me', {}, accessToken);
+  const response = await request<{ user: AuthUser }>('/api/me', {}, accessToken);
   return response.user;
+}
+
+export async function loginWithPassword(input: { email: string; password: string }): Promise<LoginResponse> {
+  return request<LoginResponse>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }, null);
 }
 
 export async function getCreditBalance(): Promise<CreditBalance> {
@@ -681,9 +694,9 @@ export async function getPublicShare(token: string): Promise<PublicSharePayload>
   return response.share;
 }
 
-async function request<T>(path: string, init: RequestInit = {}, authTokenOverride?: string): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}, authTokenOverride?: string | null): Promise<T> {
   let response: Response;
-  const accessToken = authTokenOverride || await getSupabaseAccessToken();
+  const accessToken = authTokenOverride === undefined ? getAccessToken() : authTokenOverride;
   const headers = new Headers(init.headers);
   const url = buildApiUrl(path);
 
@@ -693,6 +706,13 @@ async function request<T>(path: string, init: RequestInit = {}, authTokenOverrid
 
   if (accessToken && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${accessToken}`);
+  }
+
+  if (import.meta.env.DEV) {
+    console.debug('[api] request', {
+      path,
+      hasToken: Boolean(accessToken),
+    });
   }
 
   try {
@@ -766,6 +786,9 @@ function formatApiError(error: ApiErrorResponse): string {
   }
   if (error.code === 'AUTH_INVALID') {
     return '登录已过期，请重新登录。';
+  }
+  if (error.code === 'AUTH_LOGIN_FAILED') {
+    return '账号或密码错误';
   }
   if (error.code === 'AUTH_PROFILE_REQUIRED') {
     return '账号尚未由管理员激活，请联系管理员。';

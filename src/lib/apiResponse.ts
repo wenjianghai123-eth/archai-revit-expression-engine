@@ -47,6 +47,9 @@ export function readApiErrorMessage(value: unknown, fallbackStatus?: number): st
   if (code === 'AUTH_INVALID') {
     return '登录已过期，请重新登录。';
   }
+  if (code === 'AUTH_LOGIN_FAILED') {
+    return '账号或密码错误';
+  }
   if (code === 'AUTH_PROFILE_REQUIRED') {
     return '账号尚未由管理员激活，请联系管理员。';
   }

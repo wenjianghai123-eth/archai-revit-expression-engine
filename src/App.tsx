@@ -59,7 +59,7 @@ export default function App() {
     error: currentUserError,
     isSigningIn,
     authMessage,
-    isSupabaseConfigured,
+    isAuthConfigured,
     signInWithEmail,
     signOut,
   } = useCurrentUser();
@@ -745,7 +745,7 @@ export default function App() {
         isSigningIn={isSigningIn}
         error={currentUserError}
         message={authMessage}
-        isSupabaseConfigured={isSupabaseConfigured}
+        isAuthConfigured={isAuthConfigured}
         onSignIn={signInWithEmail}
       />
     );

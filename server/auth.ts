@@ -1,5 +1,10 @@
 import { NextFunction, Request, Response } from 'express';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createRequire } from 'node:module';
+import type { JwtPayload, SignOptions } from 'jsonwebtoken';
+import type jsonwebtoken from 'jsonwebtoken';
+
+const require = createRequire(import.meta.url);
+const jwt = require('jsonwebtoken') as typeof jsonwebtoken;
 
 export interface AuthUser {
   id: string;
@@ -26,7 +31,12 @@ export type AuthMode = 'dev' | 'supabase';
 type AuthFailure = { status: 401 | 403; message: string; code: string };
 type RequestWithUser = Request & { authUser?: AuthUser; authFailure?: AuthFailure };
 
-let supabaseAdminClient: SupabaseClient | null = null;
+interface AuthTokenPayload extends JwtPayload {
+  sub: string;
+  userId: string;
+  email: string;
+  role: AuthUser['role'];
+}
 
 export async function attachAuthUser(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const authMode = readAuthMode();
@@ -64,6 +74,13 @@ export async function attachAuthUser(req: Request, _res: Response, next: NextFun
 
   try {
     const token = readBearerToken(req);
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug('[auth] middleware', {
+        path: req.path,
+        hasAuthorizationHeader: Boolean(req.headers.authorization),
+        hasToken: Boolean(token),
+      });
+    }
     if (!token) {
       (req as RequestWithUser).authFailure = {
         status: 401,
@@ -74,22 +91,11 @@ export async function attachAuthUser(req: Request, _res: Response, next: NextFun
       return;
     }
 
-    const supabase = getSupabaseAdminClient();
-    if (!supabase) {
+    const payload = verifyAuthToken(token);
+    if (!payload) {
       (req as RequestWithUser).authFailure = {
         status: 401,
-        message: 'Login expired, please sign in again.',
-        code: 'AUTH_INVALID',
-      };
-      next();
-      return;
-    }
-
-    const { data, error } = await supabase.auth.getUser(token);
-    if (error || !data.user) {
-      (req as RequestWithUser).authFailure = {
-        status: 401,
-        message: 'Login expired, please sign in again.',
+        message: 'Invalid or expired token.',
         code: 'AUTH_INVALID',
       };
       next();
@@ -97,7 +103,7 @@ export async function attachAuthUser(req: Request, _res: Response, next: NextFun
     }
 
     const { getUserProfile } = await import('./storage');
-    const profile = await getUserProfile(data.user.id);
+    const profile = await getUserProfile(payload.userId || payload.sub);
     if (!profile) {
       (req as RequestWithUser).authFailure = {
         status: 403,
@@ -119,9 +125,9 @@ export async function attachAuthUser(req: Request, _res: Response, next: NextFun
     }
 
     (req as RequestWithUser).authUser = {
-      id: data.user.id,
-      email: profile.email || data.user.email || '',
-      name: profile.name || readUserName(data.user.user_metadata) || data.user.email || 'Supabase User',
+      id: profile.id,
+      email: profile.email || payload.email || '',
+      name: profile.name || payload.email || 'ArchAI User',
       role: profile.role,
       status: profile.status,
       createdAt: profile.createdAt,
@@ -186,33 +192,46 @@ function readBearerToken(req: Request): string | null {
   return token;
 }
 
-function getSupabaseAdminClient(): SupabaseClient | null {
-  if (supabaseAdminClient) return supabaseAdminClient;
-
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!supabaseUrl || !serviceRoleKey) {
-    console.warn('AUTH_MODE=supabase requires SUPABASE_URL plus SUPABASE_SERVICE_ROLE_KEY.');
-    return null;
-  }
-
-  supabaseAdminClient = createClient(supabaseUrl, serviceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
+export function signAuthToken(user: AuthUser): string {
+  return jwt.sign(
+    {
+      sub: user.id,
+      userId: user.id,
+      email: user.email,
+      role: user.role,
     },
-  });
-
-  return supabaseAdminClient;
+    readJwtSecret(),
+    { expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as SignOptions['expiresIn'] },
+  );
 }
 
-function readUserName(metadata: unknown): string | null {
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+function verifyAuthToken(token: string): AuthTokenPayload | null {
+  try {
+    const payload = jwt.verify(token, readJwtSecret());
+    if (!isAuthTokenPayload(payload)) return null;
+    return payload;
+  } catch (error) {
+    console.warn('[auth] token verify failed', {
+      reason: error instanceof Error ? error.name || error.message : String(error),
+    });
     return null;
   }
+}
 
-  const name = (metadata as Record<string, unknown>).name || (metadata as Record<string, unknown>).full_name;
-  return typeof name === 'string' && name.trim().length > 0 ? name.trim() : null;
+export function readJwtSecret(): string {
+  const secret = process.env.JWT_SECRET;
+  if (secret?.trim()) return secret.trim();
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET is required in production.');
+  }
+  return 'archai-dev-jwt-secret-change-me';
+}
+
+function isAuthTokenPayload(value: string | JwtPayload): value is AuthTokenPayload {
+  return typeof value !== 'string'
+    && typeof value.sub === 'string'
+    && typeof value.userId === 'string'
+    && typeof value.email === 'string'
+    && (value.role === 'admin' || value.role === 'member');
 }
 

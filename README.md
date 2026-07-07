@@ -84,8 +84,6 @@ Create a local `.env` or `.env.local` file for development secrets. These files 
 
 Frontend build-time variables, visible in browser bundles:
 
-- `VITE_SUPABASE_URL`: Supabase project URL for the browser client. Required when using Supabase Auth.
-- `VITE_SUPABASE_ANON_KEY`: Supabase anon key for the browser client. Required when using Supabase Auth.
 - `VITE_API_BASE_URL`: backend origin for split frontend/backend deployments. Required for Netlify static frontend + Render/Railway backend; leave empty only for same-origin single-service deployments.
 - `VITE_ENABLE_LEGACY_GENERATION_FALLBACK`: frontend fallback to old `/api/generate/*` endpoints. Set to `true` only for local dev/mock debugging. Production builds ignore this fallback.
 
@@ -94,14 +92,17 @@ Backend/runtime variables, never expose with a `VITE_` prefix:
 - `GENERATION_PROVIDER`: `mock` by default. Set to `grsai` to use the GRS AI Banana2 provider through the backend. Legacy `AI_PROVIDER` values (`mock`, `gemini`, `grsai-banana2`, `grsai-nano-banana`) are still accepted when `GENERATION_PROVIDER` is unset.
 - `GEMINI_API_KEY`: backend-only Gemini API key. Required only when `AI_PROVIDER=gemini`.
 - `GEMINI_IMAGE_MODEL`: optional Gemini image model. Defaults in code to `gemini-2.5-flash-image-preview`.
-- `AUTH_MODE`: `dev` by default. Use `supabase` in production to require Supabase Auth JWTs for project, asset, and generation job APIs.
+- `AUTH_MODE`: `dev` by default. Use `supabase` in production. Express verifies email/password through Supabase Auth at `/api/auth/login`, then signs its own JWT for business APIs.
+- `JWT_SECRET`: fixed backend-only secret used to sign Express access tokens. Required in production; changing it invalidates all existing logins.
+- `JWT_EXPIRES_IN`: optional access token lifetime. Defaults to `7d`.
 - `DATA_BACKEND`: `json` by default. Set to `supabase` to store metadata in Supabase tables.
 - `FILE_STORAGE`: `local` by default. Set to `supabase` to store uploaded images, models, and generated results in Supabase Storage.
 - `ENABLE_LEGACY_GENERATION_ENDPOINTS`: controls old `/api/generate/*` endpoints. Defaults to enabled outside production and disabled in production. Production keeps these endpoints disabled even if this flag is set.
 - `ENABLE_PROVIDER_FALLBACK`: controls backend fallback from a real provider to mock when the provider fails. Defaults to `true` outside production and `false` in production.
 - `SUPABASE_URL`: server-side Supabase project URL for backend adapters. This URL is not a secret, but keep service-role keys backend-only.
 - `SUPABASE_STORAGE_BUCKET`: Supabase Storage bucket name used when `FILE_STORAGE=supabase`.
-- `SUPABASE_SERVICE_ROLE_KEY`: backend-only Supabase service role key used to validate JWTs. Never expose this in frontend code.
+- `SUPABASE_ANON_KEY`: backend-only anon key used by Express to verify email/password through Supabase Auth. Do not expose this from the backend service.
+- `SUPABASE_SERVICE_ROLE_KEY`: backend-only Supabase service role key used for admin user creation and storage adapters. Never expose this in frontend code.
 - `APIYI_API_KEY`: backend-only API易 model API key. Required only when using `apiyi-nano-banana2-edit`. Do not expose this in frontend code.
 - `GRSAI_API_KEY`: backend-only model API key. Required only when `GENERATION_PROVIDER=grsai`, `AI_PROVIDER=grsai-banana2`, or `AI_PROVIDER=grsai-nano-banana`. Do not expose this in frontend code.
 - `GRSAI_BASE_URL`: optional Grsai API base URL. Defaults to `https://grsai.dakka.com.cn` for China direct access. Overseas deployments can use `https://grsaiapi.com`.
@@ -150,11 +151,11 @@ ENABLE_LEGACY_GENERATION_ENDPOINTS=false
 VITE_ENABLE_LEGACY_GENERATION_FALLBACK=false
 ENABLE_PROVIDER_FALLBACK=false
 SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your_public_anon_key
 SUPABASE_STORAGE_BUCKET=archai-assets
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your_public_anon_key
 VITE_API_BASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=your_backend_only_service_role_key
+JWT_SECRET=replace-with-a-fixed-long-random-string
 PORT=8787
 MAX_IMAGE_MB=10
 ```
@@ -195,13 +196,12 @@ The old `/api/generate/floorplan`, `/api/generate/style-render`, and `/api/gener
 
 Local development defaults to `AUTH_MODE=dev`, which injects a single development user and requires no Supabase configuration. This keeps mock generation and local project workflows available after `npm run dev:client` and `npm run dev:server`.
 
-Production authentication uses Supabase when `AUTH_MODE=supabase` is set. The frontend uses `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for email + password login and logout. Accounts are created by administrators; public registration and magic-link login are intentionally not used. The Express backend uses `SUPABASE_SERVICE_ROLE_KEY` only on the server to validate incoming Bearer JWTs. Project, asset, and generation job APIs return `401` when a valid Supabase session is not present.
+Production authentication uses Express JWT when `AUTH_MODE=supabase` is set. The frontend posts email/password to `POST /api/auth/login`; Express verifies the password with Supabase Auth on the server, checks the matching `profiles` row, then returns `user`, `accessToken`, and `tokenType=Bearer`. The frontend stores `auth_access_token` in localStorage and sends it on `/api/me`, `/api/projects`, `/api/assets`, `/api/generation-jobs`, prompt templates, credits, and admin APIs. Accounts are created by administrators; public registration and magic-link login are intentionally not used.
 
-`VITE_*` variables are embedded by Vite at build time. After setting or changing `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, or `VITE_API_BASE_URL` on Vercel, Netlify, Render, or another hosting platform, rebuild and redeploy the frontend. Updating only runtime server variables will not change an already-built browser bundle.
+`VITE_*` variables are embedded by Vite at build time. After setting or changing `VITE_API_BASE_URL` on Vercel, Netlify, Render, or another hosting platform, rebuild and redeploy the frontend. Updating only runtime server variables will not change an already-built browser bundle.
 
 Frontend deployment checklist:
 
-- Configure `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the frontend deployment platform's build environment, not only in the backend service.
 - If the frontend and backend are deployed separately, set `VITE_API_BASE_URL` to the backend origin, for example `https://api.example.com`.
 - After changing any `VITE_*` variable, run `npm run build` again and redeploy the frontend. Only restarting the backend will not update the already-built browser bundle.
 - Keep `SUPABASE_SERVICE_ROLE_KEY`, `GRSAI_API_KEY`, and any other model/provider secret only in the backend environment. Do not add them with a `VITE_` prefix.
@@ -213,7 +213,7 @@ Netlify deploys this Vite app as static frontend files only. It is suitable for 
 Deploy the Express backend to a server platform such as Render or Railway, then configure the browser-facing variables in Netlify, not only in local `.env` files or the backend service:
 
 - Open Netlify Site configuration -> Environment variables.
-- Add `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and, for split frontend/backend deployments, `VITE_API_BASE_URL`.
+- Add `VITE_API_BASE_URL` for split frontend/backend deployments.
 - Set `VITE_API_BASE_URL` to the backend origin only, for example `https://your-archai-api.onrender.com`, not to the Supabase URL and not with a trailing `/api`.
 - Make sure each variable's Scope includes Builds.
 - Make sure the Production deploy context has values for these variables; branch deploy or deploy-preview values do not fix a Production deploy unless Production also has values.
@@ -231,8 +231,10 @@ Complete AI generation deployment requires the Express backend to be deployed wi
 - `DATA_BACKEND=supabase`
 - `FILE_STORAGE=supabase`
 - `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `SUPABASE_STORAGE_BUCKET`
+- `JWT_SECRET`
 - `CORS_ORIGIN=https://guangtian123-eth.netlify.app` or a comma-separated list that includes the Netlify frontend origin.
 - `APIYI_API_KEY` when using API易 Nano Banana2.
 - `GRSAI_API_KEY` when using Grsai Banana2.
@@ -240,8 +242,6 @@ Complete AI generation deployment requires the Express backend to be deployed wi
 The Netlify frontend build environment then needs:
 
 - `VITE_API_BASE_URL=https://your-backend.example.com`
-- `VITE_SUPABASE_URL`
-- `VITE_SUPABASE_ANON_KEY`
 
 ## Storage
 

@@ -38,21 +38,21 @@ SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your_public_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_backend_only_service_role_key
 SUPABASE_STORAGE_BUCKET=archai-assets
+JWT_SECRET=replace-with-a-fixed-long-random-string
+JWT_EXPIRES_IN=7d
 
 # Frontend build-time environment on Netlify/Vercel/static hosts:
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your_public_anon_key
 VITE_API_BASE_URL=https://your-api-domain.com
 VITE_ENABLE_LEGACY_GENERATION_FALLBACK=false
 ```
 
-`SUPABASE_SERVICE_ROLE_KEY`, provider keys, `DATA_BACKEND`, `FILE_STORAGE`, and `AUTH_MODE` are backend-only. Do not expose them in frontend code or client-visible config. `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `VITE_API_BASE_URL` are frontend build-time values and are expected to be visible in the browser bundle.
+`SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`, `JWT_SECRET`, provider keys, `DATA_BACKEND`, `FILE_STORAGE`, and `AUTH_MODE` are backend-only. Do not expose them in frontend code or client-visible config. `VITE_API_BASE_URL` is a frontend build-time value and is expected to be visible in the browser bundle.
 
-`VITE_*` variables are Vite build-time variables. After changing `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_BASE_URL`, or `VITE_ENABLE_LEGACY_GENERATION_FALLBACK`, run `npm run build` again and redeploy the frontend; changing only the server environment will not update already-built browser bundles.
+`VITE_*` variables are Vite build-time variables. After changing `VITE_API_BASE_URL` or `VITE_ENABLE_LEGACY_GENERATION_FALLBACK`, run `npm run build` again and redeploy the frontend; changing only the server environment will not update already-built browser bundles.
 
 If frontend and backend are deployed separately, such as Netlify static frontend plus Render/Railway backend, `VITE_API_BASE_URL` is required and must be set to the backend origin only, for example `https://api.example.com`. The frontend will call `${VITE_API_BASE_URL}/api/...`. If it is empty, the app calls same-origin `/api/...`, which only works for single-service deployments where Express serves both `dist` and `/api`.
 
-For production deploys, put `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the frontend host's build-time environment settings. Backend-only variables such as `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `GRSAI_API_KEY` are not injected into Vite browser code. After changing frontend env vars, run `npm run build` again and redeploy the frontend; restarting only the Express backend will not make the login page pick up new `VITE_*` values.
+For production deploys, put `VITE_API_BASE_URL` in the frontend host's build-time environment settings. Backend-only variables such as `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `JWT_SECRET`, and `GRSAI_API_KEY` are not injected into Vite browser code. After changing frontend env vars, run `npm run build` again and redeploy the frontend; restarting only the Express backend will not make the login page pick up new `VITE_*` values.
 
 ## Seed the First Admin
 
@@ -78,7 +78,7 @@ After seeding, log in at `/admin` with that admin account and create all member/
 
 ## Auth
 
-Use Supabase Auth when `AUTH_MODE=supabase`. Production must use `AUTH_MODE=supabase`; do not deploy production with `AUTH_MODE=dev`. The frontend uses only `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` to sign in with email and password, then attach Bearer tokens. Magic link login and public sign-up are intentionally not used. The backend validates tokens with the service role key.
+Use Express JWT auth when `AUTH_MODE=supabase`. Production must use `AUTH_MODE=supabase`; do not deploy production with `AUTH_MODE=dev`. The frontend posts email/password to Express `POST /api/auth/login`; Express verifies the password through Supabase Auth on the server, checks the `profiles` row, then signs an access token with `JWT_SECRET`. The frontend stores that token as `auth_access_token` and attaches it as `Authorization: Bearer ...` on business APIs. Magic link login and public sign-up are intentionally not used.
 
 For local mock development, keep `AUTH_MODE=dev`; no Supabase project is required.
 
