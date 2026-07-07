@@ -117,6 +117,9 @@ function readAuthErrorMessage(error: unknown, fallback: string): string {
   if (/AUTH_LOGIN_FAILED|账号或密码错误|invalid login credentials|invalid email or password|email not confirmed|invalid credentials/iu.test(message)) {
     return '账号或密码错误';
   }
+  if (/API_ROUTE_NOT_FOUND|接口地址不存在/iu.test(message)) {
+    return '接口地址不存在，请检查前后端 API 路径或后端部署配置。';
+  }
   if (/AUTH_INVALID|JWT|expired|invalid token|TOKEN_EXPIRED/iu.test(message)) {
     return '登录状态已失效，请重新登录。';
   }

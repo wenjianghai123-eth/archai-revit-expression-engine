@@ -78,6 +78,8 @@ Use this split deployment when Netlify hosts only the static Vite frontend and a
 
 In this mode `VITE_API_BASE_URL` is required in the Netlify build environment and must point to the backend origin only, for example `https://your-archai-api.onrender.com`. Netlify does not run `server/index.ts`, so same-origin `/api/...` calls on the Netlify domain will fail without this value.
 
+If the browser shows `API_ROUTE_NOT_FOUND`, first check the Network tab for the exact request URL. A request to `https://guangtian123-eth.netlify.app/api/...` means the static Netlify site is receiving the API call directly; either configure `VITE_API_BASE_URL` to the deployed Express backend and rebuild Netlify, or replace the default Netlify `/api/*` placeholder redirect with a proxy to the backend. Do not use both approaches at the same time. The Express backend logs unknown API requests as `[api] route not found` with method, path, and original URL.
+
 ## Environment Variables
 
 Create a local `.env` or `.env.local` file for development secrets. These files are ignored by git.
@@ -220,8 +222,18 @@ Deploy the Express backend to a server platform such as Render or Railway, then 
 - Set Build command to `npm run build`.
 - Set Publish directory to `dist`.
 - Keep `netlify.toml` publish set to `dist`; `public/_redirects` is copied into `dist/_redirects` during `npm run build` for SPA routing.
+- The default `public/_redirects` and `netlify.toml` put `/api/*` before the SPA fallback and return `api-not-configured.json`. This prevents API requests from being rewritten to `index.html` when no backend URL is configured.
 - After changing any `VITE_*` value, use Clear cache and deploy site so Netlify rebuilds the browser bundle with the new values.
 - To confirm the Netlify build environment before building, run `npm run check:env` in the build log or temporarily set the build command to `npm run check:env && npm run build`.
+
+Optional proxy mode: if you intentionally want the frontend to call same-origin `/api/...` on Netlify, replace the default `/api/* /api-not-configured.json 404` rule with a Netlify redirect proxy before the SPA fallback:
+
+```text
+/api/* https://your-archai-api.onrender.com/api/:splat 200
+/* /index.html 200
+```
+
+The default repository config does not include this proxy because the backend domain is deployment-specific. Without that proxy, `VITE_API_BASE_URL` is required for Netlify static frontend deployments.
 
 Keep backend-only secrets such as `SUPABASE_SERVICE_ROLE_KEY` and `GRSAI_API_KEY` on the Render/Railway backend service. Do not add them to Netlify with a `VITE_` prefix.
 

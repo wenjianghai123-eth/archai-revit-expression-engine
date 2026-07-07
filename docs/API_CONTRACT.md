@@ -7,7 +7,7 @@ This document reflects the current Express API. All AI/model calls go through th
 - Base path: `/api`
 - Request format: JSON unless the endpoint explicitly uses `multipart/form-data`.
 - Response envelope: successful API responses use `{ "ok": true, "data": ... }`; errors use `{ "ok": false, "error": { "message": "...", "code": "..." } }`.
-- Auth: most APIs require an authenticated user. Local development uses `AUTH_MODE=dev`; Supabase deployments use Bearer JWTs with `AUTH_MODE=supabase`.
+- Auth: most APIs require an authenticated user. Local development uses `AUTH_MODE=dev`; Supabase deployments use Express-signed Bearer JWTs returned by `POST /api/auth/login` when `AUTH_MODE=supabase`.
 - Storage: metadata can use `DATA_BACKEND=json` or `DATA_BACKEND=supabase`; files can use `FILE_STORAGE=local` or `FILE_STORAGE=supabase`.
 - IDs are opaque strings. Timestamps are ISO 8601 strings.
 
@@ -25,9 +25,33 @@ Public. Returns backend version and selected provider.
 }
 ```
 
-### `GET /api/auth/me`
+### `POST /api/auth/login`
 
-Requires login. In `AUTH_MODE=dev`, the backend injects the development user. In `AUTH_MODE=supabase`, the request must include a valid Supabase JWT.
+Public. Verifies email/password through the Express backend. In Supabase production mode, Express verifies the password with Supabase Auth server-side, checks the matching `profiles` row, then returns an Express access token.
+
+```json
+{
+  "ok": true,
+  "data": {
+    "user": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "email": "dev@archai.local",
+      "name": "ArchAI Dev",
+      "role": "admin",
+      "status": "active",
+      "createdAt": "2026-05-02T12:00:00.000Z"
+    },
+    "accessToken": "jwt",
+    "tokenType": "Bearer"
+  }
+}
+```
+
+Compatibility route: `POST /api/login` uses the same handler.
+
+### `GET /api/me`
+
+Requires login. In `AUTH_MODE=dev`, the backend injects the development user. In `AUTH_MODE=supabase`, the request must include the Express JWT returned by `/api/auth/login` as `Authorization: Bearer ...`.
 
 ```json
 {
@@ -42,6 +66,10 @@ Requires login. In `AUTH_MODE=dev`, the backend injects the development user. In
   }
 }
 ```
+
+Compatibility route: `GET /api/auth/me` uses the same handler.
+
+Unknown API routes return `404` with code `API_ROUTE_NOT_FOUND`. This is a route/deployment problem, not a login-expired error.
 
 ## Projects
 

@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "error": {
+    "code": "BACKEND_NOT_CONFIGURED",
+    "message": "Netlify only hosts the static frontend. Configure VITE_API_BASE_URL or a Netlify /api proxy to the Express backend."
+  }
+}

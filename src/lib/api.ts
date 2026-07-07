@@ -711,6 +711,7 @@ async function request<T>(path: string, init: RequestInit = {}, authTokenOverrid
   if (import.meta.env.DEV) {
     console.debug('[api] request', {
       path,
+      url,
       hasToken: Boolean(accessToken),
     });
   }
@@ -782,10 +783,19 @@ export async function convertModelAsset(id: string): Promise<ModelAssetRecord> {
 
 function formatApiError(error: ApiErrorResponse): string {
   if (error.code === 'AUTH_REQUIRED') {
-    return '登录状态已失效，请重新登录。';
+    return '请先登录。';
   }
   if (error.code === 'AUTH_INVALID') {
     return '登录已过期，请重新登录。';
+  }
+  if (error.code === 'TOKEN_EXPIRED') {
+    return '登录状态已失效，请重新登录。';
+  }
+  if (error.code === 'API_ROUTE_NOT_FOUND') {
+    return '接口地址不存在，请检查前后端 API 路径或后端部署配置。';
+  }
+  if (error.code === 'BACKEND_NOT_CONFIGURED') {
+    return '后端服务暂不可用，请检查 VITE_API_BASE_URL 是否指向已部署的 Express 后端。';
   }
   if (error.code === 'AUTH_LOGIN_FAILED') {
     return '账号或密码错误';

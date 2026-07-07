@@ -171,20 +171,11 @@ const queuedGenerationJobIds: string[] = [];
 let isGenerationWorkerRunning = false;
 const rateLimitGenerationJobCreate = createGenerationJobRateLimiter(generationJobRateLimitPerMinute);
 
-app.use(configureCors);
-app.use(express.json({ limit: jsonLimit }));
-app.use('/uploads', express.static(uploadsDir));
-app.use(attachAuthUser);
-
-app.get('/api/health', (_req: Request, res: Response) => {
-  res.json({ ok: true, version, provider: getGenerationProviderName() });
-});
-
-app.get('/api/ai-providers', (_req: Request, res: Response) => {
-  res.json(apiOk(getSelectableGenerationProviders()));
-});
-
-app.post('/api/auth/login', async (req: Request, res: Response<ApiResponse<{ user: UserProfile; accessToken: string; tokenType: 'Bearer' }>>, next: NextFunction) => {
+const loginHandler = async (
+  req: Request,
+  res: Response<ApiResponse<{ user: UserProfile; accessToken: string; tokenType: 'Bearer' }>>,
+  next: NextFunction,
+) => {
   try {
     const body = validateLoginBody(req.body);
     if (body.ok === false) {
@@ -222,9 +213,9 @@ app.post('/api/auth/login', async (req: Request, res: Response<ApiResponse<{ use
     }
     next(error);
   }
-});
+};
 
-app.get('/api/auth/me', (req: Request, res: Response) => {
+const currentUserHandler = (req: Request, res: Response<ApiResponse<{ user: UserProfile }>>) => {
   const user = getCurrentUser(req);
   if (!user) {
     const authFailure = getAuthFailure(req);
@@ -235,13 +226,78 @@ app.get('/api/auth/me', (req: Request, res: Response) => {
     return;
   }
 
-  res.json(apiOk({ user }));
+  res.json(apiOk({ user: { ...user, updatedAt: user.createdAt } }));
+};
+
+const logoutHandler = (_req: Request, res: Response<ApiResponse<{ ok: true }>>) => {
+  res.json(apiOk({ ok: true }));
+};
+
+const creditBalanceHandler = async (
+  req: Request,
+  res: Response<ApiResponse<{ balance: CreditBalance }>>,
+  next: NextFunction,
+) => {
+  try {
+    res.json(apiOk({ balance: await getCreditBalance(getRequiredCurrentUser(req).id) }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+const legacyImageUploadHandler = async (
+  req: Request,
+  res: Response<ApiResponse<{ asset: ImageAsset }>>,
+  next: NextFunction,
+) => {
+  try {
+    const uploadedFile = await readMultipartImage(req, maxImageMb);
+    if (uploadedFile.ok === false) {
+      res.status(uploadedFile.status).json(apiError(uploadedFile.error.message, uploadedFile.error.code));
+      return;
+    }
+
+    const extension = getImageExtension(uploadedFile.value.mimeType);
+    const user = getRequiredCurrentUser(req);
+    const storedFile = await fileStorageProvider.uploadImage({
+      content: uploadedFile.value.content,
+      filename: createStoredFilename(extension),
+      mimeType: uploadedFile.value.mimeType,
+      userId: user.id,
+    });
+    const asset = await createImageAsset({
+      userId: user.id,
+      url: storedFile.url,
+      filename: storedFile.filename,
+      mimeType: storedFile.mimeType,
+      size: storedFile.size,
+    });
+
+    res.status(201).json(apiOk({ asset }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+app.use(configureCors);
+app.use(express.json({ limit: jsonLimit }));
+app.use('/uploads', express.static(uploadsDir));
+app.use(attachAuthUser);
+
+app.get('/api/health', (_req: Request, res: Response) => {
+  res.json({ ok: true, version, provider: getGenerationProviderName() });
 });
 
-app.get('/api/me', requireAuth, (req: Request, res: Response<ApiResponse<{ user: UserProfile }>>) => {
-  const user = getRequiredCurrentUser(req);
-  res.json(apiOk({ user: { ...user, updatedAt: user.createdAt } }));
+app.get('/api/ai-providers', (_req: Request, res: Response) => {
+  res.json(apiOk(getSelectableGenerationProviders()));
 });
+
+app.post('/api/auth/login', loginHandler);
+app.post('/api/login', loginHandler);
+app.post('/api/auth/logout', logoutHandler);
+app.post('/api/logout', logoutHandler);
+app.get('/api/auth/me', currentUserHandler);
+app.get('/api/me', currentUserHandler);
 
 app.post('/api/prompts/polish', requireAuth, async (
   req: Request,
@@ -337,18 +393,10 @@ app.delete('/api/prompt-templates/:id', requireAuth, requireAdmin, async (
 });
 
 app.use('/api/assets', createAssetsRouter({ maxImageMb, maxModelMb }));
+app.post('/api/upload', requireAuth, legacyImageUploadHandler);
 
-app.get('/api/billing/credits', requireAuth, async (
-  req: Request,
-  res: Response<ApiResponse<{ balance: CreditBalance }>>,
-  next: NextFunction,
-) => {
-  try {
-    res.json(apiOk({ balance: await getCreditBalance(getRequiredCurrentUser(req).id) }));
-  } catch (error) {
-    next(error);
-  }
-});
+app.get('/api/billing/credits', requireAuth, creditBalanceHandler);
+app.get('/api/credits', requireAuth, creditBalanceHandler);
 
 app.get('/api/billing/transactions', requireAuth, async (
   req: Request,
@@ -971,6 +1019,61 @@ app.post('/api/projects/:id/generations', requireAuth, async (
   }
 });
 
+app.get('/api/generation-records', requireAuth, async (
+  req: Request,
+  res: Response<ApiResponse<{ generations: GenerationRecord[] }>>,
+  next: NextFunction,
+) => {
+  try {
+    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId.trim() : '';
+    if (!projectId) {
+      res.status(400).json(apiError('projectId is required. Use /api/projects/:id/generations when possible.', 'GENERATION_RECORDS_PROJECT_ID_REQUIRED'));
+      return;
+    }
+
+    const user = getRequiredCurrentUser(req);
+    const project = await getProject(projectId, user.id);
+    if (!project) {
+      res.status(404).json(apiError('Project not found.', 'PROJECT_NOT_FOUND'));
+      return;
+    }
+
+    res.json(apiOk({ generations: await listProjectGenerations(projectId, user.id) }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/generation-records', requireAuth, async (
+  req: Request,
+  res: Response<ApiResponse<{ generation: GenerationRecord }>>,
+  next: NextFunction,
+) => {
+  const projectId = isRecord(req.body) && typeof req.body.projectId === 'string' ? req.body.projectId.trim() : '';
+  if (!projectId) {
+    res.status(400).json(apiError('projectId is required. Use /api/projects/:id/generations when possible.', 'GENERATION_RECORDS_PROJECT_ID_REQUIRED'));
+    return;
+  }
+
+  const body = validateGenerationRecordCreateBody(req.body, projectId);
+  if (body.ok === false) {
+    res.status(400).json(apiError(body.error.message, body.error.code));
+    return;
+  }
+
+  try {
+    const generation = await createGenerationRecord({ ...body.value, userId: getRequiredCurrentUser(req).id });
+    if (!generation) {
+      res.status(404).json(apiError('Project not found.', 'PROJECT_NOT_FOUND'));
+      return;
+    }
+
+    res.status(201).json(apiOk({ generation }));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/share/:token', async (
   req: Request,
   res: Response<ApiResponse<{ share: PublicSharePayload }>>,
@@ -1006,7 +1109,12 @@ app.get('/api/share/:token', async (
   }
 });
 
-app.use('/api', (_req: Request, res: Response) => {
+app.use('/api', (req: Request, res: Response) => {
+  console.warn('[api] route not found', {
+    method: req.method,
+    path: sanitizeLogText(req.path),
+    originalUrl: sanitizeLogText(req.originalUrl),
+  });
   res.status(404).json(apiError('API route not found.', 'API_ROUTE_NOT_FOUND'));
 });
 
