@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { NextFunction, Request, Response } from 'express';
-import { attachAuthUser, devAuthUser, getAuthFailure, getCurrentUser, getRequiredCurrentUser, readAuthMode, requireAuth, signAuthToken } from './auth';
+import { attachAuthUser, devAuthUser, getRequiredCurrentUser, readAuthMode, requireAuth, signAuthToken } from './auth';
 import { createStoredFilename, fileStorageProvider, uploadsDir } from './fileStorage';
 import {
   cancelGenerationJob,
@@ -101,7 +101,6 @@ import { resolveImagePolishPrompts } from './prompts/imagePolishPrompt';
 
 export const app = express();
 const port = Number(process.env.PORT || 8787);
-const host = process.env.HOST || '0.0.0.0';
 const version = '0.1.0';
 const maxImageMb = Number(process.env.MAX_IMAGE_MB || 10);
 const maxModelMb = Number(process.env.MAX_MODEL_MB || 500);
@@ -216,16 +215,7 @@ const loginHandler = async (
 };
 
 const currentUserHandler = (req: Request, res: Response<ApiResponse<{ user: UserProfile }>>) => {
-  const user = getCurrentUser(req);
-  if (!user) {
-    const authFailure = getAuthFailure(req);
-    res.status(authFailure?.status || 401).json(apiError(
-      authFailure?.message || 'Authentication is required.',
-      authFailure?.code || 'AUTH_REQUIRED',
-    ));
-    return;
-  }
-
+  const user = getRequiredCurrentUser(req);
   res.json(apiOk({ user: { ...user, updatedAt: user.createdAt } }));
 };
 
@@ -285,7 +275,12 @@ app.use('/uploads', express.static(uploadsDir));
 app.use(attachAuthUser);
 
 app.get('/api/health', (_req: Request, res: Response) => {
-  res.json({ ok: true, version, provider: getGenerationProviderName() });
+  res.json({
+    ok: true,
+    status: 'healthy',
+    version,
+    provider: getGenerationProviderName(),
+  });
 });
 
 app.get('/api/ai-providers', (_req: Request, res: Response) => {
@@ -296,8 +291,8 @@ app.post('/api/auth/login', loginHandler);
 app.post('/api/login', loginHandler);
 app.post('/api/auth/logout', logoutHandler);
 app.post('/api/logout', logoutHandler);
-app.get('/api/auth/me', currentUserHandler);
-app.get('/api/me', currentUserHandler);
+app.get('/api/me', requireAuth, currentUserHandler);
+app.get('/api/auth/me', requireAuth, currentUserHandler);
 
 app.post('/api/prompts/polish', requireAuth, async (
   req: Request,
@@ -1135,8 +1130,8 @@ export async function startServer(): Promise<void> {
   await fileStorageProvider.ensureReady();
   await restorePendingGenerationJobs();
 
-  app.listen(port, host, () => {
-    console.log(`ArchAI Expression Engine listening on http://${host}:${port} using ${getGenerationProviderName()} provider`);
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`Server listening on ${port}`);
   });
 }
 

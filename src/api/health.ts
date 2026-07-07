@@ -7,8 +7,9 @@ const backendUnavailableMessage = '后端服务暂不可用，请稍后重试或
 
 export interface BackendHealth {
   ok: boolean;
-  version: string;
-  provider: GenerationProvider;
+  status: 'healthy';
+  version?: string;
+  provider?: GenerationProvider;
 }
 
 export async function getBackendHealth(signal?: AbortSignal): Promise<BackendHealth> {
@@ -40,16 +41,16 @@ function parseBackendHealth(value: unknown): BackendHealth {
 
   if (
     value.ok !== true ||
-    typeof value.version !== 'string' ||
-    !isGenerationProvider(value.provider)
+    value.status !== 'healthy'
   ) {
     throw new Error('后端健康检查字段不完整。');
   }
 
   return {
     ok: value.ok,
-    version: value.version,
-    provider: value.provider,
+    status: value.status,
+    version: typeof value.version === 'string' ? value.version : undefined,
+    provider: isGenerationProvider(value.provider) ? value.provider : undefined,
   };
 }
 

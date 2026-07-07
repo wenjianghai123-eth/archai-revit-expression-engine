@@ -36,10 +36,14 @@ export function useBackendHealth(isSettingsOpen: boolean) {
         const health = await getBackendHealth(signal);
         if (requestId !== requestIdRef.current) return;
         console.debug('[api-status] connected');
+        const detail = [
+          health.version ? `版本 ${health.version}` : null,
+          health.provider ? `当前 provider: ${health.provider}` : null,
+        ].filter(Boolean).join('，');
         setBackendHealth({
           status: 'connected',
           data: health,
-          message: `后端在线，版本 ${health.version}，当前 provider: ${health.provider}。`,
+          message: detail ? `后端在线，${detail}。` : '后端在线。',
         });
         return;
       } catch (error) {

@@ -15,11 +15,12 @@ This document reflects the current Express API. All AI/model calls go through th
 
 ### `GET /api/health`
 
-Public. Returns backend version and selected provider.
+Public. Returns backend health status. This endpoint does not require login and is suitable for Render health checks.
 
 ```json
 {
   "ok": true,
+  "status": "healthy",
   "version": "0.1.0",
   "provider": "mock"
 }

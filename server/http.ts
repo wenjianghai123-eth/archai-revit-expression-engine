@@ -174,12 +174,16 @@ export function isJsonParseError(error: unknown): boolean {
 }
 
 function readAllowedCorsOrigins(): string[] {
+  const defaultOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://guangtian123-eth.netlify.app'];
   const rawValue = process.env.CORS_ORIGIN || process.env.CORS_ORIGINS;
   if (!rawValue || rawValue.trim().length === 0) {
-    return ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://guangtian123-eth.netlify.app'];
+    return defaultOrigins;
   }
 
-  return rawValue.split(',').map(item => item.trim()).filter(Boolean);
+  return Array.from(new Set([
+    ...rawValue.split(',').map(item => item.trim()).filter(Boolean),
+    'https://guangtian123-eth.netlify.app',
+  ]));
 }
 
 function isCorsOriginAllowed(origin: string, allowedOrigins: string[]): boolean {

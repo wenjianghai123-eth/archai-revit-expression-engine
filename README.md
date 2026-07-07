@@ -64,8 +64,9 @@ Deploy this repository as one Node service when the hosting platform can run the
 - Build command: `npm ci && npm run build`
 - Start command: `npm run start`
 - Runtime service: `server/index.ts`, which serves both `/api/...` and the built `dist` frontend
+- Health check path: `/api/health`
 
-In this mode the browser and backend share the same origin, so leave `VITE_API_BASE_URL` empty. Keep backend variables such as `SUPABASE_SERVICE_ROLE_KEY`, `GRSAI_API_KEY`, `DATA_BACKEND`, `FILE_STORAGE`, and `AUTH_MODE` on the Node service.
+In this mode the browser and backend share the same origin, so leave `VITE_API_BASE_URL` empty. Keep backend variables such as `SUPABASE_SERVICE_ROLE_KEY`, `GRSAI_API_KEY`, `JWT_SECRET`, `DATA_BACKEND`, `FILE_STORAGE`, and `AUTH_MODE` on the Node service. Render injects `PORT`; the Express server listens on `process.env.PORT || 8787` and binds `0.0.0.0`.
 
 ### Netlify Frontend + Render/Railway Backend
 
