@@ -11,6 +11,7 @@ import {
   getImageAsset,
   getProject,
   listProjectGenerations,
+  normalizeCreditBalanceNumber,
   uploadImageAsset,
   type CreditBalance,
 } from '../lib/api';
@@ -44,7 +45,9 @@ export function useGenerationRunner({
   setHistoryItems,
 }: UseGenerationRunnerOptions) {
   const estimatedCreditCost = getGenerationCreditCost(getGenerationRecordMode(currentStep), stepStates[currentStep].config);
-  const isCreditsInsufficient = Boolean(creditBalance && creditBalance.balance < estimatedCreditCost);
+  const currentCreditBalance = normalizeCreditBalanceNumber(creditBalance);
+  const hasCreditBalance = creditBalance !== null;
+  const isCreditsInsufficient = hasCreditBalance && currentCreditBalance < estimatedCreditCost;
 
   const handleGenerate = useCallback(async (stateOverride?: GenerationRunStateOverride) => {
     const baseState = stepStates[currentStep];
@@ -66,7 +69,7 @@ export function useGenerationRunner({
         ? '正在生成中。'
         : !stateAtStart.inputImage
           ? '请先上传图片。'
-          : creditBalance && creditBalance.balance < requiredCredits
+          : hasCreditBalance && currentCreditBalance < requiredCredits
             ? `剩余额度不足，本次需要 ${requiredCredits} credits。`
             : null;
     if (import.meta.env.DEV) {
@@ -90,7 +93,7 @@ export function useGenerationRunner({
       }));
       return;
     }
-    if (creditBalance && creditBalance.balance < requiredCredits) {
+    if (hasCreditBalance && currentCreditBalance < requiredCredits) {
       setStepStates(prev => ({
         ...prev,
         [currentStep]: {

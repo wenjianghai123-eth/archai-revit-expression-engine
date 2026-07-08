@@ -384,8 +384,13 @@ export interface CreditBalance {
 }
 
 type CreditBalanceResponseData = {
+  data?: {
+    balance?: unknown;
+    creditBalance?: unknown;
+  };
   balance?: number | CreditBalance;
   creditBalance?: CreditBalance;
+  credits?: unknown;
 };
 
 type UploadImageAssetOptions = {
@@ -475,34 +480,42 @@ export async function getCreditBalance(): Promise<CreditBalance> {
 }
 
 function normalizeCreditBalanceResponse(response: CreditBalanceResponseData): CreditBalance {
-  if (typeof response.balance === 'number') {
-    return {
-      userId: response.creditBalance?.userId || '',
-      balance: response.balance,
-      updatedAt: response.creditBalance?.updatedAt || new Date().toISOString(),
-    };
-  }
-
-  if (isCreditBalance(response.balance)) {
-    return response.balance;
-  }
-
-  if (isCreditBalance(response.creditBalance)) {
-    return response.creditBalance;
-  }
-
+  const creditBalance = readCreditBalanceObject(response.data?.creditBalance)
+    || readCreditBalanceObject(response.creditBalance)
+    || readCreditBalanceObject(response.data?.balance)
+    || readCreditBalanceObject(response.balance);
+  const balance = normalizeCreditBalanceNumber(response);
   return {
-    userId: '',
-    balance: 0,
-    updatedAt: new Date().toISOString(),
+    userId: creditBalance?.userId || '',
+    balance,
+    updatedAt: creditBalance?.updatedAt || new Date().toISOString(),
   };
 }
 
-function isCreditBalance(value: unknown): value is CreditBalance {
-  return isRecord(value)
-    && typeof value.userId === 'string'
-    && typeof value.balance === 'number'
-    && typeof value.updatedAt === 'string';
+export function normalizeCreditBalanceNumber(response: unknown): number {
+  const record = isRecord(response) ? response : {};
+  const data = isRecord(record.data) ? record.data : {};
+  const dataCreditBalance = isRecord(data.creditBalance) ? data.creditBalance : {};
+  const value = data.balance
+    ?? dataCreditBalance.balance
+    ?? record.balance
+    ?? record.credits
+    ?? 0;
+
+  if (typeof value === 'number') return value;
+  if (isRecord(value) && typeof value.balance === 'number') return value.balance;
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function readCreditBalanceObject(value: unknown): CreditBalance | null {
+  if (!isRecord(value) || typeof value.balance !== 'number') return null;
+  return {
+    userId: typeof value.userId === 'string' ? value.userId : '',
+    balance: value.balance,
+    updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : new Date().toISOString(),
+  };
 }
 
 export async function listCreditTransactions(): Promise<CreditTransaction[]> {
