@@ -4,6 +4,7 @@ import { UploadErrors, UploadTarget } from './workspaceTypes';
 import { getUploadedImageSrc, isLocalInpaintingStep, modeLabel } from './workspaceUtils';
 import { FurnitureReferencesPanel } from './ReferenceImagesPanel';
 import { AspectRatioImage } from '../common/AspectRatioImage';
+import { revokeUploadedImagePreview } from '../../utils/file';
 
 interface InputImagePanelProps {
   step: GenerationStep;
@@ -52,7 +53,10 @@ export function InputImagePanel({
           title={isLocalInpaintingStep(step) ? '原始图片' : '输入图片'}
           uploadErrors={uploadErrors}
           onUploadClick={onUploadClick}
-          onClear={() => onUpdateInputImage(null)}
+          onClear={() => {
+            revokeUploadedImagePreview(inputImage);
+            onUpdateInputImage(null);
+          }}
           onFileDrop={onFileDrop}
         />
         <EditTargetControls step={step} config={config} onUpdateConfig={onUpdateConfig} />
@@ -72,7 +76,10 @@ export function InputImagePanel({
             optional
             uploadErrors={uploadErrors}
             onUploadClick={onUploadClick}
-            onClear={() => onUpdateMaterialImage(null)}
+            onClear={() => {
+              revokeUploadedImagePreview(materialImage);
+              onUpdateMaterialImage(null);
+            }}
             onFileDrop={onFileDrop}
           />
         ) : null}
@@ -128,6 +135,22 @@ function UploadField({ target, image, title, optional = false, uploadErrors, onU
             >
               <X className="h-4 w-4" />
             </span>
+            {image.uploadStatus === 'uploading' ? (
+              <div className="absolute bottom-0 left-0 right-0 bg-slate-950/70 px-3 py-2 text-left text-[11px] font-bold text-white">
+                <div className="flex items-center justify-between">
+                  <span>正在上传...</span>
+                  <span>{image.uploadProgress ?? 0}%</span>
+                </div>
+                <div className="mt-1 h-1 overflow-hidden rounded-full bg-white/20">
+                  <div className="h-full rounded-full bg-blue-400" style={{ width: `${image.uploadProgress ?? 0}%` }} />
+                </div>
+              </div>
+            ) : null}
+            {image.uploadStatus === 'failed' ? (
+              <div className="absolute bottom-0 left-0 right-0 bg-amber-600/90 px-3 py-2 text-left text-[11px] font-bold text-white">
+                {image.uploadError || '上传失败，可重试'}
+              </div>
+            ) : null}
           </>
         ) : (
           <div className="flex flex-col items-center gap-2 text-xs font-bold">

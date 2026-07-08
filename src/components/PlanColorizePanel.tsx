@@ -60,7 +60,7 @@ export function PlanColorizePanel({
   onUpdateConfig,
   onGenerate,
 }: PlanColorizePanelProps) {
-  const sourceImage = state.inputImage?.dataUrl || state.inputImage?.url;
+  const sourceImage = state.inputImage?.previewUrl || state.inputImage?.publicUrl || state.inputImage?.url || state.inputImage?.thumbnailUrl || state.inputImage?.dataUrl;
   const batchEnabled = state.config.planColorizeBatchEnabled === true;
   const selectedStyleIds = readPlanColorizeStyleIds(state.config);
   const activeStyles = batchEnabled

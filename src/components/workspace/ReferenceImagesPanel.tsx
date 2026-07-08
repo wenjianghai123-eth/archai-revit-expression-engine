@@ -1,4 +1,4 @@
-import { AlertCircle, BookOpen, Trash2, Upload } from 'lucide-react';
+﻿import { AlertCircle, BookOpen, Trash2, Upload } from 'lucide-react';
 import { GenerationConfig, MaterialTexture, ReferenceImage } from '../../types';
 import { UploadErrors } from './workspaceTypes';
 import { AspectRatioImage } from '../common/AspectRatioImage';
@@ -61,7 +61,7 @@ export function MaterialTexturesPanel({
               className="group w-24 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white/80 p-1.5 shadow-sm transition hover:border-blue-200 hover:shadow-md sm:w-28"
             >
               <AspectRatioImage
-                src={texture.url}
+                src={texture.previewUrl || texture.thumbnailUrl || texture.publicUrl || texture.url || texture.dataUrl}
                 alt={`${textureName} 预览`}
                 ratio="4:3"
                 fit="contain"
@@ -69,6 +69,8 @@ export function MaterialTexturesPanel({
                 imageClassName="p-0.5"
                 placeholder="材质贴图预览"
               />
+              {texture.uploadStatus === 'uploading' ? <p className="mt-1 text-[9px] font-bold text-blue-600">上传中 {texture.uploadProgress ?? 0}%</p> : null}
+              {texture.uploadStatus === 'failed' ? <p className="mt-1 text-[9px] font-bold text-amber-600">上传失败，可重试</p> : null}
               <div className="mt-1.5 flex items-center justify-between gap-1.5">
                 <div className="min-w-0">
                   <p className="text-[9px] font-black leading-3 text-blue-600">材质 {index + 1}</p>
@@ -148,7 +150,13 @@ export function FurnitureReferencesPanel({
       <div className="grid grid-cols-3 gap-2">
         {references.map(reference => (
           <div key={reference.id} className="group relative aspect-video overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-            <AspectRatioImage src={reference.url} alt={reference.name || '家具参考图'} className="h-full rounded-none border-0 shadow-none" />
+            <AspectRatioImage src={reference.previewUrl || reference.thumbnailUrl || reference.publicUrl || reference.url || reference.dataUrl} alt={reference.name || '家具参考图'} className="h-full rounded-none border-0 shadow-none" />
+            {reference.uploadStatus === 'uploading' ? (
+              <span className="absolute bottom-1 left-1 rounded bg-slate-950/70 px-1.5 py-0.5 text-[9px] font-bold text-white">{reference.uploadProgress ?? 0}%</span>
+            ) : null}
+            {reference.uploadStatus === 'failed' ? (
+              <span className="absolute bottom-1 left-1 rounded bg-amber-600 px-1.5 py-0.5 text-[9px] font-bold text-white">失败</span>
+            ) : null}
             <button
               type="button"
               onClick={() => onRemoveFurnitureReference(reference.id)}

@@ -621,8 +621,14 @@ export interface UploadedImage {
   type: string;
   size: number;
   dataUrl: string;
+  previewUrl?: string;
   url?: string;
+  publicUrl?: string;
+  thumbnailUrl?: string;
   assetId?: string;
+  uploadStatus?: 'idle' | 'local-preview' | 'uploading' | 'uploaded' | 'failed';
+  uploadProgress?: number;
+  uploadError?: string;
   width?: number;
   height?: number;
 }
@@ -632,7 +638,13 @@ export interface MaterialTexture {
   name?: string;
   url: string;
   dataUrl?: string;
+  previewUrl?: string;
+  publicUrl?: string;
+  thumbnailUrl?: string;
   assetId?: string;
+  uploadStatus?: 'idle' | 'local-preview' | 'uploading' | 'uploaded' | 'failed';
+  uploadProgress?: number;
+  uploadError?: string;
   source: 'upload' | 'library';
 }
 
@@ -641,7 +653,13 @@ export interface ReferenceImage {
   name?: string;
   url: string;
   dataUrl?: string;
+  previewUrl?: string;
+  publicUrl?: string;
+  thumbnailUrl?: string;
   assetId?: string;
+  uploadStatus?: 'idle' | 'local-preview' | 'uploading' | 'uploaded' | 'failed';
+  uploadProgress?: number;
+  uploadError?: string;
   source: 'upload' | 'library';
 }
 

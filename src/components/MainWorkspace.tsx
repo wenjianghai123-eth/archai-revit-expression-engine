@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { GenerationConfig, GenerationHistoryItem, GenerationProvider, GenerationRunStateOverride, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, ResultSendTargetStep, SecondaryEditAction, StepState, UploadedImage } from '../types';
-import { createUploadedImage, validateImageFile } from '../utils/file';
+import { createLocalPreviewImage, createUploadedImage, hydrateUploadedImageDataUrl, revokeUploadedImagePreview, validateImageFile } from '../utils/file';
 import { getProject, uploadImageAsset } from '../lib/api';
 import { GenerationStatusPanel } from './workspace/GenerationStatusPanel';
 import { InputImagePanel } from './workspace/InputImagePanel';
@@ -207,19 +207,47 @@ export function MainWorkspace({
     }
 
     try {
-      const localImage = await createUploadedImage(file);
+      const previousImage = target === 'input' ? state.inputImage : state.materialImage;
+      const localImage = createLocalPreviewImage(file);
+      revokeUploadedImagePreview(previousImage);
+      if (target === 'input') onUpdateInputImage({ ...localImage, uploadStatus: 'uploading' });
+      else onUpdateMaterialImage({ ...localImage, uploadStatus: 'uploading' });
+      void hydrateUploadedImageDataUrl(localImage, file)
+        .then(hydrated => {
+          const next = { ...hydrated, uploadStatus: 'uploading' as const };
+          if (target === 'input') onUpdateInputImage(next);
+          else onUpdateMaterialImage(next);
+        })
+        .catch(() => undefined);
       let image = localImage;
 
       try {
-        const asset = await uploadImageAsset(file, file.name);
-        image = { ...localImage, assetId: asset.id, url: asset.url };
+        const asset = await uploadImageAsset(file, file.name, {
+          onProgress: progress => {
+            const next = { ...localImage, uploadStatus: 'uploading' as const, uploadProgress: progress };
+            if (target === 'input') onUpdateInputImage(next);
+            else onUpdateMaterialImage(next);
+          },
+        });
+        image = {
+          ...localImage,
+          assetId: asset.id,
+          url: asset.publicUrl || asset.url,
+          publicUrl: asset.publicUrl || asset.url,
+          thumbnailUrl: asset.thumbnailUrl,
+          uploadStatus: 'uploaded',
+          uploadProgress: 100,
+        };
       } catch (error) {
         const uploadError = readImageTypeUploadError(error);
         if (uploadError) {
+          const failedImage = { ...localImage, uploadStatus: 'failed' as const, uploadError };
+          if (target === 'input') onUpdateInputImage(failedImage);
+          else onUpdateMaterialImage(failedImage);
           setUploadErrors(prev => ({ ...prev, [target]: uploadError }));
           return;
         }
-        // Keep dataUrl fallback when backend upload is unavailable.
+        image = { ...localImage, uploadStatus: 'failed', uploadError: '上传失败，可重试' };
       }
 
       if (target === 'input') onUpdateInputImage(image);
@@ -251,14 +279,14 @@ export function MainWorkspace({
         continue;
       }
 
-      const localImage = await createUploadedImage(file);
+      const localImage = createLocalPreviewImage(file);
       let assetId: string | undefined;
-      let url = localImage.dataUrl;
+      let url = localImage.previewUrl || localImage.dataUrl;
 
       try {
         const asset = await uploadImageAsset(file, file.name);
         assetId = asset.id;
-        url = asset.url;
+        url = asset.publicUrl || asset.url;
       } catch (error) {
         const uploadError = readImageTypeUploadError(error);
         if (uploadError) {
@@ -273,7 +301,12 @@ export function MainWorkspace({
         name: localImage.name,
         url,
         dataUrl: localImage.dataUrl,
+        previewUrl: localImage.previewUrl,
+        publicUrl: url,
+        thumbnailUrl: undefined,
         assetId,
+        uploadStatus: assetId ? 'uploaded' : 'failed',
+        uploadProgress: assetId ? 100 : 0,
         source: 'upload',
       });
     }

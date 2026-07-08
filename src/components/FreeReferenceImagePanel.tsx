@@ -560,5 +560,5 @@ function readGenerateDisabledReason({
 }
 
 function readImageSrc(image: UploadedImage): string {
-  return resolveAssetUrl(image.url || image.dataUrl);
+  return resolveAssetUrl(image.previewUrl || image.publicUrl || image.url || image.thumbnailUrl || image.dataUrl);
 }

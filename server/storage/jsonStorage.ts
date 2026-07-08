@@ -639,6 +639,7 @@ async function createImageAsset(input: {
     userId: input.userId,
     url: input.url,
     publicUrl: input.url,
+    thumbnailUrl: input.url,
     path: input.filename,
     storageProvider: input.url.startsWith('/uploads/') ? 'local' : 'supabase',
     filename: input.filename,

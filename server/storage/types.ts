@@ -214,6 +214,7 @@ export interface ImageAsset {
   userId: string;
   url: string;
   publicUrl?: string;
+  thumbnailUrl?: string;
   path?: string;
   storageProvider?: 'local' | 'supabase';
   filename: string;

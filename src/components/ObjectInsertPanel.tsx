@@ -2474,7 +2474,7 @@ function ExportPreview({ title, info }: { title: string; info: ExportedImageInfo
 }
 
 function readImageSrc(image: UploadedImage): string {
-  return resolveAssetUrl(image.dataUrl || image.url);
+  return resolveAssetUrl(image.previewUrl || image.publicUrl || image.url || image.thumbnailUrl || image.dataUrl);
 }
 
 function createObjectItemId(): string {

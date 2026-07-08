@@ -5,6 +5,7 @@ type AssetLike = {
   url?: string | null;
   thumbnailUrl?: string | null;
   previewUrl?: string | null;
+  dataUrl?: string | null;
 };
 
 export function resolveAssetUrl(url?: string | null): string {
@@ -25,7 +26,7 @@ export function resolveAssetUrl(url?: string | null): string {
 
 export function readAssetImageUrl(asset?: AssetLike | null): string {
   if (!asset) return '';
-  return asset.publicUrl || asset.url || asset.thumbnailUrl || asset.previewUrl || '';
+  return asset.previewUrl || asset.publicUrl || asset.url || asset.thumbnailUrl || asset.dataUrl || '';
 }
 
 export function logAssetUploadSuccess(asset: unknown): void {

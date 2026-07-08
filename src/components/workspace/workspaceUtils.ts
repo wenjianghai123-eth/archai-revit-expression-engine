@@ -54,7 +54,7 @@ export function isLocalInpaintingStep(step: GenerationStep): boolean {
 }
 
 export function getUploadedImageSrc(image: UploadedImage): string {
-  return resolveAssetUrl(image.url || image.dataUrl);
+  return resolveAssetUrl(image.previewUrl || image.publicUrl || image.url || image.thumbnailUrl || image.dataUrl);
 }
 
 export function getDataUrlExtension(dataUrl: string): string {

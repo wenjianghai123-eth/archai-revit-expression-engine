@@ -3,6 +3,9 @@ import { parseApiResponse, readApiErrorMessage } from './apiResponse';
 import { getAccessToken } from './authToken';
 import { isAbortError } from '../utils/apiConnectionStatus';
 import { logAssetUploadSuccess } from '../utils/assetUrl';
+import { compressImageBeforeUpload } from '../utils/imageCompression';
+
+const fileUploadCache = new WeakMap<File, Promise<ImageAsset>>();
 
 const BACKEND_UNAVAILABLE_MESSAGE = '后端服务暂不可用，请稍后重试或检查 VITE_API_BASE_URL 是否指向已部署的 Express 后端。';
 
@@ -122,6 +125,7 @@ export interface ImageAsset {
   userId: string;
   url: string;
   publicUrl?: string;
+  thumbnailUrl?: string;
   path?: string;
   storageProvider?: 'local' | 'supabase';
   filename: string;
@@ -384,6 +388,10 @@ type CreditBalanceResponseData = {
   creditBalance?: CreditBalance;
 };
 
+type UploadImageAssetOptions = {
+  onProgress?: (percent: number) => void;
+};
+
 export interface CreditTransaction {
   id: string;
   userId: string;
@@ -613,16 +621,68 @@ export async function createProjectGeneration(projectId: string, input: Generati
   return response.generation;
 }
 
-export async function uploadImageAsset(file: Blob, filename = 'image.png'): Promise<ImageAsset> {
-  const formData = new FormData();
-  formData.append('file', file, filename);
+export async function uploadImageAsset(file: Blob, filename = 'image.png', options: UploadImageAssetOptions = {}): Promise<ImageAsset> {
+  if (file instanceof File) {
+    const existing = fileUploadCache.get(file);
+    if (existing) return existing;
 
-  const response = await request<{ asset: ImageAsset }>('/api/assets/images', {
-    method: 'POST',
-    body: formData,
-  });
+    const uploadPromise = uploadImageAssetUncached(file, filename || file.name, options)
+      .catch(error => {
+        fileUploadCache.delete(file);
+        throw error;
+      });
+    fileUploadCache.set(file, uploadPromise);
+    return uploadPromise;
+  }
+
+  return uploadImageAssetUncached(file, filename, options);
+}
+
+async function uploadImageAssetUncached(file: Blob, filename = 'image.png', options: UploadImageAssetOptions = {}): Promise<ImageAsset> {
+  const uploadFile = file instanceof File ? await compressImageBeforeUpload(file) : file;
+  const uploadFilename = uploadFile instanceof File ? uploadFile.name : filename;
+  const formData = new FormData();
+  formData.append('file', uploadFile, uploadFilename);
+
+  const response = await uploadFormDataWithProgress<{ asset: ImageAsset }>('/api/assets/images', formData, options.onProgress);
   logAssetUploadSuccess(response.asset);
   return response.asset;
+}
+
+function uploadFormDataWithProgress<T>(path: string, formData: FormData, onProgress?: (percent: number) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const accessToken = getAccessToken();
+    xhr.open('POST', buildApiUrl(path));
+    if (accessToken) xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
+
+    xhr.upload.onprogress = event => {
+      if (!event.lengthComputable) return;
+      onProgress?.(Math.round((event.loaded / event.total) * 100));
+    };
+
+    xhr.onload = async () => {
+      try {
+        const body = xhr.responseText ? JSON.parse(xhr.responseText) as unknown : null;
+        if (!isApiResponse<T>(body)) {
+          reject(new Error(readApiErrorMessage(body) || `请求失败（HTTP ${xhr.status}）。`));
+          return;
+        }
+        if (body.ok === false) {
+          reject(new Error(formatApiError(body.error)));
+          return;
+        }
+        onProgress?.(100);
+        resolve(body.data);
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error('图片上传失败，请重试。'));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error(BACKEND_UNAVAILABLE_MESSAGE));
+    xhr.onabort = () => reject(new Error('图片上传已取消。'));
+    xhr.send(formData);
+  });
 }
 
 export async function getImageAsset(id: string): Promise<ImageAsset> {

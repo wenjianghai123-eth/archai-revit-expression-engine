@@ -53,6 +53,7 @@ function getImageDimensions(dataUrl: string): Promise<{ width: number; height: n
 }
 
 export async function createUploadedImage(file: File): Promise<UploadedImage> {
+  const previewUrl = URL.createObjectURL(file);
   const dataUrl = await readFileAsDataUrl(file);
   let dimensions: { width: number; height: number } | null = null;
 
@@ -68,7 +69,48 @@ export async function createUploadedImage(file: File): Promise<UploadedImage> {
     type: normalizeImageMimeType(file.type) || inferImageMimeTypeFromFilename(file.name) || file.type,
     size: file.size,
     dataUrl,
+    previewUrl,
+    uploadStatus: 'local-preview',
     width: dimensions?.width,
     height: dimensions?.height,
   };
+}
+
+export function createLocalPreviewImage(file: File): UploadedImage {
+  const normalizedType = normalizeImageMimeType(file.type) || inferImageMimeTypeFromFilename(file.name) || file.type;
+  const previewUrl = URL.createObjectURL(file);
+  return {
+    id: `${Date.now()}-${file.name}`,
+    name: file.name,
+    type: normalizedType,
+    size: file.size,
+    dataUrl: previewUrl,
+    previewUrl,
+    uploadStatus: 'local-preview',
+    uploadProgress: 0,
+  };
+}
+
+export async function hydrateUploadedImageDataUrl(image: UploadedImage, file: File): Promise<UploadedImage> {
+  const dataUrl = await readFileAsDataUrl(file);
+  let dimensions: { width: number; height: number } | null = null;
+
+  try {
+    dimensions = await getImageDimensions(dataUrl);
+  } catch {
+    dimensions = null;
+  }
+
+  return {
+    ...image,
+    dataUrl,
+    width: dimensions?.width ?? image.width,
+    height: dimensions?.height ?? image.height,
+  };
+}
+
+export function revokeUploadedImagePreview(image: UploadedImage | null | undefined): void {
+  if (image?.previewUrl?.startsWith('blob:')) {
+    URL.revokeObjectURL(image.previewUrl);
+  }
 }

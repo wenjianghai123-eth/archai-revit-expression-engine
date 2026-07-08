@@ -1118,6 +1118,7 @@ function mapImageAssetRow(row: ImageAssetRow): ImageAsset {
     userId: row.user_id,
     url: row.url,
     publicUrl: row.url,
+    thumbnailUrl: row.url,
     path: row.filename,
     storageProvider,
     filename: row.filename,
