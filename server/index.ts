@@ -93,7 +93,7 @@ import { defaultPlanColorizeStyleId, maxPlanColorizeBatchCount, resolvePlanColor
 import { findFloorplanColorTemplate, resolveFloorplanBatchCount, resolveFloorplanVariantPlans, readFloorplanVariantFocus, readFloorplanVariantType } from '../src/constants/floorplanVariants';
 import { getGenerationCreditCost, getGenerationOutputCount } from '../src/utils/generationCredits';
 import { createAssetsRouter } from './routes/assets';
-import { authenticateSupabasePassword, createSupabaseAuthUser, resetSupabaseAuthUserPassword, updateSupabaseAuthUserMetadata } from './supabaseAdmin';
+import { authenticateSupabasePassword, createSupabaseAuthUser, getSupabaseAdminClient, resetSupabaseAuthUserPassword, updateSupabaseAuthUserMetadata } from './supabaseAdmin';
 import { getModelConversionConfig } from './modelConversionService';
 import { getModelOptimizationConfig } from './modelOptimizationService';
 import { polishPromptText, PromptPolishRequest, PromptPolishResult } from './promptPolishService';
@@ -121,6 +121,7 @@ console.info('Model processing configuration', {
   BLENDER_BIN: modelConversionConfig.blenderBin,
   MODEL_CONVERSION_TIMEOUT_MS: modelConversionConfig.timeoutMs,
 });
+logSupabaseProjectRef();
 
 interface GenerateRequestBody {
   inputImageDataUrl: string;
@@ -168,6 +169,9 @@ interface PublicGenerationResult {
 
 type LoginPayload = { user: UserProfile; accessToken: string; tokenType: 'Bearer' };
 type LoginApiResponse = ApiResponse<LoginPayload> | ({ ok: true; data: LoginPayload } & LoginPayload);
+type CreditBalancePayload = { balance: number; creditBalance: CreditBalance };
+type CreditBalanceApiResponse = ApiResponse<CreditBalancePayload> | ({ ok: true; data: CreditBalancePayload; balance: number });
+type CreditBalanceRow = { user_id: string; balance: number; updated_at: string };
 
 const queuedGenerationJobIds: string[] = [];
 let isGenerationWorkerRunning = false;
@@ -258,15 +262,117 @@ const logoutHandler = (_req: Request, res: Response<ApiResponse<{ ok: true }>>) 
 
 const creditBalanceHandler = async (
   req: Request,
-  res: Response<ApiResponse<{ balance: CreditBalance }>>,
+  res: Response<CreditBalanceApiResponse>,
   next: NextFunction,
 ) => {
   try {
-    res.json(apiOk({ balance: await getCreditBalance(getRequiredCurrentUser(req).id) }));
+    setNoStoreHeaders(res);
+    const user = getRequiredCurrentUser(req);
+    console.info('[credits] request user', {
+      userId: sanitizeLogText(user.id),
+      email: sanitizeLogText(user.email),
+    });
+
+    const creditBalance = await readCreditBalanceForCurrentBackend(user.id);
+    const payload: CreditBalancePayload = {
+      balance: creditBalance.balance,
+      creditBalance,
+    };
+    res.json({
+      ok: true,
+      data: payload,
+      balance: creditBalance.balance,
+    });
   } catch (error) {
     next(error);
   }
 };
+
+async function readCreditBalanceForCurrentBackend(userId: string): Promise<CreditBalance> {
+  if (process.env.DATA_BACKEND === 'supabase') {
+    return readSupabaseCreditBalance(userId);
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('DATA_BACKEND=supabase is required for production credit balance reads.');
+  }
+
+  return getCreditBalance(userId);
+}
+
+async function readSupabaseCreditBalance(userId: string): Promise<CreditBalance> {
+  const supabase = getSupabaseAdminClient();
+  const { data, error } = await supabase
+    .from('credit_balances')
+    .select('user_id,balance,updated_at')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) throw error;
+
+  const row = data as CreditBalanceRow | null;
+  logSupabaseCreditBalanceRow(userId, row);
+  if (row) return mapCreditBalanceRow(row);
+
+  const { data: created, error: createError } = await supabase
+    .from('credit_balances')
+    .insert({
+      user_id: userId,
+      balance: 0,
+      updated_at: new Date().toISOString(),
+    })
+    .select('user_id,balance,updated_at')
+    .single();
+
+  if (createError) throw createError;
+
+  const createdRow = created as CreditBalanceRow;
+  console.info('[credits] supabase balance created', {
+    userId: sanitizeLogText(userId),
+    balance: createdRow.balance,
+    updatedAt: createdRow.updated_at,
+  });
+  return mapCreditBalanceRow(createdRow);
+}
+
+function logSupabaseCreditBalanceRow(userId: string, row: CreditBalanceRow | null): void {
+  console.info('[credits] supabase balance row', {
+    userId: sanitizeLogText(userId),
+    hasRow: Boolean(row),
+    balance: row?.balance ?? null,
+    updatedAt: row?.updated_at ?? null,
+  });
+}
+
+function mapCreditBalanceRow(row: CreditBalanceRow): CreditBalance {
+  return {
+    userId: row.user_id,
+    balance: row.balance,
+    updatedAt: row.updated_at,
+  };
+}
+
+function setNoStoreHeaders(res: Response): void {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+}
+
+function logSupabaseProjectRef(): void {
+  const projectRef = readSupabaseProjectRef(process.env.SUPABASE_URL);
+  if (!projectRef) return;
+  console.info('[supabase] project ref', projectRef);
+}
+
+function readSupabaseProjectRef(supabaseUrl: string | undefined): string | null {
+  if (!supabaseUrl) return null;
+  try {
+    const hostname = new URL(supabaseUrl).hostname;
+    return hostname.endsWith('.supabase.co') ? hostname.split('.')[0] || null : null;
+  } catch {
+    return null;
+  }
+}
 
 const legacyImageUploadHandler = async (
   req: Request,

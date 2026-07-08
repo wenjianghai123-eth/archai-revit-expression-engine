@@ -379,6 +379,11 @@ export interface CreditBalance {
   updatedAt: string;
 }
 
+type CreditBalanceResponseData = {
+  balance?: number | CreditBalance;
+  creditBalance?: CreditBalance;
+};
+
 export interface CreditTransaction {
   id: string;
   userId: string;
@@ -457,8 +462,39 @@ export async function loginWithPassword(input: { email: string; password: string
 }
 
 export async function getCreditBalance(): Promise<CreditBalance> {
-  const response = await request<{ balance: CreditBalance }>('/api/billing/credits');
-  return response.balance;
+  const response = await request<CreditBalanceResponseData>('/api/credits', { cache: 'no-store' });
+  return normalizeCreditBalanceResponse(response);
+}
+
+function normalizeCreditBalanceResponse(response: CreditBalanceResponseData): CreditBalance {
+  if (typeof response.balance === 'number') {
+    return {
+      userId: response.creditBalance?.userId || '',
+      balance: response.balance,
+      updatedAt: response.creditBalance?.updatedAt || new Date().toISOString(),
+    };
+  }
+
+  if (isCreditBalance(response.balance)) {
+    return response.balance;
+  }
+
+  if (isCreditBalance(response.creditBalance)) {
+    return response.creditBalance;
+  }
+
+  return {
+    userId: '',
+    balance: 0,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function isCreditBalance(value: unknown): value is CreditBalance {
+  return isRecord(value)
+    && typeof value.userId === 'string'
+    && typeof value.balance === 'number'
+    && typeof value.updatedAt === 'string';
 }
 
 export async function listCreditTransactions(): Promise<CreditTransaction[]> {

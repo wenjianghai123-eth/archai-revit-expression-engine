@@ -334,6 +334,7 @@ Current generation record shape:
 
 | Method | Path | Description |
 | --- | --- | --- |
+| `GET` | `/api/credits` | Return current user's credit balance. |
 | `GET` | `/api/billing/credits` | Return current user's credit balance. |
 | `GET` | `/api/billing/transactions` | Return current user's credit transaction history. |
 
@@ -343,12 +344,14 @@ Generation jobs debit credits on creation. Failed jobs and cancelled queued/runn
 {
   "ok": true,
   "data": {
-    "balance": {
+    "balance": 990,
+    "creditBalance": {
       "userId": "user_123",
       "balance": 990,
       "updatedAt": "2026-05-02T12:00:00.000Z"
     }
-  }
+  },
+  "balance": 990
 }
 ```
 
