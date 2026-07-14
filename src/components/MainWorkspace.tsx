@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { GenerationConfig, GenerationHistoryItem, GenerationProvider, GenerationRunStateOverride, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, ResultSendTargetStep, SecondaryEditAction, StepState, UploadedImage } from '../types';
 import { createLocalPreviewImage, createUploadedImage, hydrateUploadedImageDataUrl, revokeUploadedImagePreview, validateImageFile } from '../utils/file';
-import { getProject, uploadImageAsset } from '../lib/api';
+import { getImageAsset, getProject, uploadImageAsset } from '../lib/api';
 import { GenerationStatusPanel } from './workspace/GenerationStatusPanel';
 import { InputImagePanel } from './workspace/InputImagePanel';
 import { InpaintMaskPanel } from './workspace/InpaintMaskPanel';
@@ -17,12 +17,14 @@ import { MaterialReplaceConfigPanel } from './MaterialReplaceConfigPanel';
 import { ObjectInsertPanel } from './ObjectInsertPanel';
 import { FreeReferenceImagePanel } from './FreeReferenceImagePanel';
 import { ImagePolishPanel } from './ImagePolishPanel';
+import { FloorPlanRegionPanel } from './FloorPlanRegionPanel';
 import { UploadErrors, UploadTarget, ViewModeOption } from './workspace/workspaceTypes';
 import { getUploadedImageSrc, isLocalInpaintingStep, maxFurnitureReferences, maxMaterialTextures, readGenerationStatusLabel } from './workspace/workspaceUtils';
 import { IMAGE_UPLOAD_ACCEPT, readImageTypeUploadError } from '../utils/imageValidation';
 
 const MaterialLibrary = lazy(() => import('./MaterialLibrary').then(module => ({ default: module.MaterialLibrary })));
 const PromptTemplatePanel = lazy(() => import('./PromptTemplatePanel').then(module => ({ default: module.PromptTemplatePanel })));
+const floorPlanAssetStorageKey = 'archai:floor-plan:last-asset-id';
 
 interface WorkspaceProps {
   step: GenerationStep;
@@ -51,6 +53,10 @@ interface WorkspaceProps {
   isCreditsInsufficient: boolean;
   providerUnavailableReason?: string | null;
   isAdmin?: boolean;
+  onStartContinuousEdit?: (image: UploadedImage) => Promise<void>;
+  creditBalance?: number | null;
+  onRefreshCreditBalance?: () => Promise<void>;
+  onEnsureProject?: () => Promise<string>;
 }
 
 export function MainWorkspace({
@@ -80,6 +86,10 @@ export function MainWorkspace({
   isCreditsInsufficient,
   providerUnavailableReason = null,
   isAdmin = false,
+  onStartContinuousEdit,
+  creditBalance = null,
+  onRefreshCreditBalance,
+  onEnsureProject,
 }: WorkspaceProps) {
   const inputFileRef = useRef<HTMLInputElement>(null);
   const materialFileRef = useRef<HTMLInputElement>(null);
@@ -90,9 +100,27 @@ export function MainWorkspace({
   const [isPromptTemplatePanelOpen, setIsPromptTemplatePanelOpen] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [projectName, setProjectName] = useState<string | null>(null);
+  const [isCreatingContinuousEdit, setIsCreatingContinuousEdit] = useState(false);
+  const [continuousEditError, setContinuousEditError] = useState<string | null>(null);
 
   const isFloorplanStep = step === GenerationStep.FloorplanTo3D;
   const isStyleRenderStep = step === GenerationStep.StyleRender;
+
+  useEffect(() => {
+    let active = true;
+    if (!isFloorplanStep || state.inputImage) return () => { active = false; };
+    const assetId = window.localStorage.getItem(floorPlanAssetStorageKey);
+    if (!assetId) return () => { active = false; };
+    getImageAsset(assetId).then(asset => {
+      if (!active) return;
+      const url = asset.publicUrl || asset.url;
+      onUpdateInputImage({ id: asset.id, assetId: asset.id, name: asset.filename || '已上传平面图', type: asset.mimeType, size: asset.size, dataUrl: url, url, publicUrl: url, thumbnailUrl: asset.thumbnailUrl, uploadStatus: 'uploaded', uploadProgress: 100 });
+    }).catch(error => {
+      console.error('[floor-plan-segment] restore source asset failed', { assetId, error });
+      window.localStorage.removeItem(floorPlanAssetStorageKey);
+    });
+    return () => { active = false; };
+  }, [isFloorplanStep, onUpdateInputImage, state.inputImage]);
   const isModelSnapshotStep = step === GenerationStep.ModelSnapshotRender;
   const isDesignVariantsStep = step === GenerationStep.DesignVariants;
   const isPlanColorizeStep = step === GenerationStep.PlanColorize;
@@ -212,13 +240,7 @@ export function MainWorkspace({
       revokeUploadedImagePreview(previousImage);
       if (target === 'input') onUpdateInputImage({ ...localImage, uploadStatus: 'uploading' });
       else onUpdateMaterialImage({ ...localImage, uploadStatus: 'uploading' });
-      void hydrateUploadedImageDataUrl(localImage, file)
-        .then(hydrated => {
-          const next = { ...hydrated, uploadStatus: 'uploading' as const };
-          if (target === 'input') onUpdateInputImage(next);
-          else onUpdateMaterialImage(next);
-        })
-        .catch(() => undefined);
+      const hydrationPromise = hydrateUploadedImageDataUrl(localImage, file).catch(() => localImage);
       let image = localImage;
 
       try {
@@ -229,8 +251,9 @@ export function MainWorkspace({
             else onUpdateMaterialImage(next);
           },
         });
+        const hydrated = await hydrationPromise;
         image = {
-          ...localImage,
+          ...hydrated,
           assetId: asset.id,
           url: asset.publicUrl || asset.url,
           publicUrl: asset.publicUrl || asset.url,
@@ -252,6 +275,9 @@ export function MainWorkspace({
 
       if (target === 'input') onUpdateInputImage(image);
       else onUpdateMaterialImage(image);
+      if (target === 'input' && isFloorplanStep && image.uploadStatus === 'uploaded' && image.assetId) {
+        window.localStorage.setItem(floorPlanAssetStorageKey, image.assetId);
+      }
       setUploadErrors(prev => ({ ...prev, [target]: null }));
     } catch (error) {
       setUploadErrors(prev => ({
@@ -445,6 +471,41 @@ export function MainWorkspace({
         variantLocks: state.config.variantLocks || ['structure', 'camera', 'walls-openings'],
       },
     });
+  };
+
+  const handleStartContinuousEditClick = async () => {
+    const image = state.inputImage;
+    setContinuousEditError(null);
+    if (!image) {
+      setContinuousEditError('请先选择并上传输入图片。');
+      return;
+    }
+    if (image.uploadStatus === 'uploading' || image.uploadStatus === 'local-preview' || image.uploadStatus === 'idle') {
+      setContinuousEditError('图片正在上传，完成后可连续修改。');
+      return;
+    }
+    if (image.uploadStatus === 'failed') {
+      setContinuousEditError(image.uploadError || '图片上传失败，请重新上传后重试。');
+      return;
+    }
+    if (image.uploadStatus !== 'uploaded' || !image.assetId) {
+      setContinuousEditError('图片尚未取得正式资产 ID，请重新上传后重试。');
+      return;
+    }
+    if (!onStartContinuousEdit) {
+      setContinuousEditError('连续修改功能当前不可用，请刷新页面或检查前端版本。');
+      return;
+    }
+    setIsCreatingContinuousEdit(true);
+    try {
+      await onStartContinuousEdit(image);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '连续修改会话创建失败，请重试。';
+      console.error('[continuous-edit] create session failed', { assetId: image.assetId, error });
+      setContinuousEditError(message);
+    } finally {
+      setIsCreatingContinuousEdit(false);
+    }
   };
 
   if (isDesignVariantsStep) {
@@ -668,6 +729,13 @@ export function MainWorkspace({
           onRemoveFurnitureReference={handleRemoveFurnitureReference}
           onFileDrop={(target, files) => { void handleFileSelected(target, files); }}
         />
+        {state.inputImage && onStartContinuousEdit ? <div className="mt-3">
+          <button type="button" onClick={()=>{void handleStartContinuousEditClick();}} disabled={isCreatingContinuousEdit||state.inputImage.uploadStatus!=='uploaded'||!state.inputImage.assetId} className="w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300">
+            {isCreatingContinuousEdit?'正在创建会话…':state.inputImage.uploadStatus==='uploading'||state.inputImage.uploadStatus==='local-preview'?'图片正在上传…':state.inputImage.uploadStatus==='failed'?'图片上传失败，请重试':'开始连续修改'}
+          </button>
+          {state.inputImage.uploadStatus==='uploading'||state.inputImage.uploadStatus==='local-preview'?<p className="mt-2 text-xs text-slate-500">图片正在上传，完成后可连续修改</p>:null}
+          {continuousEditError?<p role="alert" className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{continuousEditError}</p>:null}
+        </div>:null}
         <div className="mt-5 space-y-5">
           {!isMaterialReplaceStep ? (
             <PromptConfigPanel
@@ -685,7 +753,15 @@ export function MainWorkspace({
         </div>
       </aside>
 
-      {step === GenerationStep.LocalInpainting || (isMaterialReplaceStep && materialReplaceEditMode === 'mask') ? (
+      {isFloorplanStep ? (
+        <FloorPlanRegionPanel
+          image={state.inputImage}
+          onUpload={() => handleUploadClick('input')}
+          creditBalance={creditBalance}
+          onRefreshCreditBalance={onRefreshCreditBalance}
+          onEnsureProject={onEnsureProject}
+        />
+      ) : step === GenerationStep.LocalInpainting || (isMaterialReplaceStep && materialReplaceEditMode === 'mask') ? (
         <InpaintMaskPanel
           inputImage={state.inputImage}
           maskImageDataUrl={state.maskImage?.dataUrl || null}

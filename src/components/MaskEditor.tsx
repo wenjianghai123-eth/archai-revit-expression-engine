@@ -7,6 +7,7 @@ interface MaskEditorProps {
   maskImageDataUrl: string | null;
   useFullImage: boolean;
   onMaskChange: (maskDataUrl: string | null, useFullImage: boolean, feather?: number) => void;
+  allowFullImage?: boolean;
 }
 
 type MaskTool = 'brush' | 'eraser' | 'rectangle' | 'lasso';
@@ -25,7 +26,7 @@ interface Rect {
 
 const maxHistoryLength = 20;
 
-export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, useFullImage, onMaskChange }: MaskEditorProps) {
+export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, useFullImage, onMaskChange, allowFullImage = true }: MaskEditorProps) {
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const historyRef = useRef<string[]>([]);
@@ -488,12 +489,12 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, useFullI
         <ToolButton active={false} label="清空" onClick={handleClear}>
           <Trash2 className="h-3.5 w-3.5" />
         </ToolButton>
-        <ToolButton active={useFullImage} label="整图" onClick={handleUseFullImage}>
+        {allowFullImage ? <><ToolButton active={useFullImage} label="整图" onClick={handleUseFullImage}>
           <Maximize2 className="h-3.5 w-3.5" />
         </ToolButton>
         <ToolButton active={false} label="取消整图" onClick={handleCancelFullImage} disabled={!useFullImage}>
           <X className="h-3.5 w-3.5" />
-        </ToolButton>
+        </ToolButton></> : null}
       </div>
 
       <label className="flex shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-bold text-slate-500">

@@ -953,6 +953,63 @@ describe('POST /api/generation-jobs asset ownership', () => {
       error: { code: 'GENERATION_JOB_INPUT_ASSET_NOT_FOUND' },
     });
   });
+
+  it('creates a region-material plan-colorize job with compiled prompt and fixed input order', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Region material plan' });
+    const source = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const control = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const material = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const region = { id: 'region-1', number: 1, polygon: [[0, 0], [1, 0], [1, 1], [0, 1]] as [number, number][], areaRatio: 1, suggestedName: null, name: 'Kitchen', confidence: 1, maskAssetId: null, maskUrl: null };
+    const regionSet = await storage.createFloorPlanRegionSet({
+      userId: DEV_AUTH_USER_ID,
+      sourceAssetId: source.id,
+      width: 100,
+      height: 100,
+      regions: [region],
+      autoRegions: [region],
+      overlayAssetId: null,
+      overlayUrl: null,
+      status: 'confirmed',
+      versionNumber: 2,
+      lockedAt: new Date().toISOString(),
+      confirmedAt: new Date().toISOString(),
+    });
+    await storage.saveFloorPlanRegionMaterials(regionSet.id, DEV_AUTH_USER_ID, [{
+      regionId: region.id,
+      materialAssetId: material.id,
+      materialName: 'grey anti-slip tile',
+      scale: 1,
+      rotation: 0,
+      direction: 'horizontal',
+      jointMode: 'subtle',
+      fallbackMode: 'reference',
+    }]);
+
+    const response = await request(app).post('/api/generation-jobs').send({
+      projectId: project.id,
+      mode: 'plan-colorize',
+      step: 'plan_colorize',
+      provider: 'apiyi-nano-banana2-edit',
+      prompt: '',
+      inputAssetIds: [source.id, control.id, material.id],
+      config: {
+        generationStep: 'plan_colorize',
+        floorPlanMaterialMapping: true,
+        sourceImageAssetId: source.id,
+        floorPlanControlAssetId: control.id,
+        floorPlanRegionSetId: regionSet.id,
+        floorPlanMaterialReferenceAssetIds: [material.id],
+        floorPlanMaterialAssignments: [{ regionId: region.id, number: 1, roomName: 'Kitchen', materialName: 'grey anti-slip tile', materialAssetId: material.id, fallbackMode: 'reference', scale: 1, rotation: 0, direction: 'horizontal', jointMode: 'subtle' }],
+      },
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.inputAssetIds).toEqual([source.id, control.id, material.id]);
+    expect(response.body.data.job.creditCost).toBe(1);
+    expect(response.body.data.job.prompt).toContain('Image 1 is the original black-and-white floor plan');
+    expect(response.body.data.job.prompt).toContain('Image 2 is the deterministic material placement control image');
+    expect(response.body.data.job.prompt).toContain('Region 1: Kitchen — grey anti-slip tile.');
+  });
 });
 
 describe('project soft deletion', () => {
@@ -1988,6 +2045,88 @@ describe('credit adjustments', () => {
     expect(firstRefund?.transaction.id).toBe(secondRefund?.transaction.id);
     expect(balance.balance).toBe(20);
     expect(transactions.filter(transaction => transaction.type === 'generate_refund' && transaction.referenceId === 'job_refund_user')).toHaveLength(1);
+  });
+});
+
+describe('continuous edit session API', () => {
+  it('creates V0 and queues a generation job from the selected base version', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Continuous edit' });
+    const source = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const created = await request(app).post('/api/edit-sessions').send({ projectId: project.id, sourceAssetId: source.id, title: '客厅连续修改', aspectRatio: '16:9' });
+    expect(created.status).toBe(201);
+    expect(created.body.data.version).toMatchObject({ assetId: source.id, versionNumber: 0, parentVersionId: null });
+    expect(created.body.data.session.originalVersionId).toBe(created.body.data.version.id);
+    expect(created.body.data.session.currentVersionId).toBe(created.body.data.version.id);
+
+    await storage.adjustCredits({ userId: DEV_AUTH_USER_ID, type: 'grant', amount: 5, reason: 'Continuous edit test', referenceType: 'system', referenceId: `continuous_edit_${Date.now()}` });
+
+    const submitted = await request(app).post(`/api/edit-sessions/${created.body.data.session.id}/messages`).send({ instruction: '将墙面改成浅色木饰面', baseVersionId: created.body.data.version.id, imageSize: '1K', constraints: { preserveLayout: true } });
+    expect(submitted.status).toBe(202);
+    expect(submitted.body.data.jobId).toMatch(/^job_/u);
+    const idempotentRequest = {
+      instruction: 'idempotent edit',
+      baseVersionId: created.body.data.version.id,
+      imageSize: '1K',
+      clientRequestId: 'continuous-edit-idempotency-check',
+    };
+    const firstIdempotent = await request(app).post(`/api/edit-sessions/${created.body.data.session.id}/messages`).send(idempotentRequest);
+    const duplicateIdempotent = await request(app).post(`/api/edit-sessions/${created.body.data.session.id}/messages`).send(idempotentRequest);
+    expect(duplicateIdempotent.status).toBe(200);
+    expect(duplicateIdempotent.body.data).toMatchObject({ jobId: firstIdempotent.body.data.jobId, idempotent: true });
+    const charges = (await storage.listCreditTransactions(DEV_AUTH_USER_ID)).filter(transaction => transaction.type === 'generate_charge' && transaction.referenceId === firstIdempotent.body.data.jobId);
+    expect(charges).toHaveLength(1);
+    const job = await storage.getGenerationJob(submitted.body.data.jobId, DEV_AUTH_USER_ID);
+    expect(job?.inputAssetIds).toEqual([source.id, source.id]);
+    expect(job?.config).toMatchObject({ editSessionId: created.body.data.session.id, baseVersionId: created.body.data.version.id, sourceImageAssetId: source.id, originalStructureAssetId: source.id, apiyiImageSize: '1K' });
+
+    const output = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    await storage.createGenerationResult({ userId: DEV_AUTH_USER_ID, projectId: project.id, jobId: job!.id, assetId: output.id, imageUrl: output.url });
+    const { completeEditGeneration } = await import('./editSessionLifecycle');
+    await completeEditGeneration(job!, output.id);
+    await completeEditGeneration(job!, output.id);
+    const versions = await request(app).get(`/api/edit-sessions/${created.body.data.session.id}/versions`);
+    expect(versions.body.data.versions).toHaveLength(2);
+    expect(versions.body.data.versions[1]).toMatchObject({ assetId: output.id, parentVersionId: created.body.data.version.id, versionNumber: 1, generationJobId: job!.id });
+    const v1 = versions.body.data.versions[1];
+
+    const second = await request(app).post(`/api/edit-sessions/${created.body.data.session.id}/messages`).send({ instruction: '增加暖色灯光', baseVersionId: v1.id, imageSize: '1K' });
+    const secondJob = await storage.getGenerationJob(second.body.data.jobId, DEV_AUTH_USER_ID);
+    expect(secondJob?.inputAssetIds).toEqual([output.id, source.id]);
+    expect(secondJob?.config).toMatchObject({ baseVersionId: v1.id, sourceImageAssetId: output.id, originalStructureAssetId: source.id });
+    const output2 = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    await storage.createGenerationResult({ userId: DEV_AUTH_USER_ID, projectId: project.id, jobId: secondJob!.id, assetId: output2.id, imageUrl: output2.url });
+    await completeEditGeneration(secondJob!, output2.id);
+
+    const branch = await request(app).post(`/api/edit-sessions/${created.body.data.session.id}/messages`).send({ instruction: '改成冷色灯光分支', baseVersionId: v1.id, imageSize: '1K' });
+    const branchJob = await storage.getGenerationJob(branch.body.data.jobId, DEV_AUTH_USER_ID);
+    expect(branchJob?.inputAssetIds).toEqual([output.id, source.id]);
+    expect(branchJob?.config).toMatchObject({ baseVersionId: v1.id, sourceImageAssetId: output.id, originalStructureAssetId: source.id });
+
+    const editMask = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const finalRender = await request(app).post(`/api/edit-sessions/${created.body.data.session.id}/messages`).send({ baseVersionId: v1.id, imageSize: '4K', generationKind: 'final-render', maskAssetId: editMask.id });
+    expect(finalRender.status).toBe(202);
+    const finalJob = await storage.getGenerationJob(finalRender.body.data.jobId, DEV_AUTH_USER_ID);
+    expect(finalJob?.inputAssetIds).toEqual([output.id, source.id, editMask.id]);
+    expect(finalJob?.config).toMatchObject({ baseVersionId: v1.id, sourceImageAssetId: output.id, apiyiImageSize: '4K', generationKind: 'final-render', maskMode: 'asset-mask', maskAssetId: editMask.id });
+    expect(finalJob?.prompt).toContain('Image 3 is the edit mask');
+    const finalOutput = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    await storage.createGenerationResult({ userId: DEV_AUTH_USER_ID, projectId: project.id, jobId: finalJob!.id, assetId: finalOutput.id, imageUrl: finalOutput.url });
+    await completeEditGeneration(finalJob!, finalOutput.id);
+    const finalVersions = await storage.listAssetVersions(created.body.data.session.id, DEV_AUTH_USER_ID);
+    expect(finalVersions.find(version => version.generationJobId === finalJob!.id)).toMatchObject({ parentVersionId: v1.id, assetId: finalOutput.id });
+
+    const selected = await request(app).post(`/api/edit-sessions/${created.body.data.session.id}/select-version`).send({ versionId: created.body.data.version.id });
+    expect(selected.status).toBe(200);
+    const finalized = await request(app).post(`/api/edit-sessions/${created.body.data.session.id}/finalize`).send({});
+    expect(finalized.status).toBe(200);
+    expect(finalized.body.data.session.status).toBe('finalized');
+  });
+
+  it('rejects a source asset owned by another user', async () => {
+    const source = await createImageAssetForUser('another-user');
+    const response = await request(app).post('/api/edit-sessions').send({ sourceAssetId: source.id });
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe('EDIT_SESSION_SOURCE_NOT_FOUND');
   });
 });
 

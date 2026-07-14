@@ -33,6 +33,7 @@ import {
   updateGenerationJob,
 } from './storage';
 import { isNonEmptyString } from './validation';
+import { completeEditGeneration, failEditGeneration, markEditGenerationRunning } from './editSessionLifecycle';
 
 export interface GenerateResponseBody {
   id: string;
@@ -340,6 +341,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
       errorMessage: null,
       diagnostics,
     });
+    await markEditGenerationRunning(job);
 
     markTiming(diagnostics, 'prepareInputStartedAt', 'prepare-input');
     await updateGenerationJob(job.id, { progress: 15, diagnostics });
@@ -495,6 +497,12 @@ async function processGenerationJob(jobId: string): Promise<void> {
                 enableScaleEnhance: Boolean(job.config.enableScaleEnhance),
                 enableLandscapeFill: Boolean(job.config.enableLandscapeFill),
                 preserveLinework: job.config.preserveLinework !== false,
+                floorPlanMaterialMapping: job.config.floorPlanMaterialMapping === true,
+                sourceImageAssetId: job.config.floorPlanMaterialMapping === true ? job.config.sourceImageAssetId : undefined,
+                floorPlanRegionSetId: job.config.floorPlanMaterialMapping === true ? job.config.floorPlanRegionSetId : undefined,
+                floorPlanControlAssetId: job.config.floorPlanMaterialMapping === true ? job.config.floorPlanControlAssetId : undefined,
+                floorPlanMaterialAssignments: job.config.floorPlanMaterialMapping === true ? job.config.floorPlanMaterialAssignments : undefined,
+                compiledPrompt: job.config.floorPlanMaterialMapping === true ? job.prompt : undefined,
                 planColorizeStyleIndex: index,
                 selectedStyleId: planStyle.id,
                 selectedStyleName: planStyle.name,
@@ -599,6 +607,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
         finishedAt: latestJob.finishedAt || new Date().toISOString(),
       });
       await refundGenerationJobCredits(job.id);
+      await failEditGeneration(job, 'cancelled');
       return;
     }
 
@@ -606,6 +615,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
     finalizeDurations(diagnostics);
     logJobTiming(job.id, diagnostics);
 
+    await completeEditGeneration({ ...job, diagnostics }, firstOutputAsset.id);
     await updateGenerationJob(job.id, {
       status: 'succeeded',
       progress: 100,
@@ -659,6 +669,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
       diagnostics,
     });
     await refundGenerationJobCredits(job.id);
+    await failEditGeneration(job, terminalStatus, providerError.providerError || (error instanceof Error && 'code' in error ? String(error.code) : undefined), message);
   }
 }
 
@@ -674,6 +685,8 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     || readGenerationJobStep(job.config) === 'free_reference_image';
   const isImagePolishMode = job.step === 'image_polish'
     || readGenerationJobStep(job.config) === 'image_polish';
+  const isContinuousEditMode = isNonEmptyString(job.config.editSessionId) && isNonEmptyString(job.config.baseVersionId);
+  const isFloorPlanMaterialMappingMode = job.mode === 'plan-colorize' && job.config.floorPlanMaterialMapping === true;
   const objectInsertConfig = readObjectInsertJobConfig(job);
   const objectInsertDebugMode = isObjectInsertMode ? readObjectInsertDebugMode(job.config) : 'full';
   const objectInsertNeedsObject = isObjectInsertPreviewFusionMode ? false : objectInsertIncludesObject(objectInsertDebugMode);
@@ -683,8 +696,14 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   const objectReferenceAssetId = isObjectInsertMode ? objectInsertConfig.objectReferenceAssetId : '';
   const placementPreviewAssetId = isObjectInsertMode ? objectInsertConfig.previewAssetId : '';
   const placementMaskAssetId = isObjectInsertMode ? objectInsertConfig.maskAssetId : '';
-  const materialReferenceAssetIds = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode || isImagePolishMode
+  const materialReferenceAssetIds = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode || isImagePolishMode || isFloorPlanMaterialMappingMode
     ? []
+    : isContinuousEditMode
+    ? [
+        readConfigStringValue(job.config.sourceImageAssetId) || job.inputAssetIds[0],
+        readConfigStringValue(job.config.originalStructureAssetId) || job.inputAssetIds[1],
+        ...readStringArray(job.config.continuousEditReferenceAssetIds),
+      ].filter(isNonEmptyString)
     : Array.from(new Set([
         ...readStringArray(job.config.materialTextureAssetIds),
         ...readStringArray(job.config.materialReferenceAssetIds),
@@ -695,6 +714,9 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
         ...readStringArray(job.config.referenceImageAssetIds),
         ...job.inputAssetIds.slice(1),
       ].filter(isNonEmptyString))).slice(0, 6)
+    : [];
+  const floorPlanMaterialReferenceAssetIds = isFloorPlanMaterialMappingMode
+    ? readStringArray(job.config.floorPlanMaterialReferenceAssetIds).slice(0, 2)
     : [];
   const objectInsertOrderedAssetIds = isObjectInsertMode
     ? buildObjectInsertOrderedAssetIds({
@@ -727,6 +749,14 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
         readConfigStringValue(job.config.sourceImageAssetId) || job.inputAssetIds[0],
         ...freeReferenceAssetIds,
       ].filter(isNonEmptyString)
+    : isFloorPlanMaterialMappingMode
+    ? [
+        readConfigStringValue(job.config.sourceImageAssetId) || job.inputAssetIds[0],
+        readConfigStringValue(job.config.floorPlanControlAssetId) || job.inputAssetIds[1],
+        ...floorPlanMaterialReferenceAssetIds,
+      ].filter(isNonEmptyString)
+    : isContinuousEditMode
+    ? materialReferenceAssetIds
     : Array.from(new Set([
         ...job.inputAssetIds,
         ...materialReferenceAssetIds,
@@ -737,17 +767,17 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     throw new Error('Input image asset was not found.');
   }
 
-  const ownedMaterialReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode || isImagePolishMode
+  const ownedMaterialReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode || isImagePolishMode || isFloorPlanMaterialMappingMode
     ? []
     : await getOwnedAssetDataUrls(materialReferenceAssetIds, job.userId, 3, 'material reference');
-  const publicMaterialReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode || isImagePolishMode
+  const publicMaterialReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode || isImagePolishMode || isFloorPlanMaterialMappingMode
     ? []
     : await getMaterialTextureSourceDataUrls(job.config);
   const materialReferenceImageDataUrls = [
     ...ownedMaterialReferenceImageDataUrls,
     ...publicMaterialReferenceImageDataUrls,
   ].slice(0, 3);
-  const furnitureReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode || isImagePolishMode
+  const furnitureReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode || isImagePolishMode || isFloorPlanMaterialMappingMode
     ? []
     : await getOwnedAssetDataUrls(readStringArray(job.config.furnitureReferenceAssetIds), job.userId, 3, 'furniture reference');
   const additionalImageDataUrls = imageDataUrls.slice(1).filter(isNonEmptyString);
@@ -757,6 +787,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   const objectReferenceImageDataUrl = isObjectInsertMode && objectInsertNeedsObject ? objectInputDataUrls[0] : undefined;
   const materialImageDataUrl = isObjectInsertMode
     ? objectReferenceImageDataUrl
+    : isFloorPlanMaterialMappingMode ? undefined
     : isImagePolishMode ? undefined
     : isFreeReferenceImageMode ? undefined
     : isPanoramaReferenceMode ? undefined : materialReferenceImageDataUrls[0] || additionalImageDataUrls[0];
@@ -765,6 +796,8 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     ? additionalImageDataUrls.slice(0, 1)
     : isObjectInsertMode
     ? objectInputDataUrls.slice(objectReferenceImageDataUrl ? 1 : 0)
+    : isFloorPlanMaterialMappingMode
+    ? []
     : isImagePolishMode
     ? []
     : isFreeReferenceImageMode
@@ -791,7 +824,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
       objectItemsCount: objectInsertItems.length,
     });
   }
-  const isMaskedEditMode = job.mode === 'inpaint' || job.mode === 'material-replace' || isObjectInsertMode;
+  const isMaskedEditMode = job.mode === 'inpaint' || job.mode === 'material-replace' || isObjectInsertMode || isContinuousEditMode;
   const maskMode = isObjectInsertMode
     ? objectInsertNeedsMask && isMaskMode(job.config.maskMode) ? job.config.maskMode : undefined
     : isMaskedEditMode && isMaskMode(job.config.maskMode) ? job.config.maskMode : undefined;
@@ -846,6 +879,28 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     targetAspectRatio: targetDimensions.targetAspectRatio,
     editTarget: job.mode === 'material-replace' ? 'material' : isObjectInsertMode ? 'furniture' : readEditTarget(job.config.editTarget),
     qualityMode,
+    inputImages: isFloorPlanMaterialMappingMode
+      ? imageDataUrls.filter(isNonEmptyString).map((url, index) => ({
+        role: index === 0
+          ? 'original-floor-plan' as const
+          : index === 1
+            ? 'material-control' as const
+            : 'material-reference' as const,
+        url,
+      }))
+      : isContinuousEditMode
+      ? [
+        ...imageDataUrls.filter(isNonEmptyString).map((url, index) => ({
+          role: index === 0
+            ? 'current' as const
+            : index === 1
+              ? 'original-structure-reference' as const
+              : readContinuousEditReferenceRole(readStringArray(job.config.continuousEditReferenceRoles)[index - 2]),
+          url,
+        })),
+        ...(maskImageDataUrl ? [{ role: 'mask' as const, url: maskImageDataUrl }] : []),
+      ]
+      : undefined,
   };
 
   const localInpaint = await maybeCreateLocalInpaintContext(rawInput);
@@ -1035,7 +1090,7 @@ async function prepareGenerateInputForApiYi(input: GenerateImageInput): Promise<
     const parsed = parseRawImageDataUrl(dataUrl);
     const size = await getImageSizeFromDataUrl(dataUrl);
     return {
-      role: index === 0 ? 'input' : 'reference',
+      role: input.inputImages?.[index]?.role || (index === 0 ? 'input' : 'reference'),
       width: size.width,
       height: size.height,
       originalWidth: size.width,
@@ -1916,6 +1971,10 @@ function buildProviderInputForVariant(
   planStyle?: PlanColorizeStyleOption,
   floorplanPlan?: FloorplanVariantPlan,
 ): GenerateImageInput {
+  if (job.mode === 'plan-colorize' && job.config.floorPlanMaterialMapping === true) {
+    return input;
+  }
+
   if (isFloorplanMultiPlanJob(job)) {
     const plan = floorplanPlan || resolveFloorplanVariantPlans(job.config, batchCount)[index];
     return {
@@ -2417,6 +2476,10 @@ function resolveVariantCompleteProgress(batchCount: number, index: number): numb
 }
 
 function buildProviderPromptForJob(job: GenerationJob, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
+  if (job.mode === 'plan-colorize' && job.config.floorPlanMaterialMapping === true) {
+    return job.prompt;
+  }
+
   if (job.step === 'image_polish' || readGenerationJobStep(job.config) === 'image_polish') {
     return resolveImagePolishPrompts(job.config.enhanceMaterials === true).prompt;
   }
@@ -2647,6 +2710,13 @@ function isTimeoutGenerationFailure(error: unknown, statusCode?: number): boolea
 
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter(isNonEmptyString) : [];
+}
+
+function readContinuousEditReferenceRole(value: string | undefined): NonNullable<GenerateImageInput['inputImages']>[number]['role'] {
+  if (value === 'material') return 'material-reference';
+  if (value === 'furniture') return 'furniture-reference';
+  if (value === 'lighting') return 'lighting-reference';
+  return 'style-reference';
 }
 
 function readConfigStringValue(value: unknown): string {

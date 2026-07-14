@@ -78,6 +78,7 @@ export function AspectRatioImage({
           >
             <img
               src={resolvedSrc}
+              loading="lazy"
               alt={alt}
               className={`h-full w-full ${fit === 'cover' ? 'object-cover' : 'object-contain'} ${imageClassName}`}
               referrerPolicy="no-referrer"

@@ -33,6 +33,7 @@ interface GenerationImageViewerProps {
   resultMissingMessage?: string;
   sourceMissingMessage?: string;
   compareMissingMessage?: string;
+  imageScale?: number;
 }
 
 const viewModeOptions: Array<{ value: ViewMode; label: string }> = [
@@ -61,6 +62,7 @@ export function GenerationImageViewer({
   tabListClassName = '',
   tabButtonClassName = '',
   showTabs = true,
+  imageScale = 1,
   resultMissingMessage = '暂无生成结果',
   sourceMissingMessage = '暂无原图，无法对比。',
   compareMissingMessage = '暂无原图，无法对比。',
@@ -152,6 +154,7 @@ export function GenerationImageViewer({
           resultMissingMessage,
           sourceMissingMessage,
           compareMissingMessage,
+          imageScale,
         })}
       </div>
     </div>
@@ -169,6 +172,7 @@ function renderViewer({
   resultMissingMessage,
   sourceMissingMessage,
   compareMissingMessage,
+  imageScale,
 }: {
   viewMode: ViewMode;
   sourceImageUrl?: string;
@@ -180,6 +184,7 @@ function renderViewer({
   resultMissingMessage: string;
   sourceMissingMessage: string;
   compareMissingMessage: string;
+  imageScale: number;
 }) {
   if (isGenerating) {
     return (
@@ -193,7 +198,7 @@ function renderViewer({
 
   if (viewMode === 'source') {
     return sourceImageUrl
-      ? <img src={sourceImageUrl} alt="原图" className="h-full w-full bg-white object-contain" referrerPolicy="no-referrer" onError={() => warnImageLoadFailure(rawSourceImageUrl, sourceImageUrl)} />
+      ? <img src={sourceImageUrl} alt="原图" style={{ transform: `scale(${imageScale})` }} className="h-full w-full bg-white object-contain transition-transform" referrerPolicy="no-referrer" onError={() => warnImageLoadFailure(rawSourceImageUrl, sourceImageUrl)} />
       : <ImageEmptyState message={sourceMissingMessage} />;
   }
 
@@ -209,12 +214,12 @@ function renderViewer({
 
   if (viewMode === 'overlay') {
     return sourceImageUrl && resultImageUrl
-      ? <ImageOverlayCompare sourceImageUrl={sourceImageUrl} resultImageUrl={resultImageUrl} className="h-full" />
+      ? <ImageOverlayCompare sourceImageUrl={sourceImageUrl} resultImageUrl={resultImageUrl} imageScale={imageScale} className="h-full" />
       : <ImageEmptyState message={compareMissingMessage} />;
   }
 
   return resultImageUrl
-    ? <img src={resultImageUrl} alt="结果图" className="h-full w-full bg-white object-contain" referrerPolicy="no-referrer" onError={() => warnImageLoadFailure(rawResultImageUrl, resultImageUrl)} />
+    ? <img src={resultImageUrl} alt="结果图" style={{ transform: `scale(${imageScale})` }} className="h-full w-full bg-white object-contain transition-transform" referrerPolicy="no-referrer" onError={() => warnImageLoadFailure(rawResultImageUrl, resultImageUrl)} />
     : <ImageEmptyState title={resultMissingMessage} message="生成完成后，结果图会显示在这里。" />;
 }
 

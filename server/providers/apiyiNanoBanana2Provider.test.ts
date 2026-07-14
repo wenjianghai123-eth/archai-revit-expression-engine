@@ -101,6 +101,40 @@ describe('API易 Nano Banana 2 provider', () => {
     ]);
   });
 
+  it('keeps role-based continuous edit images in current, original, reference order', async () => {
+    const current = 'data:image/png;base64,Y3VycmVudA==';
+    const original = 'data:image/png;base64,b3JpZ2luYWw=';
+    const reference = 'data:image/png;base64,cmVmZXJlbmNl';
+    const sources = collectApiYiImageSources(createInput({
+      inputImages: [
+        { role: 'current', url: current },
+        { role: 'original-structure-reference', url: original },
+        { role: 'material-reference', url: reference },
+      ],
+    }));
+    expect(sources).toEqual([current, original, reference]);
+  });
+
+  it('includes a continuous edit mask in the role-based APIYI image order', () => {
+    const current = 'data:image/png;base64,Y3VycmVudA==';
+    const original = 'data:image/png;base64,b3JpZ2luYWw=';
+    const mask = 'data:image/png;base64,bWFzaw==';
+    expect(collectApiYiImageSources(createInput({ inputImages: [
+      { role: 'current', url: current },
+      { role: 'original-structure-reference', url: original },
+      { role: 'mask', url: mask },
+    ] }))).toEqual([current, original, mask]);
+  });
+
+  it('stores the APIYi response id as providerTaskId', async () => {
+    const provider = createApiYiNanoBanana2Provider({
+      apiKey: 'test-key',
+      fetchImpl: vi.fn(async () => new Response(JSON.stringify({ responseId: 'provider-task-123', candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: onePixelPng.replace(/^data:image\/png;base64,/u, '') } }] } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch,
+    });
+    const output = await provider.generateImage(createInput({ inputImages: [{ role: 'current', url: onePixelPng }, { role: 'original-structure-reference', url: onePixelPng }] }));
+    expect(output.metadata).toMatchObject({ providerTaskId: 'provider-task-123', requestId: expect.any(String) });
+  });
+
   it('adds the floorplan English text requirement to APIYi floorplan prompts', async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {

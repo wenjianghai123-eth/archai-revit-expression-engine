@@ -223,6 +223,124 @@ export interface ImageAsset {
   createdAt: string;
 }
 
+export type RegionPolygon = [number, number][];
+
+export type RegionEditOperation =
+  | { type: 'rename'; regionId: string; name: string }
+  | { type: 'delete'; regionId: string }
+  | { type: 'add-polygon'; regionId: string; polygon: RegionPolygon }
+  | { type: 'brush'; regionId: string; point: [number, number]; radius: number }
+  | { type: 'erase'; regionId: string; point: [number, number]; radius: number }
+  | { type: 'merge'; sourceRegionIds: string[]; outputRegionId: string }
+  | { type: 'split'; sourceRegionId: string; outputRegionIds: string[] }
+  | { type: 'restore-auto' };
+
+export interface FloorPlanRegion {
+  id: string;
+  number: number;
+  polygon: RegionPolygon;
+  areaRatio: number;
+  suggestedName: string | null;
+  name: string;
+  confidence: number;
+  maskAssetId: string | null;
+  maskUrl: string | null;
+}
+
+export interface FloorPlanRegionSet {
+  id: string;
+  userId: string;
+  sourceAssetId: string;
+  width: number;
+  height: number;
+  regions: FloorPlanRegion[];
+  autoRegions: FloorPlanRegion[];
+  overlayAssetId: string | null;
+  overlayUrl: string | null;
+  status: 'recognized' | 'confirmed';
+  versionNumber: number;
+  baseRegionSetId: string | null;
+  lockedAt: string | null;
+  confirmedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type FloorPlanMaterialDirection = 'auto' | 'horizontal' | 'vertical' | 'diagonal';
+export type FloorPlanMaterialJointMode = 'subtle' | 'visible' | 'none';
+export type FloorPlanMaterialFallbackMode = 'reference' | 'default' | 'ai-auto';
+
+export interface FloorPlanRegionMaterial {
+  id: string;
+  userId: string;
+  regionSetId: string;
+  regionId: string;
+  materialAssetId: string | null;
+  materialUrl: string | null;
+  materialName: string;
+  scale: number;
+  rotation: number;
+  direction: FloorPlanMaterialDirection;
+  jointMode: FloorPlanMaterialJointMode;
+  fallbackMode: FloorPlanMaterialFallbackMode;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type EditSessionStatus = 'active' | 'finalized' | 'archived';
+export type EditMessageStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
+
+export interface EditSession {
+  id: string;
+  userId: string;
+  projectId: string | null;
+  sourceAssetId: string;
+  originalVersionId: string;
+  currentVersionId: string;
+  title: string;
+  permanentConstraints: Record<string, unknown>;
+  aspectRatio: string | null;
+  status: EditSessionStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EditMessage {
+  id: string;
+  sessionId: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  baseVersionId: string | null;
+  outputVersionId: string | null;
+  generationJobId: string | null;
+  status: EditMessageStatus;
+  createdAt: string;
+  clientRequestId: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+export interface AssetVersion {
+  id: string;
+  assetId: string;
+  sessionId: string;
+  parentVersionId: string | null;
+  versionNumber: number;
+  storagePath: string;
+  publicUrl: string;
+  userInstruction: string;
+  compiledPrompt: string;
+  provider: string | null;
+  model: string | null;
+  generationJobId: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export type CreateEditSessionInput = Omit<EditSession, 'id' | 'originalVersionId' | 'currentVersionId' | 'status' | 'createdAt' | 'updatedAt'>;
+export type CreateEditMessageInput = Omit<EditMessage, 'id' | 'outputVersionId' | 'generationJobId' | 'createdAt' | 'errorCode' | 'errorMessage'>;
+export type CreateAssetVersionInput = Omit<AssetVersion, 'id' | 'createdAt'>;
+
 export type PromptTemplateFeature =
   | 'floorplan'
   | 'style-render'
@@ -389,6 +507,11 @@ export interface AppDatabase {
   shareLinks: ShareLink[];
   creditBalances: CreditBalance[];
   creditTransactions: CreditTransaction[];
+  editSessions: EditSession[];
+  editMessages: EditMessage[];
+  assetVersions: AssetVersion[];
+  floorPlanRegionSets: FloorPlanRegionSet[];
+  floorPlanRegionMaterials: FloorPlanRegionMaterial[];
 }
 
 export type CreateUserProfileInput = {
@@ -467,6 +590,18 @@ export type CreateImageAssetInput = {
   mimeType: string;
   size: number;
 };
+
+export type CreateFloorPlanRegionSetInput = Omit<FloorPlanRegionSet, 'id' | 'status' | 'versionNumber' | 'baseRegionSetId' | 'lockedAt' | 'confirmedAt' | 'createdAt' | 'updatedAt'> & {
+  versionNumber?: number;
+  baseRegionSetId?: string | null;
+  status?: FloorPlanRegionSet['status'];
+  lockedAt?: string | null;
+  confirmedAt?: string | null;
+};
+
+export type SaveFloorPlanRegionMaterialInput = Pick<FloorPlanRegionMaterial,
+  'regionId' | 'materialAssetId' | 'materialName' | 'scale' | 'rotation' | 'direction' | 'jointMode' | 'fallbackMode'
+>;
 
 export type CreatePromptTemplateInput = {
   name: string;
@@ -550,6 +685,7 @@ export type CreditTransactionInput = {
 
 export interface StorageAdapter {
   ensureReady(): Promise<void>;
+  ensureFloorPlanSchemaReady(): Promise<void>;
 
   listUserProfiles(): Promise<UserProfile[]>;
   getUserProfile(id: string): Promise<UserProfile | null>;
@@ -577,6 +713,24 @@ export interface StorageAdapter {
 
   createImageAsset(input: CreateImageAssetInput): Promise<ImageAsset>;
   getImageAsset(id: string, userId?: string): Promise<ImageAsset | null>;
+  createFloorPlanRegionSet(input: CreateFloorPlanRegionSetInput): Promise<FloorPlanRegionSet>;
+  getFloorPlanRegionSet(id: string, userId: string): Promise<FloorPlanRegionSet | null>;
+  getLatestFloorPlanRegionSet(sourceAssetId: string, userId: string): Promise<FloorPlanRegionSet | null>;
+  updateFloorPlanRegionSet(id: string, userId: string, input: { regions?: FloorPlanRegion[]; autoRegions?: FloorPlanRegion[]; overlayAssetId?: string | null; overlayUrl?: string | null; status?: FloorPlanRegionSet['status']; confirmedAt?: string | null; lockedAt?: string | null }): Promise<FloorPlanRegionSet | null>;
+  listFloorPlanRegionMaterials(regionSetId: string, userId: string): Promise<FloorPlanRegionMaterial[]>;
+  saveFloorPlanRegionMaterials(regionSetId: string, userId: string, materials: SaveFloorPlanRegionMaterialInput[]): Promise<FloorPlanRegionMaterial[]>;
+
+  createEditSession(input: CreateEditSessionInput, sourceAsset: ImageAsset): Promise<{ session: EditSession; version: AssetVersion }>;
+  getEditSession(id: string, userId: string): Promise<EditSession | null>;
+  updateEditSession(id: string, userId: string, input: Partial<Pick<EditSession, 'currentVersionId' | 'status' | 'title'>>): Promise<EditSession | null>;
+  listAssetVersions(sessionId: string, userId: string): Promise<AssetVersion[]>;
+  getAssetVersion(id: string, sessionId: string, userId: string): Promise<AssetVersion | null>;
+  createAssetVersion(input: CreateAssetVersionInput): Promise<AssetVersion>;
+  createEditMessage(input: CreateEditMessageInput): Promise<EditMessage>;
+  getEditMessage(id: string): Promise<EditMessage | null>;
+  getEditMessageByClientRequest(sessionId: string, clientRequestId: string): Promise<EditMessage | null>;
+  listEditMessages(sessionId: string, userId: string): Promise<EditMessage[]>;
+  updateEditMessage(id: string, input: Partial<Pick<EditMessage, 'outputVersionId' | 'generationJobId' | 'status' | 'errorCode' | 'errorMessage'>>): Promise<EditMessage | null>;
 
   listPromptTemplates(filters?: PromptTemplateFilters): Promise<PromptTemplateRecord[]>;
   getPromptTemplate(id: string): Promise<PromptTemplateRecord | null>;

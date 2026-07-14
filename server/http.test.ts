@@ -63,4 +63,25 @@ describe('createErrorHandler', () => {
       message: 'Server failed to process the request. Please try again later.',
     });
   });
+
+  it('returns a public 503 response when the floor plan schema is not ready', async () => {
+    process.env.NODE_ENV = 'production';
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const app = express();
+    app.get('/floor-plan', (_req: Request, _res: Response, next: NextFunction) => {
+      next(new SupabaseStorageError('FLOOR_PLAN_SCHEMA_NOT_READY', 'database details'));
+    });
+    app.use(createErrorHandler('1mb'));
+
+    const response = await request(app).get('/floor-plan');
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({
+      ok: false,
+      error: {
+        code: 'FLOOR_PLAN_SCHEMA_NOT_READY',
+        message: '平面图区域数据库尚未初始化，请管理员执行 Supabase migration 后重试。',
+      },
+    });
+  });
 });

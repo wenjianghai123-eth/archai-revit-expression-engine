@@ -140,6 +140,74 @@ export interface FloorplanRoomLabel {
   customTypeLabel?: string;
 }
 
+export type RegionPolygon = [number, number][];
+
+export type RegionEditOperation =
+  | { type: 'rename'; regionId: string; name: string }
+  | { type: 'delete'; regionId: string }
+  | { type: 'add-polygon'; regionId: string; polygon: RegionPolygon }
+  | { type: 'brush'; regionId: string; point: [number, number]; radius: number }
+  | { type: 'erase'; regionId: string; point: [number, number]; radius: number }
+  | { type: 'merge'; sourceRegionIds: string[]; outputRegionId: string }
+  | { type: 'split'; sourceRegionId: string; outputRegionIds: string[] }
+  | { type: 'restore-auto' };
+
+export interface FloorPlanRegion {
+  id: string;
+  number: number;
+  polygon: RegionPolygon;
+  areaRatio: number;
+  suggestedName: string | null;
+  name: string;
+  confidence: number;
+  maskAssetId: string | null;
+  maskUrl: string | null;
+}
+
+export interface FloorPlanRegionSet {
+  id: string;
+  userId: string;
+  sourceAssetId: string;
+  width: number;
+  height: number;
+  regions: FloorPlanRegion[];
+  autoRegions: FloorPlanRegion[];
+  overlayAssetId: string | null;
+  overlayUrl: string | null;
+  status: 'recognized' | 'confirmed';
+  versionNumber: number;
+  baseRegionSetId: string | null;
+  lockedAt: string | null;
+  confirmedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type FloorPlanMaterialDirection = 'auto' | 'horizontal' | 'vertical' | 'diagonal';
+export type FloorPlanMaterialJointMode = 'subtle' | 'visible' | 'none';
+export type FloorPlanMaterialFallbackMode = 'reference' | 'default' | 'ai-auto';
+
+export interface FloorPlanRegionMaterial {
+  id: string;
+  userId: string;
+  regionSetId: string;
+  regionId: string;
+  materialAssetId: string | null;
+  materialUrl: string | null;
+  materialName: string;
+  scale: number;
+  rotation: number;
+  direction: FloorPlanMaterialDirection;
+  jointMode: FloorPlanMaterialJointMode;
+  fallbackMode: FloorPlanMaterialFallbackMode;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SaveFloorPlanRegionMaterialInput = Pick<FloorPlanRegionMaterial,
+  'regionId' | 'materialAssetId' | 'materialName' | 'scale' | 'rotation' | 'direction' | 'jointMode' | 'fallbackMode'
+>;
+
 export interface GenerationJobDiagnostics {
   phase?: GenerationJobPhase;
   timing?: {
@@ -631,6 +699,69 @@ export interface UploadedImage {
   uploadError?: string;
   width?: number;
   height?: number;
+}
+
+export type EditConstraint = 'strictStructure' | 'preserveCamera' | 'preserveAspectRatio' | 'materialOnly' | 'lightingOnly' | 'furnitureOnly' | 'forbidNewComponents';
+
+export interface EditSession {
+  id: string;
+  userId: string;
+  projectId: string | null;
+  sourceAssetId: string;
+  originalVersionId: string;
+  currentVersionId: string;
+  title: string;
+  permanentConstraints: Record<string, unknown>;
+  aspectRatio: string | null;
+  status: 'active' | 'finalized' | 'archived';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EditMessage {
+  id: string;
+  sessionId: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  baseVersionId: string | null;
+  outputVersionId: string | null;
+  generationJobId: string | null;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
+  createdAt: string;
+  clientRequestId: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+export interface AssetVersion {
+  id: string;
+  assetId: string;
+  sessionId: string;
+  parentVersionId: string | null;
+  versionNumber: number;
+  storagePath: string;
+  publicUrl: string;
+  userInstruction: string;
+  compiledPrompt: string;
+  provider: string | null;
+  model: string | null;
+  generationJobId: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface EditJobState {
+  jobId: string;
+  messageId: string;
+  baseVersionId: string;
+  instruction: string;
+  imageSize: '1K' | '2K' | '4K';
+  generationKind: 'preview-edit' | 'final-render';
+  maskAssetId?: string;
+  constraints: Partial<Record<EditConstraint, boolean>>;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
+  progress: number;
+  error: string | null;
 }
 
 export interface MaterialTexture {

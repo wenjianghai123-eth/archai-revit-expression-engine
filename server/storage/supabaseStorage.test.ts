@@ -24,6 +24,18 @@ describe('createSupabaseStorageError', () => {
     expect(error.message).toContain('output_asset_ids');
   });
 
+  it('maps missing floor plan tables to a schema readiness error, not a storage error', () => {
+    const error = createSupabaseStorageError({
+      code: 'PGRST205',
+      message: "Could not find the table 'public.floor_plan_region_sets' in the schema cache",
+    }, 'creating floor plan region set');
+
+    expect(error.code).toBe('FLOOR_PLAN_SCHEMA_NOT_READY');
+    expect(error.message).toContain('20260714005000_repair_floor_plan_schema.sql');
+    expect(error.message).toContain('Supabase database error');
+    expect(error.message).not.toContain('Supabase storage error');
+  });
+
   it('maps missing credit RPC function failures to credit RPC missing errors', () => {
     const error = createSupabaseStorageError({
       code: 'PGRST202',

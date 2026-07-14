@@ -4,6 +4,7 @@ import { getAccessToken } from './authToken';
 import { isAbortError } from '../utils/apiConnectionStatus';
 import { logAssetUploadSuccess } from '../utils/assetUrl';
 import { compressImageBeforeUpload } from '../utils/imageCompression';
+import type { AssetVersion, EditMessage, EditSession, FloorPlanRegion, FloorPlanRegionMaterial, FloorPlanRegionSet, SaveFloorPlanRegionMaterialInput } from '../types';
 
 const fileUploadCache = new WeakMap<File, Promise<ImageAsset>>();
 
@@ -703,6 +704,61 @@ export async function getImageAsset(id: string): Promise<ImageAsset> {
   return response.asset;
 }
 
+export async function segmentFloorPlan(assetId: string): Promise<FloorPlanRegionSet> {
+  const response = await request<{ regionSet: FloorPlanRegionSet }>('/api/floor-plan/segment', { method: 'POST', body: JSON.stringify({ assetId }) });
+  return response.regionSet;
+}
+
+export async function getLatestFloorPlanSegmentation(assetId: string): Promise<FloorPlanRegionSet | null> {
+  const response = await request<{ regionSet: FloorPlanRegionSet | null }>(`/api/floor-plan/segments/latest?assetId=${encodeURIComponent(assetId)}`);
+  return response.regionSet;
+}
+
+export async function updateFloorPlanRegionNames(regionSetId: string, names: Record<string, string>): Promise<FloorPlanRegionSet> {
+  const response = await request<{ regionSet: FloorPlanRegionSet }>(`/api/floor-plan/segments/${encodeURIComponent(regionSetId)}`, { method: 'PATCH', body: JSON.stringify({ names }) });
+  return response.regionSet;
+}
+
+export async function updateFloorPlanRegions(regionSetId: string, regions: FloorPlanRegion[]): Promise<FloorPlanRegionSet> {
+  const response = await request<{ regionSet: FloorPlanRegionSet }>(`/api/floor-plan/segments/${encodeURIComponent(regionSetId)}`, { method: 'PATCH', body: JSON.stringify({ regions }) });
+  return response.regionSet;
+}
+
+export async function restoreFloorPlanAutoRegions(regionSetId: string): Promise<FloorPlanRegionSet> {
+  const response = await request<{ regionSet: FloorPlanRegionSet }>(`/api/floor-plan/segments/${encodeURIComponent(regionSetId)}/restore-auto`, { method: 'POST', body: JSON.stringify({}) });
+  return response.regionSet;
+}
+
+export async function confirmFloorPlanRegions(regionSetId: string, regions?: FloorPlanRegion[]): Promise<FloorPlanRegionSet> {
+  const response = await request<{ regionSet: FloorPlanRegionSet }>(`/api/floor-plan/segments/${encodeURIComponent(regionSetId)}/confirm`, { method: 'POST', body: JSON.stringify({ regions }) });
+  return response.regionSet;
+}
+
+export async function getFloorPlanRegionMaterials(regionSetId: string): Promise<FloorPlanRegionMaterial[]> {
+  const response = await request<{ materials: FloorPlanRegionMaterial[] }>(`/api/floor-plan/segments/${encodeURIComponent(regionSetId)}/materials`);
+  return response.materials;
+}
+
+export async function saveFloorPlanRegionMaterials(regionSetId: string, materials: SaveFloorPlanRegionMaterialInput[]): Promise<FloorPlanRegionMaterial[]> {
+  const response = await request<{ materials: FloorPlanRegionMaterial[] }>(`/api/floor-plan/segments/${encodeURIComponent(regionSetId)}/materials`, {
+    method: 'PUT',
+    body: JSON.stringify({ materials }),
+  });
+  return response.materials;
+}
+
+export async function generateFloorPlanMaterialPreview(
+  sourceAssetId: string,
+  regionSetId: string,
+  assignments: SaveFloorPlanRegionMaterialInput[],
+): Promise<ImageAsset> {
+  const response = await request<{ controlAsset: ImageAsset }>('/api/floor-plan/material-preview', {
+    method: 'POST',
+    body: JSON.stringify({ sourceAssetId, regionSetId, assignments }),
+  });
+  return response.controlAsset;
+}
+
 export async function listPromptTemplates(filters: { generationStep?: GenerationJobStep; search?: string; tag?: string } = {}): Promise<PromptTemplateRecord[]> {
   const params = new URLSearchParams();
   if (filters.generationStep) params.set('generationStep', filters.generationStep);
@@ -884,6 +940,17 @@ function readApiError(value: unknown): string | null {
   return null;
 }
 
+export interface EditSessionDetail { session: EditSession; versions: AssetVersion[]; messages: EditMessage[]; }
+export async function createEditSession(input: { sourceAssetId: string; projectId?: string | null; title?: string; permanentConstraints?: Record<string, unknown>; aspectRatio?: string | null }): Promise<EditSessionDetail> {
+  const response = await request<{ session: EditSession; version: AssetVersion; versions: AssetVersion[]; messages: EditMessage[] }>('/api/edit-sessions', { method: 'POST', body: JSON.stringify(input) });
+  if (!response.session?.id) throw new Error('后端未返回连续修改会话 ID。');
+  if (!Array.isArray(response.versions) || response.versions.length === 0) throw new Error('后端未返回连续修改版本列表。');
+  return { session: response.session, versions: response.versions, messages: response.messages };
+}
+export async function getEditSession(id: string): Promise<EditSessionDetail> { return request<EditSessionDetail>(`/api/edit-sessions/${encodeURIComponent(id)}`); }
+export async function createEditMessage(sessionId: string, input: { instruction: string; baseVersionId: string; imageSize?: '1K'|'2K'|'4K'; generationKind?:'preview-edit'|'final-render'; maskAssetId?:string; constraints?: Record<string, unknown>; clientRequestId:string }): Promise<{ sessionId:string; message:EditMessage; jobId:string; status:string; creditCost:number; idempotent?:boolean }> { return request(`/api/edit-sessions/${encodeURIComponent(sessionId)}/messages`, { method:'POST', body:JSON.stringify(input) }); }
+export async function selectEditVersion(sessionId:string,versionId:string):Promise<{session:EditSession;currentVersionId:string}>{return request(`/api/edit-sessions/${encodeURIComponent(sessionId)}/select-version`,{method:'POST',body:JSON.stringify({versionId})});}
+
 export async function getAiProviders(init: RequestInit = {}): Promise<AiProvidersConfig> {
   return request<AiProvidersConfig>('/api/ai-providers', init);
 }
@@ -907,6 +974,12 @@ function formatApiError(error: ApiErrorResponse): string {
   }
   if (error.code === 'API_ROUTE_NOT_FOUND') {
     return '接口地址不存在，请检查前后端 API 路径或后端部署配置。';
+  }
+  if (error.code === 'EDIT_SCHEMA_NOT_READY') {
+    return '连续修改数据表尚未创建，请执行 Supabase migration 后重试。';
+  }
+  if (error.code === 'EDIT_SESSION_SOURCE_NOT_FOUND') {
+    return '当前图片资产不存在或无权访问，请重新上传图片后重试。';
   }
   if (error.code === 'BACKEND_NOT_CONFIGURED') {
     return '后端服务暂不可用，请检查 VITE_API_BASE_URL 是否指向已部署的 Express 后端。';

@@ -6,6 +6,8 @@ import {
   CreateGenerationRecordInput,
   CreateGenerationResultInput,
   CreateImageAssetInput,
+  CreateFloorPlanRegionSetInput,
+  SaveFloorPlanRegionMaterialInput,
   CreatePromptTemplateInput,
   CreateModelAssetInput,
   UpdateModelAssetInput,
@@ -19,6 +21,7 @@ import {
   GenerationRecord,
   GenerationResult,
   ImageAsset,
+  FloorPlanRegion, FloorPlanRegionSet, FloorPlanRegionMaterial,
   PromptTemplateFilters,
   PromptTemplateRecord,
   ModelAsset,
@@ -30,6 +33,7 @@ import {
   UpdateProjectInput,
   UpdateUserProfileInput,
   UserProfile,
+  EditSession, EditMessage, AssetVersion, CreateEditSessionInput, CreateEditMessageInput, CreateAssetVersionInput,
 } from './types';
 
 type ProjectRow = {
@@ -110,6 +114,44 @@ type ImageAssetRow = {
   size: number;
   created_at: string;
 };
+
+type FloorPlanRegionSetRow = {
+  id: string;
+  user_id: string;
+  source_asset_id: string;
+  width: number;
+  height: number;
+  regions: FloorPlanRegion[];
+  auto_regions: FloorPlanRegion[];
+  overlay_asset_id: string | null;
+  status: FloorPlanRegionSet['status'];
+  version_number: number;
+  base_region_set_id: string | null;
+  locked_at: string | null;
+  confirmed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type FloorPlanRegionMaterialRow = {
+  id: string;
+  user_id: string;
+  region_set_id: string;
+  region_id: string;
+  material_asset_id: string | null;
+  material_name: string;
+  scale: number;
+  rotation: number;
+  direction: FloorPlanRegionMaterial['direction'];
+  joint_mode: FloorPlanRegionMaterial['jointMode'];
+  fallback_mode: FloorPlanRegionMaterial['fallbackMode'];
+  created_at: string;
+  updated_at: string;
+};
+
+type EditSessionRow = { id:string; user_id:string; project_id:string|null; source_asset_id:string; original_version_id:string|null; current_version_id:string|null; title:string; permanent_constraints:Record<string,unknown>; aspect_ratio:string|null; status:EditSession['status']; created_at:string; updated_at:string };
+type EditMessageRow = { id:string; session_id:string; role:EditMessage['role']; content:string; base_version_id:string|null; output_version_id:string|null; generation_job_id:string|null; status:EditMessage['status']; client_request_id:string|null; error_code:string|null; error_message:string|null; created_at:string };
+type AssetVersionRow = { id:string; asset_id:string; session_id:string; parent_version_id:string|null; version_number:number; storage_path:string; public_url:string; user_instruction:string; compiled_prompt:string; provider:string|null; model:string|null; generation_job_id:string|null; created_by:string; created_at:string };
 
 type PromptTemplateRow = {
   id: string;
@@ -222,7 +264,9 @@ type SupabaseErrorLike = {
 
 export class SupabaseStorageError extends Error {
   readonly code:
+    | 'FLOOR_PLAN_SCHEMA_NOT_READY'
     | 'SUPABASE_SCHEMA_MISMATCH'
+    | 'SUPABASE_DATABASE_ERROR'
     | 'CREDIT_RPC_MISSING'
     | 'GENERATION_JOB_CREATE_FAILED'
     | 'SUPABASE_STORAGE_ERROR';
@@ -260,6 +304,14 @@ export class SupabaseStorageAdapter implements StorageAdapter {
   async ensureReady(): Promise<void> {
     const { error } = await this.client.from('projects').select('id').limit(1);
     assertNoSupabaseError(error, 'checking Supabase storage tables');
+  }
+
+  async ensureFloorPlanSchemaReady(): Promise<void> {
+    const regionSets = await this.client.from('floor_plan_region_sets').select('id').limit(1);
+    assertNoSupabaseError(regionSets.error, 'checking floor plan region set schema');
+
+    const regionMaterials = await this.client.from('floor_plan_region_materials').select('id').limit(1);
+    assertNoSupabaseError(regionMaterials.error, 'checking floor plan region material schema');
   }
 
   async listUserProfiles(): Promise<UserProfile[]> {
@@ -664,6 +716,107 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     return data ? mapImageAssetRow(data as ImageAssetRow) : null;
   }
 
+  async createFloorPlanRegionSet(input: CreateFloorPlanRegionSetInput): Promise<FloorPlanRegionSet> {
+    const now = new Date().toISOString();
+    const row: FloorPlanRegionSetRow = { id: `floor_regions_${randomUUID()}`, user_id: input.userId, source_asset_id: input.sourceAssetId, width: input.width, height: input.height, regions: input.regions, auto_regions: input.autoRegions.length ? input.autoRegions : input.regions, overlay_asset_id: input.overlayAssetId, status: input.status ?? 'recognized', version_number: input.versionNumber ?? 1, base_region_set_id: input.baseRegionSetId ?? null, locked_at: input.lockedAt ?? null, confirmed_at: input.confirmedAt ?? null, created_at: now, updated_at: now };
+    const { data, error } = await this.client.from('floor_plan_region_sets').insert(row).select('*').single();
+    assertNoSupabaseError(error, 'creating floor plan region set');
+    return mapFloorPlanRegionSetRow(data as FloorPlanRegionSetRow, input.overlayUrl);
+  }
+
+  async getFloorPlanRegionSet(id: string, userId: string): Promise<FloorPlanRegionSet | null> {
+    const { data, error } = await this.client.from('floor_plan_region_sets').select('*').eq('id', id).eq('user_id', userId).maybeSingle();
+    assertNoSupabaseError(error, 'reading floor plan region set');
+    if (!data) return null;
+    const row = data as FloorPlanRegionSetRow;
+    const overlay = row.overlay_asset_id ? await this.getImageAsset(row.overlay_asset_id, userId) : null;
+    return mapFloorPlanRegionSetRow(row, overlay?.url || null);
+  }
+
+  async getLatestFloorPlanRegionSet(sourceAssetId: string, userId: string): Promise<FloorPlanRegionSet | null> {
+    const { data, error } = await this.client.from('floor_plan_region_sets').select('*').eq('source_asset_id', sourceAssetId).eq('user_id', userId).order('version_number', { ascending: false }).order('updated_at', { ascending: false }).limit(1).maybeSingle();
+    assertNoSupabaseError(error, 'reading floor plan region set');
+    if (!data) return null;
+    const row = data as FloorPlanRegionSetRow;
+    const overlay = row.overlay_asset_id ? await this.getImageAsset(row.overlay_asset_id, userId) : null;
+    return mapFloorPlanRegionSetRow(row, overlay?.url || null);
+  }
+
+  async updateFloorPlanRegionSet(id: string, userId: string, input: { regions?: FloorPlanRegion[]; autoRegions?: FloorPlanRegion[]; overlayAssetId?: string | null; overlayUrl?: string | null; status?: FloorPlanRegionSet['status']; confirmedAt?: string | null; lockedAt?: string | null }): Promise<FloorPlanRegionSet | null> {
+    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (input.regions) patch.regions = input.regions;
+    if (input.autoRegions) patch.auto_regions = input.autoRegions;
+    if (input.overlayAssetId !== undefined) patch.overlay_asset_id = input.overlayAssetId;
+    if (input.status) patch.status = input.status;
+    if (input.confirmedAt !== undefined) patch.confirmed_at = input.confirmedAt;
+    if (input.lockedAt !== undefined) patch.locked_at = input.lockedAt;
+    const { data, error } = await this.client.from('floor_plan_region_sets').update(patch).eq('id', id).eq('user_id', userId).select('*').maybeSingle();
+    assertNoSupabaseError(error, 'updating floor plan region set');
+    if (!data) return null;
+    const row = data as FloorPlanRegionSetRow;
+    const overlay = row.overlay_asset_id ? await this.getImageAsset(row.overlay_asset_id, userId) : null;
+    return mapFloorPlanRegionSetRow(row, overlay?.url || null);
+  }
+
+  async listFloorPlanRegionMaterials(regionSetId: string, userId: string): Promise<FloorPlanRegionMaterial[]> {
+    const { data, error } = await this.client
+      .from('floor_plan_region_materials')
+      .select('*')
+      .eq('region_set_id', regionSetId)
+      .eq('user_id', userId)
+      .order('created_at', { ascending: true });
+    assertNoSupabaseError(error, 'reading floor plan region materials');
+    return Promise.all(((data || []) as FloorPlanRegionMaterialRow[]).map(async row => {
+      const asset = row.material_asset_id ? await this.getImageAsset(row.material_asset_id, userId) : null;
+      return mapFloorPlanRegionMaterialRow(row, asset?.url || null);
+    }));
+  }
+
+  async saveFloorPlanRegionMaterials(regionSetId: string, userId: string, materials: SaveFloorPlanRegionMaterialInput[]): Promise<FloorPlanRegionMaterial[]> {
+    const now = new Date().toISOString();
+    const existing = new Map((await this.listFloorPlanRegionMaterials(regionSetId, userId)).map(material => [material.regionId, material]));
+    const rows: FloorPlanRegionMaterialRow[] = materials.map(material => ({
+      id: existing.get(material.regionId)?.id || `floor_material_${randomUUID()}`,
+      user_id: userId,
+      region_set_id: regionSetId,
+      region_id: material.regionId,
+      material_asset_id: material.materialAssetId,
+      material_name: material.materialName,
+      scale: material.scale,
+      rotation: material.rotation,
+      direction: material.direction,
+      joint_mode: material.jointMode,
+      fallback_mode: material.fallbackMode,
+      created_at: existing.get(material.regionId)?.createdAt || now,
+      updated_at: now,
+    }));
+    const { error } = await this.client
+      .from('floor_plan_region_materials')
+      .upsert(rows, { onConflict: 'region_set_id,region_id' });
+    assertNoSupabaseError(error, 'saving floor plan region materials');
+    return this.listFloorPlanRegionMaterials(regionSetId, userId);
+  }
+
+  async createEditSession(input: CreateEditSessionInput, sourceAsset: ImageAsset): Promise<{ session: EditSession; version: AssetVersion }> {
+    const now = new Date().toISOString(); const sessionId = `edit_session_${randomUUID()}`; const versionId = `asset_version_${randomUUID()}`;
+    const sessionRow: EditSessionRow = { id:sessionId, user_id:input.userId, project_id:input.projectId, source_asset_id:input.sourceAssetId, original_version_id:null, current_version_id:null, title:input.title, permanent_constraints:input.permanentConstraints, aspect_ratio:input.aspectRatio, status:'active', created_at:now, updated_at:now };
+    const createdSession = await this.client.from('edit_sessions').insert(sessionRow).select('*').single(); assertNoSupabaseError(createdSession.error, 'creating edit session');
+    const versionRow: AssetVersionRow = { id:versionId, asset_id:sourceAsset.id, session_id:sessionId, parent_version_id:null, version_number:0, storage_path:sourceAsset.path || sourceAsset.filename, public_url:sourceAsset.publicUrl || sourceAsset.url, user_instruction:'', compiled_prompt:'', provider:null, model:null, generation_job_id:null, created_by:input.userId, created_at:now };
+    const createdVersion = await this.client.from('asset_versions').insert(versionRow).select('*').single(); assertNoSupabaseError(createdVersion.error, 'creating original asset version');
+    const updatedSession = await this.client.from('edit_sessions').update({ original_version_id:versionId, current_version_id:versionId, updated_at:now }).eq('id',sessionId).select('*').single(); assertNoSupabaseError(updatedSession.error, 'linking original edit version');
+    return { session: mapEditSessionRow(updatedSession.data as EditSessionRow), version: mapAssetVersionRow(createdVersion.data as AssetVersionRow) };
+  }
+  async getEditSession(id:string,userId:string) { const {data,error}=await this.client.from('edit_sessions').select('*').eq('id',id).eq('user_id',userId).maybeSingle(); assertNoSupabaseError(error,'reading edit session'); return data?mapEditSessionRow(data as EditSessionRow):null; }
+  async updateEditSession(id:string,userId:string,input:Partial<Pick<EditSession,'currentVersionId'|'status'|'title'>>) { const patch:Record<string,unknown>={updated_at:new Date().toISOString()}; if(input.currentVersionId!==undefined)patch.current_version_id=input.currentVersionId;if(input.status!==undefined)patch.status=input.status;if(input.title!==undefined)patch.title=input.title; const {data,error}=await this.client.from('edit_sessions').update(patch).eq('id',id).eq('user_id',userId).select('*').maybeSingle();assertNoSupabaseError(error,'updating edit session');return data?mapEditSessionRow(data as EditSessionRow):null; }
+  async listAssetVersions(sessionId:string,userId:string) { const session=await this.getEditSession(sessionId,userId);if(!session)return [];const {data,error}=await this.client.from('asset_versions').select('*').eq('session_id',sessionId).order('version_number',{ascending:true});assertNoSupabaseError(error,'listing asset versions');return ((data||[]) as AssetVersionRow[]).map(mapAssetVersionRow); }
+  async getAssetVersion(id:string,sessionId:string,userId:string) { const session=await this.getEditSession(sessionId,userId);if(!session)return null;const {data,error}=await this.client.from('asset_versions').select('*').eq('id',id).eq('session_id',sessionId).maybeSingle();assertNoSupabaseError(error,'reading asset version');return data?mapAssetVersionRow(data as AssetVersionRow):null; }
+  async createAssetVersion(input:CreateAssetVersionInput) { const row:AssetVersionRow={id:`asset_version_${randomUUID()}`,asset_id:input.assetId,session_id:input.sessionId,parent_version_id:input.parentVersionId,version_number:input.versionNumber,storage_path:input.storagePath,public_url:input.publicUrl,user_instruction:input.userInstruction,compiled_prompt:input.compiledPrompt,provider:input.provider,model:input.model,generation_job_id:input.generationJobId,created_by:input.createdBy,created_at:new Date().toISOString()};const {data,error}=await this.client.from('asset_versions').insert(row).select('*').single();assertNoSupabaseError(error,'creating asset version');return mapAssetVersionRow(data as AssetVersionRow); }
+  async createEditMessage(input:CreateEditMessageInput) { if(input.clientRequestId){const existing=await this.getEditMessageByClientRequest(input.sessionId,input.clientRequestId);if(existing)return existing;}const row:EditMessageRow={id:`edit_message_${randomUUID()}`,session_id:input.sessionId,role:input.role,content:input.content,base_version_id:input.baseVersionId,output_version_id:null,generation_job_id:null,status:input.status,client_request_id:input.clientRequestId,error_code:null,error_message:null,created_at:new Date().toISOString()};const {data,error}=await this.client.from('edit_messages').insert(row).select('*').single();assertNoSupabaseError(error,'creating edit message');return mapEditMessageRow(data as EditMessageRow); }
+  async getEditMessage(id:string) { const {data,error}=await this.client.from('edit_messages').select('*').eq('id',id).maybeSingle();assertNoSupabaseError(error,'reading edit message');return data?mapEditMessageRow(data as EditMessageRow):null; }
+  async getEditMessageByClientRequest(sessionId:string,clientRequestId:string){const {data,error}=await this.client.from('edit_messages').select('*').eq('session_id',sessionId).eq('client_request_id',clientRequestId).maybeSingle();assertNoSupabaseError(error,'reading idempotent edit message');return data?mapEditMessageRow(data as EditMessageRow):null;}
+  async listEditMessages(sessionId:string,userId:string) { const session=await this.getEditSession(sessionId,userId);if(!session)return [];const {data,error}=await this.client.from('edit_messages').select('*').eq('session_id',sessionId).order('created_at',{ascending:true});assertNoSupabaseError(error,'listing edit messages');return ((data||[]) as EditMessageRow[]).map(mapEditMessageRow); }
+  async updateEditMessage(id:string,input:Partial<Pick<EditMessage,'outputVersionId'|'generationJobId'|'status'|'errorCode'|'errorMessage'>>) { const patch:Record<string,unknown>={};if(input.outputVersionId!==undefined)patch.output_version_id=input.outputVersionId;if(input.generationJobId!==undefined)patch.generation_job_id=input.generationJobId;if(input.status!==undefined)patch.status=input.status;if(input.errorCode!==undefined)patch.error_code=input.errorCode;if(input.errorMessage!==undefined)patch.error_message=input.errorMessage;const {data,error}=await this.client.from('edit_messages').update(patch).eq('id',id).select('*').maybeSingle();assertNoSupabaseError(error,'updating edit message');return data?mapEditMessageRow(data as EditMessageRow):null; }
+
   async listPromptTemplates(filters: PromptTemplateFilters = {}): Promise<PromptTemplateRecord[]> {
     let query = this.client
       .from('prompt_templates')
@@ -1052,6 +1205,10 @@ function mapGenerationJobRow(row: GenerationJobRow): GenerationJob {
   };
 }
 
+function mapEditSessionRow(row:EditSessionRow):EditSession { return {id:row.id,userId:row.user_id,projectId:row.project_id,sourceAssetId:row.source_asset_id,originalVersionId:row.original_version_id || '',currentVersionId:row.current_version_id || '',title:row.title,permanentConstraints:row.permanent_constraints || {},aspectRatio:row.aspect_ratio,status:row.status,createdAt:row.created_at,updatedAt:row.updated_at}; }
+function mapEditMessageRow(row:EditMessageRow):EditMessage { return {id:row.id,sessionId:row.session_id,role:row.role,content:row.content,baseVersionId:row.base_version_id,outputVersionId:row.output_version_id,generationJobId:row.generation_job_id,status:row.status,clientRequestId:row.client_request_id,errorCode:row.error_code,errorMessage:row.error_message,createdAt:row.created_at}; }
+function mapAssetVersionRow(row:AssetVersionRow):AssetVersion { return {id:row.id,assetId:row.asset_id,sessionId:row.session_id,parentVersionId:row.parent_version_id,versionNumber:row.version_number,storagePath:row.storage_path,publicUrl:row.public_url,userInstruction:row.user_instruction,compiledPrompt:row.compiled_prompt,provider:row.provider,model:row.model,generationJobId:row.generation_job_id,createdBy:row.created_by,createdAt:row.created_at}; }
+
 function readDiagnostics(row: GenerationJobRow): GenerationJob['diagnostics'] {
   if (isRecord(row.diagnostics)) return row.diagnostics as GenerationJob['diagnostics'];
   if (isRecord(row.config) && isRecord(row.config.__diagnostics)) {
@@ -1125,6 +1282,46 @@ function mapImageAssetRow(row: ImageAssetRow): ImageAsset {
     mimeType: row.mime_type,
     size: row.size,
     createdAt: row.created_at,
+  };
+}
+
+function mapFloorPlanRegionSetRow(row: FloorPlanRegionSetRow, overlayUrl: string | null): FloorPlanRegionSet {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    sourceAssetId: row.source_asset_id,
+    width: row.width,
+    height: row.height,
+    regions: Array.isArray(row.regions) ? row.regions : [],
+    autoRegions: Array.isArray(row.auto_regions) ? row.auto_regions : Array.isArray(row.regions) ? row.regions : [],
+    overlayAssetId: row.overlay_asset_id,
+    overlayUrl,
+    status: row.status,
+    versionNumber: row.version_number ?? 1,
+    baseRegionSetId: row.base_region_set_id,
+    lockedAt: row.locked_at,
+    confirmedAt: row.confirmed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapFloorPlanRegionMaterialRow(row: FloorPlanRegionMaterialRow, materialUrl: string | null): FloorPlanRegionMaterial {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    regionSetId: row.region_set_id,
+    regionId: row.region_id,
+    materialAssetId: row.material_asset_id,
+    materialUrl,
+    materialName: row.material_name,
+    scale: Number(row.scale),
+    rotation: Number(row.rotation),
+    direction: row.direction,
+    jointMode: row.joint_mode,
+    fallbackMode: row.fallback_mode,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -1278,6 +1475,14 @@ function assertNoSupabaseError(error: SupabaseErrorLike | null, action: string):
 
 export function createSupabaseStorageError(error: SupabaseErrorLike, action: string): SupabaseStorageError {
   const message = formatSupabaseErrorMessage(error, action);
+  if (isFloorPlanSchemaMismatch(error, action)) {
+    return new SupabaseStorageError(
+      'FLOOR_PLAN_SCHEMA_NOT_READY',
+      `${message} Apply supabase/migrations/20260714005000_repair_floor_plan_schema.sql and reload the PostgREST schema cache.`,
+      error.code,
+    );
+  }
+
   if (action === 'adjusting credits atomically' && isMissingSupabaseFunction(error)) {
     return new SupabaseStorageError(
       'CREDIT_RPC_MISSING',
@@ -1296,7 +1501,7 @@ export function createSupabaseStorageError(error: SupabaseErrorLike, action: str
 
   if (action === 'adjusting credits atomically') {
     return new SupabaseStorageError(
-      'SUPABASE_STORAGE_ERROR',
+      'SUPABASE_DATABASE_ERROR',
       `${message} Verify credit_balances, credit_transactions, and adjust_credits_atomic match docs/SUPABASE_SETUP.md.`,
       error.code,
     );
@@ -1310,11 +1515,11 @@ export function createSupabaseStorageError(error: SupabaseErrorLike, action: str
     );
   }
 
-  return new SupabaseStorageError('SUPABASE_STORAGE_ERROR', message, error.code);
+  return new SupabaseStorageError('SUPABASE_DATABASE_ERROR', message, error.code);
 }
 
 function formatSupabaseErrorMessage(error: SupabaseErrorLike, action: string): string {
-  const parts = [`Supabase storage error while ${action}: ${error.message}`];
+  const parts = [`Supabase database error while ${action}: ${error.message}`];
   if (error.code) parts.push(`code=${error.code}`);
   if (error.details) parts.push(`details=${error.details}`);
   if (error.hint) parts.push(`hint=${error.hint}`);
@@ -1322,7 +1527,7 @@ function formatSupabaseErrorMessage(error: SupabaseErrorLike, action: string): s
 }
 
 function isSupabaseSchemaMismatch(error: SupabaseErrorLike): boolean {
-  if (error.code && ['23514', '42703', '42P01', 'PGRST204'].includes(error.code)) {
+  if (error.code && ['23514', '42703', '42P01', 'PGRST204', 'PGRST205'].includes(error.code)) {
     return true;
   }
 
@@ -1334,6 +1539,12 @@ function isSupabaseSchemaMismatch(error: SupabaseErrorLike): boolean {
     text.includes('relation') && text.includes('does not exist') ||
     isMissingSupabaseFunction(error)
   );
+}
+
+function isFloorPlanSchemaMismatch(error: SupabaseErrorLike, action: string): boolean {
+  if (!isSupabaseSchemaMismatch(error)) return false;
+  const text = `${action} ${error.message} ${error.details ?? ''} ${error.hint ?? ''}`.toLowerCase();
+  return text.includes('floor plan') || text.includes('floor_plan_region_sets') || text.includes('floor_plan_region_materials');
 }
 
 function isMissingSupabaseFunction(error: SupabaseErrorLike): boolean {

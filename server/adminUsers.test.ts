@@ -303,7 +303,10 @@ describe('admin user management', () => {
       .set('x-dev-user-id', 'user-b');
 
     expect(response.status).toBe(200);
-    expect(response.body.data.balance).toMatchObject({ userId: 'user-b', balance: 5 });
+    expect(response.body.data).toMatchObject({
+      balance: 5,
+      creditBalance: { userId: 'user-b', balance: 5 },
+    });
   });
 
   it('rejects AUTH_MODE=dev in production', () => {

@@ -41,7 +41,7 @@ describe('OverlayCompareViewer', () => {
     const view = render(React.createElement(OverlayCompareViewer, { originalImageUrl: '/original.png', generatedImageUrl: '/generated.png' }));
     const slider = view.querySelector('[role="slider"]');
 
-    expect(slider?.getAttribute('aria-label')).toBe('拖拽查看原图和生成图叠加对比');
+    expect(slider?.getAttribute('aria-label')).toBe('拖动查看原图和结果图叠加对比');
     expect(slider?.getAttribute('aria-valuenow')).toBe('50');
     expect(view.querySelector('img[alt="原图"]')).toBeTruthy();
     expect(view.querySelector('img[alt="结果图"]')).toBeTruthy();
@@ -65,7 +65,7 @@ describe('OverlayCompareViewer', () => {
 
     act(() => {
       slider.dispatchEvent(pointerEvent('pointerdown', 150));
-      slider.dispatchEvent(pointerEvent('pointermove', 160));
+      slider.dispatchEvent(pointerEvent('pointermove', 160, 0));
     });
 
     expect(slider.getAttribute('aria-valuenow')).toBe('80');
@@ -74,6 +74,6 @@ describe('OverlayCompareViewer', () => {
   it('shows an empty state when images are missing', () => {
     const view = render(React.createElement(OverlayCompareViewer, { originalImageUrl: '/original.png', generatedImageUrl: null }));
 
-    expect(view.textContent).toContain('生成结果后可查看叠加对比');
+    expect(view.textContent).toContain('暂无原图，无法对比。');
   });
 });

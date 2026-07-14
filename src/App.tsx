@@ -14,11 +14,14 @@ import { GenerationStep, GenerationHistoryItem, ResultSendTargetStep, StepState,
 import {
   cancelGenerationJob,
   createAutoProject,
+  createEditSession,
+  getEditSession,
   deleteProject,
   getAiProviders,
   listPromptTemplates,
   type AiProviderOption,
   updateGenerationResult,
+  type EditSessionDetail,
 } from './lib/api';
 import { useCurrentUser } from './hooks/useCurrentUser';
 import { useBackendHealth } from './hooks/useBackendHealth';
@@ -48,9 +51,11 @@ const ProjectDetail = lazy(() => import('./components/ProjectDetail').then(modul
 const PublicSharePreview = lazy(() => import('./components/PublicSharePreview').then(module => ({ default: module.PublicSharePreview })));
 const PanoramaSharePage = lazy(() => import('./components/PanoramaSharePage').then(module => ({ default: module.PanoramaSharePage })));
 const AdminPage = lazy(() => import('./components/AdminPage').then(module => ({ default: module.AdminPage })));
+const ImageEditSessionWorkspace = lazy(() => import('./components/ImageEditSessionWorkspace').then(module => ({ default: module.ImageEditSessionWorkspace })));
 const apiStatusRetryDelays = [300, 800, 1500];
 const fallbackAiProvider: AiProviderOption = { value: 'grsai-banana2', label: 'Grsai Banana2', enabled: true, missingConfig: [] };
 const backendUnavailableMessage = '后端服务暂不可用，请稍后重试或检查部署配置。';
+const activeEditSessionStorageKey = 'archai:active-edit-session-id';
 
 export default function App() {
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
@@ -97,6 +102,7 @@ export default function App() {
   const [historyItems, setHistoryItems] = useState<GenerationHistoryItem[]>(() => listGenerationRecords());
   const [promptTemplates, setPromptTemplates] = useState(() => [] as ReturnType<typeof promptTemplateRecordToTemplate>[]);
   const [queuedSecondaryGenerationId, setQueuedSecondaryGenerationId] = useState<string | null>(null);
+  const [editSessionDetail, setEditSessionDetail] = useState<EditSessionDetail | null>(null);
   const apiProviderRequestIdRef = useRef(0);
   const { backendHealth, refreshBackendHealth } = useBackendHealth(isSettingsOpen);
   const { creditBalance, creditError, refreshCreditBalance } = useCreditBalance(Boolean(currentUser));
@@ -190,6 +196,8 @@ export default function App() {
 
   const handleSignOut = useCallback(async () => {
     await signOut();
+    window.localStorage.removeItem(activeEditSessionStorageKey);
+    setEditSessionDetail(null);
     setSelectedProjectId(null);
     setActiveTab('home');
     resetWorkflow();
@@ -222,6 +230,37 @@ export default function App() {
     refreshCreditBalance,
     setHistoryItems,
   });
+
+  const handleStartContinuousEdit = useCallback(async (image: UploadedImage) => {
+    if (!currentUser) throw new Error('登录状态已失效，请重新登录。');
+    if (image.uploadStatus !== 'uploaded') throw new Error(image.uploadStatus === 'failed' ? image.uploadError || '图片上传失败，请重新上传。' : '图片正在上传，完成后可连续修改。');
+    if (!image.assetId) throw new Error('图片上传完成但未返回正式资产 ID，请重新上传。');
+    try {
+      const project = await ensureActiveProject();
+      const detail = await createEditSession({ sourceAssetId: image.assetId, projectId: project.projectId, title: `${image.name || '图片'} · 连续修改`, aspectRatio: '16:9', permanentConstraints: { strictStructure: true, preserveCamera: true, preserveAspectRatio: true, forbidNewComponents: true } });
+      if (!detail.session?.id) throw new Error('后端未返回连续修改会话 ID。');
+      if (!detail.versions.some(version => version.versionNumber === 0 && version.id === detail.session.originalVersionId)) throw new Error('连续修改会话创建成功，但后端未返回原图版本 V0。');
+      setEditSessionDetail(detail);
+      setActiveTab('generate');
+      window.localStorage.setItem(activeEditSessionStorageKey, detail.session.id);
+    } catch (error) {
+      console.error('[continuous-edit] create session failed', { assetId: image.assetId, error });
+      const message = error instanceof Error ? error.message : '连续修改会话创建失败。';
+      setApiConnectionError(message);
+      throw error;
+    }
+  }, [currentUser, ensureActiveProject, setActiveTab]);
+
+  useEffect(() => {
+    if (!currentUser || editSessionDetail) return;
+    const sessionId = window.localStorage.getItem(activeEditSessionStorageKey);
+    if (!sessionId) return;
+    void getEditSession(sessionId).then(detail => {
+      setEditSessionDetail(detail);
+      setActiveTab('generate');
+      if (detail.session.projectId) setSelectedProjectId(detail.session.projectId);
+    }).catch(() => window.localStorage.removeItem(activeEditSessionStorageKey));
+  }, [currentUser, editSessionDetail, setActiveTab, setSelectedProjectId]);
 
   useEffect(() => {
     if (!queuedSecondaryGenerationId) return;
@@ -850,7 +889,7 @@ export default function App() {
                     className="absolute inset-0 flex min-h-0 flex-col overflow-hidden"
                   >
                     <Suspense fallback={<PanelLoading />}>
-                      <MainWorkspace
+                      {editSessionDetail ? <ImageEditSessionWorkspace initialDetail={editSessionDetail} creditBalance={creditBalance?.balance??null} onRefreshCredits={refreshCreditBalance} onClose={()=>{setEditSessionDetail(null);window.localStorage.removeItem(activeEditSessionStorageKey);}}/> : <MainWorkspace
                         step={currentStep}
                         state={stepStates[currentStep]}
                         selectedProjectId={selectedProjectId}
@@ -877,7 +916,11 @@ export default function App() {
                         isCreditsInsufficient={isCreditsInsufficient}
                         providerUnavailableReason={providerUnavailableReason}
                         isAdmin={currentUser.role === 'admin'}
-                      />
+                        onStartContinuousEdit={handleStartContinuousEdit}
+                        creditBalance={creditBalance?.balance ?? null}
+                        onRefreshCreditBalance={refreshCreditBalance}
+                        onEnsureProject={async () => (await ensureActiveProject()).projectId}
+                      />}
                     </Suspense>
                   </motion.div>
                 </AnimatePresence>

@@ -56,7 +56,7 @@ describe('PlanColorizePanel', () => {
     expect(html).toContain('房间名称标注');
     expect(html).toContain('动线箭头');
     expect(html).toContain('景观/铺装/绿化填充');
-    expect(html).toContain('生成图纸表达');
+    expect(html).toContain('生成彩平');
   });
 
   it('uses compact 16:9 before and after preview cards', () => {
@@ -103,12 +103,12 @@ describe('PlanColorizePanel', () => {
     expect(html).not.toContain('disabled=""');
   });
 
-  it('shows the 图纸智能表达 entry in the workspace stepper', () => {
+  it('shows the 平面彩平 entry in the workspace stepper', () => {
     const html = renderToStaticMarkup(
       <Stepper currentStep={GenerationStep.FloorplanTo3D} onStepChange={() => undefined} />,
     );
 
-    expect(html).toContain('图纸智能表达');
-    expect(html).toContain('上传黑白平面图，一键生成彩色分区、标注和表达图');
+    expect(html).toContain('平面彩平');
+    expect(html).toContain('当前功能：平面彩平');
   });
 });

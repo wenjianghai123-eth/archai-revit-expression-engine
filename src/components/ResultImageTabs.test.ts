@@ -60,13 +60,9 @@ describe('ResultImageTabs', () => {
 
     expect(view.querySelector('img[alt="结果图"]')?.getAttribute('src')).toBe('/output.png');
 
-    clickButton('原图');
-    expect(view.textContent).toContain('该历史记录缺少原图');
-
-    clickButton('对比');
-    expect(view.textContent).toContain('需要同时具备原图和结果图才能对比');
-
-    clickButton('叠加对比');
-    expect(view.textContent).toContain('需要同时具备原图和结果图才能叠加对比');
+    const buttons = Array.from(view.querySelectorAll('button'));
+    expect(buttons.find(button => button.textContent === '原图')?.disabled).toBe(true);
+    expect(buttons.find(button => button.textContent === '对比')?.disabled).toBe(true);
+    expect(buttons.find(button => button.textContent === '叠加对比')?.disabled).toBe(true);
   });
 });

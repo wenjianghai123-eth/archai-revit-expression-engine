@@ -32,6 +32,10 @@ export interface GenerateImageInput {
   targetAspectRatio?: string;
   editTarget?: 'general' | 'material' | 'furniture';
   qualityMode?: QualityMode;
+  inputImages?: Array<{
+    role: 'current' | 'original-structure-reference' | 'original-floor-plan' | 'material-control' | 'mask' | 'style-reference' | 'material-reference' | 'furniture-reference' | 'lighting-reference';
+    url: string;
+  }>;
 }
 
 export interface GenerateImageOutput {

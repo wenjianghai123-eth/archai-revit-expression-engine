@@ -26,6 +26,7 @@ import {
   GenerationJob,
   GenerationRecord,
   getGenerationJob,
+  getFloorPlanRegionSet,
   getImageAsset,
   getAdminDashboard,
   getPromptTemplate,
@@ -36,6 +37,7 @@ import {
   getUserProfileByEmail,
   ImageAsset,
   listGenerationResults,
+  listFloorPlanRegionMaterials,
   listPromptTemplates,
   getModelAsset,
   getProject,
@@ -93,11 +95,15 @@ import { defaultPlanColorizeStyleId, maxPlanColorizeBatchCount, resolvePlanColor
 import { findFloorplanColorTemplate, resolveFloorplanBatchCount, resolveFloorplanVariantPlans, readFloorplanVariantFocus, readFloorplanVariantType } from '../src/constants/floorplanVariants';
 import { getGenerationCreditCost, getGenerationOutputCount } from '../src/utils/generationCredits';
 import { createAssetsRouter } from './routes/assets';
+import { createEditSessionsRouter } from './routes/editSessions';
+import { createFloorPlanRouter } from './routes/floorPlan';
 import { authenticateSupabasePassword, createSupabaseAuthUser, getSupabaseAdminClient, resetSupabaseAuthUserPassword, updateSupabaseAuthUserMetadata } from './supabaseAdmin';
 import { getModelConversionConfig } from './modelConversionService';
 import { getModelOptimizationConfig } from './modelOptimizationService';
 import { polishPromptText, PromptPolishRequest, PromptPolishResult } from './promptPolishService';
 import { resolveImagePolishPrompts } from './prompts/imagePolishPrompt';
+import { compileFloorPlanMaterialPrompt, readFloorPlanMaterialPromptInput } from './prompts/floorPlanMaterialPrompt';
+import { failEditGeneration } from './editSessionLifecycle';
 
 export const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -527,6 +533,8 @@ app.delete('/api/prompt-templates/:id', requireAuth, requireAdmin, async (
 });
 
 app.use('/api/assets', createAssetsRouter({ maxImageMb, maxModelMb }));
+app.use('/api/edit-sessions', createEditSessionsRouter());
+app.use('/api/floor-plan', createFloorPlanRouter());
 app.post('/api/upload', requireAuth, legacyImageUploadHandler);
 
 app.get('/api/billing/credits', requireAuth, creditBalanceHandler);
@@ -909,6 +917,7 @@ app.post('/api/generation-jobs/:id/cancel', requireAuth, async (
     removeQueuedGenerationJob(job.id);
     if (job.status === 'cancelled') {
       await refundGenerationJobCredits(job.id);
+      await failEditGeneration(job, 'cancelled');
     }
     const latestJob = await getGenerationJob(job.id, getRequiredCurrentUser(req).id);
     res.json(apiOk({ job: latestJob || job }));
@@ -2521,6 +2530,20 @@ function validateGenerationJobCreateBody(
   if (planColorizeConfig.ok === false) {
     return { ok: false, error: planColorizeConfig.error };
   }
+  const floorPlanMaterialPromptInput = readFloorPlanMaterialPromptInput(config);
+  if (config.floorPlanMaterialMapping === true) {
+    if (generationMode !== 'plan-colorize' || generationStep !== 'plan_colorize' || !floorPlanMaterialPromptInput) {
+      return { ok: false, error: { message: '区域材质彩平配置无效。', code: 'FLOOR_PLAN_MATERIAL_GENERATION_CONFIG_INVALID' } };
+    }
+    config.sourceImageAssetId = floorPlanMaterialPromptInput.sourceAssetId;
+    config.floorPlanControlAssetId = floorPlanMaterialPromptInput.controlAssetId;
+    config.floorPlanRegionSetId = floorPlanMaterialPromptInput.regionSetId;
+    config.floorPlanMaterialAssignments = floorPlanMaterialPromptInput.assignments;
+    config.floorPlanMaterialReferenceAssetIds = floorPlanMaterialPromptInput.referenceAssetIds || [];
+    config.batchCount = 1;
+    config.planColorizeBatchEnabled = false;
+    config.apiyiImageSize = config.apiyiImageSize === '4K' ? '4K' : '2K';
+  }
   if (generationMode === 'model-render') {
     if (!isNonEmptyString(config.sourceImageAssetId) && !isNonEmptyString(config.snapshotAssetId)) {
       return { ok: false, error: { message: 'sourceImageAssetId is required for model-render jobs.', code: 'GENERATION_JOB_SNAPSHOT_ASSET_REQUIRED' } };
@@ -2868,7 +2891,9 @@ function validateGenerationJobCreateBody(
     : body.inputAssetIds.map(item => item.trim());
   const normalizedPrompt = generationStep === 'image_polish'
     ? resolveImagePolishPrompts(config.enhanceMaterials === true).prompt
-    : body.prompt;
+    : floorPlanMaterialPromptInput
+      ? compileFloorPlanMaterialPrompt(floorPlanMaterialPromptInput)
+      : body.prompt;
 
   return {
     ok: true,
@@ -3487,6 +3512,11 @@ async function validateGenerationJobAssets(
     }
   }
 
+  if (mode === 'plan-colorize' && config.floorPlanMaterialMapping === true) {
+    const validation = await validateFloorPlanMaterialGenerationAssets(inputAssetIds, step, config, userId);
+    if (validation.ok === false) return validation;
+  }
+
   for (const assetId of [
     ...readStringArray(config.materialTextureAssetIds),
     ...readStringArray(config.materialReferenceAssetIds),
@@ -3595,6 +3625,57 @@ async function validateGenerationJobAssets(
     }
   }
 
+  return { ok: true };
+}
+
+async function validateFloorPlanMaterialGenerationAssets(
+  inputAssetIds: string[],
+  step: GenerationJob['step'],
+  config: Record<string, unknown>,
+  userId: string,
+): Promise<{ ok: true } | { ok: false; error: ApiError }> {
+  const promptInput = readFloorPlanMaterialPromptInput(config);
+  if (!promptInput || step !== 'plan_colorize') {
+    return { ok: false, error: { message: '区域材质彩平配置无效。', code: 'FLOOR_PLAN_MATERIAL_GENERATION_CONFIG_INVALID' } };
+  }
+  if (inputAssetIds[0] !== promptInput.sourceAssetId || inputAssetIds[1] !== promptInput.controlAssetId) {
+    return { ok: false, error: { message: '输入图片顺序必须为原始平面图、材质控制图。', code: 'FLOOR_PLAN_MATERIAL_INPUT_ORDER_INVALID' } };
+  }
+  const regionSet = await getFloorPlanRegionSet(promptInput.regionSetId, userId);
+  if (!regionSet || regionSet.status !== 'confirmed') {
+    return { ok: false, error: { message: '已确认区域版本不存在或无权访问。', code: 'FLOOR_PLAN_REGION_SET_NOT_FOUND' } };
+  }
+  if (regionSet.sourceAssetId !== promptInput.sourceAssetId) {
+    return { ok: false, error: { message: '原始平面图与区域版本不匹配。', code: 'FLOOR_PLAN_MATERIAL_SOURCE_MISMATCH' } };
+  }
+  const regionById = new Map(regionSet.regions.map(region => [region.id, region]));
+  const savedMaterials = await listFloorPlanRegionMaterials(regionSet.id, userId);
+  const materialByRegionId = new Map(savedMaterials.map(material => [material.regionId, material]));
+  if (promptInput.assignments.length !== regionSet.regions.length || savedMaterials.length !== regionSet.regions.length) {
+    return { ok: false, error: { message: '区域材质配置尚未完整保存。', code: 'FLOOR_PLAN_MATERIAL_REGION_MISMATCH' } };
+  }
+  for (const assignment of promptInput.assignments) {
+    const region = regionById.get(assignment.regionId);
+    const saved = materialByRegionId.get(assignment.regionId);
+    if (!region || !saved || region.number !== assignment.number
+      || saved.materialAssetId !== assignment.materialAssetId
+      || saved.materialName !== assignment.materialName
+      || saved.fallbackMode !== assignment.fallbackMode
+      || saved.scale !== assignment.scale
+      || saved.rotation !== assignment.rotation
+      || saved.direction !== assignment.direction
+      || saved.jointMode !== assignment.jointMode) {
+      return { ok: false, error: { message: '材质配置已变化，请重新保存并生成控制图。', code: 'FLOOR_PLAN_MATERIAL_CONFIG_STALE' } };
+    }
+  }
+  const allowedReferenceIds = new Set(promptInput.assignments.map(assignment => assignment.materialAssetId).filter((id): id is string => Boolean(id)));
+  const referenceIds = readStringArray(config.floorPlanMaterialReferenceAssetIds);
+  if (referenceIds.length > 2 || referenceIds.some(assetId => !allowedReferenceIds.has(assetId))) {
+    return { ok: false, error: { message: '区域材质参考图配置无效。', code: 'FLOOR_PLAN_MATERIAL_REFERENCES_INVALID' } };
+  }
+  if (inputAssetIds.length !== 2 + referenceIds.length || referenceIds.some((assetId, index) => inputAssetIds[index + 2] !== assetId)) {
+    return { ok: false, error: { message: '区域材质彩平输入图片顺序无效。', code: 'FLOOR_PLAN_MATERIAL_INPUT_ORDER_INVALID' } };
+  }
   return { ok: true };
 }
 

@@ -82,6 +82,7 @@ export function createApiYiNanoBanana2Provider(options: ApiYiProviderOptions = {
       const imageSize = resolveImageSize(input);
       const parts = buildApiYiParts(prompt, inlineImages);
       const requestStartedAt = Date.now();
+      const requestId = crypto.randomUUID();
 
       if (process.env.NODE_ENV !== 'production') {
         console.debug({
@@ -94,6 +95,7 @@ export function createApiYiNanoBanana2Provider(options: ApiYiProviderOptions = {
           imageSize,
           promptLength: prompt.length,
           hasApiKey: Boolean(apiKey),
+          requestId,
         });
         console.debug({
           event: 'provider_request_prepare',
@@ -114,6 +116,7 @@ export function createApiYiNanoBanana2Provider(options: ApiYiProviderOptions = {
           headers: {
             Authorization: `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
+            'X-Request-ID': requestId,
           },
           body: JSON.stringify({
             contents: [{ parts }],
@@ -200,6 +203,8 @@ export function createApiYiNanoBanana2Provider(options: ApiYiProviderOptions = {
         },
         metadata: {
           model,
+          requestId,
+          providerTaskId: typeof body.responseId === 'string' ? body.responseId : requestId,
           providerDurationMs: Date.now() - requestStartedAt,
           httpStatus: response.status,
           inputImages: inlineImages.length,
@@ -229,6 +234,9 @@ export function buildApiYiParts(prompt: string, images: ApiYiInlineData[]): ApiY
 }
 
 export function collectApiYiImageSources(input: GenerateImageInput): string[] {
+  if (input.inputImages && input.inputImages.length > 0) {
+    return input.inputImages.map(image => image.url).filter(Boolean);
+  }
   const isPreviewFusion = isObjectInsertPreviewFusion(input);
   if (isPreviewFusion) {
     return [input.inputImageDataUrl, ...(input.referenceImageDataUrls || []).slice(0, 1)].filter(Boolean);

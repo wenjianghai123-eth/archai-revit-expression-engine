@@ -79,9 +79,10 @@ export function createErrorHandler(jsonLimit: string) {
       return;
     }
 
-    res.status(500).json(apiError(
-      resolveErrorResponseMessage(error),
-      safeError.code || 'INTERNAL_SERVER_ERROR',
+    const errorCode = safeError.code || 'INTERNAL_SERVER_ERROR';
+    res.status(resolveErrorHttpStatus(errorCode)).json(apiError(
+      resolveErrorResponseMessage(error, errorCode),
+      errorCode,
       readPublicErrorDetails(error),
     ));
   };
@@ -138,12 +139,20 @@ export function sanitizeLogText(value: string): string {
     .slice(0, 500);
 }
 
-function resolveErrorResponseMessage(error: unknown): string {
+function resolveErrorResponseMessage(error: unknown, errorCode: string): string {
+  if (errorCode === 'FLOOR_PLAN_SCHEMA_NOT_READY') {
+    return '平面图区域数据库尚未初始化，请管理员执行 Supabase migration 后重试。';
+  }
+
   if (process.env.NODE_ENV !== 'production' && error instanceof Error && error.message.trim().length > 0) {
     return sanitizeLogText(error.message);
   }
 
   return 'Server failed to process the request. Please try again later.';
+}
+
+function resolveErrorHttpStatus(errorCode: string): number {
+  return errorCode === 'FLOOR_PLAN_SCHEMA_NOT_READY' ? 503 : 500;
 }
 
 function readPublicErrorDetails(error: unknown): Partial<Omit<ApiError, 'message' | 'code'>> {

@@ -6,6 +6,8 @@ import {
   CreateGenerationRecordInput,
   CreateGenerationResultInput,
   CreateImageAssetInput,
+  CreateFloorPlanRegionSetInput,
+  SaveFloorPlanRegionMaterialInput,
   CreatePromptTemplateInput,
   CreateModelAssetInput,
   CreateProjectInput,
@@ -20,6 +22,7 @@ import {
   GenerationRecord,
   GenerationResult,
   ImageAsset,
+  FloorPlanRegion, FloorPlanRegionSet, FloorPlanRegionMaterial,
   PromptTemplateFilters,
   PromptTemplateRecord,
   ModelAsset,
@@ -33,6 +36,7 @@ import {
   UpdateProjectInput,
   UpdateUserProfileInput,
   UserProfile,
+  EditSession, EditMessage, AssetVersion, CreateEditSessionInput, CreateEditMessageInput, CreateAssetVersionInput,
 } from './types';
 
 export type {
@@ -41,6 +45,8 @@ export type {
   CreateGenerationRecordInput,
   CreateGenerationResultInput,
   CreateImageAssetInput,
+  CreateFloorPlanRegionSetInput,
+  SaveFloorPlanRegionMaterialInput,
   CreatePromptTemplateInput,
   CreateModelAssetInput,
   CreateProjectInput,
@@ -55,6 +61,7 @@ export type {
   GenerationRecord,
   GenerationResult,
   ImageAsset,
+  FloorPlanRegion, FloorPlanRegionSet, FloorPlanRegionMaterial,
   PromptTemplateFilters,
   PromptTemplateRecord,
   ModelAsset,
@@ -68,6 +75,7 @@ export type {
   UpdateProjectInput,
   UpdateUserProfileInput,
   UserProfile,
+  EditSession, EditMessage, AssetVersion, CreateEditSessionInput, CreateEditMessageInput, CreateAssetVersionInput,
 } from './types';
 
 export const storageAdapter: StorageAdapter = createStorageAdapter();
@@ -88,6 +96,10 @@ function createStorageAdapter(): StorageAdapter {
 
 export function ensureAppDatabase(): Promise<void> {
   return storageAdapter.ensureReady();
+}
+
+export function ensureFloorPlanSchemaReady(): Promise<void> {
+  return storageAdapter.ensureFloorPlanSchemaReady();
 }
 
 export function listUserProfiles(): Promise<UserProfile[]> {
@@ -177,6 +189,42 @@ export function createImageAsset(input: CreateImageAssetInput): Promise<ImageAss
 export function getImageAsset(id: string, userId?: string): Promise<ImageAsset | null> {
   return storageAdapter.getImageAsset(id, userId);
 }
+
+export function createFloorPlanRegionSet(input: CreateFloorPlanRegionSetInput) {
+  return storageAdapter.createFloorPlanRegionSet(input);
+}
+
+export function getFloorPlanRegionSet(id: string, userId: string) {
+  return storageAdapter.getFloorPlanRegionSet(id, userId);
+}
+
+export function getLatestFloorPlanRegionSet(sourceAssetId: string, userId: string) {
+  return storageAdapter.getLatestFloorPlanRegionSet(sourceAssetId, userId);
+}
+
+export function updateFloorPlanRegionSet(id: string, userId: string, input: { regions?: FloorPlanRegion[]; autoRegions?: FloorPlanRegion[]; overlayAssetId?: string | null; overlayUrl?: string | null; status?: FloorPlanRegionSet['status']; confirmedAt?: string | null; lockedAt?: string | null }) {
+  return storageAdapter.updateFloorPlanRegionSet(id, userId, input);
+}
+
+export function listFloorPlanRegionMaterials(regionSetId: string, userId: string): Promise<FloorPlanRegionMaterial[]> {
+  return storageAdapter.listFloorPlanRegionMaterials(regionSetId, userId);
+}
+
+export function saveFloorPlanRegionMaterials(regionSetId: string, userId: string, materials: SaveFloorPlanRegionMaterialInput[]): Promise<FloorPlanRegionMaterial[]> {
+  return storageAdapter.saveFloorPlanRegionMaterials(regionSetId, userId, materials);
+}
+
+export function createEditSession(input: CreateEditSessionInput, sourceAsset: ImageAsset) { return storageAdapter.createEditSession(input, sourceAsset); }
+export function getEditSession(id: string, userId: string) { return storageAdapter.getEditSession(id, userId); }
+export function updateEditSession(id: string, userId: string, input: Partial<Pick<EditSession, 'currentVersionId' | 'status' | 'title'>>) { return storageAdapter.updateEditSession(id, userId, input); }
+export function listAssetVersions(sessionId: string, userId: string) { return storageAdapter.listAssetVersions(sessionId, userId); }
+export function getAssetVersion(id: string, sessionId: string, userId: string) { return storageAdapter.getAssetVersion(id, sessionId, userId); }
+export function createAssetVersion(input: CreateAssetVersionInput) { return storageAdapter.createAssetVersion(input); }
+export function createEditMessage(input: CreateEditMessageInput) { return storageAdapter.createEditMessage(input); }
+export function getEditMessage(id: string) { return storageAdapter.getEditMessage(id); }
+export function getEditMessageByClientRequest(sessionId: string, clientRequestId: string) { return storageAdapter.getEditMessageByClientRequest(sessionId, clientRequestId); }
+export function listEditMessages(sessionId: string, userId: string) { return storageAdapter.listEditMessages(sessionId, userId); }
+export function updateEditMessage(id: string, input: Partial<Pick<EditMessage, 'outputVersionId' | 'generationJobId' | 'status' | 'errorCode' | 'errorMessage'>>) { return storageAdapter.updateEditMessage(id, input); }
 
 export function listPromptTemplates(filters?: PromptTemplateFilters): Promise<PromptTemplateRecord[]> {
   return storageAdapter.listPromptTemplates(filters);

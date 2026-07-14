@@ -8,6 +8,7 @@ interface ImageOverlayCompareProps {
   resultLabel?: string;
   className?: string;
   emptyMessage?: string;
+  imageScale?: number;
 }
 
 export function ImageOverlayCompare({
@@ -17,8 +18,10 @@ export function ImageOverlayCompare({
   resultLabel = '结果图',
   className = '',
   emptyMessage = '暂无原图，无法对比。',
+  imageScale = 1,
 }: ImageOverlayCompareProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const draggingRef = useRef(false);
   const [position, setPosition] = useState(50);
   const resolvedSourceImageUrl = resolveAssetUrl(sourceImageUrl);
   const resolvedResultImageUrl = resolveAssetUrl(resultImageUrl);
@@ -30,13 +33,19 @@ export function ImageOverlayCompare({
   }, []);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    draggingRef.current = true;
     event.currentTarget.setPointerCapture(event.pointerId);
     updatePosition(event.clientX);
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.buttons !== 1) return;
+    if (!draggingRef.current) return;
     updatePosition(event.clientX);
+  };
+
+  const handlePointerEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    draggingRef.current = false;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -69,11 +78,13 @@ export function ImageOverlayCompare({
       className={`relative h-full min-h-[220px] touch-none select-none overflow-hidden bg-white outline-none ${className}`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerEnd}
+      onPointerCancel={handlePointerEnd}
       onKeyDown={handleKeyDown}
     >
-      <img src={resolvedSourceImageUrl} alt={sourceLabel} className="absolute inset-0 h-full w-full object-contain" referrerPolicy="no-referrer" onError={() => warnImageLoadFailure(sourceImageUrl, resolvedSourceImageUrl)} />
+      <img src={resolvedSourceImageUrl} alt={sourceLabel} style={{ transform: `scale(${imageScale})` }} className="absolute inset-0 h-full w-full object-contain transition-transform" referrerPolicy="no-referrer" onError={() => warnImageLoadFailure(sourceImageUrl, resolvedSourceImageUrl)} />
       <div className="absolute inset-0 overflow-hidden" style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}>
-        <img src={resolvedResultImageUrl} alt={resultLabel} className="h-full w-full object-contain" referrerPolicy="no-referrer" onError={() => warnImageLoadFailure(resultImageUrl, resolvedResultImageUrl)} />
+        <img src={resolvedResultImageUrl} alt={resultLabel} style={{ transform: `scale(${imageScale})` }} className="h-full w-full object-contain transition-transform" referrerPolicy="no-referrer" onError={() => warnImageLoadFailure(resultImageUrl, resolvedResultImageUrl)} />
       </div>
       <span className="absolute left-3 top-3 rounded-full bg-white/90 px-2 py-1 text-[10px] font-bold text-slate-700 shadow-sm">{resultLabel}</span>
       <span className="absolute right-3 top-3 rounded-full bg-slate-900/80 px-2 py-1 text-[10px] font-bold text-white shadow-sm">{sourceLabel}</span>

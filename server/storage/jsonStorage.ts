@@ -9,6 +9,8 @@ import {
   CreateGenerationRecordInput,
   CreateGenerationResultInput,
   CreateImageAssetInput,
+  CreateFloorPlanRegionSetInput,
+  SaveFloorPlanRegionMaterialInput,
   CreatePromptTemplateInput,
   CreateModelAssetInput,
   CreateProjectInput,
@@ -21,6 +23,7 @@ import {
   GenerationRecord,
   GenerationResult,
   ImageAsset,
+  FloorPlanRegion, FloorPlanRegionSet, FloorPlanRegionMaterial,
   PromptTemplateFilters,
   PromptTemplateRecord,
   ModelAsset,
@@ -33,6 +36,7 @@ import {
   UpdateProjectInput,
   UpdateUserProfileInput,
   UserProfile,
+  EditSession, EditMessage, AssetVersion, CreateEditSessionInput, CreateEditMessageInput, CreateAssetVersionInput,
 } from './types';
 
 const dataDir = path.resolve(process.cwd(), process.env.DATA_DIR || 'data');
@@ -49,6 +53,11 @@ const emptyDatabase: AppDatabase = {
   shareLinks: [],
   creditBalances: [],
   creditTransactions: [],
+  editSessions: [],
+  editMessages: [],
+  assetVersions: [],
+  floorPlanRegionSets: [],
+  floorPlanRegionMaterials: [],
 };
 
 let writeQueue: Promise<void> = Promise.resolve();
@@ -56,6 +65,10 @@ let writeQueue: Promise<void> = Promise.resolve();
 export class JsonStorageAdapter implements StorageAdapter {
   ensureReady(): Promise<void> {
     return ensureAppDatabase();
+  }
+
+  ensureFloorPlanSchemaReady(): Promise<void> {
+    return Promise.resolve();
   }
 
   listUserProfiles(): Promise<UserProfile[]> {
@@ -145,6 +158,25 @@ export class JsonStorageAdapter implements StorageAdapter {
   getImageAsset(id: string, userId?: string): Promise<ImageAsset | null> {
     return getImageAsset(id, userId);
   }
+
+  createFloorPlanRegionSet(input: CreateFloorPlanRegionSetInput) { return createFloorPlanRegionSet(input); }
+  getFloorPlanRegionSet(id: string, userId: string) { return getFloorPlanRegionSet(id, userId); }
+  getLatestFloorPlanRegionSet(sourceAssetId: string, userId: string) { return getLatestFloorPlanRegionSet(sourceAssetId, userId); }
+  updateFloorPlanRegionSet(id: string, userId: string, input: { regions?: FloorPlanRegion[]; autoRegions?: FloorPlanRegion[]; overlayAssetId?: string | null; overlayUrl?: string | null; status?: FloorPlanRegionSet['status']; confirmedAt?: string | null; lockedAt?: string | null }) { return updateFloorPlanRegionSet(id, userId, input); }
+  listFloorPlanRegionMaterials(regionSetId: string, userId: string) { return listFloorPlanRegionMaterials(regionSetId, userId); }
+  saveFloorPlanRegionMaterials(regionSetId: string, userId: string, materials: SaveFloorPlanRegionMaterialInput[]) { return saveFloorPlanRegionMaterials(regionSetId, userId, materials); }
+
+  createEditSession(input: CreateEditSessionInput, sourceAsset: ImageAsset) { return createEditSession(input, sourceAsset); }
+  getEditSession(id: string, userId: string) { return getEditSession(id, userId); }
+  updateEditSession(id: string, userId: string, input: Partial<Pick<EditSession, 'currentVersionId' | 'status' | 'title'>>) { return updateEditSession(id, userId, input); }
+  listAssetVersions(sessionId: string, userId: string) { return listAssetVersions(sessionId, userId); }
+  getAssetVersion(id: string, sessionId: string, userId: string) { return getAssetVersion(id, sessionId, userId); }
+  createAssetVersion(input: CreateAssetVersionInput) { return createAssetVersion(input); }
+  createEditMessage(input: CreateEditMessageInput) { return createEditMessage(input); }
+  getEditMessage(id: string) { return getEditMessage(id); }
+  getEditMessageByClientRequest(sessionId: string, clientRequestId: string) { return getEditMessageByClientRequest(sessionId, clientRequestId); }
+  listEditMessages(sessionId: string, userId: string) { return listEditMessages(sessionId, userId); }
+  updateEditMessage(id: string, input: Partial<Pick<EditMessage, 'outputVersionId' | 'generationJobId' | 'status' | 'errorCode' | 'errorMessage'>>) { return updateEditMessage(id, input); }
 
   listPromptTemplates(filters?: PromptTemplateFilters): Promise<PromptTemplateRecord[]> {
     return listPromptTemplates(filters);
@@ -659,6 +691,120 @@ async function getImageAsset(id: string, userId?: string): Promise<ImageAsset | 
   return db.imageAssets.find(asset => asset.id === id && (!userId || asset.userId === userId)) ?? null;
 }
 
+async function createFloorPlanRegionSet(input: CreateFloorPlanRegionSetInput): Promise<FloorPlanRegionSet> {
+  const now = new Date().toISOString();
+  const item: FloorPlanRegionSet = { ...input, id: `floor_regions_${randomUUID()}`, autoRegions: input.autoRegions.length ? input.autoRegions : input.regions, status: input.status ?? 'recognized', versionNumber: input.versionNumber ?? 1, baseRegionSetId: input.baseRegionSetId ?? null, lockedAt: input.lockedAt ?? null, confirmedAt: input.confirmedAt ?? null, createdAt: now, updatedAt: now };
+  const db = await readDatabase();
+  db.floorPlanRegionSets.unshift(item);
+  await writeDatabase(db);
+  return item;
+}
+
+async function getFloorPlanRegionSet(id: string, userId: string): Promise<FloorPlanRegionSet | null> {
+  const db = await readDatabase();
+  return db.floorPlanRegionSets.find(item => item.id === id && item.userId === userId) || null;
+}
+
+async function getLatestFloorPlanRegionSet(sourceAssetId: string, userId: string): Promise<FloorPlanRegionSet | null> {
+  const db = await readDatabase();
+  return db.floorPlanRegionSets
+    .filter(item => item.sourceAssetId === sourceAssetId && item.userId === userId)
+    .sort((a, b) => b.versionNumber - a.versionNumber || b.updatedAt.localeCompare(a.updatedAt))[0] || null;
+}
+
+async function updateFloorPlanRegionSet(id: string, userId: string, input: { regions?: FloorPlanRegion[]; autoRegions?: FloorPlanRegion[]; overlayAssetId?: string | null; overlayUrl?: string | null; status?: FloorPlanRegionSet['status']; confirmedAt?: string | null; lockedAt?: string | null }): Promise<FloorPlanRegionSet | null> {
+  const db = await readDatabase();
+  const item = db.floorPlanRegionSets.find(candidate => candidate.id === id && candidate.userId === userId);
+  if (!item) return null;
+  if (input.regions) item.regions = input.regions;
+  if (input.autoRegions) item.autoRegions = input.autoRegions;
+  if (input.overlayAssetId !== undefined) item.overlayAssetId = input.overlayAssetId;
+  if (input.overlayUrl !== undefined) item.overlayUrl = input.overlayUrl;
+  if (input.status) item.status = input.status;
+  if (input.confirmedAt !== undefined) item.confirmedAt = input.confirmedAt;
+  if (input.lockedAt !== undefined) item.lockedAt = input.lockedAt;
+  item.updatedAt = new Date().toISOString();
+  await writeDatabase(db);
+  return item;
+}
+
+async function listFloorPlanRegionMaterials(regionSetId: string, userId: string): Promise<FloorPlanRegionMaterial[]> {
+  const db = await readDatabase();
+  return db.floorPlanRegionMaterials
+    .filter(material => material.regionSetId === regionSetId && material.userId === userId)
+    .map(material => ({
+      ...material,
+      materialUrl: material.materialAssetId
+        ? db.imageAssets.find(asset => asset.id === material.materialAssetId && asset.userId === userId)?.url || null
+        : null,
+    }));
+}
+
+async function saveFloorPlanRegionMaterials(regionSetId: string, userId: string, materials: SaveFloorPlanRegionMaterialInput[]): Promise<FloorPlanRegionMaterial[]> {
+  const db = await readDatabase();
+  const now = new Date().toISOString();
+  const existing = new Map(
+    db.floorPlanRegionMaterials
+      .filter(material => material.regionSetId === regionSetId && material.userId === userId)
+      .map(material => [material.regionId, material]),
+  );
+  const saved = materials.map(input => {
+    const previous = existing.get(input.regionId);
+    const materialUrl = input.materialAssetId
+      ? db.imageAssets.find(asset => asset.id === input.materialAssetId && asset.userId === userId)?.url || null
+      : null;
+    return {
+      id: previous?.id || `floor_material_${randomUUID()}`,
+      userId,
+      regionSetId,
+      ...input,
+      materialUrl,
+      createdAt: previous?.createdAt || now,
+      updatedAt: now,
+    } satisfies FloorPlanRegionMaterial;
+  });
+  db.floorPlanRegionMaterials = [
+    ...db.floorPlanRegionMaterials.filter(material => material.regionSetId !== regionSetId || material.userId !== userId),
+    ...saved,
+  ];
+  await writeDatabase(db);
+  return saved;
+}
+
+async function createEditSession(input: CreateEditSessionInput, sourceAsset: ImageAsset): Promise<{ session: EditSession; version: AssetVersion }> {
+  const db = await readDatabase();
+  const now = new Date().toISOString();
+  const sessionId = `edit_session_${randomUUID()}`;
+  const versionId = `asset_version_${randomUUID()}`;
+  const version: AssetVersion = {
+    id: versionId, assetId: sourceAsset.id, sessionId, parentVersionId: null, versionNumber: 0,
+    storagePath: sourceAsset.path || sourceAsset.filename, publicUrl: sourceAsset.publicUrl || sourceAsset.url,
+    userInstruction: '', compiledPrompt: '', provider: null, model: null, generationJobId: null,
+    createdBy: input.userId, createdAt: now,
+  };
+  const session: EditSession = {
+    id: sessionId, userId: input.userId, projectId: input.projectId, sourceAssetId: input.sourceAssetId,
+    originalVersionId: versionId, currentVersionId: versionId, title: input.title,
+    permanentConstraints: input.permanentConstraints, aspectRatio: input.aspectRatio, status: 'active', createdAt: now, updatedAt: now,
+  };
+  db.editSessions.unshift(session); db.assetVersions.push(version); await writeDatabase(db);
+  return { session, version };
+}
+
+async function getEditSession(id: string, userId: string) { const db = await readDatabase(); return db.editSessions.find(item => item.id === id && item.userId === userId) || null; }
+async function updateEditSession(id: string, userId: string, input: Partial<Pick<EditSession, 'currentVersionId' | 'status' | 'title'>>) {
+  const db = await readDatabase(); const item = db.editSessions.find(value => value.id === id && value.userId === userId); if (!item) return null;
+  Object.assign(item, input, { updatedAt: new Date().toISOString() }); await writeDatabase(db); return item;
+}
+async function listAssetVersions(sessionId: string, userId: string) { const db = await readDatabase(); const session = db.editSessions.find(item => item.id === sessionId && item.userId === userId); return session ? db.assetVersions.filter(item => item.sessionId === sessionId).sort((a,b) => a.versionNumber-b.versionNumber) : []; }
+async function getAssetVersion(id: string, sessionId: string, userId: string) { const versions = await listAssetVersions(sessionId, userId); return versions.find(item => item.id === id) || null; }
+async function createAssetVersion(input: CreateAssetVersionInput) { const db = await readDatabase(); const item: AssetVersion = { ...input, id: `asset_version_${randomUUID()}`, createdAt: new Date().toISOString() }; db.assetVersions.push(item); await writeDatabase(db); return item; }
+async function createEditMessage(input: CreateEditMessageInput) { const db = await readDatabase(); const existing=input.clientRequestId?db.editMessages.find(item=>item.sessionId===input.sessionId&&item.clientRequestId===input.clientRequestId):null;if(existing)return existing;const item: EditMessage = { ...input, id: `edit_message_${randomUUID()}`, outputVersionId: null, generationJobId: null, errorCode:null,errorMessage:null,createdAt: new Date().toISOString() }; db.editMessages.push(item); await writeDatabase(db); return item; }
+async function getEditMessage(id: string) { const db = await readDatabase(); return db.editMessages.find(item => item.id === id) || null; }
+async function getEditMessageByClientRequest(sessionId:string,clientRequestId:string){const db=await readDatabase();return db.editMessages.find(item=>item.sessionId===sessionId&&item.clientRequestId===clientRequestId)||null;}
+async function listEditMessages(sessionId: string, userId: string) { const db = await readDatabase(); const session = db.editSessions.find(item => item.id === sessionId && item.userId === userId); return session ? db.editMessages.filter(item => item.sessionId === sessionId).sort((a,b) => a.createdAt.localeCompare(b.createdAt)) : []; }
+async function updateEditMessage(id: string, input: Partial<Pick<EditMessage, 'outputVersionId' | 'generationJobId' | 'status' | 'errorCode' | 'errorMessage'>>) { const db = await readDatabase(); const item = db.editMessages.find(value => value.id === id); if (!item) return null; Object.assign(item, input); await writeDatabase(db); return item; }
+
 async function listPromptTemplates(filters: PromptTemplateFilters = {}): Promise<PromptTemplateRecord[]> {
   const db = await readDatabase();
   return [...db.promptTemplates]
@@ -1028,6 +1174,34 @@ async function readDatabase(): Promise<AppDatabase> {
     shareLinks: Array.isArray(parsed.shareLinks) ? parsed.shareLinks : [],
     creditBalances: Array.isArray(parsed.creditBalances) ? parsed.creditBalances : [],
     creditTransactions: Array.isArray(parsed.creditTransactions) ? parsed.creditTransactions : [],
+    editSessions: Array.isArray(parsed.editSessions) ? parsed.editSessions : [],
+    editMessages: Array.isArray(parsed.editMessages) ? parsed.editMessages.map(message=>({...message,clientRequestId:message.clientRequestId||null,errorCode:message.errorCode||null,errorMessage:message.errorMessage||null})) : [],
+    assetVersions: Array.isArray(parsed.assetVersions) ? parsed.assetVersions : [],
+    floorPlanRegionSets: normalizeFloorPlanRegionSets(Array.isArray(parsed.floorPlanRegionSets) ? parsed.floorPlanRegionSets : []),
+    floorPlanRegionMaterials: Array.isArray(parsed.floorPlanRegionMaterials) ? parsed.floorPlanRegionMaterials : [],
+  };
+}
+
+function normalizeFloorPlanRegionSets(items: FloorPlanRegionSet[]): FloorPlanRegionSet[] {
+  return items.map(item => ({
+    ...item,
+    regions: Array.isArray(item.regions) ? item.regions.map(normalizeFloorPlanRegion) : [],
+    autoRegions: Array.isArray(item.autoRegions) && item.autoRegions.length ? item.autoRegions.map(normalizeFloorPlanRegion) : (Array.isArray(item.regions) ? item.regions.map(normalizeFloorPlanRegion) : []),
+    versionNumber: typeof item.versionNumber === 'number' ? item.versionNumber : 1,
+    baseRegionSetId: item.baseRegionSetId ?? null,
+    lockedAt: item.lockedAt ?? null,
+    confirmedAt: item.confirmedAt ?? null,
+  }));
+}
+
+function normalizeFloorPlanRegion(region: FloorPlanRegion): FloorPlanRegion {
+  return {
+    ...region,
+    polygon: Array.isArray(region.polygon) ? region.polygon : [],
+    name: typeof region.name === 'string' ? region.name : '',
+    suggestedName: region.suggestedName ?? null,
+    maskAssetId: region.maskAssetId ?? null,
+    maskUrl: region.maskUrl ?? null,
   };
 }
 
