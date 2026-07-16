@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
-import { ArrowLeft, Check, Copy, Download, ExternalLink, ImagePlus, Layers3, LoaderCircle, RefreshCw, Save, Sparkles, Trash2 } from 'lucide-react';
+import { ArrowLeft, Check, Copy, Download, ExternalLink, ImagePlus, Layers3, LoaderCircle, RefreshCw, RotateCcw, Save, Sparkles, Trash2 } from 'lucide-react';
 import type {
   FloorPlanRegionMaterial,
   FloorPlanRegionSet,
@@ -24,6 +24,8 @@ interface Props {
   regionSet: FloorPlanRegionSet;
   sourceImageUrl: string;
   onBack: () => void;
+  onResetRegionsAndMaterials: () => void;
+  onResetAll: () => void;
   creditBalance?: number | null;
   onRefreshCreditBalance?: () => Promise<void>;
   onEnsureProject?: () => Promise<string>;
@@ -35,7 +37,7 @@ interface FloorPlanFinalVersion { jobId: string; assetId: string; imageUrl: stri
 
 const COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 
-export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, creditBalance = null, onRefreshCreditBalance, onEnsureProject }: Props) {
+export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onResetRegionsAndMaterials, onResetAll, creditBalance = null, onRefreshCreditBalance, onEnsureProject }: Props) {
   const [materials, setMaterials] = useState<MaterialDraft[]>(() => createDefaultDrafts(regionSet));
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -55,33 +57,56 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, cred
   const [error, setError] = useState<string | null>(null);
   const blobUrlsRef = useRef(new Map<string, string>());
   const mountedRef = useRef(true);
+  const lifecycleGenerationRef = useRef(0);
+  const requestControllersRef = useRef(new Set<AbortController>());
+
+  const beginRequest = () => {
+    const controller = new AbortController();
+    requestControllersRef.current.add(controller);
+    return { controller, generation: lifecycleGenerationRef.current };
+  };
+
+  const finishRequest = (controller: AbortController) => {
+    requestControllersRef.current.delete(controller);
+  };
+
+  const isActiveRequest = (generation: number) => mountedRef.current && generation === lifecycleGenerationRef.current;
 
   useEffect(() => {
     let active = true;
+    const { controller, generation } = beginRequest();
     setIsLoading(true);
     setError(null);
-    getFloorPlanRegionMaterials(regionSet.id)
+    getFloorPlanRegionMaterials(regionSet.id, { signal: controller.signal })
       .then(saved => {
-        if (!active) return;
+        if (!active || !isActiveRequest(generation)) return;
         setMaterials(mergeSavedMaterials(regionSet, saved));
         setSavedAt(saved[0]?.updatedAt || null);
         setIsDirty(false);
       })
       .catch(loadError => {
-        if (!active) return;
+        if (!active || !isActiveRequest(generation) || controller.signal.aborted) return;
         console.error('[floor-plan-materials] restore failed', { regionSetId: regionSet.id, error: loadError });
         setError(loadError instanceof Error ? loadError.message : '区域材质配置加载失败。');
       })
       .finally(() => {
-        if (active) setIsLoading(false);
+        finishRequest(controller);
+        if (active && isActiveRequest(generation)) setIsLoading(false);
       });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      controller.abort();
+      finishRequest(controller);
+    };
   }, [regionSet]);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      lifecycleGenerationRef.current += 1;
+      for (const controller of requestControllersRef.current) controller.abort();
+      requestControllersRef.current.clear();
       for (const url of blobUrlsRef.current.values()) URL.revokeObjectURL(url);
       blobUrlsRef.current.clear();
     };
@@ -124,10 +149,15 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, cred
       materialName: materialNameForUpload(materials.find(material => material.regionId === regionId)?.materialName, file.name),
       fallbackMode: 'reference',
     });
+    const { controller, generation } = beginRequest();
     try {
       const asset = await uploadImageAsset(file, file.name, {
-        onProgress: progress => setUploadProgress(current => ({ ...current, [regionId]: progress })),
+        onProgress: progress => {
+          if (isActiveRequest(generation)) setUploadProgress(current => ({ ...current, [regionId]: progress }));
+        },
+        signal: controller.signal,
       });
+      if (!isActiveRequest(generation)) return;
       updateMaterial(regionId, {
         materialAssetId: asset.id,
         materialUrl: asset.publicUrl || asset.url,
@@ -135,13 +165,15 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, cred
       });
       releaseBlobUrl(regionId);
     } catch (uploadError) {
+      if (!isActiveRequest(generation) || controller.signal.aborted) return;
       console.error('[floor-plan-materials] material upload failed', { regionSetId: regionSet.id, regionId, error: uploadError });
       setUploadErrors(current => ({
         ...current,
         [regionId]: uploadError instanceof Error ? uploadError.message : '材质参考图上传失败，请重试。',
       }));
     } finally {
-      setUploadProgress(current => omitKey(current, regionId));
+      finishRequest(controller);
+      if (isActiveRequest(generation)) setUploadProgress(current => omitKey(current, regionId));
     }
   };
 
@@ -188,19 +220,23 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, cred
     }
     setIsSaving(true);
     setError(null);
+    const { controller, generation } = beginRequest();
     try {
-      const saved = await saveFloorPlanRegionMaterials(regionSet.id, materials.map(toSaveInput));
+      const saved = await saveFloorPlanRegionMaterials(regionSet.id, materials.map(toSaveInput), { signal: controller.signal });
+      if (!isActiveRequest(generation)) return null;
       const merged = mergeSavedMaterials(regionSet, saved);
       setMaterials(merged);
       setSavedAt(saved[0]?.updatedAt || new Date().toISOString());
       setIsDirty(false);
       return merged;
     } catch (saveError) {
+      if (!isActiveRequest(generation) || controller.signal.aborted) return null;
       console.error('[floor-plan-materials] save failed', { regionSetId: regionSet.id, error: saveError });
       setError(saveError instanceof Error ? saveError.message : '区域材质配置保存失败。');
       return null;
     } finally {
-      setIsSaving(false);
+      finishRequest(controller);
+      if (isActiveRequest(generation)) setIsSaving(false);
     }
   };
 
@@ -211,21 +247,26 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, cred
     }
     setIsGeneratingPreview(true);
     setError(null);
+    const { controller, generation } = beginRequest();
     try {
       const assignments = isDirty ? await save() : materials;
-      if (!assignments) return;
+      if (!assignments || !isActiveRequest(generation)) return;
       const asset = await generateFloorPlanMaterialPreview(
         regionSet.sourceAssetId,
         regionSet.id,
         assignments.map(toSaveInput),
+        { signal: controller.signal },
       );
+      if (!isActiveRequest(generation)) return;
       setPreviewControlAsset(asset);
       setResultView('control');
     } catch (previewError) {
+      if (!isActiveRequest(generation) || controller.signal.aborted) return;
       console.error('[floor-plan-materials] control preview failed', { regionSetId: regionSet.id, error: previewError });
       setError(previewError instanceof Error ? previewError.message : '材质控制图生成失败。');
     } finally {
-      setIsGeneratingPreview(false);
+      finishRequest(controller);
+      if (isActiveRequest(generation)) setIsGeneratingPreview(false);
     }
   };
 
@@ -241,9 +282,11 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, cred
     setGenerationProgress(0);
     setGenerationStatus('正在创建生成任务…');
     setError(null);
+    const generation = lifecycleGenerationRef.current;
     try {
       if (!onEnsureProject) throw new Error('当前项目尚未准备完成，请返回项目后重试。');
       const projectId = await onEnsureProject();
+      if (!isActiveRequest(generation)) return;
       const assignments = buildGenerationAssignments(regionSet, materials);
       const materialReferenceAssetIds = [...new Set(materials
         .filter(material => material.fallbackMode === 'reference')
@@ -281,18 +324,22 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, cred
           qualityMode: 'high',
         },
       });
+      if (!isActiveRequest(generation)) return;
       await onRefreshCreditBalance?.().catch(() => undefined);
+      if (!isActiveRequest(generation)) return;
       setGenerationStatus('任务已创建，正在生成材质彩平…');
       let latest = job;
       const startedAt = Date.now();
       while (latest.status === 'queued' || latest.status === 'running') {
-        if (!mountedRef.current) return;
+        if (!isActiveRequest(generation)) return;
         setGenerationProgress(latest.progress);
         setGenerationStatus(latest.status === 'queued' ? '任务排队中…' : 'APIYI 正在生成材质彩平…');
         if (Date.now() - startedAt > 10 * 60 * 1000) throw new Error('生成时间较长，请稍后重新打开页面查看任务结果。');
         await delay(readPollDelay(Date.now() - startedAt));
+        if (!isActiveRequest(generation)) return;
         latest = await getGenerationJob(job.id);
       }
+      if (!isActiveRequest(generation)) return;
       if (latest.status !== 'succeeded') {
         throw new Error(latest.errorMessage || latest.failureReason || '材质彩平生成失败，算力点将自动退回。');
       }
@@ -300,6 +347,7 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, cred
       const assetId = result?.assetId || latest.outputAssetId;
       if (!assetId) throw new Error('生成成功但未返回结果资产。');
       const asset = result ? null : await getImageAsset(assetId);
+      if (!isActiveRequest(generation)) return;
       const version: FloorPlanFinalVersion = {
         jobId: latest.id,
         assetId,
@@ -313,12 +361,13 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, cred
       setResultView('final');
       await onRefreshCreditBalance?.().catch(() => undefined);
     } catch (generationError) {
+      if (!isActiveRequest(generation)) return;
       console.error('[floor-plan-materials] final generation failed', { regionSetId: regionSet.id, controlAssetId: previewControlAsset.id, error: generationError });
       setGenerationStatus('生成失败，失败任务将按现有规则自动退款');
       setError(generationError instanceof Error ? generationError.message : '材质彩平生成失败。');
       await onRefreshCreditBalance?.().catch(() => undefined);
     } finally {
-      if (mountedRef.current) setIsGeneratingFinal(false);
+      if (isActiveRequest(generation)) setIsGeneratingFinal(false);
     }
   };
 
@@ -344,6 +393,8 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, cred
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={onResetRegionsAndMaterials} className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-bold text-amber-700"><RotateCcw className="h-4 w-4" />重置区域与材质</button>
+        <button type="button" onClick={onResetAll} className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-600"><Trash2 className="h-4 w-4" />全部重置</button>
         <button type="button" onClick={() => void save()} disabled={isLoading || isSaving || hasUploads || !isDirty || isGeneratingPreview} className="inline-flex items-center gap-1 rounded-lg border border-emerald-600 bg-white px-4 py-2 text-xs font-bold text-emerald-700 disabled:border-slate-200 disabled:text-slate-400">
           {isSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}{isSaving ? '正在保存…' : hasUploads ? '等待上传完成' : '保存材质配置'}
         </button>

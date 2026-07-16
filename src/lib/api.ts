@@ -396,7 +396,10 @@ type CreditBalanceResponseData = {
 
 type UploadImageAssetOptions = {
   onProgress?: (percent: number) => void;
+  signal?: AbortSignal;
 };
+
+type ApiRequestOptions = Pick<RequestInit, 'signal'>;
 
 export interface CreditTransaction {
   id: string;
@@ -636,7 +639,7 @@ export async function createProjectGeneration(projectId: string, input: Generati
 }
 
 export async function uploadImageAsset(file: Blob, filename = 'image.png', options: UploadImageAssetOptions = {}): Promise<ImageAsset> {
-  if (file instanceof File) {
+  if (file instanceof File && !options.signal) {
     const existing = fileUploadCache.get(file);
     if (existing) return existing;
 
@@ -658,17 +661,24 @@ async function uploadImageAssetUncached(file: Blob, filename = 'image.png', opti
   const formData = new FormData();
   formData.append('file', uploadFile, uploadFilename);
 
-  const response = await uploadFormDataWithProgress<{ asset: ImageAsset }>('/api/assets/images', formData, options.onProgress);
+  const response = await uploadFormDataWithProgress<{ asset: ImageAsset }>('/api/assets/images', formData, options.onProgress, options.signal);
   logAssetUploadSuccess(response.asset);
   return response.asset;
 }
 
-function uploadFormDataWithProgress<T>(path: string, formData: FormData, onProgress?: (percent: number) => void): Promise<T> {
+function uploadFormDataWithProgress<T>(path: string, formData: FormData, onProgress?: (percent: number) => void, signal?: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const accessToken = getAccessToken();
+    const abortUpload = () => xhr.abort();
+    const cleanup = () => signal?.removeEventListener('abort', abortUpload);
+    if (signal?.aborted) {
+      reject(new DOMException('The upload was aborted.', 'AbortError'));
+      return;
+    }
     xhr.open('POST', buildApiUrl(path));
     if (accessToken) xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
+    signal?.addEventListener('abort', abortUpload, { once: true });
 
     xhr.upload.onprogress = event => {
       if (!event.lengthComputable) return;
@@ -676,6 +686,7 @@ function uploadFormDataWithProgress<T>(path: string, formData: FormData, onProgr
     };
 
     xhr.onload = async () => {
+      cleanup();
       try {
         const body = xhr.responseText ? JSON.parse(xhr.responseText) as unknown : null;
         if (!isApiResponse<T>(body)) {
@@ -693,8 +704,14 @@ function uploadFormDataWithProgress<T>(path: string, formData: FormData, onProgr
       }
     };
 
-    xhr.onerror = () => reject(new Error(BACKEND_UNAVAILABLE_MESSAGE));
-    xhr.onabort = () => reject(new Error('图片上传已取消。'));
+    xhr.onerror = () => {
+      cleanup();
+      reject(new Error(BACKEND_UNAVAILABLE_MESSAGE));
+    };
+    xhr.onabort = () => {
+      cleanup();
+      reject(new DOMException('The upload was aborted.', 'AbortError'));
+    };
     xhr.send(formData);
   });
 }
@@ -704,13 +721,13 @@ export async function getImageAsset(id: string): Promise<ImageAsset> {
   return response.asset;
 }
 
-export async function segmentFloorPlan(assetId: string): Promise<FloorPlanRegionSet> {
-  const response = await request<{ regionSet: FloorPlanRegionSet }>('/api/floor-plan/segment', { method: 'POST', body: JSON.stringify({ assetId }) });
+export async function segmentFloorPlan(assetId: string, options: ApiRequestOptions = {}): Promise<FloorPlanRegionSet> {
+  const response = await request<{ regionSet: FloorPlanRegionSet }>('/api/floor-plan/segment', { method: 'POST', body: JSON.stringify({ assetId }), signal: options.signal });
   return response.regionSet;
 }
 
-export async function getLatestFloorPlanSegmentation(assetId: string): Promise<FloorPlanRegionSet | null> {
-  const response = await request<{ regionSet: FloorPlanRegionSet | null }>(`/api/floor-plan/segments/latest?assetId=${encodeURIComponent(assetId)}`);
+export async function getLatestFloorPlanSegmentation(assetId: string, options: ApiRequestOptions = {}): Promise<FloorPlanRegionSet | null> {
+  const response = await request<{ regionSet: FloorPlanRegionSet | null }>(`/api/floor-plan/segments/latest?assetId=${encodeURIComponent(assetId)}`, { signal: options.signal });
   return response.regionSet;
 }
 
@@ -719,30 +736,31 @@ export async function updateFloorPlanRegionNames(regionSetId: string, names: Rec
   return response.regionSet;
 }
 
-export async function updateFloorPlanRegions(regionSetId: string, regions: FloorPlanRegion[]): Promise<FloorPlanRegionSet> {
-  const response = await request<{ regionSet: FloorPlanRegionSet }>(`/api/floor-plan/segments/${encodeURIComponent(regionSetId)}`, { method: 'PATCH', body: JSON.stringify({ regions }) });
+export async function updateFloorPlanRegions(regionSetId: string, regions: FloorPlanRegion[], options: ApiRequestOptions = {}): Promise<FloorPlanRegionSet> {
+  const response = await request<{ regionSet: FloorPlanRegionSet }>(`/api/floor-plan/segments/${encodeURIComponent(regionSetId)}`, { method: 'PATCH', body: JSON.stringify({ regions }), signal: options.signal });
   return response.regionSet;
 }
 
-export async function restoreFloorPlanAutoRegions(regionSetId: string): Promise<FloorPlanRegionSet> {
-  const response = await request<{ regionSet: FloorPlanRegionSet }>(`/api/floor-plan/segments/${encodeURIComponent(regionSetId)}/restore-auto`, { method: 'POST', body: JSON.stringify({}) });
+export async function restoreFloorPlanAutoRegions(regionSetId: string, options: ApiRequestOptions = {}): Promise<FloorPlanRegionSet> {
+  const response = await request<{ regionSet: FloorPlanRegionSet }>(`/api/floor-plan/segments/${encodeURIComponent(regionSetId)}/restore-auto`, { method: 'POST', body: JSON.stringify({}), signal: options.signal });
   return response.regionSet;
 }
 
-export async function confirmFloorPlanRegions(regionSetId: string, regions?: FloorPlanRegion[]): Promise<FloorPlanRegionSet> {
-  const response = await request<{ regionSet: FloorPlanRegionSet }>(`/api/floor-plan/segments/${encodeURIComponent(regionSetId)}/confirm`, { method: 'POST', body: JSON.stringify({ regions }) });
+export async function confirmFloorPlanRegions(regionSetId: string, regions?: FloorPlanRegion[], options: ApiRequestOptions = {}): Promise<FloorPlanRegionSet> {
+  const response = await request<{ regionSet: FloorPlanRegionSet }>(`/api/floor-plan/segments/${encodeURIComponent(regionSetId)}/confirm`, { method: 'POST', body: JSON.stringify({ regions }), signal: options.signal });
   return response.regionSet;
 }
 
-export async function getFloorPlanRegionMaterials(regionSetId: string): Promise<FloorPlanRegionMaterial[]> {
-  const response = await request<{ materials: FloorPlanRegionMaterial[] }>(`/api/floor-plan/segments/${encodeURIComponent(regionSetId)}/materials`);
+export async function getFloorPlanRegionMaterials(regionSetId: string, options: ApiRequestOptions = {}): Promise<FloorPlanRegionMaterial[]> {
+  const response = await request<{ materials: FloorPlanRegionMaterial[] }>(`/api/floor-plan/segments/${encodeURIComponent(regionSetId)}/materials`, { signal: options.signal });
   return response.materials;
 }
 
-export async function saveFloorPlanRegionMaterials(regionSetId: string, materials: SaveFloorPlanRegionMaterialInput[]): Promise<FloorPlanRegionMaterial[]> {
+export async function saveFloorPlanRegionMaterials(regionSetId: string, materials: SaveFloorPlanRegionMaterialInput[], options: ApiRequestOptions = {}): Promise<FloorPlanRegionMaterial[]> {
   const response = await request<{ materials: FloorPlanRegionMaterial[] }>(`/api/floor-plan/segments/${encodeURIComponent(regionSetId)}/materials`, {
     method: 'PUT',
     body: JSON.stringify({ materials }),
+    signal: options.signal,
   });
   return response.materials;
 }
@@ -751,10 +769,12 @@ export async function generateFloorPlanMaterialPreview(
   sourceAssetId: string,
   regionSetId: string,
   assignments: SaveFloorPlanRegionMaterialInput[],
+  options: ApiRequestOptions = {},
 ): Promise<ImageAsset> {
   const response = await request<{ controlAsset: ImageAsset }>('/api/floor-plan/material-preview', {
     method: 'POST',
     body: JSON.stringify({ sourceAssetId, regionSetId, assignments }),
+    signal: options.signal,
   });
   return response.controlAsset;
 }

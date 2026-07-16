@@ -27,11 +27,15 @@ import {
   updateFloorPlanRegions,
 } from '../lib/api';
 import { resolveAssetUrl } from '../utils/assetUrl';
+import { allowLatestFloorPlanRegionSet, shouldRestoreLatestFloorPlanRegionSet } from '../utils/floorPlanWorkspace';
 import { FloorPlanMaterialPanel } from './FloorPlanMaterialPanel';
 
 interface Props {
   image: UploadedImage | null;
   onUpload: () => void;
+  onResetRegionsAndMaterials: () => void;
+  onResetAll: () => void;
+  onDerivedStateChange?: (hasDerivedState: boolean) => void;
   creditBalance?: number | null;
   onRefreshCreditBalance?: () => Promise<void>;
   onEnsureProject?: () => Promise<string>;
@@ -44,7 +48,7 @@ const COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'
 const BRUSH_RADIUS = 0.035;
 const GRID_SIZE = 180;
 
-export function FloorPlanRegionPanel({ image, onUpload, creditBalance = null, onRefreshCreditBalance, onEnsureProject }: Props) {
+export function FloorPlanRegionPanel({ image, onUpload, onResetRegionsAndMaterials, onResetAll, onDerivedStateChange, creditBalance = null, onRefreshCreditBalance, onEnsureProject }: Props) {
   const [regionSet, setRegionSet] = useState<FloorPlanRegionSet | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [tool, setTool] = useState<ToolMode>('select');
@@ -60,35 +64,74 @@ export function FloorPlanRegionPanel({ image, onUpload, creditBalance = null, on
   const [workflowStep, setWorkflowStep] = useState<'regions' | 'materials'>('regions');
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const latestRegionsRef = useRef<FloorPlanRegion[]>([]);
+  const requestGenerationRef = useRef(0);
+  const requestAbortRef = useRef<AbortController | null>(null);
   const imageUrl = resolveAssetUrl(image?.previewUrl || image?.publicUrl || image?.url || image?.dataUrl || '');
   const editable = Boolean(regionSet && regionSet.status !== 'confirmed' && !regionSet.lockedAt);
 
+  const beginRequest = () => {
+    requestGenerationRef.current += 1;
+    requestAbortRef.current?.abort();
+    const controller = new AbortController();
+    requestAbortRef.current = controller;
+    return { controller, generation: requestGenerationRef.current };
+  };
+
+  const isCurrentRequest = (generation: number) => generation === requestGenerationRef.current;
+
   useEffect(() => {
     let active = true;
+    const { controller, generation } = beginRequest();
     setRegionSet(null);
     setSelectedIds([]);
     setError(null);
     setHistory([]);
     setHistoryIndex(-1);
     setWorkflowStep('regions');
-    if (!image?.assetId || image.uploadStatus !== 'uploaded') return () => { active = false; };
+    setTool('select');
+    setPolygonDraft([]);
+    setIsLoading(false);
+    setIsRestoring(false);
+    setIsSaving(false);
+    setIsDrawing(false);
+    setShowOverlay(true);
+    if (!image?.assetId || image.uploadStatus !== 'uploaded' || !shouldRestoreLatestFloorPlanRegionSet(image.assetId)) {
+      return () => {
+        active = false;
+        controller.abort();
+      };
+    }
     setIsRestoring(true);
-    getLatestFloorPlanSegmentation(image.assetId)
+    getLatestFloorPlanSegmentation(image.assetId, { signal: controller.signal })
       .then(result => {
-        if (!active) return;
+        if (!active || !isCurrentRequest(generation)) return;
         setRegionSet(result);
         setSelectedIds(result?.regions[0]?.id ? [result.regions[0].id] : []);
         resetHistory(result?.regions || []);
         setWorkflowStep(result?.status === 'confirmed' ? 'materials' : 'regions');
       })
       .catch(loadError => {
-        if (active) console.error('[floor-plan-segment] restore failed', { assetId: image.assetId, error: loadError });
+        if (active && isCurrentRequest(generation) && !controller.signal.aborted) console.error('[floor-plan-segment] restore failed', { assetId: image.assetId, error: loadError });
       })
       .finally(() => {
-        if (active) setIsRestoring(false);
+        if (active && isCurrentRequest(generation)) setIsRestoring(false);
       });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [image?.assetId, image?.uploadStatus]);
+
+  useEffect(() => {
+    onDerivedStateChange?.(Boolean(regionSet));
+  }, [onDerivedStateChange, regionSet]);
+
+  useEffect(() => () => {
+    requestGenerationRef.current += 1;
+    requestAbortRef.current?.abort();
+    requestAbortRef.current = null;
+    onDerivedStateChange?.(false);
+  }, [onDerivedStateChange]);
 
   const selectedRegion = useMemo(() => regionSet?.regions.find(region => region.id === selectedIds[0]) || null, [regionSet?.regions, selectedIds]);
   const canUndo = historyIndex > 0;
@@ -110,9 +153,12 @@ export function FloorPlanRegionPanel({ image, onUpload, creditBalance = null, on
     if (image.uploadStatus === 'uploading' || image.uploadStatus === 'local-preview') { setError('图片正在上传，完成后才能识别地面区域。'); return; }
     if (image.uploadStatus === 'failed') { setError(image.uploadError || '图片上传失败，请重新上传。'); return; }
     if (!image.assetId) { setError('图片尚未取得正式资产 ID，请重新上传。'); return; }
+    allowLatestFloorPlanRegionSet(image.assetId);
+    const { controller, generation } = beginRequest();
     setIsLoading(true);
     try {
-      const result = await segmentFloorPlan(image.assetId);
+      const result = await segmentFloorPlan(image.assetId, { signal: controller.signal });
+      if (!isCurrentRequest(generation)) return;
       setRegionSet(result);
       setSelectedIds(result.regions[0]?.id ? [result.regions[0].id] : []);
       setShowOverlay(true);
@@ -121,26 +167,31 @@ export function FloorPlanRegionPanel({ image, onUpload, creditBalance = null, on
       setPolygonDraft([]);
       setWorkflowStep('regions');
     } catch (segmentError) {
+      if (!isCurrentRequest(generation) || controller.signal.aborted) return;
       console.error('[floor-plan-segment] request failed', { assetId: image.assetId, error: segmentError });
       setError(segmentError instanceof Error ? segmentError.message : '区域识别失败，请重试。');
     } finally {
-      setIsLoading(false);
+      if (isCurrentRequest(generation)) setIsLoading(false);
     }
   };
 
   const persistRegions = async (regions: FloorPlanRegion[]) => {
     if (!regionSet || !editable) return;
+    const regionSetId = regionSet.id;
+    const { controller, generation } = beginRequest();
     setIsSaving(true);
     setError(null);
     try {
-      const updated = await updateFloorPlanRegions(regionSet.id, renumberRegions(regions));
+      const updated = await updateFloorPlanRegions(regionSetId, renumberRegions(regions), { signal: controller.signal });
+      if (!isCurrentRequest(generation)) return;
       setRegionSet(updated);
       setSelectedIds(current => current.filter(id => updated.regions.some(region => region.id === id)));
     } catch (saveError) {
-      console.error('[floor-plan-segment] save regions failed', { regionSetId: regionSet.id, error: saveError });
+      if (!isCurrentRequest(generation) || controller.signal.aborted) return;
+      console.error('[floor-plan-segment] save regions failed', { regionSetId, error: saveError });
       setError(saveError instanceof Error ? saveError.message : '区域编辑保存失败。');
     } finally {
-      setIsSaving(false);
+      if (isCurrentRequest(generation)) setIsSaving(false);
     }
   };
 
@@ -227,29 +278,36 @@ export function FloorPlanRegionPanel({ image, onUpload, creditBalance = null, on
 
   const restoreAuto = async () => {
     if (!regionSet || !editable) return;
+    const regionSetId = regionSet.id;
+    const { controller, generation } = beginRequest();
     setIsLoading(true);
     setError(null);
     try {
-      const restored = await restoreFloorPlanAutoRegions(regionSet.id);
+      const restored = await restoreFloorPlanAutoRegions(regionSetId, { signal: controller.signal });
+      if (!isCurrentRequest(generation)) return;
       setRegionSet(restored);
       setSelectedIds(restored.regions[0]?.id ? [restored.regions[0].id] : []);
       resetHistory(restored.regions);
       setPolygonDraft([]);
       setTool('select');
     } catch (restoreError) {
-      console.error('[floor-plan-segment] restore auto failed', { regionSetId: regionSet.id, error: restoreError });
+      if (!isCurrentRequest(generation) || controller.signal.aborted) return;
+      console.error('[floor-plan-segment] restore auto failed', { regionSetId, error: restoreError });
       setError(restoreError instanceof Error ? restoreError.message : '恢复自动识别结果失败。');
     } finally {
-      setIsLoading(false);
+      if (isCurrentRequest(generation)) setIsLoading(false);
     }
   };
 
   const confirm = async () => {
     if (!regionSet) return;
+    const regionSetId = regionSet.id;
+    const { controller, generation } = beginRequest();
     setIsLoading(true);
     setError(null);
     try {
-      const confirmed = await confirmFloorPlanRegions(regionSet.id, regionSet.regions);
+      const confirmed = await confirmFloorPlanRegions(regionSetId, regionSet.regions, { signal: controller.signal });
+      if (!isCurrentRequest(generation)) return;
       setRegionSet(confirmed);
       setSelectedIds(confirmed.regions[0]?.id ? [confirmed.regions[0].id] : []);
       resetHistory(confirmed.regions);
@@ -257,10 +315,11 @@ export function FloorPlanRegionPanel({ image, onUpload, creditBalance = null, on
       setPolygonDraft([]);
       setWorkflowStep('materials');
     } catch (confirmError) {
-      console.error('[floor-plan-segment] confirm failed', { regionSetId: regionSet.id, error: confirmError });
+      if (!isCurrentRequest(generation) || controller.signal.aborted) return;
+      console.error('[floor-plan-segment] confirm failed', { regionSetId, error: confirmError });
       setError(confirmError instanceof Error ? confirmError.message : '确认区域失败。');
     } finally {
-      setIsLoading(false);
+      if (isCurrentRequest(generation)) setIsLoading(false);
     }
   };
 
@@ -344,6 +403,8 @@ export function FloorPlanRegionPanel({ image, onUpload, creditBalance = null, on
       onRefreshCreditBalance={onRefreshCreditBalance}
       onEnsureProject={onEnsureProject}
       onBack={() => setWorkflowStep('regions')}
+      onResetRegionsAndMaterials={onResetRegionsAndMaterials}
+      onResetAll={onResetAll}
     />;
   }
 
@@ -365,6 +426,8 @@ export function FloorPlanRegionPanel({ image, onUpload, creditBalance = null, on
         <p className="text-xs text-slate-500">{regionSet ? `当前 ${regionSet.regions.length} 个区域${regionSet.status === 'confirmed' ? ' · 已确认版本' : isSaving ? ' · 正在保存' : ''}` : isRestoring ? '正在恢复识别结果…' : '识别封闭房间并校正区域'}</p>
       </div>
       <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={onResetRegionsAndMaterials} disabled={image.uploadStatus !== 'uploaded' || !image.assetId} className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-bold text-amber-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"><RotateCcw className="h-4 w-4" />重置区域与材质</button>
+        <button type="button" onClick={onResetAll} className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-600"><Trash2 className="h-4 w-4" />全部重置</button>
         <button type="button" onClick={() => setShowOverlay(value => !value)} disabled={!regionSet} className="inline-flex items-center gap-1 rounded-lg border bg-white px-3 py-2 text-xs font-bold disabled:opacity-40">{showOverlay ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}{showOverlay ? '隐藏覆盖层' : '显示覆盖层'}</button>
         <button type="button" onClick={() => void runSegmentation()} disabled={isLoading || isRestoring || image.uploadStatus !== 'uploaded' || !image.assetId} className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-300">{isLoading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : regionSet ? <RefreshCw className="h-4 w-4" /> : <ScanLine className="h-4 w-4" />}{isLoading ? '正在识别地面区域…' : regionSet ? '重新识别' : '识别地面区域'}</button>
       </div>

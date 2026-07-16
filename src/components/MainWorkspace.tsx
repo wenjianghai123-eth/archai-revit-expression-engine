@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { GenerationConfig, GenerationHistoryItem, GenerationProvider, GenerationRunStateOverride, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, ResultSendTargetStep, SecondaryEditAction, StepState, UploadedImage } from '../types';
 import { createLocalPreviewImage, createUploadedImage, hydrateUploadedImageDataUrl, revokeUploadedImagePreview, validateImageFile } from '../utils/file';
 import { getImageAsset, getProject, uploadImageAsset } from '../lib/api';
@@ -21,11 +21,15 @@ import { FloorPlanRegionPanel } from './FloorPlanRegionPanel';
 import { UploadErrors, UploadTarget, ViewModeOption } from './workspace/workspaceTypes';
 import { getUploadedImageSrc, isLocalInpaintingStep, maxFurnitureReferences, maxMaterialTextures, readGenerationStatusLabel } from './workspace/workspaceUtils';
 import { IMAGE_UPLOAD_ACCEPT, readImageTypeUploadError } from '../utils/imageValidation';
+import {
+  allowLatestFloorPlanRegionSet,
+  clearFloorPlanWorkspaceCache,
+  floorPlanAssetStorageKey,
+  suppressLatestFloorPlanRegionSet,
+} from '../utils/floorPlanWorkspace';
 
 const MaterialLibrary = lazy(() => import('./MaterialLibrary').then(module => ({ default: module.MaterialLibrary })));
 const PromptTemplatePanel = lazy(() => import('./PromptTemplatePanel').then(module => ({ default: module.PromptTemplatePanel })));
-const floorPlanAssetStorageKey = 'archai:floor-plan:last-asset-id';
-
 interface WorkspaceProps {
   step: GenerationStep;
   state: StepState;
@@ -102,25 +106,41 @@ export function MainWorkspace({
   const [projectName, setProjectName] = useState<string | null>(null);
   const [isCreatingContinuousEdit, setIsCreatingContinuousEdit] = useState(false);
   const [continuousEditError, setContinuousEditError] = useState<string | null>(null);
+  const [floorPlanWorkspaceRevision, setFloorPlanWorkspaceRevision] = useState(0);
+  const [floorPlanHasDerivedState, setFloorPlanHasDerivedState] = useState(false);
+  const floorPlanRequestGenerationRef = useRef(0);
+  const floorPlanRestoreGenerationRef = useRef(0);
+  const floorPlanUploadAbortRef = useRef<AbortController | null>(null);
+  const floorPlanResettingRef = useRef(false);
 
   const isFloorplanStep = step === GenerationStep.FloorplanTo3D;
   const isStyleRenderStep = step === GenerationStep.StyleRender;
 
   useEffect(() => {
     let active = true;
-    if (!isFloorplanStep || state.inputImage) return () => { active = false; };
+    const restoreGeneration = floorPlanRestoreGenerationRef.current;
+    if (!isFloorplanStep || state.inputImage || floorPlanResettingRef.current) return () => { active = false; };
     const assetId = window.localStorage.getItem(floorPlanAssetStorageKey);
     if (!assetId) return () => { active = false; };
     getImageAsset(assetId).then(asset => {
-      if (!active) return;
+      if (!active || restoreGeneration !== floorPlanRestoreGenerationRef.current || floorPlanResettingRef.current) return;
       const url = asset.publicUrl || asset.url;
       onUpdateInputImage({ id: asset.id, assetId: asset.id, name: asset.filename || '已上传平面图', type: asset.mimeType, size: asset.size, dataUrl: url, url, publicUrl: url, thumbnailUrl: asset.thumbnailUrl, uploadStatus: 'uploaded', uploadProgress: 100 });
     }).catch(error => {
-      console.error('[floor-plan-segment] restore source asset failed', { assetId, error });
-      window.localStorage.removeItem(floorPlanAssetStorageKey);
+      if (active && restoreGeneration === floorPlanRestoreGenerationRef.current) {
+        console.error('[floor-plan-segment] restore source asset failed', { assetId, error });
+        window.localStorage.removeItem(floorPlanAssetStorageKey);
+      }
     });
     return () => { active = false; };
   }, [isFloorplanStep, onUpdateInputImage, state.inputImage]);
+
+  useEffect(() => () => {
+    floorPlanRequestGenerationRef.current += 1;
+    floorPlanRestoreGenerationRef.current += 1;
+    floorPlanUploadAbortRef.current?.abort();
+    floorPlanUploadAbortRef.current = null;
+  }, []);
   const isModelSnapshotStep = step === GenerationStep.ModelSnapshotRender;
   const isDesignVariantsStep = step === GenerationStep.DesignVariants;
   const isPlanColorizeStep = step === GenerationStep.PlanColorize;
@@ -234,10 +254,27 @@ export function MainWorkspace({
       return;
     }
 
+    const tracksFloorPlanSource = target === 'input' && isFloorplanStep;
+    const requestGeneration = tracksFloorPlanSource ? floorPlanRequestGenerationRef.current + 1 : null;
+    let uploadAbortController: AbortController | null = null;
+    if (tracksFloorPlanSource && requestGeneration !== null) {
+      floorPlanRequestGenerationRef.current = requestGeneration;
+      floorPlanRestoreGenerationRef.current += 1;
+      floorPlanUploadAbortRef.current?.abort();
+      uploadAbortController = new AbortController();
+      floorPlanUploadAbortRef.current = uploadAbortController;
+      floorPlanResettingRef.current = false;
+    }
+    const isCurrentRequest = () => requestGeneration === null || requestGeneration === floorPlanRequestGenerationRef.current;
+
     try {
       const previousImage = target === 'input' ? state.inputImage : state.materialImage;
       const localImage = createLocalPreviewImage(file);
       revokeUploadedImagePreview(previousImage);
+      if (!isCurrentRequest()) {
+        revokeUploadedImagePreview(localImage);
+        return;
+      }
       if (target === 'input') onUpdateInputImage({ ...localImage, uploadStatus: 'uploading' });
       else onUpdateMaterialImage({ ...localImage, uploadStatus: 'uploading' });
       const hydrationPromise = hydrateUploadedImageDataUrl(localImage, file).catch(() => localImage);
@@ -246,12 +283,18 @@ export function MainWorkspace({
       try {
         const asset = await uploadImageAsset(file, file.name, {
           onProgress: progress => {
+            if (!isCurrentRequest()) return;
             const next = { ...localImage, uploadStatus: 'uploading' as const, uploadProgress: progress };
             if (target === 'input') onUpdateInputImage(next);
             else onUpdateMaterialImage(next);
           },
+          signal: uploadAbortController?.signal,
         });
         const hydrated = await hydrationPromise;
+        if (!isCurrentRequest()) {
+          revokeUploadedImagePreview(localImage);
+          return;
+        }
         image = {
           ...hydrated,
           assetId: asset.id,
@@ -262,6 +305,10 @@ export function MainWorkspace({
           uploadProgress: 100,
         };
       } catch (error) {
+        if (!isCurrentRequest() || uploadAbortController?.signal.aborted) {
+          revokeUploadedImagePreview(localImage);
+          return;
+        }
         const uploadError = readImageTypeUploadError(error);
         if (uploadError) {
           const failedImage = { ...localImage, uploadStatus: 'failed' as const, uploadError };
@@ -276,14 +323,20 @@ export function MainWorkspace({
       if (target === 'input') onUpdateInputImage(image);
       else onUpdateMaterialImage(image);
       if (target === 'input' && isFloorplanStep && image.uploadStatus === 'uploaded' && image.assetId) {
+        allowLatestFloorPlanRegionSet(image.assetId);
         window.localStorage.setItem(floorPlanAssetStorageKey, image.assetId);
       }
       setUploadErrors(prev => ({ ...prev, [target]: null }));
     } catch (error) {
+      if (!isCurrentRequest()) return;
       setUploadErrors(prev => ({
         ...prev,
         [target]: error instanceof Error ? error.message : '图片读取失败，请重试。',
       }));
+    } finally {
+      if (uploadAbortController && floorPlanUploadAbortRef.current === uploadAbortController) {
+        floorPlanUploadAbortRef.current = null;
+      }
     }
   };
 
@@ -390,6 +443,7 @@ export function MainWorkspace({
         name: localImage.name,
         url,
         dataUrl: localImage.dataUrl,
+        previewUrl: localImage.previewUrl,
         assetId,
         source: 'upload',
       });
@@ -426,11 +480,15 @@ export function MainWorkspace({
   };
 
   const handleRemoveMaterialTexture = (id: string) => {
+    const removed = state.materialTextures.find(texture => texture.id === id);
+    revokeBlobUrl(removed?.previewUrl);
     onUpdateMaterialTextures(state.materialTextures.filter(texture => texture.id !== id));
     setUploadErrors(prev => ({ ...prev, texture: null }));
   };
 
   const handleRemoveFurnitureReference = (id: string) => {
+    const removed = state.furnitureReferences.find(reference => reference.id === id);
+    revokeBlobUrl(removed?.previewUrl);
     onUpdateFurnitureReferences(state.furnitureReferences.filter(reference => reference.id !== id));
     setUploadErrors(prev => ({ ...prev, furniture: null }));
   };
@@ -480,6 +538,7 @@ export function MainWorkspace({
       setContinuousEditError('请先选择并上传输入图片。');
       return;
     }
+
     if (image.uploadStatus === 'uploading' || image.uploadStatus === 'local-preview' || image.uploadStatus === 'idle') {
       setContinuousEditError('图片正在上传，完成后可连续修改。');
       return;
@@ -507,6 +566,56 @@ export function MainWorkspace({
       setIsCreatingContinuousEdit(false);
     }
   };
+
+  const invalidateFloorPlanRequests = useCallback(() => {
+    floorPlanRequestGenerationRef.current += 1;
+    floorPlanRestoreGenerationRef.current += 1;
+    floorPlanUploadAbortRef.current?.abort();
+    floorPlanUploadAbortRef.current = null;
+  }, []);
+
+  const handleResetFloorPlanRegionsAndMaterials = useCallback(() => {
+    const sourceImage = state.inputImage;
+    if (!sourceImage) return;
+    invalidateFloorPlanRequests();
+    if (sourceImage.assetId) suppressLatestFloorPlanRegionSet(sourceImage.assetId);
+    revokeFloorPlanDerivedBlobUrls(state);
+    if (state.isGenerating) onCancelGeneration();
+    onReset();
+    onUpdateInputImage(sourceImage);
+    setUploadErrors({ input: null, material: null, texture: null, furniture: null });
+    setContinuousEditError(null);
+    setIsCreatingContinuousEdit(false);
+    setFloorPlanHasDerivedState(false);
+    setFloorPlanWorkspaceRevision(current => current + 1);
+  }, [invalidateFloorPlanRequests, onCancelGeneration, onReset, onUpdateInputImage, state]);
+
+  const handleResetFloorPlanAll = useCallback(() => {
+    const hasAdvancedWork = floorPlanHasDerivedState
+      || state.materialTextures.length > 0
+      || Boolean(state.materialImage || state.maskImage || state.outputImage || state.generationJobId || state.generationResults.length);
+    if (hasAdvancedWork && !window.confirm('全部重置将清除当前平面图、区域划分、材质配置和生成结果。历史记录不会被删除。是否继续？')) {
+      return;
+    }
+
+    floorPlanResettingRef.current = true;
+    invalidateFloorPlanRequests();
+    revokeFloorPlanAllBlobUrls(state);
+    clearFloorPlanWorkspaceCache(state.inputImage?.assetId);
+    for (const input of [inputFileRef.current, materialFileRef.current, materialTextureFileRef.current, furnitureReferenceFileRef.current]) {
+      if (input) input.value = '';
+    }
+    if (state.isGenerating) onCancelGeneration();
+    onReset();
+    setUploadErrors({ input: null, material: null, texture: null, furniture: null });
+    setContinuousEditError(null);
+    setIsCreatingContinuousEdit(false);
+    setFloorPlanHasDerivedState(false);
+    setFloorPlanWorkspaceRevision(current => current + 1);
+    Promise.resolve().then(() => {
+      floorPlanResettingRef.current = false;
+    });
+  }, [floorPlanHasDerivedState, invalidateFloorPlanRequests, onCancelGeneration, onReset, state]);
 
   if (isDesignVariantsStep) {
     return (
@@ -755,8 +864,12 @@ export function MainWorkspace({
 
       {isFloorplanStep ? (
         <FloorPlanRegionPanel
+          key={`floor-plan-workspace-${floorPlanWorkspaceRevision}`}
           image={state.inputImage}
           onUpload={() => handleUploadClick('input')}
+          onResetRegionsAndMaterials={handleResetFloorPlanRegionsAndMaterials}
+          onResetAll={handleResetFloorPlanAll}
+          onDerivedStateChange={setFloorPlanHasDerivedState}
           creditBalance={creditBalance}
           onRefreshCreditBalance={onRefreshCreditBalance}
           onEnsureProject={onEnsureProject}
@@ -816,7 +929,8 @@ export function MainWorkspace({
         onRetryBatchItem={variantIndex => onGenerate({ config: { ...state.config, floorplanRetryVariantIndex: variantIndex } })}
         onSetViewMode={onSetViewMode}
         onNextStep={onNextStep}
-        onReset={onReset}
+        onReset={isFloorplanStep ? handleResetFloorPlanAll : onReset}
+        resetLabel={isFloorplanStep ? '全部重置' : undefined}
       />
 
       <Suspense fallback={null}>
@@ -837,4 +951,20 @@ export function MainWorkspace({
       </Suspense>
     </div>
   );
+}
+
+function revokeBlobUrl(url: string | null | undefined): void {
+  if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
+}
+
+function revokeFloorPlanDerivedBlobUrls(state: StepState): void {
+  revokeUploadedImagePreview(state.materialImage);
+  revokeUploadedImagePreview(state.maskImage);
+  state.materialTextures.forEach(texture => revokeBlobUrl(texture.previewUrl));
+  state.furnitureReferences.forEach(reference => revokeBlobUrl(reference.previewUrl));
+}
+
+function revokeFloorPlanAllBlobUrls(state: StepState): void {
+  revokeUploadedImagePreview(state.inputImage);
+  revokeFloorPlanDerivedBlobUrls(state);
 }

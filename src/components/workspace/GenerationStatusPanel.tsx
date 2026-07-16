@@ -39,6 +39,7 @@ interface GenerationStatusPanelProps {
   onSetViewMode: (viewMode: StepState['viewMode']) => void;
   onNextStep: () => void;
   onReset: () => void;
+  resetLabel?: string;
 }
 
 export function GenerationStatusPanel({
@@ -67,6 +68,7 @@ export function GenerationStatusPanel({
   onSetViewMode,
   onNextStep,
   onReset,
+  resetLabel = '重置',
 }: GenerationStatusPanelProps) {
   return (
     <aside className="workspace-side-panel glass-panel flex w-96 shrink-0 flex-col overflow-y-auto rounded-r-3xl border border-white/60 p-4 custom-scrollbar">
@@ -104,7 +106,7 @@ export function GenerationStatusPanel({
       <div className="mt-auto border-t border-slate-100 pt-4">
         <div className="grid grid-cols-3 gap-2">
         <button type="button" onClick={onReset} disabled={state.isGenerating} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-500 disabled:opacity-40">
-          重置
+          {resetLabel}
         </button>
         <button
           type="button"
