@@ -3,9 +3,9 @@ import { getRequiredCurrentUser, requireAuth } from '../auth';
 import { apiError, apiOk } from '../http';
 import { enqueueGenerationJob, isGenerationWorkerDisabled } from '../generationService';
 import {
-  adjustCredits, createEditMessage, createEditSession, createGenerationJob, getAssetVersion, getEditSession,
+  adjustCredits, createAssetVersion, createEditMessage, createEditSession, createGenerationJob, getAssetVersion, getEditSession,
   getEditMessageByClientRequest, getGenerationJob, getImageAsset, getProject, listAssetVersions, listEditMessages, updateEditMessage, updateEditSession,
-  updateGenerationJob,
+  listEditSessions, updateAssetVersion, updateGenerationJob,
 } from '../storage';
 import { getGenerationCreditCost } from '../../src/utils/generationCredits';
 import { compileContinuousEditPrompt } from '../prompts/continuousEditPrompt';
@@ -14,6 +14,22 @@ const allowedImageSizes = new Set(['512', '1K', '2K', '4K']);
 
 export function createEditSessionsRouter(): Router {
   const router = Router();
+
+  router.get('/', requireAuth, async (req, res, next) => {
+    try {
+      const user = getRequiredCurrentUser(req);
+      const projectId = readString(req.query.projectId);
+      const sessions = await listEditSessions(user.id, projectId || null);
+      const details = await Promise.all(sessions.map(async session => ({
+        session,
+        versions: await listAssetVersions(session.id, user.id),
+        messages: await listEditMessages(session.id, user.id),
+      })));
+      res.json(apiOk({ sessions: details }));
+    } catch (error) {
+      next(error);
+    }
+  });
 
   router.post('/', requireAuth, async (req, res, next) => {
     try {
@@ -77,12 +93,141 @@ export function createEditSessionsRouter(): Router {
   });
 
   router.post('/:sessionId/select-version',requireAuth,async(req,res,next)=>{try{const user=getRequiredCurrentUser(req);const session=await getEditSession(req.params.sessionId,user.id);if(!session)return void res.status(404).json(apiError('Edit session not found.','EDIT_SESSION_NOT_FOUND'));const versionId=readString(asRecord(req.body).versionId);if(!versionId||!(await getAssetVersion(versionId,session.id,user.id)))return void res.status(404).json(apiError('Version not found in this session.','EDIT_VERSION_NOT_FOUND'));const updated=await updateEditSession(session.id,user.id,{currentVersionId:versionId});res.json(apiOk({session:updated,currentVersionId:versionId}));}catch(error){next(error);}});
-  router.post('/:sessionId/finalize',requireAuth,async(req,res,next)=>{try{const user=getRequiredCurrentUser(req);const session=await getEditSession(req.params.sessionId,user.id);if(!session)return void res.status(404).json(apiError('Edit session not found.','EDIT_SESSION_NOT_FOUND'));const updated=await updateEditSession(session.id,user.id,{status:'finalized'});res.json(apiOk({session:updated,finalVersionId:updated?.currentVersionId}));}catch(error){next(error);}});
+
+  router.patch('/:sessionId/versions/:versionId', requireAuth, async (req, res, next) => {
+    try {
+      const user = getRequiredCurrentUser(req);
+      const session = await getEditSession(req.params.sessionId, user.id);
+      if (!session) return void res.status(404).json(apiError('Edit session not found.', 'EDIT_SESSION_NOT_FOUND'));
+      const version = await getAssetVersion(req.params.versionId, session.id, user.id);
+      if (!version) return void res.status(404).json(apiError('Version not found in this session.', 'EDIT_VERSION_NOT_FOUND'));
+      const body = asRecord(req.body);
+      const displayName = readNullableString(body.displayName);
+      const note = readNullableString(body.note);
+      if (displayName === undefined && note === undefined) {
+        return void res.status(400).json(apiError('displayName or note is required.', 'EDIT_VERSION_UPDATE_REQUIRED'));
+      }
+      const updated = await updateAssetVersion(version.id, session.id, user.id, {
+        ...(displayName !== undefined ? { displayName } : {}),
+        ...(note !== undefined ? { note: note || '' } : {}),
+      });
+      res.json(apiOk({ version: updated }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/:sessionId/versions/:versionId/set-primary', requireAuth, async (req, res, next) => {
+    try {
+      const { session, version, userId } = await requireOwnedVersion(req.params.sessionId, req.params.versionId, req);
+      if (!session || !version || !userId) return void res.status(404).json(apiError('Version not found in this session.', 'EDIT_VERSION_NOT_FOUND'));
+      const updated = await updateEditSession(session.id, userId, { primaryVersionId: version.id });
+      res.json(apiOk({ session: updated, primaryVersionId: version.id }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/:sessionId/versions/:versionId/set-final', requireAuth, async (req, res, next) => {
+    try {
+      const { session, version, userId } = await requireOwnedVersion(req.params.sessionId, req.params.versionId, req);
+      if (!session || !version || !userId) return void res.status(404).json(apiError('Version not found in this session.', 'EDIT_VERSION_NOT_FOUND'));
+      const updated = await updateEditSession(session.id, userId, {
+        finalVersionId: version.id,
+      });
+      res.json(apiOk({ session: updated, finalVersionId: version.id }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/:sessionId/versions/:versionId/restore', requireAuth, async (req, res, next) => {
+    try {
+      const { session, version, userId } = await requireOwnedVersion(req.params.sessionId, req.params.versionId, req);
+      if (!session || !version || !userId) return void res.status(404).json(apiError('Version not found in this session.', 'EDIT_VERSION_NOT_FOUND'));
+      const versions = await listAssetVersions(session.id, userId);
+      const restored = await createAssetVersion({
+        assetId: version.assetId,
+        sessionId: session.id,
+        parentVersionId: version.id,
+        restoredFromVersionId: version.id,
+        versionNumber: versions.reduce((max, item) => Math.max(max, item.versionNumber), -1) + 1,
+        displayName: `恢复自 V${version.versionNumber}`,
+        note: version.note || '',
+        storagePath: version.storagePath,
+        publicUrl: version.publicUrl,
+        userInstruction: `恢复到 V${version.versionNumber}`,
+        compiledPrompt: '',
+        provider: null,
+        model: null,
+        generationJobId: null,
+        createdBy: userId,
+        exportedAt: null,
+      });
+      const updated = await updateEditSession(session.id, userId, {
+        currentVersionId: restored.id,
+        status: 'active',
+      });
+      console.info({
+        event: 'edit_version_restored',
+        sessionId: session.id,
+        userId,
+        baseVersionId: version.id,
+        outputVersionId: restored.id,
+      });
+      res.status(201).json(apiOk({ session: updated, version: restored }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/:sessionId/versions/:versionId/exported', requireAuth, async (req, res, next) => {
+    try {
+      const { session, version, userId } = await requireOwnedVersion(req.params.sessionId, req.params.versionId, req);
+      if (!session || !version || !userId) return void res.status(404).json(apiError('Version not found in this session.', 'EDIT_VERSION_NOT_FOUND'));
+      const updated = await updateAssetVersion(version.id, session.id, userId, {
+        exportedAt: new Date().toISOString(),
+      });
+      res.json(apiOk({ version: updated }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/:sessionId/finalize', requireAuth, async (req, res, next) => {
+    try {
+      const user = getRequiredCurrentUser(req);
+      const session = await getEditSession(req.params.sessionId, user.id);
+      if (!session) return void res.status(404).json(apiError('Edit session not found.', 'EDIT_SESSION_NOT_FOUND'));
+      const requestedVersionId = readString(asRecord(req.body).versionId) || session.currentVersionId;
+      const version = await getAssetVersion(requestedVersionId, session.id, user.id);
+      if (!version) return void res.status(404).json(apiError('Version not found in this session.', 'EDIT_VERSION_NOT_FOUND'));
+      const updated = await updateEditSession(session.id, user.id, {
+        status: 'finalized',
+        finalVersionId: version.id,
+      });
+      res.json(apiOk({ session: updated, finalVersionId: version.id }));
+    } catch (error) {
+      next(error);
+    }
+  });
   return router;
 }
 
 function asRecord(value:unknown):Record<string,unknown>{return typeof value==='object'&&value!==null&&!Array.isArray(value)?value as Record<string,unknown>:{};}
 function readString(value:unknown):string|undefined{return typeof value==='string'&&value.trim()?value.trim():undefined;}
+function readNullableString(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  return typeof value === 'string' ? value.trim() : undefined;
+}
 function readStringArray(value:unknown):string[]{return Array.isArray(value)?value.filter((item):item is string=>typeof item==='string'&&Boolean(item.trim())).map(item=>item.trim()):[];}
 function readReferenceRoles(value:unknown,count:number):string[]{const roles=readStringArray(value);return Array.from({length:count},(_,index)=>roles[index]||'style');}
 function isEditSchemaMissing(error:unknown):boolean{const message=error instanceof Error?error.message:String(error);return /PGRST205|42P01|edit_sessions|edit_messages|asset_versions/iu.test(message)&&/not find|does not exist|schema cache|relation/iu.test(message);}
+
+async function requireOwnedVersion(sessionId: string, versionId: string, req: Parameters<typeof getRequiredCurrentUser>[0]) {
+  const user = getRequiredCurrentUser(req);
+  const session = await getEditSession(sessionId, user.id);
+  if (!session) return { session: null, version: null, userId: user.id };
+  const version = await getAssetVersion(versionId, session.id, user.id);
+  return { session, version, userId: user.id };
+}

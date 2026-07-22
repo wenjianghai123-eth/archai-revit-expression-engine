@@ -4,7 +4,18 @@ import { getAccessToken } from './authToken';
 import { isAbortError } from '../utils/apiConnectionStatus';
 import { logAssetUploadSuccess } from '../utils/assetUrl';
 import { compressImageBeforeUpload } from '../utils/imageCompression';
-import type { AssetVersion, EditMessage, EditSession, FloorPlanRegion, FloorPlanRegionMaterial, FloorPlanRegionSet, SaveFloorPlanRegionMaterialInput } from '../types';
+import type {
+  AssetVersion,
+  DesignWorkflowDetail,
+  DesignWorkflowNode,
+  DesignWorkflowStageKey,
+  EditMessage,
+  EditSession,
+  FloorPlanRegion,
+  FloorPlanRegionMaterial,
+  FloorPlanRegionSet,
+  SaveFloorPlanRegionMaterialInput,
+} from '../types';
 
 const fileUploadCache = new WeakMap<File, Promise<ImageAsset>>();
 
@@ -208,6 +219,7 @@ export interface ModelAssetRecord {
     conversionStatus?: 'idle' | 'converting' | 'succeeded' | 'failed';
     conversionError?: string | null;
     convertedAt?: string;
+    conversionStartedAt?: string;
     previewUrl?: string;
     optimizedUrl?: string;
     thumbnailUrl?: string;
@@ -221,6 +233,7 @@ export interface ModelAssetRecord {
     originalFileSize: number;
     optimizedFileSize?: number;
     optimizationStatus: 'pending' | 'processing' | 'succeeded' | 'failed' | 'skipped';
+    optimizationStartedAt?: string;
     optimizationError?: string;
     faceCount?: number;
     optimizedFaceCount?: number;
@@ -255,6 +268,20 @@ export interface GenerationJob {
   creditCost: number;
   creditRefunded: boolean;
   failureReason: string | null;
+  idempotencyKey: string | null;
+  attemptCount: number;
+  maxAttempts: number;
+  nextAttemptAt: string | null;
+  leaseOwner: string | null;
+  leaseExpiresAt: string | null;
+  heartbeatAt: string | null;
+  executionTimeoutAt: string | null;
+  providerStartedAt: string | null;
+  providerFinishedAt: string | null;
+  providerDurationMs: number | null;
+  lastErrorCode: string | null;
+  lastErrorCategory: string | null;
+  lastErrorRetryable: boolean | null;
 }
 
 export interface GenerationJobDiagnostics {
@@ -320,6 +347,7 @@ export interface GenerationJobInput {
   featureName?: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];
+  idempotencyKey?: string;
 }
 
 export interface AiProviderOption {
@@ -401,6 +429,32 @@ type UploadImageAssetOptions = {
 
 type ApiRequestOptions = Pick<RequestInit, 'signal'>;
 
+export interface RefineMaskInput {
+  imageAssetId?: string;
+  image?: string;
+  roughMask: string;
+  maskMode: 'smart' | 'precise';
+  targetObject?: string;
+}
+
+export interface RefineMaskResult {
+  refinedMask: string;
+  detectedObject: string;
+  confidence: number;
+  method: string;
+}
+
+export async function refineImageMask(
+  input: RefineMaskInput,
+  options: ApiRequestOptions = {},
+): Promise<RefineMaskResult> {
+  return request<RefineMaskResult>('/api/image/refine-mask', {
+    method: 'POST',
+    body: JSON.stringify(input),
+    signal: options.signal,
+  });
+}
+
 export interface CreditTransaction {
   id: string;
   userId: string;
@@ -421,6 +475,12 @@ export interface AdminDashboard {
     succeededJobCount: number;
     failedJobCount: number;
     totalCreditsConsumed: number;
+    queuedJobCount: number;
+    runningJobCount: number;
+    retryingJobCount: number;
+    expiredLeaseJobCount: number;
+    leasedJobCount: number;
+    averageProviderDurationMs: number;
   };
   recentJobs: GenerationJob[];
   recentErrorJobs: GenerationJob[];
@@ -655,6 +715,80 @@ export async function uploadImageAsset(file: Blob, filename = 'image.png', optio
   return uploadImageAssetUncached(file, filename, options);
 }
 
+export async function getProjectDesignWorkflow(projectId: string): Promise<DesignWorkflowDetail | null> {
+  const response = await request<{
+    workflow: DesignWorkflowDetail['workflow'] | null;
+    nodes: DesignWorkflowNode[];
+  }>(`/api/projects/${encodeURIComponent(projectId)}/design-workflow`);
+  return response.workflow ? { workflow: response.workflow, nodes: response.nodes } : null;
+}
+
+export async function createProjectDesignWorkflow(input: {
+  projectId: string;
+  inputAssetId: string;
+  sourceFeature?: string;
+  title?: string;
+}): Promise<DesignWorkflowDetail> {
+  const response = await request<DesignWorkflowDetail>(
+    `/api/projects/${encodeURIComponent(input.projectId)}/design-workflow`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        inputAssetId: input.inputAssetId,
+        sourceFeature: input.sourceFeature,
+        title: input.title,
+      }),
+    },
+  );
+  return response;
+}
+
+export async function advanceProjectDesignWorkflow(input: {
+  projectId: string;
+  workflowId: string;
+  stageKey: DesignWorkflowStageKey;
+  sourceFeature: string;
+  inputAssetId?: string | null;
+  parentJobId?: string | null;
+  parentResultId?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<DesignWorkflowDetail & { node: DesignWorkflowNode }> {
+  return request(
+    `/api/projects/${encodeURIComponent(input.projectId)}/design-workflow/${encodeURIComponent(input.workflowId)}/advance`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        stageKey: input.stageKey,
+        sourceFeature: input.sourceFeature,
+        inputAssetId: input.inputAssetId,
+        parentJobId: input.parentJobId,
+        parentResultId: input.parentResultId,
+        metadata: input.metadata,
+      }),
+    },
+  );
+}
+
+export async function skipProjectDesignWorkflow(
+  projectId: string,
+  workflowId: string,
+): Promise<DesignWorkflowDetail & { node: DesignWorkflowNode }> {
+  return request(
+    `/api/projects/${encodeURIComponent(projectId)}/design-workflow/${encodeURIComponent(workflowId)}/skip`,
+    { method: 'POST' },
+  );
+}
+
+export async function backProjectDesignWorkflow(
+  projectId: string,
+  workflowId: string,
+): Promise<DesignWorkflowDetail & { node: DesignWorkflowNode }> {
+  return request(
+    `/api/projects/${encodeURIComponent(projectId)}/design-workflow/${encodeURIComponent(workflowId)}/back`,
+    { method: 'POST' },
+  );
+}
+
 async function uploadImageAssetUncached(file: Blob, filename = 'image.png', options: UploadImageAssetOptions = {}): Promise<ImageAsset> {
   const uploadFile = file instanceof File ? await compressImageBeforeUpload(file) : file;
   const uploadFilename = uploadFile instanceof File ? uploadFile.name : filename;
@@ -718,6 +852,19 @@ function uploadFormDataWithProgress<T>(path: string, formData: FormData, onProgr
 
 export async function getImageAsset(id: string): Promise<ImageAsset> {
   const response = await request<{ asset: ImageAsset }>(`/api/assets/images/${encodeURIComponent(id)}`);
+  return response.asset;
+}
+
+export async function listImageAssets(limit = 40): Promise<ImageAsset[]> {
+  const response = await request<{ assets: ImageAsset[] }>(`/api/assets/images?limit=${Math.max(1, Math.min(100, Math.round(limit)))}`);
+  return response.assets;
+}
+
+export async function removeImageAssetBackground(id: string): Promise<ImageAsset> {
+  const response = await request<{ asset: ImageAsset }>(`/api/assets/images/${encodeURIComponent(id)}/remove-background`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
   return response.asset;
 }
 
@@ -810,9 +957,12 @@ export async function deletePromptTemplate(id: string): Promise<PromptTemplateRe
 }
 
 export async function createGenerationJob(input: GenerationJobInput): Promise<GenerationJob> {
+  const idempotencyKey = input.idempotencyKey || globalThis.crypto?.randomUUID?.();
+  const { idempotencyKey: _ignored, ...body } = input;
   const response = await request<{ job: GenerationJob }>('/api/generation-jobs', {
     method: 'POST',
-    body: JSON.stringify(input),
+    headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+    body: JSON.stringify(body),
   });
   return response.job;
 }
@@ -869,6 +1019,13 @@ export async function createShareLink(projectId: string, expiresAt?: string): Pr
     method: 'POST',
     body: JSON.stringify({ expiresAt }),
   });
+}
+
+export async function listProjectShareLinks(projectId: string): Promise<ShareLink[]> {
+  const response = await request<{ shareLinks: ShareLink[] }>(
+    `/api/projects/${encodeURIComponent(projectId)}/share-links`,
+  );
+  return response.shareLinks;
 }
 
 export async function revokeShareLink(projectId: string, shareLinkId: string): Promise<ShareLink> {
@@ -961,6 +1118,12 @@ function readApiError(value: unknown): string | null {
 }
 
 export interface EditSessionDetail { session: EditSession; versions: AssetVersion[]; messages: EditMessage[]; }
+export async function listProjectEditSessions(projectId: string): Promise<EditSessionDetail[]> {
+  const response = await request<{ sessions: EditSessionDetail[] }>(
+    `/api/edit-sessions?projectId=${encodeURIComponent(projectId)}`,
+  );
+  return response.sessions;
+}
 export async function createEditSession(input: { sourceAssetId: string; projectId?: string | null; title?: string; permanentConstraints?: Record<string, unknown>; aspectRatio?: string | null }): Promise<EditSessionDetail> {
   const response = await request<{ session: EditSession; version: AssetVersion; versions: AssetVersion[]; messages: EditMessage[] }>('/api/edit-sessions', { method: 'POST', body: JSON.stringify(input) });
   if (!response.session?.id) throw new Error('后端未返回连续修改会话 ID。');
@@ -970,6 +1133,43 @@ export async function createEditSession(input: { sourceAssetId: string; projectI
 export async function getEditSession(id: string): Promise<EditSessionDetail> { return request<EditSessionDetail>(`/api/edit-sessions/${encodeURIComponent(id)}`); }
 export async function createEditMessage(sessionId: string, input: { instruction: string; baseVersionId: string; imageSize?: '1K'|'2K'|'4K'; generationKind?:'preview-edit'|'final-render'; maskAssetId?:string; constraints?: Record<string, unknown>; clientRequestId:string }): Promise<{ sessionId:string; message:EditMessage; jobId:string; status:string; creditCost:number; idempotent?:boolean }> { return request(`/api/edit-sessions/${encodeURIComponent(sessionId)}/messages`, { method:'POST', body:JSON.stringify(input) }); }
 export async function selectEditVersion(sessionId:string,versionId:string):Promise<{session:EditSession;currentVersionId:string}>{return request(`/api/edit-sessions/${encodeURIComponent(sessionId)}/select-version`,{method:'POST',body:JSON.stringify({versionId})});}
+export async function updateEditVersion(
+  sessionId: string,
+  versionId: string,
+  input: { displayName?: string | null; note?: string | null },
+): Promise<AssetVersion> {
+  const response = await request<{ version: AssetVersion }>(
+    `/api/edit-sessions/${encodeURIComponent(sessionId)}/versions/${encodeURIComponent(versionId)}`,
+    { method: 'PATCH', body: JSON.stringify(input) },
+  );
+  return response.version;
+}
+export async function restoreEditVersion(sessionId: string, versionId: string): Promise<{ session: EditSession; version: AssetVersion }> {
+  return request(`/api/edit-sessions/${encodeURIComponent(sessionId)}/versions/${encodeURIComponent(versionId)}/restore`, {
+    method: 'POST',
+  });
+}
+export async function setPrimaryEditVersion(sessionId: string, versionId: string): Promise<EditSession> {
+  const response = await request<{ session: EditSession }>(
+    `/api/edit-sessions/${encodeURIComponent(sessionId)}/versions/${encodeURIComponent(versionId)}/set-primary`,
+    { method: 'POST' },
+  );
+  return response.session;
+}
+export async function setFinalEditVersion(sessionId: string, versionId: string): Promise<EditSession> {
+  const response = await request<{ session: EditSession }>(
+    `/api/edit-sessions/${encodeURIComponent(sessionId)}/versions/${encodeURIComponent(versionId)}/set-final`,
+    { method: 'POST' },
+  );
+  return response.session;
+}
+export async function markEditVersionExported(sessionId: string, versionId: string): Promise<AssetVersion> {
+  const response = await request<{ version: AssetVersion }>(
+    `/api/edit-sessions/${encodeURIComponent(sessionId)}/versions/${encodeURIComponent(versionId)}/exported`,
+    { method: 'POST' },
+  );
+  return response.version;
+}
 
 export async function getAiProviders(init: RequestInit = {}): Promise<AiProvidersConfig> {
   return request<AiProvidersConfig>('/api/ai-providers', init);

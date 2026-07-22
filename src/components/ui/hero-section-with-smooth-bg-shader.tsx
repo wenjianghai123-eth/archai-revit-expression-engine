@@ -50,7 +50,7 @@ class ShaderErrorBoundary extends Component<{ children: ReactNode }, ShaderError
 export function HeroSection({
   title = '建筑与室内设计的 AI 表达工作台',
   highlightText = '从图纸到效果图',
-  description = '上传平面图、参考图或模型素材，快速完成彩平表达、自由参考生图、材质软装替换、元素植入和方案变体，让设计方案更快呈现、更容易沟通。',
+  description = '面向建筑与室内设计的智能表达工作台，帮助设计师把图纸、白模和设计意图快速转化为可比较、可修改、可汇报、可交付的设计成果。',
   buttonText = '开始创作',
   secondaryButtonText = '查看核心功能',
   onButtonClick,
@@ -152,7 +152,7 @@ export function HeroSection({
           </div>
 
           <div className="mx-auto mt-12 grid max-w-3xl grid-cols-1 gap-3 text-left text-xs font-semibold text-slate-700 sm:grid-cols-3 sm:text-center">
-            {['5 个高频设计工作流', '从素材到方案一站完成', '生成结果持续沉淀复用'].map(item => (
+            {['6 个核心设计能力', '三类设计表达工作流', '生成结果持续沉淀复用'].map(item => (
               <div key={item} className="rounded-2xl border border-white/45 bg-white/25 px-4 py-3 backdrop-blur-lg">
                 {item}
               </div>

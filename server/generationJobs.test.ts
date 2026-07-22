@@ -129,6 +129,41 @@ describe('POST /api/generation-jobs asset ownership', () => {
     expect(response.body.error.message).toContain('missing-provider');
   });
 
+  it('uses an idempotency key to create and charge one generation job', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Idempotent generation request' });
+    const inputAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const idempotencyKey = `generation-test-${Date.now()}`;
+    const payload = {
+      projectId: project.id,
+      mode: 'style-render',
+      prompt: 'idempotent render',
+      config: {},
+      inputAssetIds: [inputAsset.id],
+    };
+
+    const first = await request(app)
+      .post('/api/generation-jobs')
+      .set('Idempotency-Key', idempotencyKey)
+      .send(payload);
+    const duplicate = await request(app)
+      .post('/api/generation-jobs')
+      .set('Idempotency-Key', idempotencyKey)
+      .send(payload);
+
+    expect(first.status).toBe(201);
+    expect(duplicate.status).toBe(200);
+    expect(duplicate.body.data).toMatchObject({
+      idempotent: true,
+      job: { id: first.body.data.job.id },
+    });
+    const transactions = await storage.listCreditTransactions(DEV_AUTH_USER_ID);
+    expect(transactions.filter(transaction => (
+      transaction.type === 'generate_charge' && transaction.referenceId === first.body.data.job.id
+    ))).toHaveLength(1);
+
+    await request(app).post(`/api/generation-jobs/${encodeURIComponent(first.body.data.job.id)}/cancel`);
+  });
+
   it.each([
     'floorplan',
     'style-render',
@@ -183,8 +218,20 @@ describe('POST /api/generation-jobs asset ownership', () => {
         config: {
           step: 'object_insert',
           sourceImageAssetId: sourceAsset.id,
+          objectInsertWorkflowMode: 'scene-enrichment',
+          objectInsertSceneEnrichment: {
+            plants: 'many',
+            people: 'moderate',
+            decorations: 'few',
+          },
           objectInsert: {
             mode: 'object_insert_preview_fusion',
+            workflowMode: 'scene-enrichment',
+            sceneEnrichment: {
+              plants: 'many',
+              people: 'moderate',
+              decorations: 'few',
+            },
             previewAssetId: previewAsset.id,
             placement,
           },
@@ -204,11 +251,23 @@ describe('POST /api/generation-jobs asset ownership', () => {
         step: 'object_insert',
         sourceImageAssetId: sourceAsset.id,
         objectInsertMode: 'object_insert_preview_fusion',
+        objectInsertWorkflowMode: 'scene-enrichment',
+        objectInsertSceneEnrichment: {
+          plants: 'many',
+          people: 'moderate',
+          decorations: 'few',
+        },
         placementPreviewAssetId: previewAsset.id,
         editTarget: 'furniture',
         objectPlacement: placement,
         objectInsert: {
           mode: 'object_insert_preview_fusion',
+          workflowMode: 'scene-enrichment',
+          sceneEnrichment: {
+            plants: 'many',
+            people: 'moderate',
+            decorations: 'few',
+          },
           sourceImageAssetId: sourceAsset.id,
           previewAssetId: previewAsset.id,
           placement,
@@ -398,6 +457,119 @@ describe('POST /api/generation-jobs asset ownership', () => {
     expect(response.body.data.job.config).not.toHaveProperty('maskAssetId');
   });
 
+  it('creates a multi-candidate material job with semantic controls and a protected mask', async () => {
+    const originalBalance = await storage.getCreditBalance(DEV_AUTH_USER_ID);
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Controlled material replace' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const maskAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const protectionAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          editMode: 'mask',
+          sourceImageAssetId: sourceAsset.id,
+          maskMode: 'asset-mask',
+          maskAssetId: maskAsset.id,
+          protectionMaskAssetId: protectionAsset.id,
+          targetObjectType: 'floor',
+          targetMaterial: 'tile',
+          materialCandidateCount: 3,
+          materialRealSizeMm: 900,
+          materialJointWidthMm: 3,
+          materialTextureAlignment: 'custom-origin',
+          materialTextureOrigin: { x: 0.2, y: 0.75 },
+          semanticObjectSelections: [{ id: 'floor-left', objectType: 'floor', x: 0.25, y: 0.6 }],
+          feather: 6,
+          maskExpansion: 4,
+        },
+        inputAssetIds: [sourceAsset.id, protectionAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).toMatchObject({
+      batchCount: 3,
+      materialCandidateCount: 3,
+      protectionMaskAssetId: protectionAsset.id,
+      hasProtectionMask: true,
+      materialRealSizeMm: 900,
+      materialJointWidthMm: 3,
+      materialTextureAlignment: 'custom-origin',
+      materialTextureOrigin: { x: 0.2, y: 0.75 },
+      semanticObjectSelections: [{ id: 'floor-left', objectType: 'floor', x: 0.25, y: 0.6 }],
+      feather: 6,
+      maskExpansion: 4,
+    });
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 3);
+  });
+
+  it('requires smart masks to be confirmed before creating a material job', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Unconfirmed smart mask' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const maskAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          editMode: 'mask',
+          maskSelectionMode: 'smart',
+          smartMaskConfirmed: false,
+          sourceImageAssetId: sourceAsset.id,
+          maskMode: 'asset-mask',
+          maskAssetId: maskAsset.id,
+          targetMaterial: 'fabric',
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('GENERATION_JOB_SMART_MASK_NOT_CONFIRMED');
+  });
+
+  it('stores confirmed smart mask metadata on the generation job', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Confirmed smart mask' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const maskAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          editMode: 'mask',
+          maskSelectionMode: 'smart',
+          smartMaskConfirmed: true,
+          smartMaskDetectedObject: 'sofa',
+          smartMaskConfidence: 0.94,
+          smartMaskRefinementMethod: 'edge-aware-seeded-region-growing',
+          sourceImageAssetId: sourceAsset.id,
+          maskMode: 'asset-mask',
+          maskAssetId: maskAsset.id,
+          targetMaterial: 'fabric',
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).toMatchObject({
+      maskSelectionMode: 'smart',
+      smartMaskConfirmed: true,
+      smartMaskDetectedObject: 'sofa',
+      smartMaskConfidence: 0.94,
+      smartMaskRefinementMethod: 'edge-aware-seeded-region-growing',
+    });
+  });
+
   it('accepts material-replace with legacy top-level maskAssetId payload shape', async () => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Material replace top-level mask' });
     const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
@@ -564,10 +736,24 @@ describe('POST /api/generation-jobs asset ownership', () => {
           modelSnapshotMetadata: {
             sourceType: 'model-snapshot',
             sourceModelAssetId: modelAsset.id,
+            snapshotAssetId: snapshotAsset.id,
+            bookmarkId: 'view-front-1',
+            bookmarkName: '外立面 1',
+            cameraPreset: 'exterior-front',
+            batchGroupId: 'view-batch-1',
+            batchIndex: 0,
+            batchCount: 3,
             width: 800,
             height: 600,
             createdAt: new Date().toISOString(),
           },
+          modelViewBookmarkId: 'view-front-1',
+          modelViewBookmarkName: '外立面 1',
+          modelCameraPreset: 'exterior-front',
+          modelViewBatchId: 'view-batch-1',
+          modelViewBatchIndex: 0,
+          modelViewBatchCount: 3,
+          modelViewBookmarks: [{ id: 'should-not-be-stored' }],
         },
         inputAssetIds: [snapshotAsset.id],
       });
@@ -579,8 +765,15 @@ describe('POST /api/generation-jobs asset ownership', () => {
       config: {
         sourceModelAssetId: modelAsset.id,
         snapshotAssetId: snapshotAsset.id,
+        modelViewBookmarkId: 'view-front-1',
+        modelViewBookmarkName: '外立面 1',
+        modelCameraPreset: 'exterior-front',
+        modelViewBatchId: 'view-batch-1',
+        modelViewBatchIndex: 0,
+        modelViewBatchCount: 3,
       },
     });
+    expect(response.body.data.job.config).not.toHaveProperty('modelViewBookmarks');
   });
 
   it('creates a model-render job from an uploaded snapshot without a source model asset', async () => {
@@ -1010,6 +1203,75 @@ describe('POST /api/generation-jobs asset ownership', () => {
     expect(response.body.data.job.prompt).toContain('Image 2 is the deterministic material placement control image');
     expect(response.body.data.job.prompt).toContain('Region 1: Kitchen — grey anti-slip tile.');
   });
+
+  it('normalizes image-polish mode and all control values into the generation job', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Image polish config project' });
+    const source = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const controls = {
+      clarity: 'high',
+      lightingOptimization: 'medium',
+      materialDetail: 'low',
+      removeModelFeel: 'medium',
+      colorPreservation: 'high',
+      structurePreservation: 'high',
+      denoise: 'high',
+      shadow: 'medium',
+      reflection: 'off',
+    };
+
+    const response = await request(app).post('/api/generation-jobs').send({
+      projectId: project.id,
+      mode: 'inpaint',
+      step: 'image_polish',
+      prompt: '',
+      inputAssetIds: [source.id],
+      config: {
+        sourceImageAssetId: source.id,
+        imagePolishMode: 'conservative',
+        imagePolishControls: controls,
+      },
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job).toMatchObject({
+      mode: 'inpaint',
+      step: 'image_polish',
+      prompt: expect.stringContaining('执行“保守提质”'),
+      config: {
+        imagePolishMode: 'conservative',
+        imagePolishControls: controls,
+        enhanceMaterials: false,
+        promptMode: 'conservative_polish',
+        preserveStructure: true,
+        preserveCamera: true,
+        preserveColor: true,
+      },
+    });
+    expect(response.body.data.job.prompt).toContain('反射优化：关闭');
+    expect(response.body.data.job.prompt).toContain('不得新增人物、绿植、家具或装饰');
+  });
+
+  it('maps the legacy enhanceMaterials flag to white-model materialization', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Legacy image polish project' });
+    const source = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app).post('/api/generation-jobs').send({
+      projectId: project.id,
+      mode: 'inpaint',
+      step: 'image_polish',
+      prompt: '',
+      inputAssetIds: [source.id],
+      config: { sourceImageAssetId: source.id, enhanceMaterials: true },
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).toMatchObject({
+      imagePolishMode: 'white-model-materialization',
+      enhanceMaterials: true,
+      promptMode: 'white_model_materialization',
+    });
+    expect(response.body.data.job.prompt).toContain('执行“白模材质化”');
+  });
 });
 
 describe('project soft deletion', () => {
@@ -1296,6 +1558,27 @@ describe('generation job credits', () => {
             stylePackId: 'interior-common',
             variantStyles: ['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby'],
             variantNames: ['方案 A', '方案 B', '方案 C', '方案 D', '方案 E', '方案 F', '方案 G', '方案 H'],
+            variantDiversity: 'high',
+            variantMatrixVariables: ['material-system', 'color-system', 'lighting-atmosphere', 'overall-design-style'],
+            variantVariableLocks: ['furniture-layout'],
+            parentResultId: 'parent-result-1',
+            parentJobId: 'parent-job-1',
+            variantMatrix: [{
+              variantIndex: 0,
+              changedVariables: ['material-system', 'color-system', 'lighting-atmosphere', 'overall-design-style'],
+              lockedVariables: ['furniture-layout'],
+              values: {
+                'material-system': '浅色石材 + 木饰面',
+                'color-system': '黑白灰与暖木',
+                'lighting-atmosphere': '明亮均匀自然光',
+                'furniture-layout': '保持原布局',
+                'overall-design-style': '现代极简',
+              },
+              description: '强调材质、色彩和自然采光的现代极简方案。',
+              differenceSummary: '相对原图重点改变材质、色彩和灯光。',
+              parentResultId: 'parent-result-1',
+              parentJobId: 'parent-job-1',
+            }],
             customPrompt: 'Keep the original layout and camera angle.',
           },
           inputAssetIds: [ownAsset.id],
@@ -1316,6 +1599,147 @@ describe('generation job credits', () => {
         variantCode: 'A',
         variantName: '方案 A',
         stylePackId: 'interior-common',
+        variantDiversity: 'high',
+        changedVariables: ['material-system', 'color-system', 'lighting-atmosphere', 'overall-design-style'],
+        lockedVariables: ['furniture-layout'],
+        differenceSummary: '相对原图重点改变材质、色彩和灯光。',
+        reportNarrative: expect.stringContaining('方案 A'),
+        parentResultId: 'parent-result-1',
+        parentJobId: 'parent-job-1',
+        relationshipType: 'derived-variant',
+      });
+    } finally {
+      process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
+    }
+  });
+
+  it('stores image-polish mode, controls, and compiled prompt in result metadata', async () => {
+    const originalWorkerDisabled = process.env.ARCHAI_DISABLE_GENERATION_WORKER;
+    process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'false';
+
+    try {
+      const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Image polish worker project' });
+      const sourceAsset = await storage.createImageAsset({
+        userId: DEV_AUTH_USER_ID,
+        url: `data:image/png;base64,${validOnePixelPng.toString('base64')}`,
+        filename: 'image-polish-input.png',
+        mimeType: 'image/png',
+        size: validOnePixelPng.length,
+      });
+      const controls = {
+        clarity: 'high',
+        lightingOptimization: 'high',
+        materialDetail: 'high',
+        removeModelFeel: 'high',
+        colorPreservation: 'medium',
+        structurePreservation: 'high',
+        denoise: 'medium',
+        shadow: 'high',
+        reflection: 'medium',
+      };
+
+      const response = await request(app).post('/api/generation-jobs').send({
+        projectId: project.id,
+        mode: 'inpaint',
+        step: 'image_polish',
+        prompt: '',
+        inputAssetIds: [sourceAsset.id],
+        config: {
+          sourceImageAssetId: sourceAsset.id,
+          imagePolishMode: 'white-model-materialization',
+          imagePolishControls: controls,
+        },
+      });
+
+      expect(response.status).toBe(201);
+      const job = await waitForGenerationJob(response.body.data.job.id, 'succeeded');
+      const results = await storage.listGenerationResults(job.id, DEV_AUTH_USER_ID);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].metadata).toMatchObject({
+        step: 'image_polish',
+        sourceImageAssetId: sourceAsset.id,
+        imagePolishMode: 'white-model-materialization',
+        imagePolishControls: controls,
+        enhanceMaterials: true,
+        promptMode: 'white_model_materialization',
+        compiledPrompt: expect.stringContaining('执行“白模材质化”'),
+      });
+    } finally {
+      process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
+    }
+  });
+
+  it('stores model camera bookmark and batch relationship in result metadata', async () => {
+    const originalWorkerDisabled = process.env.ARCHAI_DISABLE_GENERATION_WORKER;
+    process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'false';
+
+    try {
+      const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Model view batch worker project' });
+      const snapshotAsset = await storage.createImageAsset({
+        userId: DEV_AUTH_USER_ID,
+        url: `data:image/png;base64,${validOnePixelPng.toString('base64')}`,
+        filename: 'model-view-front.png',
+        mimeType: 'image/png',
+        size: validOnePixelPng.length,
+      });
+      const modelAsset = await createModelAssetForUser(DEV_AUTH_USER_ID);
+      const metadata = {
+        sourceType: 'model-snapshot',
+        inputSource: 'model-capture',
+        sourceModelAssetId: modelAsset.id,
+        snapshotAssetId: snapshotAsset.id,
+        bookmarkId: 'view-front-1',
+        bookmarkName: '外立面 1',
+        cameraPreset: 'exterior-front',
+        batchGroupId: 'view-batch-1',
+        batchIndex: 0,
+        batchCount: 2,
+        width: 1,
+        height: 1,
+        edgesEnabled: true,
+        createdAt: new Date().toISOString(),
+      };
+
+      const response = await request(app).post('/api/generation-jobs').send({
+        projectId: project.id,
+        mode: 'model-render',
+        step: 'model_snapshot_render',
+        prompt: 'render this model view',
+        inputAssetIds: [snapshotAsset.id],
+        config: {
+          sourceImageAssetId: snapshotAsset.id,
+          snapshotAssetId: snapshotAsset.id,
+          sourceModelAssetId: modelAsset.id,
+          modelSnapshotMetadata: metadata,
+          modelViewBookmarkId: 'view-front-1',
+          modelViewBookmarkName: '外立面 1',
+          modelCameraPreset: 'exterior-front',
+          modelViewBatchId: 'view-batch-1',
+          modelViewBatchIndex: 0,
+          modelViewBatchCount: 2,
+        },
+      });
+
+      expect(response.status).toBe(201);
+      const job = await waitForGenerationJob(response.body.data.job.id, 'succeeded');
+      const results = await storage.listGenerationResults(job.id, DEV_AUTH_USER_ID);
+      expect(results[0].metadata).toMatchObject({
+        mode: 'model-render',
+        step: 'model_snapshot_render',
+        sourceModelAssetId: modelAsset.id,
+        snapshotAssetId: snapshotAsset.id,
+        modelViewBookmarkId: 'view-front-1',
+        modelViewBookmarkName: '外立面 1',
+        modelCameraPreset: 'exterior-front',
+        modelViewBatchId: 'view-batch-1',
+        modelViewBatchIndex: 0,
+        modelViewBatchCount: 2,
+        modelSnapshotMetadata: expect.objectContaining({
+          bookmarkId: 'view-front-1',
+          cameraPreset: 'exterior-front',
+          edgesEnabled: true,
+        }),
       });
     } finally {
       process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
@@ -1698,6 +2122,13 @@ describe('public share links', () => {
     expect(createShare.status).toBe(201);
     const token = createShare.body.data.shareLink.token;
 
+    const listed = await request(app)
+      .get(`/api/projects/${encodeURIComponent(project.id)}/share-links`);
+    expect(listed.status).toBe(200);
+    expect(listed.body.data.shareLinks).toEqual([
+      expect.objectContaining({ token, projectId: project.id }),
+    ]);
+
     const response = await request(app).get(`/api/share/${encodeURIComponent(token)}`);
 
     expect(response.status).toBe(200);
@@ -2048,6 +2479,211 @@ describe('credit adjustments', () => {
   });
 });
 
+describe('project design workflow API', () => {
+  it('persists formal asset transfers, skipped stages, back navigation, and generation output links', async () => {
+    const project = await storage.createProject({
+      userId: DEV_AUTH_USER_ID,
+      name: 'Workflow orchestrator',
+    });
+    const source = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const created = await request(app)
+      .post(`/api/projects/${project.id}/design-workflow`)
+      .send({
+        inputAssetId: source.id,
+        sourceFeature: 'floorplan-to-3d',
+      });
+
+    expect(created.status).toBe(201);
+    expect(created.body.data.nodes).toEqual([
+      expect.objectContaining({
+        stageKey: 'input',
+        inputAssetId: source.id,
+        parentNodeId: null,
+      }),
+    ]);
+    const workflowId = created.body.data.workflow.id;
+
+    const base = await request(app)
+      .post(`/api/projects/${project.id}/design-workflow/${workflowId}/advance`)
+      .send({
+        stageKey: 'base-render',
+        sourceFeature: 'project-input',
+        inputAssetId: source.id,
+      });
+    expect(base.status).toBe(201);
+    expect(base.body.data.node).toMatchObject({
+      stageKey: 'base-render',
+      inputAssetId: source.id,
+      parentNodeId: created.body.data.nodes[0].id,
+    });
+
+    const skipped = await request(app)
+      .post(`/api/projects/${project.id}/design-workflow/${workflowId}/skip`)
+      .send({});
+    expect(skipped.status).toBe(201);
+    expect(skipped.body.data.skippedNode).toMatchObject({
+      id: base.body.data.node.id,
+      status: 'skipped',
+    });
+    expect(skipped.body.data.node.stageKey).toBe('design-variants');
+
+    const backed = await request(app)
+      .post(`/api/projects/${project.id}/design-workflow/${workflowId}/back`)
+      .send({});
+    expect(backed.status).toBe(200);
+    expect(backed.body.data.node).toMatchObject({
+      stageKey: 'base-render',
+      status: 'skipped',
+    });
+
+    const parentJob = await storage.createGenerationJob({
+      userId: DEV_AUTH_USER_ID,
+      projectId: project.id,
+      mode: 'floorplan',
+      step: 'floorplan_to_3d',
+      prompt: 'Base render',
+      config: {},
+      inputAssetIds: [source.id],
+      provider: 'mock',
+    });
+    const baseOutput = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const parentResult = await storage.createGenerationResult({
+      userId: DEV_AUTH_USER_ID,
+      projectId: project.id,
+      jobId: parentJob!.id,
+      assetId: baseOutput.id,
+      imageUrl: baseOutput.url,
+      isSelected: true,
+    });
+
+    const variants = await request(app)
+      .post(`/api/projects/${project.id}/design-workflow/${workflowId}/advance`)
+      .send({
+        stageKey: 'design-variants',
+        sourceFeature: 'floorplan-to-3d',
+        inputAssetId: baseOutput.id,
+        parentJobId: parentJob!.id,
+        parentResultId: parentResult!.id,
+      });
+    expect(variants.status).toBe(201);
+    expect(variants.body.data.node).toMatchObject({
+      stageKey: 'design-variants',
+      inputAssetId: baseOutput.id,
+      parentJobId: parentJob!.id,
+      parentResultId: parentResult!.id,
+    });
+    await storage.adjustCredits({
+      userId: DEV_AUTH_USER_ID,
+      type: 'grant',
+      amount: 10,
+      reason: 'Workflow generation test',
+      referenceType: 'system',
+      referenceId: `workflow_${workflowId}`,
+    });
+    const jobResponse = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'design-variants',
+        step: 'design_variants',
+        prompt: '',
+        config: {
+          batchCount: 2,
+          designWorkflowId: workflowId,
+          designWorkflowNodeId: variants.body.data.node.id,
+          designWorkflowStageKey: 'design-variants',
+        },
+        inputAssetIds: [baseOutput.id],
+      });
+    expect(jobResponse.status).toBe(201);
+
+    const linked = await storage.getDesignWorkflowNode(
+      variants.body.data.node.id,
+      workflowId,
+      project.id,
+      DEV_AUTH_USER_ID,
+    );
+    expect(linked?.outputJobId).toBe(jobResponse.body.data.job.id);
+
+    const generatedAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const generatedResult = await storage.createGenerationResult({
+      userId: DEV_AUTH_USER_ID,
+      projectId: project.id,
+      jobId: jobResponse.body.data.job.id,
+      assetId: generatedAsset.id,
+      imageUrl: generatedAsset.url,
+      isSelected: true,
+    });
+    const { completeDesignWorkflowGeneration } = await import('./projectWorkflowLifecycle');
+    await completeDesignWorkflowGeneration(jobResponse.body.data.job, generatedResult!);
+
+    const detail = await request(app)
+      .get(`/api/projects/${project.id}/design-workflow`);
+    expect(detail.status).toBe(200);
+    expect(detail.body.data.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: variants.body.data.node.id,
+        status: 'completed',
+        outputJobId: jobResponse.body.data.job.id,
+        outputResultId: generatedResult!.id,
+        outputAssetId: generatedAsset.id,
+      }),
+    ]));
+    const storedResult = (await storage.listGenerationResults(
+      jobResponse.body.data.job.id,
+      DEV_AUTH_USER_ID,
+    )).find(result => result.id === generatedResult!.id);
+    expect(storedResult?.metadata).toMatchObject({
+      designWorkflowId: workflowId,
+      designWorkflowNodeId: variants.body.data.node.id,
+      designWorkflowStageKey: 'design-variants',
+      parentJobId: parentJob!.id,
+      parentResultId: parentResult!.id,
+      sourceFeature: 'floorplan-to-3d',
+    });
+  });
+
+  it('rejects a generation result that does not match the transferred asset', async () => {
+    const project = await storage.createProject({
+      userId: DEV_AUTH_USER_ID,
+      name: 'Workflow mismatch',
+    });
+    const source = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const other = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const created = await request(app)
+      .post(`/api/projects/${project.id}/design-workflow`)
+      .send({ inputAssetId: source.id });
+    const job = await storage.createGenerationJob({
+      userId: DEV_AUTH_USER_ID,
+      projectId: project.id,
+      mode: 'floorplan',
+      prompt: 'base',
+      config: {},
+      inputAssetIds: [source.id],
+      provider: 'mock',
+    });
+    const result = await storage.createGenerationResult({
+      userId: DEV_AUTH_USER_ID,
+      projectId: project.id,
+      jobId: job!.id,
+      assetId: source.id,
+      imageUrl: source.url,
+    });
+
+    const response = await request(app)
+      .post(`/api/projects/${project.id}/design-workflow/${created.body.data.workflow.id}/advance`)
+      .send({
+        stageKey: 'base-render',
+        sourceFeature: 'input',
+        inputAssetId: other.id,
+        parentJobId: job!.id,
+        parentResultId: result!.id,
+      });
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe('DESIGN_WORKFLOW_RESULT_ASSET_MISMATCH');
+  });
+});
+
 describe('continuous edit session API', () => {
   it('creates V0 and queues a generation job from the selected base version', async () => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Continuous edit' });
@@ -2114,6 +2750,56 @@ describe('continuous edit session API', () => {
     await completeEditGeneration(finalJob!, finalOutput.id);
     const finalVersions = await storage.listAssetVersions(created.body.data.session.id, DEV_AUTH_USER_ID);
     expect(finalVersions.find(version => version.generationJobId === finalJob!.id)).toMatchObject({ parentVersionId: v1.id, assetId: finalOutput.id });
+
+    const renamed = await request(app)
+      .patch(`/api/edit-sessions/${created.body.data.session.id}/versions/${v1.id}`)
+      .send({ displayName: '暖木客厅主方案', note: '客户确认墙面材质，待调整灯光。' });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.data.version).toMatchObject({
+      id: v1.id,
+      displayName: '暖木客厅主方案',
+      note: '客户确认墙面材质，待调整灯光。',
+    });
+
+    const primary = await request(app)
+      .post(`/api/edit-sessions/${created.body.data.session.id}/versions/${v1.id}/set-primary`)
+      .send({});
+    expect(primary.status).toBe(200);
+    expect(primary.body.data.session.primaryVersionId).toBe(v1.id);
+
+    const markedFinal = await request(app)
+      .post(`/api/edit-sessions/${created.body.data.session.id}/versions/${v1.id}/set-final`)
+      .send({});
+    expect(markedFinal.status).toBe(200);
+    expect(markedFinal.body.data.session.finalVersionId).toBe(v1.id);
+    expect(markedFinal.body.data.session.status).toBe('active');
+
+    const beforeRestore = await storage.listAssetVersions(created.body.data.session.id, DEV_AUTH_USER_ID);
+    const restored = await request(app)
+      .post(`/api/edit-sessions/${created.body.data.session.id}/versions/${v1.id}/restore`)
+      .send({});
+    expect(restored.status).toBe(201);
+    expect(restored.body.data.version).toMatchObject({
+      assetId: v1.assetId,
+      parentVersionId: v1.id,
+      restoredFromVersionId: v1.id,
+    });
+    expect(restored.body.data.version.id).not.toBe(v1.id);
+    const afterRestore = await storage.listAssetVersions(created.body.data.session.id, DEV_AUTH_USER_ID);
+    expect(afterRestore).toHaveLength(beforeRestore.length + 1);
+    expect(restored.body.data.session.currentVersionId).toBe(restored.body.data.version.id);
+
+    const exported = await request(app)
+      .post(`/api/edit-sessions/${created.body.data.session.id}/versions/${v1.id}/exported`)
+      .send({});
+    expect(exported.status).toBe(200);
+    expect(exported.body.data.version.exportedAt).toEqual(expect.any(String));
+
+    const projectSessions = await request(app)
+      .get(`/api/edit-sessions?projectId=${encodeURIComponent(project.id)}`);
+    expect(projectSessions.status).toBe(200);
+    expect(projectSessions.body.data.sessions[0].session.id).toBe(created.body.data.session.id);
+    expect(projectSessions.body.data.sessions[0].versions.length).toBe(afterRestore.length);
 
     const selected = await request(app).post(`/api/edit-sessions/${created.body.data.session.id}/select-version`).send({ versionId: created.body.data.version.id });
     expect(selected.status).toBe(200);

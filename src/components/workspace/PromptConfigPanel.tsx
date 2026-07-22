@@ -14,12 +14,14 @@ import { type SmartPromptMode } from '../../promptTemplates/intelligentPromptTem
 import { SmartPromptAssistant } from './SmartPromptAssistant';
 import { isLocalInpaintingStep } from './workspaceUtils';
 import { PromptVoiceAssistant } from '../PromptVoiceAssistant';
+import type { DrawingTool } from '../drawing-expression/drawingExpressionState';
 
 interface PromptConfigPanelProps {
   step: GenerationStep;
   config: GenerationConfig;
   isFloorplanStep: boolean;
   compactInpaint?: boolean;
+  activeDrawingTool?: DrawingTool;
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
   onOpenPromptTemplatePanel: () => void;
 }
@@ -29,6 +31,7 @@ export function PromptConfigPanel({
   config,
   isFloorplanStep,
   compactInpaint = false,
+  activeDrawingTool,
   onUpdateConfig,
   onOpenPromptTemplatePanel,
 }: PromptConfigPanelProps) {
@@ -67,7 +70,7 @@ export function PromptConfigPanel({
       <QualityModeControls config={config} onUpdateConfig={onUpdateConfig} />
 
       {step === GenerationStep.FloorplanTo3D ? (
-        <FloorplanMultiPlanControls config={config} onUpdateConfig={onUpdateConfig} />
+        <FloorplanMultiPlanControls config={config} activeDrawingTool={activeDrawingTool} onUpdateConfig={onUpdateConfig} />
       ) : null}
 
       {step === GenerationStep.LocalInpainting ? (
@@ -79,6 +82,7 @@ export function PromptConfigPanel({
 
 interface FloorplanMultiPlanControlsProps {
   config: GenerationConfig;
+  activeDrawingTool?: DrawingTool;
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
 }
 
@@ -96,11 +100,10 @@ const floorplanRoomTypeOptions: Array<{ value: FloorplanRoomType; label: string 
   { value: 'custom', label: '自定义' },
 ];
 
-function FloorplanMultiPlanControls({ config, onUpdateConfig }: FloorplanMultiPlanControlsProps) {
+function FloorplanMultiPlanControls({ config, activeDrawingTool, onUpdateConfig }: FloorplanMultiPlanControlsProps) {
   const outputMode = config.floorplanOutputMode || 'single';
   const variantType = config.floorplanVariantType || 'material_style';
   const variantFocus = config.floorplanVariantFocus || (variantType === 'mixed' ? 'both' : variantType);
-  const renderMode = config.floorplanRenderMode || 'semi-3d';
   const lineworkPreservation = config.lineworkPreservation || 'high';
   const floorplanTemplateId = config.floorplanTemplateId || 'residential-warm-wood';
   const roomLabels = Array.isArray(config.floorplanRoomLabels) ? config.floorplanRoomLabels : [];
@@ -152,22 +155,16 @@ function FloorplanMultiPlanControls({ config, onUpdateConfig }: FloorplanMultiPl
     <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-3">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-xs font-black text-slate-900">平面彩平模式</p>
+          <p className="text-xs font-black text-slate-900">{readDrawingToolSettingsLabel(activeDrawingTool)}</p>
+          <p className="mt-0.5 text-[11px] text-slate-500">这里只调整当前功能参数；功能切换请使用页面顶部工具栏。</p>
         </div>
       </div>
+
+      <p className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">结构一致性：必须保留墙体、门窗、家具、文字、尺寸、轴线、构图和画幅；仅增强表达，不重构空间。</p>
 
       <div className="grid grid-cols-2 gap-2">
-        <MiniOption active={outputMode !== 'multi'} label="三维彩平表达" onClick={() => updateMultiPlan({ floorplanOutputMode: 'single', batchCount: 1 })} />
+        <MiniOption active={outputMode !== 'multi'} label="单张输出" onClick={() => updateMultiPlan({ floorplanOutputMode: 'single', batchCount: 1 })} />
         <MiniOption active={outputMode === 'multi'} label="多方案输出" onClick={() => updateMultiPlan({ floorplanOutputMode: 'multi', batchCount: config.batchCount === 2 || config.batchCount === 6 ? config.batchCount : 4 })} />
-      </div>
-
-      <div className="space-y-2">
-        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">表达类型</p>
-        <div className="grid grid-cols-3 gap-2">
-          <MiniOption active={renderMode === 'flat-color'} label="彩色平面图" onClick={() => updateMultiPlan({ floorplanRenderMode: 'flat-color' })} />
-          <MiniOption active={renderMode === 'semi-3d'} label="三维彩平" onClick={() => updateMultiPlan({ floorplanRenderMode: 'semi-3d' })} />
-          <MiniOption active={renderMode === 'presentation'} label="汇报表达图" onClick={() => updateMultiPlan({ floorplanRenderMode: 'presentation' })} />
-        </div>
       </div>
 
       <div className="space-y-2">
@@ -285,6 +282,16 @@ function FloorplanMultiPlanControls({ config, onUpdateConfig }: FloorplanMultiPl
       ) : null}
     </div>
   );
+}
+
+function readDrawingToolSettingsLabel(tool?: DrawingTool): string {
+  if (tool === 'color-plan-2d') return '二维彩平参数';
+  if (tool === 'color-plan-3d') return '三维彩平参数';
+  if (tool === 'functional-zoning') return '功能分区参数';
+  if (tool === 'circulation-analysis') return '动线分析参数';
+  if (tool === 'material-mapping') return '区域材质配置';
+  if (tool === 'region-recognition') return '区域识别与校正';
+  return '图纸表达参数';
 }
 
 function MiniOption({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {

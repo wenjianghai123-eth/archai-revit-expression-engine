@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { FurnitureStyle } from '../types';
 import { MOCK_FURNITURE_STYLES } from '../constants';
+import { useEnterpriseAssetPreferences } from '../hooks/useEnterpriseAssetPreferences';
 
 interface StyleLibraryProps {
   isOpen: boolean;
@@ -23,6 +24,7 @@ interface StyleLibraryProps {
 }
 
 export function StyleLibrary({ isOpen, onClose, onSelect, selectedId }: StyleLibraryProps) {
+  const { markUsed } = useEnterpriseAssetPreferences();
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<string>('全部');
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -38,6 +40,10 @@ export function StyleLibrary({ isOpen, onClose, onSelect, selectedId }: StyleLib
   });
 
   const selectedStyle = MOCK_FURNITURE_STYLES.find(s => s.id === (hoveredId || selectedId)) || MOCK_FURNITURE_STYLES[0];
+  const handleSelect = (style: FurnitureStyle) => {
+    markUsed(`furniture:${style.id}`);
+    onSelect(style);
+  };
 
   if (!isOpen) return null;
 
@@ -103,7 +109,7 @@ export function StyleLibrary({ isOpen, onClose, onSelect, selectedId }: StyleLib
                 key={s.id}
                 onMouseEnter={() => setHoveredId(s.id)}
                 onMouseLeave={() => setHoveredId(null)}
-                onClick={() => onSelect(s)}
+                onClick={() => handleSelect(s)}
                 className={`group p-3 rounded-2xl border cursor-pointer transition-all flex items-center gap-4 ${s.id === selectedId ? 'bg-white border-blue-200 shadow-lg shadow-blue-500/5' : 'bg-transparent border-transparent hover:bg-white hover:border-slate-200'}`}
               >
                 <div className="w-16 h-16 rounded-xl overflow-hidden shrink-0 border border-slate-100 shadow-sm transition-transform group-hover:scale-105">
@@ -196,7 +202,7 @@ export function StyleLibrary({ isOpen, onClose, onSelect, selectedId }: StyleLib
 
                      <div className="mt-12 pt-8 border-t border-slate-100 flex items-center gap-4">
                         <button 
-                          onClick={() => onSelect(selectedStyle)}
+                          onClick={() => handleSelect(selectedStyle)}
                           className="flex-1 bg-slate-900 text-white font-bold py-4 rounded-2xl hover:bg-black transition-all flex items-center justify-center gap-3 shadow-xl shadow-slate-200"
                         >
                           <Armchair className="w-5 h-5 fill-current text-blue-400" />

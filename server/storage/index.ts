@@ -2,6 +2,7 @@ import { JsonStorageAdapter } from './jsonStorage';
 import { SupabaseStorageAdapter } from './supabaseStorage';
 import {
   CreateGenerationJobInput,
+  ClaimGenerationJobInput,
   AdminDashboard,
   CreateGenerationRecordInput,
   CreateGenerationResultInput,
@@ -18,6 +19,7 @@ import {
   CreateUserProfileInput,
   GenerationJob,
   GenerationJobDiagnostics,
+  GenerationErrorCategory,
   GenerationJobStep,
   GenerationRecord,
   GenerationResult,
@@ -37,10 +39,13 @@ import {
   UpdateUserProfileInput,
   UserProfile,
   EditSession, EditMessage, AssetVersion, CreateEditSessionInput, CreateEditMessageInput, CreateAssetVersionInput,
+  DesignWorkflow, DesignWorkflowNode, DesignWorkflowStageKey, CreateDesignWorkflowInput, CreateDesignWorkflowNodeInput,
+  UpdateDesignWorkflowInput, UpdateDesignWorkflowNodeInput,
 } from './types';
 
 export type {
   CreateGenerationJobInput,
+  ClaimGenerationJobInput,
   AdminDashboard,
   CreateGenerationRecordInput,
   CreateGenerationResultInput,
@@ -57,6 +62,7 @@ export type {
   CreateUserProfileInput,
   GenerationJob,
   GenerationJobDiagnostics,
+  GenerationErrorCategory,
   GenerationJobStep,
   GenerationRecord,
   GenerationResult,
@@ -76,6 +82,8 @@ export type {
   UpdateUserProfileInput,
   UserProfile,
   EditSession, EditMessage, AssetVersion, CreateEditSessionInput, CreateEditMessageInput, CreateAssetVersionInput,
+  DesignWorkflow, DesignWorkflowNode, DesignWorkflowStageKey, CreateDesignWorkflowInput, CreateDesignWorkflowNodeInput,
+  UpdateDesignWorkflowInput, UpdateDesignWorkflowNodeInput,
 } from './types';
 
 export const storageAdapter: StorageAdapter = createStorageAdapter();
@@ -162,6 +170,15 @@ export function updateGenerationResult(id: string, userId: string, input: Update
   return storageAdapter.updateGenerationResult(id, userId, input);
 }
 
+export function createDesignWorkflow(input: CreateDesignWorkflowInput) { return storageAdapter.createDesignWorkflow(input); }
+export function getActiveDesignWorkflow(projectId: string, userId: string) { return storageAdapter.getActiveDesignWorkflow(projectId, userId); }
+export function getDesignWorkflow(id: string, projectId: string, userId: string) { return storageAdapter.getDesignWorkflow(id, projectId, userId); }
+export function updateDesignWorkflow(id: string, projectId: string, userId: string, input: UpdateDesignWorkflowInput) { return storageAdapter.updateDesignWorkflow(id, projectId, userId, input); }
+export function listDesignWorkflowNodes(workflowId: string, projectId: string, userId: string) { return storageAdapter.listDesignWorkflowNodes(workflowId, projectId, userId); }
+export function getDesignWorkflowNode(id: string, workflowId: string, projectId: string, userId: string) { return storageAdapter.getDesignWorkflowNode(id, workflowId, projectId, userId); }
+export function createDesignWorkflowNode(input: CreateDesignWorkflowNodeInput) { return storageAdapter.createDesignWorkflowNode(input); }
+export function updateDesignWorkflowNode(id: string, input: UpdateDesignWorkflowNodeInput) { return storageAdapter.updateDesignWorkflowNode(id, input); }
+
 export function createGenerationJob(input: CreateGenerationJobInput): Promise<GenerationJob | null> {
   return storageAdapter.createGenerationJob(input);
 }
@@ -170,8 +187,28 @@ export function getGenerationJob(id: string, userId?: string): Promise<Generatio
   return storageAdapter.getGenerationJob(id, userId);
 }
 
+export function getGenerationJobByIdempotencyKey(userId: string, idempotencyKey: string): Promise<GenerationJob | null> {
+  return storageAdapter.getGenerationJobByIdempotencyKey(userId, idempotencyKey);
+}
+
 export function listRunnableGenerationJobs(): Promise<GenerationJob[]> {
   return storageAdapter.listRunnableGenerationJobs();
+}
+
+export function claimGenerationJob(input: ClaimGenerationJobInput): Promise<GenerationJob | null> {
+  return storageAdapter.claimGenerationJob(input);
+}
+
+export function renewGenerationJobLease(id: string, workerId: string, leaseDurationMs: number): Promise<boolean> {
+  return storageAdapter.renewGenerationJobLease(id, workerId, leaseDurationMs);
+}
+
+export function updateGenerationJobWithLease(
+  id: string,
+  workerId: string,
+  input: UpdateGenerationJobInput,
+): Promise<GenerationJob | null> {
+  return storageAdapter.updateGenerationJobWithLease(id, workerId, input);
 }
 
 export function updateGenerationJob(id: string, input: UpdateGenerationJobInput): Promise<GenerationJob | null> {
@@ -188,6 +225,10 @@ export function createImageAsset(input: CreateImageAssetInput): Promise<ImageAss
 
 export function getImageAsset(id: string, userId?: string): Promise<ImageAsset | null> {
   return storageAdapter.getImageAsset(id, userId);
+}
+
+export function listImageAssets(userId: string, limit = 40): Promise<ImageAsset[]> {
+  return storageAdapter.listImageAssets(userId, limit);
 }
 
 export function createFloorPlanRegionSet(input: CreateFloorPlanRegionSetInput) {
@@ -215,11 +256,13 @@ export function saveFloorPlanRegionMaterials(regionSetId: string, userId: string
 }
 
 export function createEditSession(input: CreateEditSessionInput, sourceAsset: ImageAsset) { return storageAdapter.createEditSession(input, sourceAsset); }
+export function listEditSessions(userId: string, projectId?: string | null) { return storageAdapter.listEditSessions(userId, projectId); }
 export function getEditSession(id: string, userId: string) { return storageAdapter.getEditSession(id, userId); }
-export function updateEditSession(id: string, userId: string, input: Partial<Pick<EditSession, 'currentVersionId' | 'status' | 'title'>>) { return storageAdapter.updateEditSession(id, userId, input); }
+export function updateEditSession(id: string, userId: string, input: Partial<Pick<EditSession, 'currentVersionId' | 'primaryVersionId' | 'finalVersionId' | 'status' | 'title'>>) { return storageAdapter.updateEditSession(id, userId, input); }
 export function listAssetVersions(sessionId: string, userId: string) { return storageAdapter.listAssetVersions(sessionId, userId); }
 export function getAssetVersion(id: string, sessionId: string, userId: string) { return storageAdapter.getAssetVersion(id, sessionId, userId); }
 export function createAssetVersion(input: CreateAssetVersionInput) { return storageAdapter.createAssetVersion(input); }
+export function updateAssetVersion(id: string, sessionId: string, userId: string, input: Partial<Pick<AssetVersion, 'displayName' | 'note' | 'exportedAt'>>) { return storageAdapter.updateAssetVersion(id, sessionId, userId, input); }
 export function createEditMessage(input: CreateEditMessageInput) { return storageAdapter.createEditMessage(input); }
 export function getEditMessage(id: string) { return storageAdapter.getEditMessage(id); }
 export function getEditMessageByClientRequest(sessionId: string, clientRequestId: string) { return storageAdapter.getEditMessageByClientRequest(sessionId, clientRequestId); }
@@ -266,6 +309,10 @@ export function createShareLink(input: CreateShareLinkInput): Promise<ShareLink 
   return storageAdapter.createShareLink(input);
 }
 
+export function listProjectShareLinks(projectId: string, userId: string): Promise<ShareLink[]> {
+  return storageAdapter.listProjectShareLinks(projectId, userId);
+}
+
 export function getShareLinkByToken(token: string): Promise<ShareLink | null> {
   return storageAdapter.getShareLinkByToken(token);
 }
@@ -292,6 +339,10 @@ export function getCreditTransactionByReference(
   referenceId: string,
 ): Promise<CreditTransaction | null> {
   return storageAdapter.getCreditTransactionByReference(userId, type, referenceId);
+}
+
+export function refundGenerationJobOnce(jobId: string): Promise<boolean> {
+  return storageAdapter.refundGenerationJobOnce(jobId);
 }
 
 export function getAdminDashboard(): Promise<AdminDashboard> {

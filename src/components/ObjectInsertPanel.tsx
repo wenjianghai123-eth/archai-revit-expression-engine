@@ -1,10 +1,12 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Crosshair, Download, ExternalLink, ImagePlus, Move, RotateCcw, RotateCw, Trash2, Upload, X } from 'lucide-react';
+import { BookOpen, Crosshair, Download, ImagePlus, RotateCcw, Trash2, Upload, WandSparkles, X } from 'lucide-react';
 import {
   GenerationConfig,
   GenerationResultOption,
   GenerationRunStateOverride,
   GenerationStep,
+  ResultSendTargetStep,
+  SecondaryEditAction,
   ObjectInsertItemConfig,
   ObjectInsertDebugMode,
   ObjectFidelity,
@@ -15,24 +17,36 @@ import {
   ObjectInsertPositionConstraintStrength,
   ObjectInsertSurface,
   ObjectInsertType,
+  ObjectInsertWorkflowMode,
   ObjectPlacement,
   StepState,
   UploadedImage,
 } from '../types';
-import { uploadImageAsset } from '../lib/api';
-import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
+import { listImageAssets, removeImageAssetBackground, uploadImageAsset, type ImageAsset } from '../lib/api';
 import { createUploadedImage, validateImageFile } from '../utils/file';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { resolveAssetUrl } from '../utils/assetUrl';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { AspectRatioImage } from './common/AspectRatioImage';
 import { GenerationImageViewer } from './common/GenerationImageViewer';
+import { ResultQualityReport } from './common/ResultQualityReport';
+import { normalizeStepGenerationResult } from '../utils/normalizeGenerationResult';
+import { GenerationResultActions } from './common/GenerationResultActions';
+import { NormalizedGenerationProgress } from './common/GenerationProgress';
 import { IMAGE_UPLOAD_ACCEPT, readImageTypeUploadError } from '../utils/imageValidation';
 import { SavePromptTemplateModal } from './SavePromptTemplateModal';
 import { canSavePromptTemplate } from '../utils/savedPromptTemplates';
+import { ResultSendActions } from './workspace/SecondaryEditActions';
+import { ObjectInsertCanvas, type ObjectInsertCanvasInteraction } from './object-insert/ObjectInsertCanvas';
+import { ObjectInsertLayerPanel } from './object-insert/ObjectInsertLayerPanel';
+import { ObjectInsertBasicSettings } from './object-insert/ObjectInsertBasicSettings';
+import { ObjectInsertSceneEnrichmentPanel } from './object-insert/ObjectInsertSceneEnrichmentPanel';
+import { ObjectInsertResultComparison } from './object-insert/ObjectInsertResultComparison';
+import { ObjectInsertAssetLibrary } from './object-insert/ObjectInsertAssetLibrary';
+import { ObjectInsertAdvancedSettings } from './object-insert/ObjectInsertAdvancedSettings';
 
 type UploadKind = 'source' | 'object';
-type InteractionMode = 'move' | 'resize' | 'rotate';
+type InteractionMode = ObjectInsertCanvasInteraction;
 
 interface ObjectInsertDraftItem {
   id: string;
@@ -48,6 +62,10 @@ interface ObjectInsertDraftItem {
   placementMode: ObjectInsertPlacementMode;
   placementIntent: string;
   extraPrompt: string;
+  visible: boolean;
+  locked: boolean;
+  zIndex: number;
+  backgroundRemovedAssetId?: string;
 }
 
 interface ObjectInsertPanelProps {
@@ -57,6 +75,8 @@ interface ObjectInsertPanelProps {
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
   onGenerate: (stateOverride?: GenerationRunStateOverride) => void;
   onContinueRefineSource?: (image: UploadedImage, source: { resultId?: string; label: string }) => void;
+  onSecondaryEditResult?: (resultId: string, action: SecondaryEditAction) => void;
+  onSendResultToStep?: (resultId: string, targetStep: ResultSendTargetStep) => void;
   projectName?: string | null;
   isAdmin?: boolean;
 }
@@ -185,6 +205,8 @@ export function ObjectInsertPanel({
   onUpdateConfig,
   onGenerate,
   onContinueRefineSource,
+  onSecondaryEditResult,
+  onSendResultToStep,
   projectName,
   isAdmin = false,
 }: ObjectInsertPanelProps) {
@@ -205,13 +227,19 @@ export function ObjectInsertPanel({
   const [isSelected, setIsSelected] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [isPreparingGeneration, setIsPreparingGeneration] = useState(false);
-  const [isDownloadingResult, setIsDownloadingResult] = useState(false);
-  const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [isSafetyDebugEnabled, setIsSafetyDebugEnabled] = useState(false);
   const [debugInputMode, setDebugInputMode] = useState<ObjectInsertDebugMode>('full');
   const [isSaveTemplateOpen, setIsSaveTemplateOpen] = useState(false);
+  const [showPlacementGuides, setShowPlacementGuides] = useState(true);
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+  const [assetLibrary, setAssetLibrary] = useState<ImageAsset[]>([]);
+  const [assetLibraryLoading, setAssetLibraryLoading] = useState(false);
+  const [assetLibraryError, setAssetLibraryError] = useState<string | null>(null);
+  const [isRemovingBackground, setIsRemovingBackground] = useState(false);
+  const undoHistoryRef = useRef<ObjectInsertDraftItem[][]>([]);
+  const redoHistoryRef = useRef<ObjectInsertDraftItem[][]>([]);
+  const [historyRevision, setHistoryRevision] = useState(0);
 
   const sourceWidth = sourceImage?.width || 1200;
   const sourceHeight = sourceImage?.height || 800;
@@ -237,9 +265,17 @@ export function ObjectInsertPanel({
   const placementMode = activeObjectItem?.placementMode || readObjectInsertPlacementMode(state.config);
   const placementModeOption = objectInsertPlacementModeOptions.find(option => option.value === placementMode)
     || objectInsertPlacementModeOptions[0];
-  const selectedResult = state.generationResults.find(result => result.isSelected) || state.generationResults[0];
+  const selectedResult = state.generationResults.find(result => result.id === selectedCandidateId)
+    || state.generationResults.find(result => result.isSelected)
+    || state.generationResults[0];
   const originalResultImage = getOriginalResultImageUrl(selectedResult, state.outputImage);
   const originalResultAssetId = getOriginalResultAssetId(selectedResult);
+  const normalizedResult = normalizeStepGenerationResult(state, {
+    originalImageUrl: sourceImage ? readImageSrc(sourceImage) : null,
+    originalAssetId: sourceImage?.assetId,
+    resultImageUrl: originalResultImage,
+    resultAssetId: originalResultAssetId,
+  });
   const resultDimensionsText = formatResultDimensions(selectedResult);
   const canSaveTemplate = canSavePromptTemplate(GenerationStep.ObjectInsert, state, selectedResult, originalResultImage);
   const placementIntent = activeObjectItem?.placementIntent || readObjectInsertPlacementIntent(state.config);
@@ -253,6 +289,10 @@ export function ObjectInsertPanel({
   const enforceContactShadow = readObjectInsertBooleanConstraint(state.config, activeObjectItem, 'enforceContactShadow');
   const enforceOcclusion = readObjectInsertBooleanConstraint(state.config, activeObjectItem, 'enforceOcclusion');
   const enforcePerspectiveScale = readObjectInsertBooleanConstraint(state.config, activeObjectItem, 'enforcePerspectiveScale');
+  const workflowMode: ObjectInsertWorkflowMode = state.config.objectInsertWorkflowMode === 'scene-enrichment' ? 'scene-enrichment' : 'placement';
+  const sceneEnrichment = state.config.objectInsertSceneEnrichment || { plants: 'moderate', people: 'few', decorations: 'moderate' };
+  const canUndoObjectEdit = historyRevision >= 0 && undoHistoryRef.current.length > 0;
+  const canRedoObjectEdit = historyRevision >= 0 && redoHistoryRef.current.length > 0;
   const generationPreflightWarnings = useMemo(() => buildObjectInsertPreflightWarnings({
     surface: activeObjectInsertSurface,
     objectImage,
@@ -312,6 +352,8 @@ export function ObjectInsertPanel({
       objectInsertCandidateStrategy: nextCandidateStrategy,
       objectInsertCandidateStrategies: nextCandidateStrategies,
       objectInsertCandidatePromptHints: nextCandidatePromptHints,
+      objectInsertWorkflowMode: patch.objectInsertWorkflowMode || workflowMode,
+      objectInsertSceneEnrichment: patch.objectInsertSceneEnrichment || sceneEnrichment,
       placementMode: nextPlacementMode,
       placementIntent: nextPlacementIntent,
       harmonyPriority: nextHarmonyPriority,
@@ -346,6 +388,8 @@ export function ObjectInsertPanel({
         objectInsertCandidateStrategy: nextCandidateStrategy,
         objectInsertCandidateStrategies: nextCandidateStrategies,
         objectInsertCandidatePromptHints: nextCandidatePromptHints,
+        workflowMode: nestedPatch.workflowMode || patch.objectInsertWorkflowMode || workflowMode,
+        sceneEnrichment: nestedPatch.sceneEnrichment || patch.objectInsertSceneEnrichment || sceneEnrichment,
         objectType: nestedPatch.objectType || nextObjectType,
         objectInsertSurface: nestedPatch.objectInsertSurface || nextObjectInsertSurface,
         objectFidelity: nestedPatch.objectFidelity || nextObjectFidelity,
@@ -375,10 +419,12 @@ export function ObjectInsertPanel({
     placementMode,
     positionConstraintStrength,
     sourceImage?.assetId,
+    sceneEnrichment,
     state.config.customPrompt,
     state.config.objectInsert,
     state.config.objectInsertExtraPrompt,
     uiMode,
+    workflowMode,
   ]);
 
   const updatePlacement = useCallback((nextPlacement: ObjectPlacement, itemId = activeObjectItem?.id) => {
@@ -407,7 +453,24 @@ export function ObjectInsertPanel({
     return createInitialPlacement(source, object);
   }, []);
 
-  const applyObjectItems = useCallback((nextItems: ObjectInsertDraftItem[], nextActiveId = activeItemId) => {
+  const cloneObjectItems = useCallback((items: ObjectInsertDraftItem[]) => items.map(item => ({
+    ...item,
+    placement: { ...item.placement },
+    referenceImages: [...item.referenceImages],
+  })), []);
+
+  const pushObjectHistory = useCallback(() => {
+    undoHistoryRef.current = [...undoHistoryRef.current.slice(-29), cloneObjectItems(objectItems)];
+    redoHistoryRef.current = [];
+    setHistoryRevision(value => value + 1);
+  }, [cloneObjectItems, objectItems]);
+
+  const applyObjectItems = useCallback((nextItems: ObjectInsertDraftItem[], nextActiveId = activeItemId, recordHistory = true) => {
+    if (recordHistory) {
+      undoHistoryRef.current = [...undoHistoryRef.current.slice(-29), cloneObjectItems(objectItems)];
+      redoHistoryRef.current = [];
+      setHistoryRevision(value => value + 1);
+    }
     const safeItems = nextItems.slice(0, maxObjectItems);
     const nextActiveItem = safeItems.find(item => item.id === nextActiveId) || safeItems[0] || null;
     setObjectItems(safeItems);
@@ -424,7 +487,25 @@ export function ObjectInsertPanel({
         objectItems: toObjectInsertConfigItems(safeItems),
       },
     }));
-  }, [activeItemId, buildObjectInsertConfigPatch, onUpdateConfig, onUpdateMaterialImage, placementIntent, placementMode, state.config.objectInsert]);
+  }, [activeItemId, buildObjectInsertConfigPatch, cloneObjectItems, objectItems, onUpdateConfig, onUpdateMaterialImage, placementIntent, placementMode, state.config.objectInsert]);
+
+  const handleUndoObjectEdit = useCallback(() => {
+    const previous = undoHistoryRef.current.pop();
+    if (!previous) return;
+    redoHistoryRef.current.push(cloneObjectItems(objectItems));
+    const restoredActiveId = previous.some(item => item.id === activeItemId) ? activeItemId : previous[0]?.id || '';
+    applyObjectItems(cloneObjectItems(previous), restoredActiveId, false);
+    setHistoryRevision(value => value + 1);
+  }, [activeItemId, applyObjectItems, cloneObjectItems, objectItems]);
+
+  const handleRedoObjectEdit = useCallback(() => {
+    const next = redoHistoryRef.current.pop();
+    if (!next) return;
+    undoHistoryRef.current.push(cloneObjectItems(objectItems));
+    const restoredActiveId = next.some(item => item.id === activeItemId) ? activeItemId : next[0]?.id || '';
+    applyObjectItems(cloneObjectItems(next), restoredActiveId, false);
+    setHistoryRevision(value => value + 1);
+  }, [activeItemId, applyObjectItems, cloneObjectItems, objectItems]);
 
   const handleAddObjectItem = useCallback(() => {
     if (objectItems.length >= maxObjectItems) {
@@ -692,20 +773,9 @@ export function ObjectInsertPanel({
 
       const nextItems = [...baseItems, ...newItems].slice(0, maxObjectItems);
       const nextActiveItem = newItems[0] || nextItems[0];
-      setObjectItems(nextItems);
-      setActiveItemId(nextActiveItem.id);
-      if (nextActiveItem.referenceImages[0]) onUpdateMaterialImage(nextActiveItem.referenceImages[0]);
-      if (nextActiveItem.placement) setPlacement(nextActiveItem.placement);
+      applyObjectItems(nextItems, nextActiveItem.id);
       setUploadErrors(prev => ({ ...prev, object: null }));
       setExportResult(null);
-      onUpdateConfig(buildObjectInsertConfigPatch({
-        objectReferenceAssetId: nextActiveItem.referenceImages[0]?.assetId,
-        objectPlacement: nextActiveItem.placement,
-        objectInsert: {
-          ...(state.config.objectInsert || {}),
-          objectItems: toObjectInsertConfigItems(nextItems),
-        },
-      }));
       setMessage(`已新增 ${newItems.length} 个植入对象。`);
     } catch (error) {
       setUploadErrors(prev => ({
@@ -717,20 +787,17 @@ export function ObjectInsertPanel({
     activeObjectFidelity,
     activeObjectInsertSurface,
     activeObjectType,
-    buildObjectInsertConfigPatch,
+    applyObjectItems,
     createPlacementForImages,
     enforceContactShadow,
     enforceOcclusion,
     enforcePerspectiveScale,
     objectItems,
-    onUpdateConfig,
-    onUpdateMaterialImage,
     placementIntent,
     placementMode,
     sourceImage,
     sourceHeight,
     sourceWidth,
-    state.config.objectInsert,
   ]);
 
   const startInteraction = (itemId: string, mode: InteractionMode, event: React.PointerEvent<HTMLElement>) => {
@@ -743,6 +810,7 @@ export function ObjectInsertPanel({
     setPlacement(item.placement);
     onUpdateMaterialImage(itemImage);
     setIsSelected(true);
+    pushObjectHistory();
     interactionRef.current = {
       mode,
       itemId,
@@ -755,6 +823,7 @@ export function ObjectInsertPanel({
 
   const handleCenterObject = () => {
     if (!sourceImage || !objectImage) return;
+    pushObjectHistory();
     updatePlacement({
       ...placement,
       x: (sourceWidth - placement.width) / 2,
@@ -765,6 +834,7 @@ export function ObjectInsertPanel({
 
   const handleResetPlacement = () => {
     if (!sourceImage || !objectImage) return;
+    pushObjectHistory();
     const nextPlacement = createInitialPlacement(sourceImage, objectImage);
     updatePlacement(nextPlacement);
     setMessage('摆放已重置。');
@@ -772,13 +842,13 @@ export function ObjectInsertPanel({
 
   const handleRemoveObject = () => {
     interactionRef.current = null;
-    onUpdateMaterialImage(null);
-    setPlacement(emptyPlacement);
+    if (activeObjectItem) {
+      handleUpdateObjectItem(activeObjectItem.id, { referenceImages: [], backgroundRemovedAssetId: undefined });
+    } else {
+      onUpdateMaterialImage(null);
+      setPlacement(emptyPlacement);
+    }
     setExportResult(null);
-    onUpdateConfig({
-      objectReferenceAssetId: undefined,
-      objectPlacement: emptyPlacement,
-    });
     setMessage('已删除物体参考图。');
   };
 
@@ -857,6 +927,136 @@ export function ObjectInsertPanel({
       objectInsertCandidateStrategies: strategies,
       objectInsertCandidatePromptHints: buildObjectInsertCandidatePromptHints(strategies),
     }));
+  };
+
+  const handleWorkflowModeChange = (value: ObjectInsertWorkflowMode) => {
+    onUpdateConfig(buildObjectInsertConfigPatch({
+      objectInsertWorkflowMode: value,
+      objectInsertSceneEnrichment: sceneEnrichment,
+      objectInsert: { ...(state.config.objectInsert || {}), workflowMode: value, sceneEnrichment },
+    }));
+    setMessage(value === 'scene-enrichment' ? '已切换为场景丰富，新增内容仍通过 object_insert 生成。' : '已切换为手动元素摆放。');
+  };
+
+  const handleSceneEnrichmentChange = (value: NonNullable<GenerationConfig['objectInsertSceneEnrichment']>) => {
+    onUpdateConfig(buildObjectInsertConfigPatch({
+      objectInsertWorkflowMode: 'scene-enrichment',
+      objectInsertSceneEnrichment: value,
+      objectInsert: { ...(state.config.objectInsert || {}), workflowMode: 'scene-enrichment', sceneEnrichment: value },
+    }));
+  };
+
+  const handleToggleLayerVisible = (itemId: string) => {
+    const item = objectItems.find(candidate => candidate.id === itemId);
+    if (item) handleUpdateObjectItem(itemId, { visible: !item.visible });
+  };
+
+  const handleToggleLayerLocked = (itemId: string) => {
+    const item = objectItems.find(candidate => candidate.id === itemId);
+    if (item) handleUpdateObjectItem(itemId, { locked: !item.locked });
+  };
+
+  const handleMoveLayer = (itemId: string, direction: -1 | 1) => {
+    const index = objectItems.findIndex(item => item.id === itemId);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= objectItems.length) return;
+    const next = [...objectItems];
+    [next[index], next[target]] = [next[target], next[index]];
+    applyObjectItems(next.map((item, zIndex) => ({ ...item, zIndex })), itemId);
+  };
+
+  const handleDuplicateLayer = (itemId: string) => {
+    const item = objectItems.find(candidate => candidate.id === itemId);
+    if (!item || objectItems.length >= maxObjectItems) return;
+    const duplicate: ObjectInsertDraftItem = {
+      ...item,
+      id: createObjectItemId(),
+      objectLabel: `${item.objectLabel} 副本`,
+      placement: sanitizePlacement({ ...item.placement, x: item.placement.x + 24, y: item.placement.y + 24 }, sourceWidth, sourceHeight),
+      referenceImages: [...item.referenceImages],
+      locked: false,
+      zIndex: objectItems.length,
+    };
+    applyObjectItems([...objectItems, duplicate], duplicate.id);
+  };
+
+  const handleRenameLayer = (itemId: string) => {
+    const item = objectItems.find(candidate => candidate.id === itemId);
+    if (!item) return;
+    const value = window.prompt('请输入图层名称', item.objectLabel);
+    if (value?.trim()) handleUpdateObjectItem(itemId, { objectLabel: value.trim().slice(0, 40) });
+  };
+
+  const handleSnapActiveObject = () => {
+    if (!activeObjectItem || !activeObjectItem.placement.width) return;
+    pushObjectHistory();
+    const next = { ...activeObjectItem.placement };
+    if (activeObjectInsertSurface === 'floor' || activeObjectInsertSurface === 'outdoor-ground') next.y = sourceHeight - next.height * 1.04;
+    if (activeObjectInsertSurface === 'wall') next.y = Math.max(0, sourceHeight * 0.28 - next.height / 2);
+    if (activeObjectInsertSurface === 'tabletop') next.y = Math.max(0, sourceHeight * 0.58 - next.height);
+    if (activeObjectInsertSurface === 'ceiling') next.y = sourceHeight * 0.04;
+    updatePlacement(next, activeObjectItem.id);
+    setMessage(`已按「${objectInsertSurfaceOptions.find(option => option.value === activeObjectInsertSurface)?.label || '自动'}」调整落点。`);
+  };
+
+  const handleRefreshAssetLibrary = useCallback(async () => {
+    setAssetLibraryLoading(true);
+    setAssetLibraryError(null);
+    try {
+      setAssetLibrary(await listImageAssets(40));
+    } catch (error) {
+      setAssetLibraryError(error instanceof Error ? error.message : '素材库加载失败。');
+    } finally {
+      setAssetLibraryLoading(false);
+    }
+  }, []);
+
+  const handleSelectLibraryAsset = (asset: ImageAsset) => {
+    const image: UploadedImage = {
+      id: `library-${asset.id}`,
+      name: asset.filename,
+      type: asset.mimeType,
+      size: asset.size,
+      dataUrl: resolveAssetUrl(asset.publicUrl || asset.url),
+      assetId: asset.id,
+      url: asset.url,
+      publicUrl: asset.publicUrl,
+      thumbnailUrl: asset.thumbnailUrl,
+      uploadStatus: 'uploaded',
+    };
+    const basePlacement = sourceImage ? createPlacementForImages(sourceImage, image) : emptyPlacement;
+    const item: ObjectInsertDraftItem = {
+      ...createDefaultObjectItem(objectItems.length),
+      objectLabel: asset.filename.replace(/\.[^.]+$/u, '').slice(0, 40) || `对象 ${objectItems.length + 1}`,
+      referenceImages: [image],
+      placement: sourceImage ? offsetPlacement(basePlacement, sourceWidth, sourceHeight, objectItems.length) : basePlacement,
+      objectType: activeObjectType,
+      objectInsertSurface: activeObjectInsertSurface,
+      zIndex: objectItems.length,
+    };
+    const next = objectItems.some(existing => existing.referenceImages.length === 0)
+      ? objectItems.map((existing, index) => index === 0 ? item : existing)
+      : [...objectItems, item];
+    applyObjectItems(next.slice(0, maxObjectItems), item.id);
+  };
+
+  const handleRemoveActiveBackground = async () => {
+    const image = activeObjectItem?.referenceImages[0];
+    if (!activeObjectItem || !image?.assetId || isRemovingBackground) {
+      setMessage('请先选择已完成上传的对象素材。');
+      return;
+    }
+    setIsRemovingBackground(true);
+    try {
+      const asset = await removeImageAssetBackground(image.assetId);
+      const nextImage: UploadedImage = { ...image, id: `background-removed-${asset.id}`, assetId: asset.id, url: asset.url, publicUrl: asset.publicUrl, thumbnailUrl: asset.thumbnailUrl, type: asset.mimeType, size: asset.size, uploadStatus: 'uploaded' };
+      handleUpdateObjectItem(activeObjectItem.id, { referenceImages: [nextImage, ...activeObjectItem.referenceImages.slice(1)], backgroundRemovedAssetId: asset.id });
+      setMessage('自动去背景已生成新素材，原始素材不会被覆盖。');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '自动去背景失败。');
+    } finally {
+      setIsRemovingBackground(false);
+    }
   };
 
   const handleAutoAdjustChange = (
@@ -1107,7 +1307,63 @@ export function ObjectInsertPanel({
       setMessage('请先上传原始场景图。');
       return;
     }
-    const candidateItems = objectItems.filter(item => item.referenceImages.length > 0).slice(0, maxObjectItems);
+    if (workflowMode === 'scene-enrichment') {
+      setIsPreparingGeneration(true);
+      setMessage('正在准备场景丰富任务...');
+      try {
+        const uploaded = await ensureUploadedImageAsset(sourceImage, 'object-insert-scene-enrichment');
+        const fullPlacement: ObjectPlacement = { x: 0, y: 0, width: uploaded.image.width || sourceWidth, height: uploaded.image.height || sourceHeight, rotation: 0 };
+        const effectiveConfig = { ...state.config, ...configOverride } as GenerationConfig;
+        const count = effectiveConfig.batchCount === 2 || effectiveConfig.batchCount === 3 ? effectiveConfig.batchCount : candidateCount;
+        const strategies = resolveObjectInsertCandidateStrategies(effectiveConfig, count);
+        const enrichment = effectiveConfig.objectInsertSceneEnrichment || sceneEnrichment;
+        const configPatch: GenerationConfig = {
+          ...effectiveConfig,
+          step: 'object_insert',
+          objectInsertMode: 'object_insert_preview_fusion',
+          objectInsertWorkflowMode: 'scene-enrichment',
+          objectInsertSceneEnrichment: enrichment,
+          sourceImageAssetId: uploaded.assetId,
+          placementPreviewAssetId: uploaded.assetId,
+          placementGuideAssetId: uploaded.assetId,
+          objectPlacement: fullPlacement,
+          objectInsertDebugMode: 'source_placement_preview',
+          placementMode: 'natural',
+          editTarget: 'furniture',
+          batchCount: count,
+          objectInsertCandidateStrategy: strategies[0] || 'natural-fit',
+          objectInsertCandidateStrategies: strategies,
+          objectInsertCandidatePromptHints: buildObjectInsertCandidatePromptHints(strategies),
+          preserveStructure: true,
+          preserveCamera: true,
+          objectInsert: {
+            ...(effectiveConfig.objectInsert || {}),
+            mode: 'object_insert_preview_fusion',
+            workflowMode: 'scene-enrichment',
+            sceneEnrichment: enrichment,
+            sourceImageAssetId: uploaded.assetId,
+            objectItems: [],
+            previewAssetId: uploaded.assetId,
+            guideAssetId: uploaded.assetId,
+            placement: fullPlacement,
+            placementMode: 'natural',
+            objectInsertCandidateStrategy: strategies[0] || 'natural-fit',
+            objectInsertCandidateStrategies: strategies,
+            objectInsertCandidatePromptHints: buildObjectInsertCandidatePromptHints(strategies),
+          },
+        };
+        onUpdateInputImage(uploaded.image);
+        onUpdateConfig(configPatch);
+        onGenerate({ inputImage: uploaded.image, materialImage: null, maskImage: null, useFullImageMask: false, config: configPatch });
+        setMessage(`场景丰富任务已提交：绿植 ${enrichment.plants}、人物 ${enrichment.people}、装饰 ${enrichment.decorations}。`);
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : '场景丰富任务创建失败。');
+      } finally {
+        setIsPreparingGeneration(false);
+      }
+      return;
+    }
+    const candidateItems = objectItems.filter(item => item.visible && item.referenceImages.length > 0).slice(0, maxObjectItems);
     if (candidateItems.length === 0) {
       setMessage('请至少添加 1 个植入对象，并上传参考图。');
       return;
@@ -1163,6 +1419,8 @@ export function ObjectInsertPanel({
         ...effectivePreviewFusionConfig,
         step: 'object_insert',
         objectInsertMode: 'object_insert_preview_fusion',
+        objectInsertWorkflowMode: 'placement',
+        objectInsertSceneEnrichment: sceneEnrichment,
         sourceImageAssetId: previewFusionSourceUpload.assetId,
         placementPreviewAssetId: placementPreviewAsset.id,
         placementGuideAssetId: placementPreviewAsset.id,
@@ -1180,6 +1438,8 @@ export function ObjectInsertPanel({
         allowAutoAdjustScale: previewFusionAllowAutoAdjustScale,
         objectInsert: {
           mode: 'object_insert_preview_fusion',
+          workflowMode: 'placement',
+          sceneEnrichment,
           sourceImageAssetId: previewFusionSourceUpload.assetId,
           objectItems: previewFusionObjectItemConfigs,
           globalExtraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
@@ -1205,10 +1465,10 @@ export function ObjectInsertPanel({
         editTarget: 'furniture',
         preserveStructure: true,
         preserveCamera: true,
-        batchCount: 1,
-        objectInsertCandidateStrategy: 'natural-fit',
-        objectInsertCandidateStrategies: ['natural-fit'],
-        objectInsertCandidatePromptHints: buildObjectInsertCandidatePromptHints(['natural-fit']),
+        batchCount: candidateCount,
+        objectInsertCandidateStrategy: candidateStrategies[0] || 'natural-fit',
+        objectInsertCandidateStrategies: candidateStrategies,
+        objectInsertCandidatePromptHints: buildObjectInsertCandidatePromptHints(candidateStrategies),
       };
       setExportResult({ preview: placementPreview, mask: placementPreview, placement: previewFusionObjectItemConfigs[0]?.placement || emptyPlacement });
       setObjectItems(objectItems.map(item => {
@@ -1482,28 +1742,6 @@ export function ObjectInsertPanel({
     }
   };
 
-  const handleDownloadResult = async () => {
-    if (!originalResultImage || isDownloadingResult) return;
-    setIsDownloadingResult(true);
-    setDownloadMessage(null);
-    setDownloadError(null);
-    try {
-      await downloadAsset({
-        url: originalResultImage,
-        assetId: originalResultAssetId,
-      }, buildResultImageFilename({
-        projectName,
-        featureLabel: '元素植入',
-      }));
-      setDownloadMessage('已开始下载');
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : '';
-      setDownloadError(errorMessage === downloadFallbackMessage ? downloadFallbackMessage : '下载失败，请稍后重试');
-    } finally {
-      setIsDownloadingResult(false);
-    }
-  };
-
   return (
     <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden p-3">
       <input ref={sourceInputRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} className="hidden" onChange={event => { void handleUploadImage('source', event.currentTarget.files); event.currentTarget.value = ''; }} />
@@ -1531,6 +1769,22 @@ export function ObjectInsertPanel({
           ))}
         </div>
 
+        <div className="grid grid-cols-2 gap-1 rounded-2xl border border-slate-200 bg-white p-1">
+          {([
+            { value: 'placement' as const, label: '手动元素摆放' },
+            { value: 'scene-enrichment' as const, label: '场景丰富' },
+          ]).map(option => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => handleWorkflowModeChange(option.value)}
+              className={`rounded-xl px-2 py-2 text-xs font-black transition ${workflowMode === option.value ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+
         <UploadCard
           title="原始场景图"
           description="作为画布底图，必填。"
@@ -1545,16 +1799,82 @@ export function ObjectInsertPanel({
         />
 
         {uiMode === 'simple' ? (
-          <UploadCard
-            title="物体参考图"
-            description="上传要植入的物体，随后在画布中拖拽摆放。"
-            image={objectImage}
-            error={uploadErrors.object}
-            onUpload={() => objectInputRef.current?.click()}
-            onRemove={handleRemoveObject}
-          />
+          <div className="space-y-3">
+            {workflowMode === 'placement' ? (
+              <>
+                <UploadCard
+                  title="物体参考图"
+                  description="可一次选择多张物体图；上传后在画布中拖动、缩放和旋转。"
+                  image={objectImage}
+                  error={uploadErrors.object}
+                  onUpload={() => objectInputRef.current?.click()}
+                  onRemove={handleRemoveObject}
+                />
+                <ObjectInsertBasicSettings
+                  placementMode={placementMode}
+                  surface={activeObjectInsertSurface}
+                  candidateCount={candidateCount}
+                  showGuides={showPlacementGuides}
+                  canUndo={canUndoObjectEdit}
+                  canRedo={canRedoObjectEdit}
+                  onPlacementMode={handlePlacementModeChange}
+                  onSurface={handleObjectSurfaceChange}
+                  onCandidateCount={handleCandidateCountChange}
+                  onSnap={handleSnapActiveObject}
+                  onToggleGuides={() => setShowPlacementGuides(value => !value)}
+                  onUndo={handleUndoObjectEdit}
+                  onRedo={handleRedoObjectEdit}
+                />
+                <ObjectInsertLayerPanel
+                  items={objectItems.map(item => ({
+                    id: item.id,
+                    label: item.objectLabel || readObjectTypeLabel(item.objectType),
+                    thumbnailUrl: item.referenceImages[0] ? readImageSrc(item.referenceImages[0]) : undefined,
+                    visible: item.visible,
+                    locked: item.locked,
+                  }))}
+                  activeItemId={activeObjectItem?.id || null}
+                  onSelect={itemId => { setActiveItemId(itemId); setIsSelected(true); }}
+                  onToggleVisible={handleToggleLayerVisible}
+                  onToggleLocked={handleToggleLayerLocked}
+                  onMove={handleMoveLayer}
+                  onDuplicate={handleDuplicateLayer}
+                  onDelete={handleRemoveObjectItem}
+                  onRename={handleRenameLayer}
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleRemoveActiveBackground()}
+                  disabled={!activeObjectItem?.referenceImages[0]?.assetId || isRemovingBackground}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-black text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <WandSparkles className="h-4 w-4" />
+                  {isRemovingBackground ? '正在自动去背景…' : '自动去背景（生成新素材）'}
+                </button>
+                <ObjectInsertAssetLibrary
+                  assets={assetLibrary}
+                  loading={assetLibraryLoading}
+                  error={assetLibraryError}
+                  onRefresh={() => void handleRefreshAssetLibrary()}
+                  onSelect={handleSelectLibraryAsset}
+                />
+              </>
+            ) : (
+              <>
+                <ObjectInsertSceneEnrichmentPanel value={sceneEnrichment} onChange={handleSceneEnrichmentChange} />
+                <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                  <p className="text-xs font-black text-slate-900">生成候选</p>
+                  <div className="mt-2 grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1">
+                    {([1, 2, 3] as const).map(count => (
+                      <button key={count} type="button" onClick={() => handleCandidateCountChange(count)} className={`rounded-lg px-2 py-1.5 text-xs font-black ${candidateCount === count ? 'bg-slate-900 text-white' : 'bg-white text-slate-600'}`}>{count} 张</button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         ) : (
-          <>
+          <ObjectInsertAdvancedSettings>
 
         <ObjectItemsPanel
           items={objectItems}
@@ -1861,37 +2181,50 @@ export function ObjectInsertPanel({
             ) : null}
           </div>
         ) : null}
-          </>
+          </ObjectInsertAdvancedSettings>
         )}
       </aside>
 
       <main className="workspace-canvas mx-3 flex min-w-0 flex-1 flex-col p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-lg font-black text-slate-950">摆放画布</h3>
-            <p className="text-xs text-slate-500">拖动物体图层，使用右下角缩放，顶部圆点旋转。</p>
+            <h3 className="text-lg font-black text-slate-950">{workflowMode === 'scene-enrichment' ? '场景丰富预览' : '摆放画布'}</h3>
+            <p className="text-xs text-slate-500">{workflowMode === 'scene-enrichment' ? '原始场景作为严格结构参考，数量等级会真实进入生成配置。' : '拖动物体图层，使用右下角缩放，顶部圆点旋转。'}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={handleExport}
-              disabled={!sourceImage || !objectImage || isExporting || state.isGenerating || isPreparingGeneration}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-            >
-              <Download className="h-4 w-4" />
-              {isExporting ? '正在导出' : '导出 placement preview'}
-            </button>
+            {workflowMode === 'placement' ? (
+              <button
+                type="button"
+                onClick={handleExport}
+                disabled={!sourceImage || !objectImage || isExporting || state.isGenerating || isPreparingGeneration}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+              >
+                <Download className="h-4 w-4" />
+                {isExporting ? '正在导出' : '导出 placement preview'}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => void handleGenerateMultiClick()}
-              disabled={!sourceImage || objectItems.every(item => item.referenceImages.length === 0) || state.isGenerating || isPreparingGeneration}
+              disabled={!sourceImage || (workflowMode === 'placement' && objectItems.every(item => !item.visible || item.referenceImages.length === 0)) || state.isGenerating || isPreparingGeneration}
               className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-lg shadow-blue-100 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
             >
               <ImagePlus className="h-4 w-4" />
-              {state.isGenerating ? 'AI 生成中' : isPreparingGeneration ? '准备任务中' : '生成融合效果图'}
+              {state.isGenerating ? 'AI 生成中' : isPreparingGeneration ? '准备任务中' : workflowMode === 'scene-enrichment' ? '生成场景丰富候选' : '生成融合候选'}
             </button>
           </div>
         </div>
+
+        <ObjectInsertResultComparison
+          results={state.generationResults}
+          selectedId={selectedResult?.id}
+          onSelect={setSelectedCandidateId}
+        />
+
+        <section className="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
+          <NormalizedGenerationProgress result={normalizedResult} compact />
+          <GenerationResultActions result={normalizedResult} featureName="元素植入" projectName={projectName} compact />
+        </section>
 
         {originalResultImage ? (
           <section className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -1919,24 +2252,12 @@ export function ObjectInsertPanel({
                 sourceMissingMessage="暂无原图，无法对比。"
               />
             </div>
+            {selectedResult ? (
+              <div className="border-t border-slate-100 px-4 py-3">
+                <ResultQualityReport resultId={selectedResult.id} metadata={selectedResult.metadata} />
+              </div>
+            ) : null}
             <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 bg-white px-4 py-3">
-              <button
-                type="button"
-                onClick={() => window.open(originalResultImage, '_blank', 'noopener,noreferrer')}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:border-blue-200 hover:text-blue-700"
-              >
-                <ExternalLink className="mr-1 inline h-3.5 w-3.5" />
-                查看大图
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleDownloadResult()}
-                disabled={isDownloadingResult}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Download className={`mr-1 inline h-3.5 w-3.5 ${isDownloadingResult ? 'animate-pulse' : ''}`} />
-                {isDownloadingResult ? '正在下载...' : '保存到本地'}
-              </button>
               {canSaveTemplate && selectedResult ? (
                 <button
                   type="button"
@@ -1964,10 +2285,15 @@ export function ObjectInsertPanel({
                 继续微调
               </button>
             </div>
-            {(downloadMessage || downloadError) ? (
-              <div className="border-t border-slate-100 px-4 py-2 text-xs font-semibold">
-                {downloadMessage ? <span className="text-emerald-700">{downloadMessage}</span> : null}
-                {downloadError ? <span className="text-amber-700">{downloadError}</span> : null}
+            {selectedResult && onSendResultToStep ? (
+              <div className="border-t border-slate-100 bg-slate-50 px-4 py-3">
+                <ResultSendActions
+                  resultId={selectedResult.id}
+                  currentStep={GenerationStep.ObjectInsert}
+                  onSend={onSendResultToStep}
+                  onSecondaryAction={onSecondaryEditResult}
+                  disabled={state.isGenerating || isPreparingGeneration}
+                />
               </div>
             ) : null}
           </section>
@@ -1976,59 +2302,33 @@ export function ObjectInsertPanel({
         <div className="min-h-0 flex-1 overflow-auto rounded-2xl border border-slate-200 bg-white p-3 custom-scrollbar">
           {sourceImage ? (
             <div className="mx-auto max-h-full max-w-5xl">
-              <div
-                ref={stageRef}
-                className="relative w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-950 shadow-inner"
-                style={{ aspectRatio: `${sourceWidth} / ${sourceHeight}` }}
-                onPointerDown={() => setIsSelected(false)}
-              >
-                <img src={readImageSrc(sourceImage)} alt="原始场景图" className="absolute inset-0 h-full w-full select-none object-contain" draggable={false} />
-                {objectItems.some(item => item.referenceImages[0]) ? (
-                  objectItems.map((item, index) => {
-                    const itemImage = item.referenceImages[0];
-                    if (!itemImage) return null;
-                    const isActive = item.id === activeObjectItem?.id;
-                    return (
-                      <div
-                        key={item.id}
-                        className={`absolute touch-none select-none cursor-move ${
-                          isActive && isSelected ? 'ring-2 ring-blue-400' : 'ring-1 ring-white/70'
-                        }`}
-                        style={{ ...getObjectPlacementStyle(item.placement), zIndex: 10 + index }}
-                        onPointerDown={event => startInteraction(item.id, 'move', event)}
-                      >
-                        <img src={readImageSrc(itemImage)} alt={item.objectLabel || `家具 ${index + 1}`} className="h-full w-full select-none object-contain" draggable={false} />
-                        {isActive && isSelected ? (
-                          <>
-                            <button
-                              type="button"
-                              aria-label="旋转物体"
-                              className="absolute left-1/2 top-0 flex h-8 w-8 -translate-x-1/2 -translate-y-11 items-center justify-center rounded-full border border-blue-200 bg-white text-blue-600 shadow-lg"
-                              onPointerDown={event => startInteraction(item.id, 'rotate', event)}
-                            >
-                              <RotateCw className="h-4 w-4" />
-                            </button>
-                            <button
-                              type="button"
-                              aria-label="缩放物体"
-                              className="absolute bottom-0 right-0 flex h-8 w-8 translate-x-1/2 translate-y-1/2 items-center justify-center rounded-full border border-blue-200 bg-white text-blue-600 shadow-lg"
-                              onPointerDown={event => startInteraction(item.id, 'resize', event)}
-                            >
-                              <Move className="h-4 w-4 rotate-45" />
-                            </button>
-                          </>
-                        ) : null}
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="rounded-2xl border border-dashed border-white/30 bg-slate-950/60 px-4 py-3 text-center text-sm font-bold text-white">
-                      请上传家具参考图
-                    </div>
-                  </div>
-                )}
-              </div>
+              <ObjectInsertCanvas
+                sourceUrl={readImageSrc(sourceImage)}
+                sourceLabel="原始场景图"
+                aspectRatio={`${sourceWidth} / ${sourceHeight}`}
+                items={objectItems.flatMap(item => {
+                  const image = item.referenceImages[0];
+                  return image ? [{
+                    id: item.id,
+                    label: item.objectLabel || readObjectTypeLabel(item.objectType),
+                    imageUrl: readImageSrc(image),
+                    placement: item.placement,
+                    visible: item.visible,
+                    locked: item.locked,
+                    zIndex: item.zIndex,
+                  }] : [];
+                })}
+                activeItemId={activeObjectItem?.id || null}
+                selected={isSelected}
+                showGuides={workflowMode === 'placement' && showPlacementGuides}
+                stageRef={stageRef}
+                getPlacementStyle={getObjectPlacementStyle}
+                onClearSelection={() => setIsSelected(false)}
+                onStartInteraction={startInteraction}
+              />
+              {workflowMode === 'placement' && objectItems.every(item => !item.visible || !item.referenceImages[0]) ? (
+                <button type="button" onClick={() => objectInputRef.current?.click()} className="mx-auto mt-3 block rounded-xl border border-dashed border-blue-200 bg-blue-50 px-4 py-2 text-xs font-black text-blue-700">上传一个或多个物体开始摆放</button>
+              ) : null}
             </div>
           ) : (
             <div className="flex h-full min-h-[420px] items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50">
@@ -2496,6 +2796,9 @@ function createDefaultObjectItem(index = 0): ObjectInsertDraftItem {
     placementMode: 'natural',
     placementIntent: '',
     extraPrompt: '',
+    visible: true,
+    locked: false,
+    zIndex: index,
   };
 }
 
@@ -2516,6 +2819,10 @@ function createInitialObjectItems(config: GenerationConfig, legacyObjectImage: U
       placementMode: item.placementMode === 'strict' ? 'strict' : 'natural',
       placementIntent: item.placementIntent || '',
       extraPrompt: item.extraPrompt || '',
+      visible: item.visible !== false,
+      locked: item.locked === true,
+      zIndex: typeof item.zIndex === 'number' ? item.zIndex : index,
+      backgroundRemovedAssetId: item.backgroundRemovedAssetId,
     }));
   }
 
@@ -2533,6 +2840,9 @@ function createInitialObjectItems(config: GenerationConfig, legacyObjectImage: U
     placementMode: readObjectInsertPlacementMode(config),
     placementIntent: readObjectInsertPlacementIntent(config),
     extraPrompt: config.objectInsertExtraPrompt || config.objectInsert?.extraPrompt || config.customPrompt || '',
+    visible: true,
+    locked: false,
+    zIndex: 0,
   }];
 }
 
@@ -2662,6 +2972,10 @@ function toObjectInsertConfigItems(items: ObjectInsertDraftItem[]): ObjectInsert
     placementMode: item.placementMode,
     placementIntent: item.placementIntent || undefined,
     extraPrompt: item.extraPrompt || undefined,
+    visible: item.visible,
+    locked: item.locked,
+    zIndex: item.zIndex,
+    backgroundRemovedAssetId: item.backgroundRemovedAssetId,
   }));
 }
 

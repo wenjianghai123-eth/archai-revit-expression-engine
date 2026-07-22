@@ -11,29 +11,44 @@ import { createMockGeneration, mockProvider } from './providers/mockProvider';
 import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider, MaskMode, ProviderName, QualityMode } from './providers/types';
 import { getImageSizeFromDataUrl, isValidTargetDimension, parseImageDataUrl as parseRawImageDataUrl } from './image/imageMetadata';
 import { prepareImageForProvider, prepareMaskForProvider, PreparedProviderImage } from './image/prepareProviderImage';
-import { composeLocalInpaintResult, createLocalInpaintContext, cropImageDataUrlToBox, LocalInpaintContext } from './image/localInpaint';
-import { FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT, buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode } from '../src/promptTemplates/intelligentPromptTemplates';
+import { composeLocalInpaintResult, createLocalInpaintContext, cropImageDataUrlToBox, LocalInpaintContext, prepareEditableMask } from './image/localInpaint';
+import { analyzeGenerationQuality, createUnavailableQualityReport } from './image/generationQuality';
+import { buildFloorplanTextLanguageRequirement, buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode } from '../src/promptTemplates/intelligentPromptTemplates';
 import { findPlanColorizeStyle, maxPlanColorizeBatchCount, planColorizeStyleOptions, resolvePlanColorizeStyles, type PlanColorizeStyleOption } from '../src/constants/planColorizeStyles';
 import { resolveFloorplanBatchCount, resolveFloorplanVariantPlans, type FloorplanVariantPlan } from '../src/constants/floorplanVariants';
 import { getGenerationOutputCount } from '../src/utils/generationCredits';
+import { buildDesignVariantMatrixPrompt, buildDesignVariantReportNarrative, readDesignVariantDiversity, resolveDesignVariantMatrix } from '../src/utils/designVariantMatrix';
 import { resolveImagePolishPrompts } from './prompts/imagePolishPrompt';
 import {
   adjustCredits,
+  claimGenerationJob,
   createGenerationRecord,
   createGenerationResult,
   createImageAsset,
   GenerationJob,
   GenerationJobDiagnostics,
   GenerationRecord,
-  getCreditTransactionByReference,
+  GenerationResult,
   getGenerationJob,
+  getCreditTransactionByReference,
   getImageAsset,
   ImageAsset,
-  listRunnableGenerationJobs,
+  listGenerationResults,
+  refundGenerationJobOnce,
+  renewGenerationJobLease,
   updateGenerationJob,
+  updateGenerationJobWithLease,
 } from './storage';
 import { isNonEmptyString } from './validation';
 import { completeEditGeneration, failEditGeneration, markEditGenerationRunning } from './editSessionLifecycle';
+import { completeDesignWorkflowGeneration } from './projectWorkflowLifecycle';
+import {
+  calculateGenerationRetryDelayMs,
+  classifyGenerationFailure,
+  createGenerationWorkerId,
+  getGenerationWorkerSettings,
+  logGenerationWorkerEvent,
+} from './generationWorkerReliability';
 
 export interface GenerateResponseBody {
   id: string;
@@ -47,9 +62,12 @@ export interface GenerateResponseBody {
 
 const maxImageMb = Number(process.env.MAX_IMAGE_MB || 10);
 const defaultProvider = selectProvider();
-const queuedGenerationJobIds: string[] = [];
+const embeddedWorkerId = createGenerationWorkerId('embedded');
 const activeGenerationJobIds = new Set<string>();
+const embeddedPreferredJobIds: string[] = [];
 let isGenerationWorkerScheduling = false;
+let embeddedWorkerWakeRequested = false;
+let embeddedRecoveryRequested = false;
 const providerMaintenanceUserMessage = '当前生成模型正在维护，请稍后重试，或切换其他生成模型。';
 
 type ProviderImageSettings = {
@@ -114,6 +132,25 @@ interface ProviderBatchFailure {
 
 type ProviderBatchResult = ProviderBatchSuccess | ProviderBatchFailure;
 
+function shouldExpectStructurePreservation(job: GenerationJob): boolean {
+  if (
+    job.config.preserveStructure === true
+    || job.config.preserveGeometry === true
+    || job.config.preserveLayout === true
+    || job.config.preserveLinework === true
+    || job.config.strictStructure === true
+  ) {
+    return true;
+  }
+  const step = job.step ?? readGenerationJobStep(job.config);
+  return job.mode === 'floorplan'
+    || job.mode === 'plan-colorize'
+    || job.mode === 'material-replace'
+    || job.mode === 'inpaint'
+    || step === 'image_polish'
+    || step === 'object_insert';
+}
+
 export function getGenerationProviderName(config?: Record<string, unknown>): ProviderName {
   return resolveGenerationProviderName(config);
 }
@@ -167,43 +204,11 @@ export function normalizeGenerationProviderName(value: unknown): ProviderName | 
 }
 
 export async function refundGenerationJobCredits(jobId: string): Promise<void> {
-  const job = await getGenerationJob(jobId);
-  if (!job) return;
-  if (!isRefundableGenerationJobStatus(job.status)) return;
-  if (job.creditRefunded) return;
-
-  const existingRefund = await getCreditTransactionByReference(job.userId, 'generate_refund', job.id)
-    || await getCreditTransactionByReference(job.userId, 'refund', job.id);
-  if (existingRefund) {
-    await updateGenerationJob(job.id, {
-      creditRefunded: true,
-      failureReason: job.failureReason || job.errorMessage || job.status,
-    });
-    return;
-  }
-
-  const debit = await getCreditTransactionByReference(job.userId, 'generate_charge', job.id)
-    || await getCreditTransactionByReference(job.userId, 'debit', job.id);
-  if (!debit || debit.amount >= 0) return;
-
-  const result = await adjustCredits({
-    userId: job.userId,
-    type: 'generate_refund',
-    amount: Math.abs(debit.amount),
-    reason: `Refund generation job ${job.mode}: ${job.failureReason || job.errorMessage || job.status}`,
-    referenceType: 'generation_job',
-    referenceId: job.id,
-  });
-  if (result) {
-    await updateGenerationJob(job.id, {
-      creditRefunded: true,
-      failureReason: job.failureReason || job.errorMessage || job.status,
-    });
-  }
+  await refundGenerationJobOnce(jobId);
 }
 
 async function refundPartialBatchCredits(job: GenerationJob, failedCount: number): Promise<void> {
-  if ((job.mode !== 'plan-colorize' && job.mode !== 'floorplan') || failedCount <= 0) return;
+  if ((job.mode !== 'plan-colorize' && job.mode !== 'floorplan' && job.mode !== 'material-replace' && !isFreeReferenceImageJob(job)) || failedCount <= 0) return;
   const referenceId = `${job.id}:partial-${job.mode}:${failedCount}`;
   const existingRefund = await getCreditTransactionByReference(job.userId, 'generate_refund', referenceId)
     || await getCreditTransactionByReference(job.userId, 'refund', referenceId);
@@ -225,25 +230,24 @@ function isRefundableGenerationJobStatus(status: GenerationJob['status']): boole
 
 export async function restorePendingGenerationJobs(): Promise<void> {
   if (isGenerationWorkerDisabled()) return;
-
-  const jobs = await listRunnableGenerationJobs();
-  for (const job of jobs) {
-    enqueueGenerationJob(job.id);
-  }
+  enqueueGenerationJob('startup-recovery');
 }
 
 export function enqueueGenerationJob(jobId: string): void {
-  if (!queuedGenerationJobIds.includes(jobId) && !activeGenerationJobIds.has(jobId)) {
-    queuedGenerationJobIds.push(jobId);
+  if (jobId === 'startup-recovery') {
+    embeddedRecoveryRequested = true;
+  } else if (!embeddedPreferredJobIds.includes(jobId)) {
+    embeddedPreferredJobIds.unshift(jobId);
   }
-
+  embeddedWorkerWakeRequested = true;
   setTimeout(() => {
-    void runGenerationWorker();
+    void runEmbeddedGenerationWorker();
   }, 0);
 }
 
 export function isGenerationWorkerDisabled(): boolean {
-  return process.env.ARCHAI_DISABLE_GENERATION_WORKER === 'true';
+  return process.env.ARCHAI_DISABLE_GENERATION_WORKER === 'true'
+    || process.env.GENERATION_WORKER_MODE === 'external';
 }
 
 export function isLegacyGenerationEndpointEnabled(): boolean {
@@ -260,11 +264,9 @@ export function isLegacyGenerationEndpointEnabled(): boolean {
   return readRequestedProviderName() === 'mock' && (process.env.AUTH_MODE || 'dev') === 'dev';
 }
 
-export function removeQueuedGenerationJob(jobId: string): void {
-  const index = queuedGenerationJobIds.indexOf(jobId);
-  if (index !== -1) {
-    queuedGenerationJobIds.splice(index, 1);
-  }
+export function removeQueuedGenerationJob(_jobId: string): void {
+  // The durable queue is stored in generation_jobs. Cancellation updates the
+  // persisted status; an active worker observes the cleared lease and exits.
 }
 
 export async function generateWithFallbackResponse(input: GenerateImageInput, userId?: string): Promise<GenerateResponseBody> {
@@ -277,41 +279,78 @@ export async function generateWithFallbackResponse(input: GenerateImageInput, us
   return toGenerateResponseBody(output, outputImageUrl);
 }
 
-async function runGenerationWorker(): Promise<void> {
+async function runEmbeddedGenerationWorker(): Promise<void> {
   if (isGenerationWorkerScheduling) return;
   isGenerationWorkerScheduling = true;
+  embeddedWorkerWakeRequested = false;
 
   try {
-    const concurrency = readPositiveInteger(process.env.GENERATION_WORKER_CONCURRENCY, 1);
-    while (queuedGenerationJobIds.length > 0 && activeGenerationJobIds.size < concurrency) {
-      const jobId = queuedGenerationJobIds.shift();
-      if (!jobId) continue;
-      if (activeGenerationJobIds.has(jobId)) continue;
-      activeGenerationJobIds.add(jobId);
-      void processGenerationJob(jobId)
+    const { concurrency } = getGenerationWorkerSettings();
+    while (activeGenerationJobIds.size < concurrency) {
+      const preferredJobId = embeddedPreferredJobIds.shift();
+      if (!preferredJobId && !embeddedRecoveryRequested) break;
+      const claimedJob = await claimNextGenerationJob(embeddedWorkerId, preferredJobId);
+      if (!claimedJob) {
+        if (!preferredJobId) {
+          embeddedRecoveryRequested = false;
+          break;
+        }
+        continue;
+      }
+      activeGenerationJobIds.add(claimedJob.id);
+      void processGenerationJob(claimedJob, embeddedWorkerId)
         .catch(error => {
-          console.error('Generation worker crashed while processing a job', {
-            jobId,
+          logGenerationWorkerEvent('error', 'worker_crashed', {
+            workerId: embeddedWorkerId,
+            job: claimedJob,
             error: error instanceof Error ? error.message : 'unknown error',
           });
         })
         .finally(() => {
-          activeGenerationJobIds.delete(jobId);
-          if (queuedGenerationJobIds.length > 0) {
+          activeGenerationJobIds.delete(claimedJob.id);
+          if (!isGenerationWorkerDisabled()) {
             setTimeout(() => {
-              void runGenerationWorker();
+              void runEmbeddedGenerationWorker();
             }, 0);
           }
         });
     }
   } finally {
     isGenerationWorkerScheduling = false;
+    if (embeddedWorkerWakeRequested) {
+      setTimeout(() => {
+        void runEmbeddedGenerationWorker();
+      }, 0);
+    }
   }
 }
 
-async function processGenerationJob(jobId: string): Promise<void> {
-  const job = await getGenerationJob(jobId);
-  if (!job || job.status === 'cancelled' || job.status === 'succeeded' || job.status === 'failed' || job.status === 'timeout') return;
+export async function claimNextGenerationJob(workerId: string, preferredJobId?: string): Promise<GenerationJob | null> {
+  const settings = getGenerationWorkerSettings();
+  const preferred = await claimGenerationJob({
+    workerId,
+    leaseDurationMs: settings.leaseDurationMs,
+    executionTimeoutMs: settings.executionTimeoutMs,
+    preferredJobId,
+  });
+  return preferred;
+}
+
+export async function runGenerationWorkerOnce(workerId: string): Promise<boolean> {
+  const job = await claimNextGenerationJob(workerId);
+  if (!job) return false;
+  await processGenerationJob(job, workerId);
+  return true;
+}
+
+async function processGenerationJob(job: GenerationJob, workerId: string): Promise<void> {
+  if (job.status === 'cancelled' || job.status === 'succeeded' || job.status === 'failed' || job.status === 'timeout') return;
+  const lease = startGenerationLeaseHeartbeat(job, workerId);
+  const updateClaimedJob = async (input: Parameters<typeof updateGenerationJobWithLease>[2]): Promise<GenerationJob> => {
+    const updated = await updateGenerationJobWithLease(job.id, workerId, input);
+    if (!updated) throw createGenerationLeaseLostError(job.id);
+    return updated;
+  };
   const selectedProvider = selectProviderByName(resolveGenerationProviderName(job.config, job.provider));
   const isObjectInsert = isObjectInsertJob(job);
   const diagnostics: GenerationJobDiagnostics = {
@@ -325,6 +364,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
   };
 
   try {
+    logGenerationWorkerEvent('info', 'job_started', { workerId, job });
     if (process.env.NODE_ENV !== 'production') {
       console.debug({
         event: 'generation_provider_dispatch',
@@ -334,7 +374,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
         step: job.step ?? readGenerationJobStep(job.config),
       });
     }
-    await updateGenerationJob(job.id, {
+    await updateClaimedJob({
       status: 'running',
       progress: 10,
       startedAt: diagnostics.timing?.jobStartedAt,
@@ -344,11 +384,11 @@ async function processGenerationJob(jobId: string): Promise<void> {
     await markEditGenerationRunning(job);
 
     markTiming(diagnostics, 'prepareInputStartedAt', 'prepare-input');
-    await updateGenerationJob(job.id, { progress: 15, diagnostics });
+    await updateClaimedJob({ progress: 15, diagnostics });
     const { input, imageDiagnostics, localInpaint } = await buildGenerateInputFromJob(job);
     diagnostics.images = imageDiagnostics;
     markTiming(diagnostics, 'prepareInputFinishedAt');
-    await updateGenerationJob(job.id, { progress: 22, diagnostics });
+    await updateClaimedJob({ progress: 22, diagnostics });
 
     const batchCount = resolveBatchCountForJob(job);
     const variantStyles = job.mode === 'design-variants' ? resolveVariantStyles(job.config, batchCount) : ['modern-minimal'];
@@ -357,11 +397,22 @@ async function processGenerationJob(jobId: string): Promise<void> {
       ? resolveFloorplanVariantPlans(job.config, batchCount)
       : [];
     const outputAssetIds: string[] = [];
+    const existingResultsByKey = new Map(
+      (await listGenerationResults(job.id, job.userId))
+        .filter(result => result.resultKey)
+        .map(result => [result.resultKey as string, result]),
+    );
     let firstOutput: GenerateImageOutput | null = null;
     let firstOutputAsset: ImageAsset | null = null;
+    let firstGenerationResult: GenerationResult | null = null;
 
     markTiming(diagnostics, 'providerRequestStartedAt', 'provider-request');
-    await updateGenerationJob(job.id, { progress: resolveVariantStartProgress(batchCount, 0), diagnostics });
+    const providerStartedAt = diagnostics.timing?.providerRequestStartedAt || new Date().toISOString();
+    await updateClaimedJob({
+      progress: resolveVariantStartProgress(batchCount, 0),
+      diagnostics,
+      providerStartedAt,
+    });
     const providerResults: ProviderBatchResult[] = await mapWithConcurrency(
       Array.from({ length: batchCount }, (_, index) => index),
       job.mode === 'design-variants' ? readPositiveInteger(process.env.GENERATION_VARIANT_CONCURRENCY, 1) : 1,
@@ -371,14 +422,14 @@ async function processGenerationJob(jobId: string): Promise<void> {
         const floorplanPlan = floorplanVariantPlans[index];
         try {
           const providerInput = buildProviderInputForVariant(job, input, index, batchCount, variantStyle, planStyle, floorplanPlan);
-          const providerOutput = await generateWithFallback(providerInput, selectedProvider);
-          await updateGenerationJob(job.id, {
+          const providerOutput = await runWithJobDeadline(job, () => generateWithFallback(providerInput, selectedProvider));
+          await updateClaimedJob({
             progress: job.mode === 'design-variants' || job.mode === 'plan-colorize' || isFloorplanMultiPlanJob(job) ? resolveVariantCompleteProgress(batchCount, index) : 75,
             diagnostics,
           });
           return { index, variantStyle, planStyle, floorplanPlan, providerOutput };
         } catch (error) {
-          if ((job.mode !== 'plan-colorize' && !isFloorplanMultiPlanJob(job)) || batchCount <= 1) throw error;
+          if ((job.mode !== 'plan-colorize' && job.mode !== 'material-replace' && !isFloorplanMultiPlanJob(job) && !isFreeReferenceImageJob(job)) || batchCount <= 1) throw error;
           return { index, variantStyle, planStyle, floorplanPlan, error };
         }
       },
@@ -397,7 +448,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
       try {
         await refundPartialBatchCredits(job, failedProviderResults.length);
       } catch (refundError) {
-        console.warn('Failed to refund partial plan colorize credits', {
+        console.warn('Failed to refund partial batch credits', {
           jobId: job.id,
           failedCount: failedProviderResults.length,
           error: refundError instanceof Error ? refundError.message : String(refundError),
@@ -410,9 +461,46 @@ async function processGenerationJob(jobId: string): Promise<void> {
     }
     markTiming(diagnostics, 'providerRequestFinishedAt');
     mergeProviderDiagnostics(diagnostics, successfulProviderResults.map(result => result.providerOutput));
-    await updateGenerationJob(job.id, { progress: job.mode === 'design-variants' || job.mode === 'plan-colorize' || isFloorplanMultiPlanJob(job) ? 75 : 75, diagnostics });
+    const providerFinishedAt = diagnostics.timing?.providerRequestFinishedAt || new Date().toISOString();
+    const providerDurationMs = durationBetween(providerStartedAt, providerFinishedAt) ?? null;
+    await updateClaimedJob({
+      progress: 75,
+      diagnostics,
+      providerFinishedAt,
+      providerDurationMs,
+    });
 
     for (const { index, variantStyle, planStyle, floorplanPlan, providerOutput } of successfulProviderResults) {
+      const resultKey = `${job.id}:${index}`;
+      const existingResult = existingResultsByKey.get(resultKey);
+      if (existingResult) {
+        const existingAsset = await getImageAsset(existingResult.assetId, job.userId);
+        if (existingAsset) {
+          if (!firstOutput) firstOutput = providerOutput;
+          if (!firstOutputAsset) firstOutputAsset = existingAsset;
+          if (!firstGenerationResult) firstGenerationResult = existingResult;
+          outputAssetIds.push(existingAsset.id);
+          logGenerationWorkerEvent('info', 'result_reused', {
+            workerId,
+            job,
+            resultKey,
+            outputAssetId: existingAsset.id,
+          });
+          continue;
+        }
+      }
+      const designVariantMatrixItem = job.mode === 'design-variants'
+        ? readDesignVariantMatrixItem(job.config, readDesignVariantTargetIndex(job.config, index), index, batchCount)
+        : undefined;
+      const imagePolishPromptConfig = job.step === 'image_polish' || readGenerationJobStep(job.config) === 'image_polish'
+        ? resolveImagePolishPrompts({
+            mode: job.config.imagePolishMode === 'conservative' || job.config.imagePolishMode === 'white-model-materialization'
+              ? job.config.imagePolishMode
+              : undefined,
+            controls: isRecord(job.config.imagePolishControls) ? job.config.imagePolishControls : undefined,
+            enhanceMaterials: job.config.enhanceMaterials === true,
+          })
+        : null;
 
       markTiming(diagnostics, 'postprocessStartedAt', 'postprocess');
       const providerOriginalMetadata = await readImageDataUrlMetadata(providerOutput.dataUrl);
@@ -425,7 +513,7 @@ async function processGenerationJob(jobId: string): Promise<void> {
           bbox: localInpaint.bbox,
           featherRadius: isObjectInsert
             ? readPositiveInteger(process.env.OBJECT_INSERT_LOCAL_FEATHER_RADIUS, 8)
-            : readPositiveInteger(process.env.LOCAL_INPAINT_FEATHER_RADIUS, 2),
+            : Math.max(0, Math.min(30, readConfigNumber(job.config.feather, readPositiveInteger(process.env.LOCAL_INPAINT_FEATHER_RADIUS, 2)))),
         });
       }
       const savedOutputMetadata = await readImageDataUrlMetadata(outputDataUrl);
@@ -435,10 +523,11 @@ async function processGenerationJob(jobId: string): Promise<void> {
       };
       markTiming(diagnostics, 'postprocessFinishedAt');
       const progress = resolveVariantCompleteProgress(batchCount, index);
-      await updateGenerationJob(job.id, { progress });
+      await updateClaimedJob({ progress });
 
       markTiming(diagnostics, 'saveResultStartedAt', 'save-result');
-      await updateGenerationJob(job.id, { progress: job.mode === 'design-variants' || isFloorplanMultiPlanJob(job) ? progress : 88, diagnostics });
+      await updateClaimedJob({ progress: job.mode === 'design-variants' || isFloorplanMultiPlanJob(job) ? progress : 88, diagnostics });
+      await assertGenerationLeaseActive(job.id, workerId, lease);
       const outputAsset = await saveGeneratedDataUrl(job.userId, output.dataUrl, `generation-${job.id}-${index + 1}`);
       console.info('Generation output saved', {
         jobId: job.id,
@@ -456,8 +545,36 @@ async function processGenerationJob(jobId: string): Promise<void> {
       if (!firstOutputAsset) firstOutputAsset = outputAsset;
       outputAssetIds.push(outputAsset.id);
       const originalOutputMetadata = buildOriginalOutputMetadata(outputAsset, savedOutputMetadata, providerOriginalMetadata);
+      let qualityReport;
+      try {
+        qualityReport = await analyzeGenerationQuality({
+          sourceImageDataUrl: localInpaint?.originalImageDataUrl || input.inputImageDataUrl,
+          resultImageDataUrl: outputDataUrl,
+          maskImageDataUrl: localInpaint?.originalMaskDataUrl || input.maskImageDataUrl,
+          sourceOriginalWidth: localInpaint?.originalWidth || imageDiagnostics.inputWidthBefore,
+          sourceOriginalHeight: localInpaint?.originalHeight || imageDiagnostics.inputHeightBefore,
+          expectedWidth: localInpaint?.originalWidth || input.targetWidth,
+          expectedHeight: localInpaint?.originalHeight || input.targetHeight,
+          preserveStructure: shouldExpectStructurePreservation(job),
+        });
+      } catch (qualityError) {
+        qualityReport = createUnavailableQualityReport(qualityError);
+        console.warn('Generation quality check unavailable', {
+          jobId: job.id,
+          resultIndex: index,
+          error: qualityError instanceof Error ? qualityError.message : String(qualityError),
+        });
+      }
+      console.info('Generation quality checked', {
+        jobId: job.id,
+        resultIndex: index,
+        outputAssetId: outputAsset.id,
+        qualityStatus: qualityReport.status,
+        qualityScore: qualityReport.score,
+        qualityIssueCodes: qualityReport.issues.map(issue => issue.code),
+      });
 
-      await createGenerationResult({
+      const generationResult = await createGenerationResult({
         jobId: job.id,
         userId: job.userId,
         projectId: job.projectId,
@@ -465,7 +582,9 @@ async function processGenerationJob(jobId: string): Promise<void> {
         imageUrl: outputAsset.url,
         isSelected: index === 0,
         isFavorite: false,
-        metadata: job.mode === 'design-variants'
+        resultKey,
+        metadata: {
+          ...(job.mode === 'design-variants'
           ? {
               ...(providerOutput.metadata || {}),
               ...originalOutputMetadata,
@@ -479,7 +598,16 @@ async function processGenerationJob(jobId: string): Promise<void> {
               changeScopeLabel: readVariantChangeScopeLabel(job.config),
               lockedItemsLabel: readVariantLocksLabel(job.config),
               strategyNote: readVariantStrategyNote(job.config, index),
-              designDescription: buildDesignVariantDescription(job.config, readDesignVariantTargetIndex(job.config, index), variantStyle, index),
+              designDescription: designVariantMatrixItem?.description || buildDesignVariantDescription(job.config, readDesignVariantTargetIndex(job.config, index), variantStyle, index),
+              changedVariables: designVariantMatrixItem?.changedVariables || [],
+              lockedVariables: designVariantMatrixItem?.lockedVariables || [],
+              variantVariableValues: designVariantMatrixItem?.values || {},
+              differenceSummary: designVariantMatrixItem?.differenceSummary || '相对原图形成新的设计表达方向。',
+              reportNarrative: designVariantMatrixItem ? buildDesignVariantReportNarrative(designVariantMatrixItem, resolveVariantName(job.config, index)) : undefined,
+              variantDiversity: readDesignVariantDiversity(job.config.variantDiversity),
+              parentResultId: designVariantMatrixItem?.parentResultId || (typeof job.config.parentResultId === 'string' ? job.config.parentResultId : undefined),
+              parentJobId: designVariantMatrixItem?.parentJobId || (typeof job.config.parentJobId === 'string' ? job.config.parentJobId : undefined),
+              relationshipType: designVariantMatrixItem?.parentResultId || job.config.parentResultId ? 'derived-variant' : 'root-variant',
               batchGroupId: typeof job.config.batchGroupId === 'string' ? job.config.batchGroupId : undefined,
               batchCount,
             }
@@ -532,6 +660,35 @@ async function processGenerationJob(jobId: string): Promise<void> {
                 batchGroupId: typeof job.config.batchGroupId === 'string' ? job.config.batchGroupId : undefined,
                 batchCount,
               }
+          : isFreeReferenceImageJob(job)
+            ? {
+                ...(providerOutput.metadata || {}),
+                ...originalOutputMetadata,
+                mode: job.mode,
+                step: 'free_reference_image',
+                sourceImageAssetId: typeof job.config.sourceImageAssetId === 'string' ? job.config.sourceImageAssetId : job.inputAssetIds[0],
+                referenceImageAssetIds: readStringArray(job.config.referenceImageAssetIds),
+                freeReferenceReferences: job.config.freeReferenceReferences,
+                freeReferenceAspectRatio: job.config.freeReferenceAspectRatio,
+                freeReferenceStructureControl: job.config.freeReferenceStructureControl,
+                freeReferenceStylePresetId: job.config.freeReferenceStylePresetId,
+                candidateIndex: index,
+                candidateNumber: index + 1,
+                batchCount,
+              }
+          : imagePolishPromptConfig
+            ? {
+                ...(providerOutput.metadata || {}),
+                ...originalOutputMetadata,
+                mode: job.mode,
+                step: 'image_polish',
+                sourceImageAssetId: typeof job.config.sourceImageAssetId === 'string' ? job.config.sourceImageAssetId : job.inputAssetIds[0],
+                imagePolishMode: imagePolishPromptConfig.mode,
+                imagePolishControls: imagePolishPromptConfig.controls,
+                enhanceMaterials: imagePolishPromptConfig.mode === 'white-model-materialization',
+                promptMode: imagePolishPromptConfig.mode === 'white-model-materialization' ? 'white_model_materialization' : 'conservative_polish',
+                compiledPrompt: imagePolishPromptConfig.prompt,
+              }
           : job.mode === 'material-replace'
             ? {
                 ...(providerOutput.metadata || {}),
@@ -543,6 +700,34 @@ async function processGenerationJob(jobId: string): Promise<void> {
                 materialDirection: typeof job.config.materialDirection === 'string' ? job.config.materialDirection : undefined,
                 materialFinish: typeof job.config.materialFinish === 'string' ? job.config.materialFinish : undefined,
                 materialReplaceScope: typeof job.config.materialReplaceScope === 'string' ? job.config.materialReplaceScope : undefined,
+                semanticObjectSelections: job.config.semanticObjectSelections,
+                materialRealSizeMm: job.config.materialRealSizeMm,
+                materialJointWidthMm: job.config.materialJointWidthMm,
+                materialTextureAlignment: job.config.materialTextureAlignment,
+                materialTextureOrigin: job.config.materialTextureOrigin,
+                maskExpansion: job.config.maskExpansion,
+                feather: job.config.feather,
+                protectionMaskAssetId: job.config.protectionMaskAssetId,
+                materialCandidateIndex: index,
+                candidateIndex: index,
+                candidateNumber: index + 1,
+                batchCount,
+              }
+          : job.mode === 'model-render'
+            ? {
+                ...(providerOutput.metadata || {}),
+                ...originalOutputMetadata,
+                mode: 'model-render',
+                step: 'model_snapshot_render',
+                sourceModelAssetId: typeof job.config.sourceModelAssetId === 'string' ? job.config.sourceModelAssetId : undefined,
+                snapshotAssetId: typeof job.config.snapshotAssetId === 'string' ? job.config.snapshotAssetId : job.inputAssetIds[0],
+                modelSnapshotMetadata: readModelSnapshotMetadata(job.config.modelSnapshotMetadata),
+                modelViewBookmarkId: typeof job.config.modelViewBookmarkId === 'string' ? job.config.modelViewBookmarkId : undefined,
+                modelViewBookmarkName: typeof job.config.modelViewBookmarkName === 'string' ? job.config.modelViewBookmarkName : undefined,
+                modelCameraPreset: typeof job.config.modelCameraPreset === 'string' ? job.config.modelCameraPreset : undefined,
+                modelViewBatchId: typeof job.config.modelViewBatchId === 'string' ? job.config.modelViewBatchId : undefined,
+                modelViewBatchIndex: typeof job.config.modelViewBatchIndex === 'number' ? job.config.modelViewBatchIndex : undefined,
+                modelViewBatchCount: typeof job.config.modelViewBatchCount === 'number' ? job.config.modelViewBatchCount : undefined,
               }
           : job.mode === 'panorama-roam-render'
             ? {
@@ -581,21 +766,30 @@ async function processGenerationJob(jobId: string): Promise<void> {
                 allowAutoAdjustPosition: readObjectInsertJobConfig(job).allowAutoAdjustPosition,
                 allowAutoAdjustRotation: readObjectInsertJobConfig(job).allowAutoAdjustRotation,
                 allowAutoAdjustScale: readObjectInsertJobConfig(job).allowAutoAdjustScale,
+                objectInsertWorkflowMode: job.config.objectInsertWorkflowMode,
+                objectInsertSceneEnrichment: job.config.objectInsertSceneEnrichment,
                 objectInsertCandidateIndex: index,
+                candidateNumber: index + 1,
+                batchCount,
                 objectInsertCandidateStrategy: readObjectInsertCandidateStrategy(job.config, index),
                 objectInsertCandidatePromptHint: readObjectInsertCandidatePrompt(job.config, index),
               }
           : {
               ...(providerOutput.metadata || {}),
               ...originalOutputMetadata,
-            },
+            }),
+          qualityReport,
+          qualityStatus: qualityReport.status,
+          qualityWarnings: qualityReport.warnings,
+        },
       });
 
       if (!firstOutput) firstOutput = output;
+      if (!firstGenerationResult && generationResult) firstGenerationResult = generationResult;
       markTiming(diagnostics, 'saveResultFinishedAt');
     }
 
-    if (!firstOutput || !firstOutputAsset) {
+    if (!firstOutput || !firstOutputAsset || !firstGenerationResult) {
       throw new Error('Provider did not return a generation result.');
     }
 
@@ -615,14 +809,29 @@ async function processGenerationJob(jobId: string): Promise<void> {
     finalizeDurations(diagnostics);
     logJobTiming(job.id, diagnostics);
 
+    await assertGenerationLeaseActive(job.id, workerId, lease);
     await completeEditGeneration({ ...job, diagnostics }, firstOutputAsset.id);
-    await updateGenerationJob(job.id, {
+    await completeDesignWorkflowGeneration({ ...job, diagnostics }, firstGenerationResult);
+    await updateClaimedJob({
       status: 'succeeded',
       progress: 100,
       outputAssetId: firstOutputAsset.id,
       outputAssetIds,
       finishedAt: diagnostics.timing?.jobFinishedAt,
       diagnostics,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      heartbeatAt: null,
+      executionTimeoutAt: null,
+      lastErrorCode: null,
+      lastErrorCategory: null,
+      lastErrorRetryable: null,
+    });
+    logGenerationWorkerEvent('info', 'job_succeeded', {
+      workerId,
+      job,
+      providerDurationMs,
+      outputCount: outputAssetIds.length,
     });
 
     await createGenerationRecord({
@@ -641,7 +850,17 @@ async function processGenerationJob(jobId: string): Promise<void> {
       modelSnapshotMetadata: readModelSnapshotMetadata(job.config.modelSnapshotMetadata),
     });
   } catch (error) {
+    const latestJob = await getGenerationJob(job.id);
+    if (latestJob?.status === 'cancelled') {
+      await refundGenerationJobCredits(job.id);
+      await failEditGeneration(job, 'cancelled');
+      logGenerationWorkerEvent('info', 'job_cancelled', { workerId, job });
+      return;
+    }
     const providerError = normalizeProviderFailure(error);
+    if (diagnostics.timing?.providerRequestStartedAt && !diagnostics.timing.providerRequestFinishedAt) {
+      markTiming(diagnostics, 'providerRequestFinishedAt');
+    }
     const message = providerError.userMessage || (error instanceof Error ? error.message : 'Generation failed.');
     if (providerError.userMessage || providerError.providerError || providerError.providerStatus || providerError.statusCode || providerError.rawSnippet) {
       diagnostics.provider = {
@@ -655,21 +874,147 @@ async function processGenerationJob(jobId: string): Promise<void> {
         rawSnippet: providerError.rawSnippet,
       };
     }
-    const terminalStatus = isTimeoutGenerationFailure(error, providerError.statusCode) ? 'timeout' : 'failed';
+    const failure = classifyGenerationFailure(error);
+    const terminalStatus = failure.category === 'timeout' ? 'timeout' : 'failed';
     markTiming(diagnostics, 'jobFinishedAt', terminalStatus);
     finalizeDurations(diagnostics);
     logJobTiming(job.id, diagnostics, message);
-    console.error('Generation job failed', { jobId: job.id, error: message });
-    await updateGenerationJob(job.id, {
+    const shouldRetry = failure.retryable && job.attemptCount < job.maxAttempts;
+    if (shouldRetry) {
+      const retryDelayMs = calculateGenerationRetryDelayMs(job.attemptCount);
+      await updateClaimedJob({
+        status: 'queued',
+        progress: Math.min(20, Math.max(0, latestJob?.progress || job.progress)),
+        errorMessage: message,
+        failureReason: message,
+        nextAttemptAt: new Date(Date.now() + retryDelayMs).toISOString(),
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+        executionTimeoutAt: null,
+        providerFinishedAt: new Date().toISOString(),
+        providerDurationMs: diagnostics.timing?.providerDurationMs ?? null,
+        lastErrorCode: failure.code,
+        lastErrorCategory: failure.category,
+        lastErrorRetryable: true,
+        diagnostics: { ...diagnostics, phase: 'queued' },
+      });
+      logGenerationWorkerEvent('warn', 'job_retry_scheduled', {
+        workerId,
+        job,
+        errorCode: failure.code,
+        errorCategory: failure.category,
+        retryDelayMs,
+      });
+      if (!isGenerationWorkerDisabled()) {
+        const retryTimer = setTimeout(() => enqueueGenerationJob(job.id), retryDelayMs);
+        retryTimer.unref?.();
+      }
+      return;
+    }
+    logGenerationWorkerEvent('error', 'job_failed', {
+      workerId,
+      job,
+      error: message,
+      errorCode: failure.code,
+      errorCategory: failure.category,
+    });
+    await updateClaimedJob({
       status: terminalStatus,
       progress: 99,
       errorMessage: message,
       failureReason: message,
       finishedAt: diagnostics.timing?.jobFinishedAt,
       diagnostics,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      heartbeatAt: null,
+      executionTimeoutAt: null,
+      providerFinishedAt: new Date().toISOString(),
+      providerDurationMs: diagnostics.timing?.providerDurationMs ?? null,
+      lastErrorCode: failure.code,
+      lastErrorCategory: failure.category,
+      lastErrorRetryable: false,
     });
     await refundGenerationJobCredits(job.id);
-    await failEditGeneration(job, terminalStatus, providerError.providerError || (error instanceof Error && 'code' in error ? String(error.code) : undefined), message);
+    await failEditGeneration(job, terminalStatus, failure.code, message);
+  } finally {
+    lease.stop();
+  }
+}
+
+function startGenerationLeaseHeartbeat(job: GenerationJob, workerId: string): {
+  isLost: () => boolean;
+  stop: () => void;
+} {
+  const settings = getGenerationWorkerSettings();
+  let lost = false;
+  const timer = setInterval(() => {
+    void renewGenerationJobLease(job.id, workerId, settings.leaseDurationMs)
+      .then(renewed => {
+        if (!renewed) {
+          lost = true;
+          logGenerationWorkerEvent('warn', 'lease_lost', { workerId, job });
+        }
+      })
+      .catch(error => {
+        logGenerationWorkerEvent('warn', 'lease_renew_failed', {
+          workerId,
+          job,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }, settings.heartbeatIntervalMs);
+  timer.unref?.();
+  return {
+    isLost: () => lost,
+    stop: () => clearInterval(timer),
+  };
+}
+
+async function assertGenerationLeaseActive(
+  jobId: string,
+  workerId: string,
+  lease: { isLost: () => boolean },
+): Promise<void> {
+  if (lease.isLost()) throw createGenerationLeaseLostError(jobId);
+  const current = await getGenerationJob(jobId);
+  if (!current || current.status !== 'running' || current.leaseOwner !== workerId) {
+    throw createGenerationLeaseLostError(jobId);
+  }
+}
+
+function createGenerationLeaseLostError(jobId: string): Error {
+  const error = new Error(`Generation job lease was lost: ${jobId}.`) as Error & { code?: string };
+  error.code = 'GENERATION_LEASE_LOST';
+  return error;
+}
+
+async function runWithJobDeadline<T>(job: GenerationJob, operation: () => Promise<T>): Promise<T> {
+  const deadline = job.executionTimeoutAt ? new Date(job.executionTimeoutAt).getTime() : NaN;
+  const fallbackTimeoutMs = getGenerationWorkerSettings().executionTimeoutMs;
+  const timeoutMs = Number.isFinite(deadline)
+    ? Math.max(1, deadline - Date.now())
+    : fallbackTimeoutMs;
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<T>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          const error = new Error(`Generation job exceeded its ${timeoutMs}ms execution timeout.`) as Error & {
+            code?: string;
+            statusCode?: number;
+          };
+          error.code = 'GENERATION_JOB_TIMEOUT';
+          error.statusCode = 408;
+          reject(error);
+        }, timeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 
@@ -780,7 +1125,11 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   const furnitureReferenceImageDataUrls = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode || isImagePolishMode || isFloorPlanMaterialMappingMode
     ? []
     : await getOwnedAssetDataUrls(readStringArray(job.config.furnitureReferenceAssetIds), job.userId, 3, 'furniture reference');
-  const additionalImageDataUrls = imageDataUrls.slice(1).filter(isNonEmptyString);
+  const nonReferenceAssetIds = new Set([
+    readConfigStringValue(job.config.maskAssetId),
+    readConfigStringValue(job.config.protectionMaskAssetId),
+  ].filter(isNonEmptyString));
+  const additionalImageDataUrls = imageDataUrls.slice(1).filter((url, index) => isNonEmptyString(url) && !nonReferenceAssetIds.has(assetIds[index + 1]));
   const objectInputDataUrls = isObjectInsertMode && !isObjectInsertPreviewFusionMode
     ? mapObjectInsertInputDataUrls(objectInsertItems, objectInsertOrderedAssetIds.slice(1), additionalImageDataUrls)
     : [];
@@ -792,7 +1141,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     : isFreeReferenceImageMode ? undefined
     : isPanoramaReferenceMode ? undefined : materialReferenceImageDataUrls[0] || additionalImageDataUrls[0];
   const floorplanTextureUrls = job.mode === 'floorplan' ? await getFloorplanTextureDataUrls(job.config) : [];
-  const referenceImageDataUrls = isObjectInsertPreviewFusionMode
+  const uncroppedReferenceImageDataUrls = isObjectInsertPreviewFusionMode
     ? additionalImageDataUrls.slice(0, 1)
     : isObjectInsertMode
     ? objectInputDataUrls.slice(objectReferenceImageDataUrl ? 1 : 0)
@@ -808,6 +1157,9 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
         ...additionalImageDataUrls.slice(1).filter(url => !materialReferenceImageDataUrls.includes(url) && !furnitureReferenceImageDataUrls.includes(url)),
         ...floorplanTextureUrls,
       ];
+  const referenceImageDataUrls = isFreeReferenceImageMode
+    ? await applyFreeReferenceCrops(uncroppedReferenceImageDataUrls, job.config)
+    : uncroppedReferenceImageDataUrls;
   if (isObjectInsertPreviewFusionMode && process.env.NODE_ENV !== 'production') {
     console.debug('[ObjectInsert] object_insert_preview_fusion provider inputs', {
       jobId: job.id,
@@ -831,21 +1183,39 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   const maskAssetId = maskMode === 'asset-mask'
     ? readConfigStringValue(job.config.maskAssetId) || placementMaskAssetId || null
     : null;
-  const maskImageDataUrl = maskMode === 'full-image'
+  let maskImageDataUrl = maskMode === 'full-image'
     ? createFullImageMaskDataUrl()
     : maskAssetId ? await getImageAssetDataUrl(maskAssetId, job.userId) : undefined;
+  const protectionMaskAssetId = readConfigStringValue(job.config.protectionMaskAssetId);
+  const protectionMaskImageDataUrl = protectionMaskAssetId ? await getImageAssetDataUrl(protectionMaskAssetId, job.userId) : undefined;
+  if (maskMode === 'asset-mask' && maskImageDataUrl) {
+    maskImageDataUrl = await prepareEditableMask({
+      maskImageDataUrl,
+      protectionMaskDataUrl: protectionMaskImageDataUrl,
+      expansion: readConfigNumber(job.config.maskExpansion),
+    });
+  }
   const qualityMode = resolveQualityModeForJob(job);
 
   const targetDimensions = resolveQualityTargetDimensions(job.mode, qualityMode, await resolveTargetDimensions(job.mode, job.config, inputImageDataUrl));
   if (isImagePolishMode && process.env.NODE_ENV !== 'production') {
-    const enhanceMaterials = job.config.enhanceMaterials === true;
+    const imagePolishPromptConfig = resolveImagePolishPrompts({
+      mode: job.config.imagePolishMode === 'conservative' || job.config.imagePolishMode === 'white-model-materialization'
+        ? job.config.imagePolishMode
+        : undefined,
+      controls: isRecord(job.config.imagePolishControls) ? job.config.imagePolishControls : undefined,
+      enhanceMaterials: job.config.enhanceMaterials === true,
+    });
+    const enhanceMaterials = imagePolishPromptConfig.mode === 'white-model-materialization';
     console.debug({
       event: 'image_polish_provider_prepare',
       jobId: job.id,
       enhanceMaterials,
+      imagePolishMode: imagePolishPromptConfig.mode,
+      imagePolishControls: imagePolishPromptConfig.controls,
       promptMode: typeof job.config.promptMode === 'string'
         ? job.config.promptMode
-        : enhanceMaterials ? 'material_enhance' : 'default_polish',
+        : enhanceMaterials ? 'white_model_materialization' : 'conservative_polish',
       provider: job.provider,
       mode: job.mode,
       step: job.step ?? readGenerationJobStep(job.config),
@@ -992,7 +1362,10 @@ function resolveQualityTargetDimensions(
 }
 
 export async function prepareGenerateInputForProvider(input: GenerateImageInput): Promise<{ input: GenerateImageInput; imageDiagnostics: NonNullable<GenerationJobDiagnostics['images']> }> {
-  const settings = resolveProviderImageSettings(input.qualityMode);
+  const baseSettings = resolveProviderImageSettings(input.qualityMode);
+  const settings = input.step === 'free_reference_image' || input.config.step === 'free_reference_image'
+    ? { ...baseSettings, maxReferenceImages: 6 }
+    : baseSettings;
   const prepared: Array<{ role: string; image: PreparedProviderImage }> = [];
 
   const inputImage = await prepareImageForProvider({
@@ -1167,6 +1540,34 @@ function isObjectInsertInput(input: GenerateImageInput): boolean {
 
 function isFloorplanMultiPlanJob(job: GenerationJob): boolean {
   return job.mode === 'floorplan' && job.config.floorplanOutputMode === 'multi';
+}
+
+function isFreeReferenceImageJob(job: GenerationJob): boolean {
+  return job.step === 'free_reference_image' || readGenerationJobStep(job.config) === 'free_reference_image';
+}
+
+export async function applyFreeReferenceCrops(dataUrls: string[], config: Record<string, unknown>): Promise<string[]> {
+  const references = Array.isArray(config.freeReferenceReferences) ? config.freeReferenceReferences.filter(isRecord) : [];
+  return Promise.all(dataUrls.map(async (dataUrl, index) => {
+    const crop = references[index]?.crop;
+    if (!isRecord(crop)) return dataUrl;
+    const x = readNormalizedCropValue(crop.x, 0);
+    const y = readNormalizedCropValue(crop.y, 0);
+    const width = Math.min(1 - x, readNormalizedCropValue(crop.width, 1));
+    const height = Math.min(1 - y, readNormalizedCropValue(crop.height, 1));
+    if (x <= 0.001 && y <= 0.001 && width >= 0.999 && height >= 0.999) return dataUrl;
+    const size = await getImageSizeFromDataUrl(dataUrl);
+    return cropImageDataUrlToBox(dataUrl, {
+      x: Math.round(x * size.width),
+      y: Math.round(y * size.height),
+      width: Math.max(1, Math.round(width * size.width)),
+      height: Math.max(1, Math.round(height * size.height)),
+    });
+  }));
+}
+
+function readNormalizedCropValue(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback;
 }
 
 export function resolveProviderImageSettings(qualityMode: QualityMode | undefined): ProviderImageSettings {
@@ -1919,6 +2320,8 @@ function resolveBatchCountForJob(job: GenerationJob): number {
 
 function resolveBatchCountForJobConfig(mode: GenerationRecord['mode'], config: Record<string, unknown>): number {
   const outputCount = getGenerationOutputCount(mode, config);
+  if (readGenerationJobStep(config) === 'free_reference_image') return outputCount === 2 || outputCount === 4 ? outputCount : 1;
+  if (mode === 'material-replace') return outputCount === 2 || outputCount === 3 || outputCount === 4 ? outputCount : 1;
   if (mode === 'floorplan') return config.floorplanOutputMode === 'multi' ? resolveFloorplanBatchCount(outputCount) : 1;
   if (mode === 'design-variants') return outputCount === 2 || outputCount === 4 || outputCount === 8 ? outputCount : 1;
   if (mode === 'plan-colorize') return outputCount >= 1 && outputCount <= maxPlanColorizeBatchCount ? Math.floor(outputCount) : 1;
@@ -2032,8 +2435,34 @@ function buildProviderInputForVariant(
     };
   }
 
+  if (isFreeReferenceImageJob(job)) {
+    const candidateHint = batchCount > 1
+      ? `Candidate ${index + 1} of ${batchCount}. Keep all requested controls, but provide a distinct, coherent interpretation without changing the source structure.`
+      : '';
+    return {
+      ...input,
+      prompt: [input.prompt, candidateHint].filter(Boolean).join('\n'),
+      config: { ...input.config, candidateIndex: index, candidateNumber: index + 1, batchCount },
+    };
+  }
+
+  if (job.mode === 'material-replace') {
+    const hints = [
+      'Paving candidate A: prioritize the configured real-world module size, exact target boundary, and the most conservative seam layout.',
+      'Paving candidate B: keep the same material and scale, but optimize the seam distribution and starting origin for fewer awkward edge cuts.',
+      'Paving candidate C: keep the same material identity, but provide an alternative alignment consistent with the selected direction and surface perspective.',
+      'Paving candidate D: keep the same layout controls while refining roughness, reflections, joints, and lighting integration for the most presentation-ready result.',
+    ];
+    return {
+      ...input,
+      prompt: [input.prompt, hints[index] || hints[0], `This is material paving candidate ${index + 1} of ${batchCount}. Do not change the selected material or exchange target objects.`].join('\n'),
+      config: { ...input.config, materialCandidateIndex: index, candidateIndex: index, batchCount },
+    };
+  }
+
   if (job.mode !== 'design-variants') return input;
   const targetVariantIndex = readDesignVariantTargetIndex(job.config, index);
+  const matrixItem = readDesignVariantMatrixItem(job.config, targetVariantIndex, index, batchCount);
 
   return {
     ...input,
@@ -2045,6 +2474,12 @@ function buildProviderInputForVariant(
       variantLabel: readVariantLabel(targetVariantIndex),
       variantName: resolveVariantName(job.config, index),
       variantStyle,
+      variantDiversity: readDesignVariantDiversity(job.config.variantDiversity),
+      designVariantMatrixItem: matrixItem,
+      changedVariables: matrixItem.changedVariables,
+      lockedVariables: matrixItem.lockedVariables,
+      variantVariableValues: matrixItem.values,
+      differenceSummary: matrixItem.differenceSummary,
       stylePackId: typeof job.config.stylePackId === 'string' ? job.config.stylePackId : 'interior-common',
       variantChangeScope: readVariantChangeScope(job.config),
       variantLocks: readVariantLocks(job.config),
@@ -2053,7 +2488,7 @@ function buildProviderInputForVariant(
       changeScopeLabel: readVariantChangeScopeLabel(job.config),
       lockedItemsLabel: readVariantLocksLabel(job.config),
       strategyNote: readVariantStrategyNote(job.config, index),
-      designDescription: buildDesignVariantDescription(job.config, targetVariantIndex, variantStyle, index),
+      designDescription: matrixItem.description || buildDesignVariantDescription(job.config, targetVariantIndex, variantStyle, index),
       batchGroupId: typeof job.config.batchGroupId === 'string' ? job.config.batchGroupId : undefined,
       batchCount,
     },
@@ -2085,6 +2520,7 @@ function buildFloorplanMultiPlanPrompt(
     }),
     `This is 3D colored floor plan option ${index + 1} of ${batchCount}: ${plan?.variantName || readVariantLabel(index)}.`,
     buildFloorplanExpressionControlPrompt(job.config),
+    buildFloorPlanProductModePrompt(job.config),
     buildFloorplanTemplatePrompt(job.config),
     buildFloorplanRoomLabelsPrompt(job.config),
     'Common requirement: preserve the original floor plan structure, walls, doors, windows, openings, functional zoning, circulation logic, room proportions, and main spatial relationships. Do not change the basic architectural layout.',
@@ -2120,7 +2556,7 @@ function buildFloorplanMultiPlanPrompt(
   pieces.push(job.config.enableLegend === true || job.config.enableAreaText === true || job.config.enableMaterialLegend === true
     ? 'Do not output a collage, comparison sheet, watermark, dimensions, or UI elements. Any legend or labels must be minimal, useful, and part of the floor plan presentation.'
     : 'Do not output a collage, comparison sheet, text, labels, watermark, dimensions, or UI elements.');
-  pieces.push(FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT);
+  pieces.push(buildFloorplanTextLanguageRequirement(readFloorPlanTextLanguage(job.config)));
   return pieces.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
 }
 
@@ -2129,6 +2565,17 @@ const floorplanRenderModePromptMap: Record<string, string> = {
   'semi-3d': 'Floor plan render mode: semi-3d. Create a layered semi-3D colored floor plan expression, while preserving the original floor plan structure, walls, openings, furniture outlines, and plan proportions.',
   presentation: 'Floor plan render mode: presentation. Strengthen presentation-board quality, material hierarchy, graphic completeness, clean composition, and readable spatial expression while preserving the original plan structure.',
 };
+
+const floorPlanProductModePromptMap: Record<string, string> = {
+  'precise-material': 'Product mode: precise material colored plan. Follow confirmed region boundaries and material assignments exactly, with strict structure consistency.',
+  'three-dimensional': 'Product mode: three-dimensional colored plan. Enhance material, furniture and spatial depth while remaining a top-down plan.',
+  analysis: 'Product mode: analytical drawing expression. Prioritize zoning, circulation and diagram readability while preserving source geometry.',
+  'multi-option': 'Product mode: multi-option colored plans. Keep one common structure baseline and vary only the requested presentation direction.',
+};
+
+function buildFloorPlanProductModePrompt(config: Record<string, unknown>): string {
+  return typeof config.floorPlanExpressionMode === 'string' ? floorPlanProductModePromptMap[config.floorPlanExpressionMode] || '' : '';
+}
 
 const lineworkPreservationPromptMap: Record<string, string> = {
   strict: 'Linework preservation: strict. Extremely strictly preserve the original linework, wall thickness, doors, windows, furniture outlines, room boundaries, and all plan geometry.',
@@ -2153,25 +2600,33 @@ function buildFloorplanTemplatePrompt(config: Record<string, unknown>): string {
 }
 
 function buildFloorplanRoomLabelsPrompt(config: Record<string, unknown>): string {
+  const language = readFloorPlanTextLanguage(config);
+  if (language === 'none') return '';
   const labels = Array.isArray(config.floorplanRoomLabels) ? config.floorplanRoomLabels.filter(isRecord).slice(0, 20) : [];
   if (labels.length === 0) return '';
   return [
     'Manual room labels: express each functional zone according to the following room labels. Keep room labels subtle and integrated with the plan; do not move walls, openings, room boundaries, or furniture outlines.',
     ...labels.map((label, index) => {
-      const type = readFloorplanRoomTypeLabel(label);
-      const name = readFloorplanEnglishRoomName(typeof label.name === 'string' ? label.name : '', type || `Area ${index + 1}`);
+      const type = readFloorplanRoomTypeLabel(label, language);
+      const rawName = typeof label.name === 'string' ? label.name.trim() : '';
+      const name = language === 'zh-CN' ? rawName || type || `区域 ${index + 1}` : readFloorplanEnglishRoomName(rawName, type || `Area ${index + 1}`);
       const position = typeof label.positionDescription === 'string' && label.positionDescription.trim()
-        ? readEnglishPromptValue(label.positionDescription.trim(), '')
+        ? language === 'zh-CN' ? label.positionDescription.trim() : readEnglishPromptValue(label.positionDescription.trim(), '')
         : '';
       return `Room ${index + 1}: ${name} = ${type}${position ? `, location: ${position}` : ''}.`;
     }),
   ].join(' ');
 }
 
-function readFloorplanRoomTypeLabel(label: Record<string, unknown>): string {
+function readFloorplanRoomTypeLabel(label: Record<string, unknown>, language: 'zh-CN' | 'en' | 'none' = 'en'): string {
   const type = typeof label.roomType === 'string' ? label.roomType : 'custom';
   if (type === 'custom') {
-    return readEnglishPromptValue(typeof label.customTypeLabel === 'string' ? label.customTypeLabel : '', 'Custom Room');
+    const custom = typeof label.customTypeLabel === 'string' ? label.customTypeLabel.trim() : '';
+    return language === 'zh-CN' ? custom || '自定义区域' : readEnglishPromptValue(custom, 'Custom Room');
+  }
+  if (language === 'zh-CN') {
+    const chineseLabels: Record<string, string> = { 'living-room': '客厅', 'dining-room': '餐厅', bedroom: '卧室', kitchen: '厨房', bathroom: '卫生间', balcony: '阳台', entry: '玄关', study: '书房', office: '办公区', commercial: '商业区' };
+    return chineseLabels[type] || '区域';
   }
   const labels: Record<string, string> = {
     'living-room': 'Living Room',
@@ -2230,13 +2685,20 @@ function buildFloorplanExpressionControlPrompt(config: Record<string, unknown>):
   const lineworkPreservation = typeof config.lineworkPreservation === 'string' && lineworkPreservationPromptMap[config.lineworkPreservation]
     ? config.lineworkPreservation
     : 'high';
+  const language = readFloorPlanTextLanguage(config);
+  const languageLabel = language === 'zh-CN' ? 'Simplified Chinese' : 'English';
+  const textDisabled = language === 'none';
   return [
     floorplanRenderModePromptMap[renderMode],
     lineworkPreservationPromptMap[lineworkPreservation],
-    config.enableLegend === true ? 'Add a concise graphic legend with English entries only where appropriate, without covering important plan content.' : '',
-    config.enableAreaText === true ? 'Add clear English area or functional text labels where appropriate; keep text minimal, legible, and aligned with the plan.' : '',
-    config.enableMaterialLegend === true ? 'Add an English material legend that explains key floor, wall, soft furnishing, and finish categories where appropriate.' : '',
+    !textDisabled && config.enableLegend === true ? `Add a concise graphic legend in ${languageLabel}, without covering important plan content.` : '',
+    !textDisabled && config.enableAreaText === true ? `Add clear area or functional labels in ${languageLabel}; keep text minimal, legible, and aligned with the plan.` : '',
+    !textDisabled && config.enableMaterialLegend === true ? `Add a material legend in ${languageLabel} that explains key floor, wall, soft furnishing, and finish categories.` : '',
   ].filter(part => part.trim().length > 0).join(' ');
+}
+
+function readFloorPlanTextLanguage(config: Record<string, unknown>): 'zh-CN' | 'en' | 'none' {
+  return config.floorPlanTextLanguage === 'zh-CN' || config.floorPlanTextLanguage === 'none' ? config.floorPlanTextLanguage : 'en';
 }
 
 async function mapWithConcurrency<T, R>(
@@ -2296,6 +2758,7 @@ function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount:
   const customStyle = style === 'custom' && typeof job.config.customStyleLabel === 'string'
     ? `Direction: ${job.config.customStyleLabel.trim()}.`
     : variantStylePrompts[style] || variantStylePrompts['modern-minimal'];
+  const matrixItem = readDesignVariantMatrixItem(job.config, targetVariantIndex, index, batchCount);
   const parts = [
     buildSmartPromptForJob(job, qualityMode, {
       config: {
@@ -2309,9 +2772,24 @@ function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount:
     }),
     strategy === 'same-style' ? sameStyleVariantPrompts[index] : undefined,
     buildDesignVariantControlPrompt(job.config, index),
+    buildDesignVariantMatrixPrompt(matrixItem, readDesignVariantDiversity(job.config.variantDiversity)),
     `This is ${readVariantLabel(targetVariantIndex)} of ${batchCount}.`,
   ];
   return parts.filter((part): part is string => Boolean(part && part.trim().length > 0)).join(' ');
+}
+
+function readDesignVariantMatrixItem(config: Record<string, unknown>, targetIndex: number, configIndex: number, batchCount: number) {
+  const rawMatrix = Array.isArray(config.variantMatrix) ? config.variantMatrix : [];
+  const highestIndex = rawMatrix.reduce((highest, item) => isRecord(item) && typeof item.variantIndex === 'number'
+    ? Math.max(highest, Math.floor(item.variantIndex))
+    : highest, -1);
+  const matrixCount = highestIndex >= 4 || batchCount >= 8
+    ? 8
+    : highestIndex >= 2 || batchCount >= 4
+      ? 4
+      : 2;
+  const matrix = resolveDesignVariantMatrix(config, matrixCount);
+  return matrix.find(item => item.variantIndex === targetIndex) || matrix[configIndex] || matrix[0];
 }
 
 const variantChangeScopePromptMap: Record<string, string> = {
@@ -2481,7 +2959,17 @@ function buildProviderPromptForJob(job: GenerationJob, qualityMode: QualityMode 
   }
 
   if (job.step === 'image_polish' || readGenerationJobStep(job.config) === 'image_polish') {
-    return resolveImagePolishPrompts(job.config.enhanceMaterials === true).prompt;
+    return resolveImagePolishPrompts({
+      mode: job.config.imagePolishMode === 'conservative' || job.config.imagePolishMode === 'white-model-materialization'
+        ? job.config.imagePolishMode
+        : undefined,
+      controls: isRecord(job.config.imagePolishControls) ? job.config.imagePolishControls : undefined,
+      enhanceMaterials: job.config.enhanceMaterials === true,
+    }).prompt;
+  }
+
+  if (isFreeReferenceImageJob(job)) {
+    return job.prompt;
   }
 
   if (isObjectInsertJob(job) && readObjectInsertPreviewFusionMode(job.config, job.mode)) {
@@ -2602,6 +3090,19 @@ function readModelSnapshotMetadata(value: unknown): GenerationRecord['modelSnaps
     clippingHeight: typeof value.clippingHeight === 'number' ? value.clippingHeight : undefined,
     xrayEnabled: typeof value.xrayEnabled === 'boolean' ? value.xrayEnabled : undefined,
     edgesEnabled: typeof value.edgesEnabled === 'boolean' ? value.edgesEnabled : undefined,
+    bookmarkId: typeof value.bookmarkId === 'string' ? value.bookmarkId : undefined,
+    bookmarkName: typeof value.bookmarkName === 'string' ? value.bookmarkName : undefined,
+    cameraPreset: value.cameraPreset === 'interior'
+      || value.cameraPreset === 'exterior-front'
+      || value.cameraPreset === 'exterior-side'
+      || value.cameraPreset === 'bird-eye'
+      || value.cameraPreset === 'top'
+      || value.cameraPreset === 'custom'
+      ? value.cameraPreset
+      : undefined,
+    batchGroupId: typeof value.batchGroupId === 'string' ? value.batchGroupId : undefined,
+    batchIndex: typeof value.batchIndex === 'number' && Number.isInteger(value.batchIndex) && value.batchIndex >= 0 ? value.batchIndex : undefined,
+    batchCount: typeof value.batchCount === 'number' && Number.isInteger(value.batchCount) && value.batchCount > 0 ? value.batchCount : undefined,
     createdAt: value.createdAt,
   };
 }
@@ -2721,6 +3222,10 @@ function readContinuousEditReferenceRole(value: string | undefined): NonNullable
 
 function readConfigStringValue(value: unknown): string {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : '';
+}
+
+function readConfigNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
 function readGenerationJobStep(config: Record<string, unknown>): GenerationJob['step'] {

@@ -73,6 +73,20 @@ describe('API易 Nano Banana 2 provider', () => {
     expect(output.dataUrl).toBe(onePixelPng);
   });
 
+  it('passes the free-reference 2:1 aspect ratio through to APIYI', async () => {
+    const requests: RequestInit[] = [];
+    const provider = createApiYiNanoBanana2Provider({
+      apiKey: 'test-key',
+      fetchImpl: vi.fn(async (_url, init) => {
+        requests.push(init || {});
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: onePixelPng.replace(/^data:image\/png;base64,/u, '') } }] } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }) as typeof fetch,
+    });
+    await provider.generateImage(createInput({ targetAspectRatio: '2:1', config: { step: 'free_reference_image', freeReferenceAspectRatio: '2:1' } }));
+    const body = JSON.parse(String(requests[0].body)) as { generationConfig: { imageConfig: { aspectRatio: string } } };
+    expect(body.generationConfig.imageConfig.aspectRatio).toBe('2:1');
+  });
+
   it('sends only source image and placement preview for object_insert_preview_fusion', () => {
     const sources = collectApiYiImageSources(createInput({
       mode: 'inpaint',

@@ -234,3 +234,37 @@
       linear-gradient(135deg, #071a1d 0%, #0b2428 48%, #102f35 100%);
   }
 }
+
+/* Drawing expression owns its grid tracks. Keep generic workspace panel widths
+   from overriding the responsive columns defined in index.css. */
+.workspace-theme .drawing-workspace {
+  gap: 1rem;
+  padding: 0.75rem;
+}
+
+.workspace-theme .drawing-left-panel,
+.workspace-theme .drawing-right-panel {
+  width: 100%;
+  max-height: 100%;
+  flex-shrink: 1;
+}
+
+.workspace-theme .drawing-right-panel-content {
+  flex: 1 1 0%;
+  height: 0;
+}
+
+@media (min-width: 900px) {
+  .workspace-theme .drawing-right-panel-header,
+  .workspace-theme .drawing-right-panel-footer {
+    padding: 0.75rem;
+  }
+
+  .workspace-theme .drawing-action-buttons {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .workspace-theme .drawing-action-primary {
+    grid-column: auto;
+  }
+}

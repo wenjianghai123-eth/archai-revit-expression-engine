@@ -18,7 +18,7 @@ import {
   Trash2,
   Undo2,
 } from 'lucide-react';
-import type { FloorPlanRegion, FloorPlanRegionSet, RegionEditOperation, RegionPolygon, UploadedImage } from '../types';
+import type { FloorPlanRegion, FloorPlanRegionSet, FloorPlanRegionType, GenerationConfig, RegionEditOperation, RegionPolygon, UploadedImage } from '../types';
 import {
   confirmFloorPlanRegions,
   getLatestFloorPlanSegmentation,
@@ -29,6 +29,7 @@ import {
 import { resolveAssetUrl } from '../utils/assetUrl';
 import { allowLatestFloorPlanRegionSet, shouldRestoreLatestFloorPlanRegionSet } from '../utils/floorPlanWorkspace';
 import { FloorPlanMaterialPanel } from './FloorPlanMaterialPanel';
+import type { DrawingTool } from './drawing-expression/drawingExpressionState';
 
 interface Props {
   image: UploadedImage | null;
@@ -39,6 +40,10 @@ interface Props {
   creditBalance?: number | null;
   onRefreshCreditBalance?: () => Promise<void>;
   onEnsureProject?: () => Promise<string>;
+  config?: GenerationConfig;
+  onUpdateConfig?: (config: Partial<GenerationConfig>) => void;
+  activeTool?: DrawingTool;
+  onRequestTool?: (tool: DrawingTool) => void;
 }
 
 type ToolMode = 'select' | 'polygon' | 'brush' | 'erase';
@@ -47,8 +52,14 @@ type HistoryState = { regions: FloorPlanRegion[]; operation: RegionEditOperation
 const COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 const BRUSH_RADIUS = 0.035;
 const GRID_SIZE = 180;
+const REGION_TYPE_OPTIONS: Array<{ value: FloorPlanRegionType; label: string }> = [
+  { value: 'living', label: '起居' }, { value: 'dining', label: '餐饮' }, { value: 'bedroom', label: '卧室' },
+  { value: 'kitchen', label: '厨房' }, { value: 'bathroom', label: '卫浴' }, { value: 'circulation', label: '交通' },
+  { value: 'service', label: '后勤' }, { value: 'outdoor', label: '室外' }, { value: 'commercial', label: '商业' },
+  { value: 'office', label: '办公' }, { value: 'other', label: '其他' },
+];
 
-export function FloorPlanRegionPanel({ image, onUpload, onResetRegionsAndMaterials, onResetAll, onDerivedStateChange, creditBalance = null, onRefreshCreditBalance, onEnsureProject }: Props) {
+export function FloorPlanRegionPanel({ image, onUpload, onResetRegionsAndMaterials, onResetAll, onDerivedStateChange, creditBalance = null, onRefreshCreditBalance, onEnsureProject, config, onUpdateConfig, activeTool = 'region-recognition', onRequestTool }: Props) {
   const [regionSet, setRegionSet] = useState<FloorPlanRegionSet | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [tool, setTool] = useState<ToolMode>('select');
@@ -140,6 +151,16 @@ export function FloorPlanRegionPanel({ image, onUpload, onResetRegionsAndMateria
   useEffect(() => {
     latestRegionsRef.current = regionSet?.regions || [];
   }, [regionSet?.regions]);
+
+  useEffect(() => {
+    if (activeTool === 'region-recognition' && workflowStep !== 'regions') {
+      setWorkflowStep('regions');
+      return;
+    }
+    if (activeTool === 'material-mapping' && regionSet?.status === 'confirmed' && workflowStep !== 'materials') {
+      setWorkflowStep('materials');
+    }
+  }, [activeTool, regionSet?.status, workflowStep]);
 
   const resetHistory = (regions: FloorPlanRegion[]) => {
     const snapshot = cloneRegions(regions);
@@ -238,6 +259,22 @@ export function FloorPlanRegionPanel({ image, onUpload, onResetRegionsAndMateria
     commitRegions(regionSet.regions, { type: 'rename', regionId, name: regionSet.regions.find(region => region.id === regionId)?.name || '' });
   };
 
+  const updateRegionMetadata = (regionId: string, patch: Pick<FloorPlanRegion, 'regionType' | 'regionUsage'>) => {
+    if (!regionSet || !editable) return;
+    const regions = regionSet.regions.map(region => region.id === regionId ? { ...region, ...patch } : region);
+    commitRegions(regions, {
+      type: 'update-metadata',
+      regionId,
+      regionType: patch.regionType ?? null,
+      regionUsage: patch.regionUsage || '',
+    });
+  };
+
+  const updateRegionUsageDraft = (regionId: string, regionUsage: string) => {
+    if (!editable) return;
+    setRegionSet(current => current ? { ...current, regions: current.regions.map(region => region.id === regionId ? { ...region, regionUsage } : region) } : current);
+  };
+
   const deleteSelected = () => {
     if (!regionSet || !editable || !selectedIds.length) return;
     const deleted = selectedIds[0];
@@ -314,6 +351,7 @@ export function FloorPlanRegionPanel({ image, onUpload, onResetRegionsAndMateria
       setTool('select');
       setPolygonDraft([]);
       setWorkflowStep('materials');
+      onRequestTool?.('material-mapping');
     } catch (confirmError) {
       if (!isCurrentRequest(generation) || controller.signal.aborted) return;
       console.error('[floor-plan-segment] confirm failed', { regionSetId, error: confirmError });
@@ -402,9 +440,11 @@ export function FloorPlanRegionPanel({ image, onUpload, onResetRegionsAndMateria
       creditBalance={creditBalance}
       onRefreshCreditBalance={onRefreshCreditBalance}
       onEnsureProject={onEnsureProject}
-      onBack={() => setWorkflowStep('regions')}
+      onBack={() => { setWorkflowStep('regions'); onRequestTool?.('region-recognition'); }}
       onResetRegionsAndMaterials={onResetRegionsAndMaterials}
       onResetAll={onResetAll}
+      config={config}
+      onUpdateConfig={onUpdateConfig}
     />;
   }
 
@@ -422,7 +462,7 @@ export function FloorPlanRegionPanel({ image, onUpload, onResetRegionsAndMateria
   return <main className="workspace-canvas flex min-w-0 flex-1 flex-col overflow-hidden bg-slate-100">
     <div className="flex min-h-14 flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white/90 px-4 py-2">
       <div>
-        <h3 className="text-sm font-bold text-slate-800">地面区域识别与校正</h3>
+        <h3 className="text-sm font-bold text-slate-800">精准材质彩平 · 地面区域识别与校正</h3>
         <p className="text-xs text-slate-500">{regionSet ? `当前 ${regionSet.regions.length} 个区域${regionSet.status === 'confirmed' ? ' · 已确认版本' : isSaving ? ' · 正在保存' : ''}` : isRestoring ? '正在恢复识别结果…' : '识别封闭房间并校正区域'}</p>
       </div>
       <div className="flex flex-wrap gap-2">
@@ -435,8 +475,8 @@ export function FloorPlanRegionPanel({ image, onUpload, onResetRegionsAndMateria
 
     {error ? <div role="alert" className="mx-4 mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{error}</div> : null}
 
-    <div className="flex min-h-0 flex-1 overflow-hidden">
-      <div className="min-w-0 flex-1 overflow-auto p-5">
+    <div className="floor-plan-region-workspace flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
+      <div className="floor-plan-region-canvas min-w-0 flex-1 overflow-auto p-5">
         <div className="mx-auto max-w-5xl overflow-hidden rounded-xl bg-white shadow-lg">
           <div
             ref={viewerRef}
@@ -447,7 +487,7 @@ export function FloorPlanRegionPanel({ image, onUpload, onResetRegionsAndMateria
             onPointerCancel={onCanvasPointerUp}
           >
             <img src={imageUrl} alt="待识别平面图" className="block h-auto w-full select-none" draggable={false} />
-            {showOverlay && regionSet ? <svg viewBox="0 0 1 1" preserveAspectRatio="none" className="absolute inset-0 h-full w-full" aria-label="区域编辑覆盖层">
+            {showOverlay && regionSet ? <svg viewBox="0 0 1 1" preserveAspectRatio="none" className="absolute inset-0 z-[1] h-full w-full" aria-label="区域编辑覆盖层">
               {regionSet.regions.map((region, index) => {
                 const points = region.polygon.map(point => point.join(',')).join(' ');
                 const center = polygonCenter(region.polygon);
@@ -465,7 +505,7 @@ export function FloorPlanRegionPanel({ image, onUpload, onResetRegionsAndMateria
         </div>
       </div>
 
-      <aside className="w-80 shrink-0 overflow-y-auto border-l border-slate-200 bg-white p-3">
+      <aside className="floor-plan-region-editor w-full shrink-0 overflow-y-auto overflow-x-hidden border-t border-slate-200 bg-white p-3">
         <div className="mb-3 flex items-center justify-between">
           <span className="text-sm font-bold text-slate-800">区域编辑</span>
           {regionSet?.status === 'confirmed' ? <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700">已确认</span> : null}
@@ -499,12 +539,22 @@ export function FloorPlanRegionPanel({ image, onUpload, onResetRegionsAndMateria
               <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white" style={{ backgroundColor: COLORS[index % COLORS.length] }}>{region.number}</span>
               <input value={region.name} onChange={event => renameRegion(region.id, event.target.value)} onBlur={() => saveName(region.id)} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} disabled={!editable} placeholder="房间名称" className="min-w-0 flex-1 rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold disabled:bg-slate-50" aria-label={`区域 ${region.number} 名称`} />
             </div>
+            <div className="mt-2 grid grid-cols-2 gap-2 pl-8">
+              <label className="text-[10px] font-bold text-slate-500">区域类型
+                <select value={region.regionType || ''} onChange={event => updateRegionMetadata(region.id, { regionType: (event.currentTarget.value || null) as FloorPlanRegionType | null, regionUsage: region.regionUsage || '' })} disabled={!editable} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold disabled:bg-slate-50">
+                  <option value="">未设置</option>{REGION_TYPE_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+              <label className="text-[10px] font-bold text-slate-500">区域用途
+                <input value={region.regionUsage || ''} onChange={event => updateRegionUsageDraft(region.id, event.currentTarget.value)} onBlur={() => updateRegionMetadata(region.id, { regionType: region.regionType ?? null, regionUsage: regionSet?.regions.find(candidate => candidate.id === region.id)?.regionUsage || '' })} disabled={!editable} placeholder="如：会客、备餐" className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1.5 text-xs font-semibold disabled:bg-slate-50" />
+              </label>
+            </div>
             <p className="mt-1 pl-14 text-[10px] text-slate-400">约占图面 {(region.areaRatio * 100).toFixed(1)}% · regionId {region.id}</p>
           </div>) || <p className="py-8 text-center text-xs text-slate-400">尚未识别区域</p>}
         </div>
 
         {regionSet?.status === 'confirmed'
-          ? <button type="button" onClick={() => setWorkflowStep('materials')} className="mt-3 inline-flex w-full items-center justify-center gap-1 rounded-xl bg-emerald-600 px-3 py-2.5 text-sm font-bold text-white"><Check className="h-4 w-4" />进入设置区域材质</button>
+          ? <button type="button" onClick={() => { setWorkflowStep('materials'); onRequestTool?.('material-mapping'); }} className="mt-3 inline-flex w-full items-center justify-center gap-1 rounded-xl bg-emerald-600 px-3 py-2.5 text-sm font-bold text-white"><Check className="h-4 w-4" />进入设置区域材质</button>
           : regionSet ? <button type="button" onClick={() => void confirm()} disabled={isLoading || isSaving} className="mt-3 inline-flex w-full items-center justify-center gap-1 rounded-xl bg-emerald-600 px-3 py-2.5 text-sm font-bold text-white disabled:bg-slate-300"><Check className="h-4 w-4" />确认区域划分</button> : null}
       </aside>
     </div>

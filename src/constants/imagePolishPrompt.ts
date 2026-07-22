@@ -1,89 +1,164 @@
-export const IMAGE_POLISH_PROMPT = `请对这张图片进行轻度照片化和画质增强处理。
+import type { ImagePolishControlLevel, ImagePolishControls, ImagePolishMode } from '../types';
 
-这是一次保守的图像增强任务，不是重新渲染，不是重新设计，也不是材质替换。请尽量保持原图的所有视觉内容不变，只提升画面的真实感、清晰度、光影自然度和照片质感。
+export const IMAGE_POLISH_MODE_OPTIONS: Array<{
+  value: ImagePolishMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'conservative',
+    label: '保守提质',
+    description: '只优化清晰度、噪点、光影、阴影与边缘，不新增内容、不换材质、不改颜色。',
+  },
+  {
+    value: 'white-model-materialization',
+    label: '白模材质化',
+    description: '为白模合理补全材质与光影，同时锁定结构、镜头、构图和主要家具位置。',
+  },
+];
 
-请严格保持：
-- 原图的空间结构不变；
-- 原图的相机角度不变；
-- 原图的透视关系不变；
-- 原图的构图边界不变；
-- 原图的画面比例不变；
-- 原图中的家具、灯具、墙面、地面、门窗、柜体、装饰物位置不变；
-- 原图中的颜色关系不变；
-- 原图中的墙面颜色、地面颜色、家具颜色、木色、金属色、布艺颜色、皮革颜色不变；
-- 原图中已有表面的外观不变。
+export const IMAGE_POLISH_CONTROL_OPTIONS: Array<{
+  key: keyof ImagePolishControls;
+  label: string;
+  description: string;
+}> = [
+  { key: 'clarity', label: '清晰度', description: '提升细节可读性与边缘干净度' },
+  { key: 'lightingOptimization', label: '光影优化', description: '自然化环境光与明暗过渡' },
+  { key: 'materialDetail', label: '材质细节', description: '增强已有材质或白模材质表现' },
+  { key: 'removeModelFeel', label: '去模型感', description: '减少灰模感、塑料感和未完成感' },
+  { key: 'colorPreservation', label: '色彩保持', description: '锁定原图的色相与色彩关系' },
+  { key: 'structurePreservation', label: '结构保持', description: '锁定结构、镜头、透视和构图' },
+  { key: 'denoise', label: '降噪', description: '减少噪点、脏点与压缩伪影' },
+  { key: 'shadow', label: '阴影', description: '优化接触阴影与空间层次' },
+  { key: 'reflection', label: '反射', description: '优化玻璃、金属等已有表面的反射' },
+];
 
-只允许进行以下轻度优化：
-1. 提升图片清晰度；
-2. 减少模型感、灰感、脏感或低清感；
-3. 让光线过渡更自然；
-4. 让阴影更柔和、更真实；
-5. 让边缘更干净；
-6. 让画面整体更像真实相机拍摄；
-7. 让画面更干净、更统一。
+export const IMAGE_POLISH_CONTROL_LEVEL_OPTIONS: Array<{ value: ImagePolishControlLevel; label: string }> = [
+  { value: 'off', label: '关闭' },
+  { value: 'low', label: '轻度' },
+  { value: 'medium', label: '适中' },
+  { value: 'high', label: '加强' },
+];
 
-禁止：
-- 不要新增材质；
-- 不要替换材质；
-- 不要重新生成墙面；
-- 不要重新生成地面；
-- 不要重新生成家具表面；
-- 不要把原本的颜色改成另一种颜色；
-- 不要把原来的普通表面改成木纹、石纹、金属、皮革、布料或其他新表面；
-- 不要增加新的纹理图案；
-- 不要增加新的装饰物；
-- 不要增加新的家具；
-- 不要改变空间风格；
-- 不要改变设计方案；
-- 不要让画面变成新的室内效果图方案；
-- 不要过度渲染；
-- 不要过度美化；
-- 不要强行增加高级材质；
-- 不要改变原图已有设计。
+export const DEFAULT_IMAGE_POLISH_CONTROLS: Record<ImagePolishMode, ImagePolishControls> = {
+  conservative: {
+    clarity: 'medium',
+    lightingOptimization: 'medium',
+    materialDetail: 'low',
+    removeModelFeel: 'low',
+    colorPreservation: 'high',
+    structurePreservation: 'high',
+    denoise: 'medium',
+    shadow: 'medium',
+    reflection: 'low',
+  },
+  'white-model-materialization': {
+    clarity: 'high',
+    lightingOptimization: 'high',
+    materialDetail: 'high',
+    removeModelFeel: 'high',
+    colorPreservation: 'medium',
+    structurePreservation: 'high',
+    denoise: 'medium',
+    shadow: 'high',
+    reflection: 'medium',
+  },
+};
 
-最终结果应该看起来像：原图本身被做了一次专业的清晰度、光影和照片质感增强，而不是被重新设计或重新渲染。`;
+const CONTROL_PROMPT_LABELS: Record<keyof ImagePolishControls, string> = {
+  clarity: '清晰度',
+  lightingOptimization: '光影优化',
+  materialDetail: '材质细节',
+  removeModelFeel: '去模型感',
+  colorPreservation: '色彩保持',
+  structurePreservation: '结构保持',
+  denoise: '降噪',
+  shadow: '阴影优化',
+  reflection: '反射优化',
+};
 
-export const IMAGE_POLISH_NEGATIVE_PROMPT = '不要新增材质，不要替换材质，不要改变颜色，不要改色，不要重新设计，不要改变空间结构，不要改变构图，不要改变镜头角度，不要改变透视，不要移动家具，不要新增家具，不要新增装饰，不要新增木纹，不要新增石纹，不要新增金属质感，不要新增皮革质感，不要新增布艺质感，不要改变墙面，不要改变地面，不要改变柜体，不要改变桌椅，不要过度渲染，不要建筑效果图风格，不要重新生成设计方案，不要强烈风格化，不要高对比滤镜，不要过曝，不要过暗，不要卡通化，不要插画化，不要拼贴，不要文字，不要水印，不要logo。';
+const CONTROL_LEVEL_PROMPTS: Record<ImagePolishControlLevel, string> = {
+  off: '关闭，不执行该项增强',
+  low: '轻度处理，变化必须克制',
+  medium: '适中处理，保持自然且不过度',
+  high: '重点处理，但不得突破模式的硬性边界',
+};
+
+export const IMAGE_POLISH_PROMPT = `执行“保守提质”。这不是重新渲染、重新设计或材质替换。
+只允许提升清晰度、降噪、光影自然度、阴影、边缘洁净度和轻度真实感。
+必须保留原图的结构、相机、透视、构图、画幅、家具位置、材质身份和颜色关系。
+严禁新增人物、绿植、家具、装饰物或建筑构件；严禁替换材质、改变颜色或移动任何主要元素。`;
+
+export const IMAGE_POLISH_NEGATIVE_PROMPT = '禁止新增人物、绿植、家具、装饰物和建筑构件；禁止替换材质、改变颜色、改变结构、改变镜头、改变透视、改变构图、改变画幅、移动家具、重新设计、过度渲染、文字、水印、logo、拼贴、卡通化、插画化。';
 
 export const IMAGE_POLISH_DEFAULT_PROMPT = IMAGE_POLISH_PROMPT;
 export const IMAGE_POLISH_DEFAULT_NEGATIVE_PROMPT = IMAGE_POLISH_NEGATIVE_PROMPT;
 
-export const IMAGE_POLISH_MATERIAL_ENHANCE_PROMPT = `请将这张原始室内 / 建筑空间图转化为高质量、真实自然的效果图。保持原图的空间结构、相机视角、透视关系、构图边界、主要家具布局和核心设计元素不变，不要重新设计空间。
+export const IMAGE_POLISH_MATERIAL_ENHANCE_PROMPT = `执行“白模材质化”。允许根据白模、灰模和已有设计线索合理补全真实材质、自然光影、阴影与反射。
+必须严格锁定原始空间结构、建筑构件、相机视角、透视、画幅、构图和主要家具位置，不得重新设计空间。
+不得新增人物、绿植、家具或与原设计无关的装饰；不得移动、删除或替换主要家具和建筑元素。`;
 
-请去除原图中的模型感、线稿感、灰模感、白模感或未完成渲染感，将其转化为真实材质、自然光影和完整空间氛围。整体效果应呈现为专业建筑 / 室内设计效果图。
+export const IMAGE_POLISH_MATERIAL_ENHANCE_NEGATIVE_PROMPT = '禁止改变空间结构、建筑构件、相机角度、透视、构图和画幅；禁止移动或删除主要家具；禁止新增人物、绿植、家具和无关装饰；禁止重新设计、错误阴影、过曝、低清晰度、文字、水印、logo、拼贴、卡通化、插画化。';
 
-渲染方向：
+export interface ImagePolishPromptInput {
+  mode?: ImagePolishMode;
+  controls?: Partial<ImagePolishControls> | null;
+  enhanceMaterials?: boolean;
+}
 
-- 风格：现代、自然、温暖、高级、低饱和；
-- 材质：根据原图元素合理转化为真实木饰面、石材、涂料、金属、织物、玻璃、地面材质等；
-- 灯光：增强自然光、环境光、间接光和局部灯光效果；
-- 阴影：增加真实接触阴影、柔和阴影和空间层次；
-- 细节：适当优化家具、软装、装饰物、纹理和边缘细节；
-- 氛围：整体统一、舒适、真实、有设计感。
+export function resolveImagePolishMode(value: unknown, enhanceMaterials = false): ImagePolishMode {
+  if (value === 'conservative' || value === 'white-model-materialization') return value;
+  return enhanceMaterials ? 'white-model-materialization' : 'conservative';
+}
 
-严格要求：
+export function resolveImagePolishControls(
+  value: unknown,
+  mode: ImagePolishMode,
+): ImagePolishControls {
+  const defaults = DEFAULT_IMAGE_POLISH_CONTROLS[mode];
+  if (!isRecord(value)) return { ...defaults };
+  const controls = Object.fromEntries(
+    (Object.keys(defaults) as Array<keyof ImagePolishControls>).map(key => [
+      key,
+      isImagePolishControlLevel(value[key]) ? value[key] : defaults[key],
+    ]),
+  ) as unknown as ImagePolishControls;
+  if (controls.structurePreservation === 'off') controls.structurePreservation = defaults.structurePreservation;
+  if (mode === 'conservative' && controls.colorPreservation === 'off') controls.colorPreservation = defaults.colorPreservation;
+  return controls;
+}
 
-1. 保持原始空间结构不变；
-2. 保持原始镜头角度和透视不变；
-3. 保持主要家具和建筑构件的位置不变；
-4. 不要大幅改变空间功能；
-5. 不要添加过多新家具；
-6. 不要删除原图中的主要设计元素；
-7. 不要改变画面比例和构图边界；
-8. 不要生成文字、水印、logo 或拼贴图；
-9. 不要出现卡通风、插画风、过度锐化或过度曝光；
-10. 最终效果应自然、真实、统一，像专业室内 / 建筑可视化渲染图。`;
+export function resolveImagePolishPrompts(
+  input: boolean | ImagePolishPromptInput = false,
+): { prompt: string; negativePrompt: string; mode: ImagePolishMode; controls: ImagePolishControls } {
+  const normalizedInput = typeof input === 'boolean' ? { enhanceMaterials: input } : input;
+  const mode = resolveImagePolishMode(normalizedInput.mode, normalizedInput.enhanceMaterials === true);
+  const controls = resolveImagePolishControls(normalizedInput.controls, mode);
+  const basePrompt = mode === 'white-model-materialization'
+    ? IMAGE_POLISH_MATERIAL_ENHANCE_PROMPT
+    : IMAGE_POLISH_DEFAULT_PROMPT;
+  const negativePrompt = mode === 'white-model-materialization'
+    ? IMAGE_POLISH_MATERIAL_ENHANCE_NEGATIVE_PROMPT
+    : IMAGE_POLISH_DEFAULT_NEGATIVE_PROMPT;
+  const controlPrompt = (Object.keys(controls) as Array<keyof ImagePolishControls>)
+    .map(key => `- ${CONTROL_PROMPT_LABELS[key]}：${CONTROL_LEVEL_PROMPTS[controls[key]]}。`)
+    .join('\n');
+  const hardBoundary = mode === 'white-model-materialization'
+    ? '最终硬性约束：只补全材质和光影表达；结构、相机、透视、构图、画幅及主要家具位置必须与输入图一致。'
+    : '最终硬性约束：不得新增人物、绿植、家具或装饰，不得替换材质，不得改变颜色，不得改变结构、相机、透视、构图或画幅。';
 
-export const IMAGE_POLISH_MATERIAL_ENHANCE_NEGATIVE_PROMPT = '不要改变原始空间结构，不要改变相机角度，不要改变透视关系，不要移动主要家具，不要重新设计房间，不要过度添加新家具，不要删除主要元素，不要改变画面比例，不要裁切画面，不要生成拼贴图，不要出现文字、水印、logo，不要卡通风，不要插画风，不要线稿感，不要灰模感，不要白模感，不要未完成模型感，不要扭曲家具，不要错误阴影，不要过曝，不要低清晰度。';
+  return {
+    mode,
+    controls,
+    prompt: `${basePrompt}\n\n本次控制强度：\n${controlPrompt}\n\n${hardBoundary}`,
+    negativePrompt,
+  };
+}
 
-export function resolveImagePolishPrompts(enhanceMaterials: boolean): { prompt: string; negativePrompt: string } {
-  return enhanceMaterials
-    ? {
-        prompt: IMAGE_POLISH_MATERIAL_ENHANCE_PROMPT,
-        negativePrompt: IMAGE_POLISH_MATERIAL_ENHANCE_NEGATIVE_PROMPT,
-      }
-    : {
-        prompt: IMAGE_POLISH_DEFAULT_PROMPT,
-        negativePrompt: IMAGE_POLISH_DEFAULT_NEGATIVE_PROMPT,
-      };
+function isImagePolishControlLevel(value: unknown): value is ImagePolishControlLevel {
+  return value === 'off' || value === 'low' || value === 'medium' || value === 'high';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

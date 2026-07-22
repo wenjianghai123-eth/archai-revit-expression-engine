@@ -17,6 +17,8 @@ function createInitialStepState(step: GenerationStep): StepState {
     materialTextures: [],
     furnitureReferences: [],
     maskImage: null,
+    maskHasVisiblePixels: false,
+    protectionMaskImage: null,
     useFullImageMask: false,
     outputImage: null,
     generationResults: [],
@@ -77,6 +79,8 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
         ...prev[currentStep],
         inputImage: image,
         maskImage: null,
+        maskHasVisiblePixels: false,
+        protectionMaskImage: null,
         useFullImageMask: false,
         outputImage: image ? prev[currentStep].outputImage : null,
         generationResults: image ? prev[currentStep].generationResults : [],
@@ -138,7 +142,7 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
     }));
   }, [currentStep]);
 
-  const handleUpdateMaskImage = useCallback((maskDataUrl: string | null, useFullImage: boolean, feather = 0) => {
+  const handleUpdateMaskImage = useCallback((maskDataUrl: string | null, useFullImage: boolean, feather = 0, protectionMaskDataUrl: string | null = null, expansion = 0, hasValidMaskPixels?: boolean) => {
     setStepStates(prev => ({
       ...prev,
       [currentStep]: {
@@ -152,10 +156,24 @@ export function useGenerationWorkflow(onOpenGenerate: () => void) {
               dataUrl: maskDataUrl,
             }
           : null,
+        maskHasVisiblePixels: maskDataUrl
+          ? hasValidMaskPixels ?? true
+          : false,
+        protectionMaskImage: protectionMaskDataUrl
+          ? {
+              id: `protection-mask-${Date.now()}`,
+              name: '保护区域 mask',
+              type: 'image/png',
+              size: 0,
+              dataUrl: protectionMaskDataUrl,
+            }
+          : null,
         useFullImageMask: useFullImage,
         config: {
           ...prev[currentStep].config,
           feather,
+          maskExpansion: expansion,
+          hasProtectionMask: Boolean(protectionMaskDataUrl),
         },
         generationStatus: 'ready',
         generationError: null,

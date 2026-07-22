@@ -1,7 +1,15 @@
-import { Download, ExternalLink, ImageUp, Loader2, Sparkles, Upload, X } from 'lucide-react';
+import { Loader2, Sparkles, Upload, X } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { uploadImageAsset } from '../lib/api';
-import { GenerationConfig, GenerationRunStateOverride, GenerationStep, ResultSendTargetStep, StepState, UploadedImage } from '../types';
+import {
+  DEFAULT_IMAGE_POLISH_CONTROLS,
+  IMAGE_POLISH_CONTROL_LEVEL_OPTIONS,
+  IMAGE_POLISH_CONTROL_OPTIONS,
+  IMAGE_POLISH_MODE_OPTIONS,
+  resolveImagePolishControls,
+  resolveImagePolishMode,
+} from '../constants/imagePolishPrompt';
+import { GenerationConfig, GenerationRunStateOverride, GenerationStep, ImagePolishControls, ImagePolishMode, ResultSendTargetStep, SecondaryEditAction, StepState, UploadedImage } from '../types';
 import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
 import { createUploadedImage, validateImageFile } from '../utils/file';
 import { IMAGE_UPLOAD_ACCEPT, readImageTypeUploadError } from '../utils/imageValidation';
@@ -9,7 +17,11 @@ import { resolveAssetUrl } from '../utils/assetUrl';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { AspectRatioImage } from './common/AspectRatioImage';
 import { GenerationImageViewer } from './common/GenerationImageViewer';
-import { ResultSendActions } from './workspace/SecondaryEditActions';
+import { ResultQualityReport } from './common/ResultQualityReport';
+import { ContinuousEditAction, ResultSendActions } from './workspace/SecondaryEditActions';
+import { normalizeStepGenerationResult } from '../utils/normalizeGenerationResult';
+import { GenerationResultActions } from './common/GenerationResultActions';
+import { NormalizedGenerationProgress } from './common/GenerationProgress';
 
 interface ImagePolishPanelProps {
   state: StepState;
@@ -18,6 +30,7 @@ interface ImagePolishPanelProps {
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
   onGenerate: (stateOverride?: GenerationRunStateOverride) => void;
   onSendResultToStep?: (resultId: string, targetStep: ResultSendTargetStep) => void;
+  onSecondaryEditResult?: (resultId: string, action: SecondaryEditAction) => void;
 }
 
 type PreviewMode = 'result' | 'original' | 'compare';
@@ -29,6 +42,7 @@ export function ImagePolishPanel({
   onUpdateConfig,
   onGenerate,
   onSendResultToStep,
+  onSecondaryEditResult,
 }: ImagePolishPanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -45,9 +59,16 @@ export function ImagePolishPanel({
     || null;
   const resultImageUrl = getOriginalResultImageUrl(selectedResult, state.outputImage);
   const resultAssetId = getOriginalResultAssetId(selectedResult);
+  const normalizedResult = normalizeStepGenerationResult(state, {
+    originalImageUrl: sourceImageUrl,
+    originalAssetId: sourceImage?.assetId,
+    resultImageUrl,
+    resultAssetId,
+  });
   const dimensionsText = formatResultDimensions(selectedResult);
   const isBusy = state.isGenerating || isPreparing;
-  const enhanceMaterials = state.config.enhanceMaterials === true;
+  const imagePolishMode = resolveImagePolishMode(state.config.imagePolishMode, state.config.enhanceMaterials === true);
+  const imagePolishControls = resolveImagePolishControls(state.config.imagePolishControls, imagePolishMode);
 
   const handleUpload = async (files: FileList | null) => {
     const selectedFiles = Array.from(files || []);
@@ -78,7 +99,7 @@ export function ImagePolishPanel({
         }
       }
       onUpdateInputImage(image);
-      onUpdateConfig(createImagePolishConfigPatch(image.assetId, enhanceMaterials));
+      onUpdateConfig(createImagePolishConfigPatch(image.assetId, imagePolishMode, imagePolishControls));
       setUploadError(null);
       setMessage(null);
     } catch (error) {
@@ -101,10 +122,11 @@ export function ImagePolishPanel({
     setMessage('正在创建质感提升任务...');
     try {
       const imageWithAsset = await ensureUploadedImageAsset(sourceImage, 'image-polish-source');
-      const nextEnhanceMaterials = state.config.enhanceMaterials === true;
+      const nextMode = resolveImagePolishMode(state.config.imagePolishMode, state.config.enhanceMaterials === true);
+      const nextControls = resolveImagePolishControls(state.config.imagePolishControls, nextMode);
       const config: GenerationConfig = {
         ...state.config,
-        ...createImagePolishConfigPatch(imageWithAsset.assetId, nextEnhanceMaterials),
+        ...createImagePolishConfigPatch(imageWithAsset.assetId, nextMode, nextControls),
       };
       onUpdateInputImage(imageWithAsset);
       onUpdateConfig(config);
@@ -112,8 +134,9 @@ export function ImagePolishPanel({
         console.debug({
           event: 'image_polish_submit',
           sourceImageAssetId: imageWithAsset.assetId,
-          enhanceMaterials: nextEnhanceMaterials,
-          promptMode: nextEnhanceMaterials ? 'material_enhance' : 'default_polish',
+          imagePolishMode: nextMode,
+          imagePolishControls: nextControls,
+          promptMode: nextMode === 'white-model-materialization' ? 'white_model_materialization' : 'conservative_polish',
           provider: config.aiProvider,
         });
       }
@@ -149,6 +172,36 @@ export function ImagePolishPanel({
     }
   };
 
+  const handleUtilityAction = async (action: 'download' | 'share' | 'pdf') => {
+    if (action === 'download') {
+      await handleDownload();
+      return;
+    }
+    if (action === 'pdf') {
+      window.print();
+      return;
+    }
+    if (!resultImageUrl) return;
+    setDownloadError(null);
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: `${projectName || '烛照AI'} · 质感提升`,
+          text: '烛照AI 质感提升结果',
+          ...(resultImageUrl.startsWith('http') ? { url: resultImageUrl } : {}),
+        });
+      } else if (navigator.clipboard && resultImageUrl.startsWith('http')) {
+        await navigator.clipboard.writeText(resultImageUrl);
+        setMessage('结果链接已复制。');
+      } else {
+        throw new Error('SHARE_NOT_SUPPORTED');
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      setDownloadError('当前浏览器无法直接分享，请先保存结果图。');
+    }
+  };
+
   return (
     <section className="workspace-surface flex min-h-0 flex-1 overflow-hidden p-4">
       <input
@@ -167,7 +220,7 @@ export function ImagePolishPanel({
           <div>
             <h2 className="text-lg font-black text-slate-950">质感提升</h2>
             <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
-              只上传原图，一键提升真实感、清晰度与照片质感，尽量保持原色、原材质倾向和原设计不变。
+              选择保守提质或白模材质化，再精确控制清晰度、光影、材质、色彩与结构保持强度。
             </p>
           </div>
 
@@ -200,20 +253,78 @@ export function ImagePolishPanel({
             {uploadError ? <p className="mt-2 rounded-lg bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">{uploadError}</p> : null}
           </div>
 
-          <label className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white/50 p-3 text-left">
-            <input
-              type="checkbox"
-              checked={enhanceMaterials}
-              onChange={event => onUpdateConfig(createImagePolishConfigPatch(sourceImage?.assetId, event.currentTarget.checked))}
-              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-cyan-700 focus:ring-cyan-600"
-            />
-            <span className="min-w-0">
-              <span className="block text-sm font-black text-slate-900">提升材质</span>
-              <span className="mt-1 block text-xs font-semibold leading-5 text-slate-500">
-                勾选后，将在保持原有空间结构、镜头视角、构图和主要元素不变的前提下，增强真实材质、光影和空间氛围，使画面更接近专业室内 / 建筑效果图。
-              </span>
-            </span>
-          </label>
+          <section className="rounded-2xl border border-slate-200 bg-white/55 p-3">
+            <div className="mb-3">
+              <p className="text-sm font-black text-slate-900">处理模式</p>
+              <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">先确定允许改变的边界，再细调各项强度。</p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1 2xl:grid-cols-2">
+              {IMAGE_POLISH_MODE_OPTIONS.map(option => {
+                const selected = imagePolishMode === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => onUpdateConfig(createImagePolishConfigPatch(
+                      sourceImage?.assetId,
+                      option.value,
+                      DEFAULT_IMAGE_POLISH_CONTROLS[option.value],
+                    ))}
+                    className={`rounded-xl border p-3 text-left transition ${selected ? 'border-cyan-500 bg-cyan-50 ring-1 ring-cyan-200' : 'border-slate-200 bg-white hover:border-cyan-200'}`}
+                  >
+                    <span className={`block text-sm font-black ${selected ? 'text-cyan-900' : 'text-slate-900'}`}>{option.label}</span>
+                    <span className="mt-1 block text-[11px] font-semibold leading-5 text-slate-500">{option.description}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className={`mt-3 rounded-xl px-3 py-2 text-xs font-semibold leading-5 ${imagePolishMode === 'conservative' ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
+              {imagePolishMode === 'conservative'
+                ? '硬性限制：不新增人物、绿植或家具，不替换材质、不改颜色，不改变结构和镜头。'
+                : '硬性限制：只补全材质与光影；结构、镜头、构图和主要家具位置仍保持不变。'}
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-200 bg-white/55 p-3">
+            <div className="mb-3">
+              <p className="text-sm font-black text-slate-900">精细控制</p>
+              <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">九项设置都会进入服务端最终提示词和结果记录。</p>
+            </div>
+            <div className="space-y-3">
+              {IMAGE_POLISH_CONTROL_OPTIONS.map(option => {
+                const levels = option.key === 'structurePreservation' || (imagePolishMode === 'conservative' && option.key === 'colorPreservation')
+                  ? IMAGE_POLISH_CONTROL_LEVEL_OPTIONS.filter(level => level.value !== 'off')
+                  : IMAGE_POLISH_CONTROL_LEVEL_OPTIONS;
+                return <div key={option.key}>
+                  <div className="mb-1.5 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-black text-slate-800">{option.label}</p>
+                      <p className="mt-0.5 text-[10px] font-semibold leading-4 text-slate-400">{option.description}</p>
+                    </div>
+                    <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-black text-slate-600">
+                      {IMAGE_POLISH_CONTROL_LEVEL_OPTIONS.find(level => level.value === imagePolishControls[option.key])?.label}
+                    </span>
+                  </div>
+                  <div className={`grid gap-1 rounded-xl bg-slate-100 p-1 ${levels.length === 3 ? 'grid-cols-3' : 'grid-cols-4'}`}>
+                    {levels.map(level => (
+                      <button
+                        key={level.value}
+                        type="button"
+                        onClick={() => onUpdateConfig(createImagePolishConfigPatch(
+                          sourceImage?.assetId,
+                          imagePolishMode,
+                          { ...imagePolishControls, [option.key]: level.value },
+                        ))}
+                        className={`rounded-lg px-1 py-1.5 text-[10px] font-black transition ${imagePolishControls[option.key] === level.value ? 'bg-white text-cyan-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                      >
+                        {level.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>;
+              })}
+            </div>
+          </section>
 
           <button type="button" onClick={() => void handleGenerate()} disabled={isBusy} className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-cyan-700 px-4 text-sm font-black text-white shadow-sm transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:bg-slate-300">
             {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
@@ -231,30 +342,36 @@ export function ImagePolishPanel({
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
               {dimensionsText ? <span className="text-xs font-bold text-slate-500">{dimensionsText}</span> : null}
-              {sourceImageUrl ? (
-                <button type="button" onClick={() => window.open(sourceImageUrl, '_blank', 'noopener,noreferrer')} className="inline-flex h-8 items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 text-xs font-bold text-slate-700 transition hover:bg-white hover:text-cyan-800">
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  查看原图
-                </button>
-              ) : null}
-              {resultImageUrl ? (
-                <>
-                  <button type="button" onClick={() => window.open(resultImageUrl, '_blank', 'noopener,noreferrer')} className="inline-flex h-8 items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 text-xs font-bold text-slate-700 transition hover:bg-white hover:text-cyan-800">
-                    <ImageUp className="h-3.5 w-3.5" />
-                    查看结果
-                  </button>
-                  <button type="button" onClick={() => void handleDownload()} disabled={isDownloading} className="inline-flex h-8 items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 text-xs font-bold text-slate-700 transition hover:bg-white hover:text-cyan-800 disabled:cursor-not-allowed disabled:opacity-60">
-                    <Download className={`h-3.5 w-3.5 ${isDownloading ? 'animate-pulse' : ''}`} />
-                    {isDownloading ? '正在保存...' : '保存到本地'}
-                  </button>
-                </>
-              ) : null}
+              <GenerationResultActions result={normalizedResult} featureName="质感提升" projectName={projectName} compact />
             </div>
           </div>
+          <div className="border-b border-slate-100 px-4 py-3"><NormalizedGenerationProgress result={normalizedResult} compact /></div>
           {downloadError ? <div className="border-b border-slate-100 px-4 py-2 text-xs font-semibold text-amber-700">{downloadError}</div> : null}
+          {resultImageUrl && selectedResult ? (
+            <div className="border-b border-slate-100 px-4 py-3">
+              <ResultQualityReport resultId={selectedResult.id} metadata={selectedResult.metadata} />
+            </div>
+          ) : null}
           {resultImageUrl && selectedResult && onSendResultToStep ? (
             <div className="border-b border-slate-100 bg-white/45 px-4 py-3">
-              <ResultSendActions resultId={selectedResult.id} currentStep={GenerationStep.ImagePolish} onSend={onSendResultToStep} disabled={state.isGenerating} />
+              <div className="flex flex-wrap items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  <ResultSendActions
+                    resultId={selectedResult.id}
+                    currentStep={GenerationStep.ImagePolish}
+                    onSend={onSendResultToStep}
+                    onUtilityAction={action => { void handleUtilityAction(action); }}
+                    disabled={state.isGenerating}
+                  />
+                </div>
+                {onSecondaryEditResult ? (
+                  <ContinuousEditAction
+                    resultId={selectedResult.id}
+                    onAction={onSecondaryEditResult}
+                    disabled={state.isGenerating}
+                  />
+                ) : null}
+              </div>
             </div>
           ) : null}
           <div className="min-h-0 bg-slate-50 p-4">
@@ -324,7 +441,12 @@ function ImageBlock({ title, src }: { title: string; src: string }) {
   );
 }
 
-function createImagePolishConfigPatch(sourceImageAssetId?: string, enhanceMaterials = false): Partial<GenerationConfig> {
+function createImagePolishConfigPatch(
+  sourceImageAssetId: string | undefined,
+  imagePolishMode: ImagePolishMode,
+  imagePolishControls: ImagePolishControls,
+): Partial<GenerationConfig> {
+  const isWhiteModelMaterialization = imagePolishMode === 'white-model-materialization';
   return {
     prompt: '',
     negativePrompt: '',
@@ -332,19 +454,21 @@ function createImagePolishConfigPatch(sourceImageAssetId?: string, enhanceMateri
     generationStep: 'image_polish',
     featureKey: 'image_polish',
     featureName: '质感提升',
-    enhanceMaterials,
-    promptMode: enhanceMaterials ? 'material_enhance' : 'default_polish',
+    imagePolishMode,
+    imagePolishControls,
+    enhanceMaterials: isWhiteModelMaterialization,
+    promptMode: isWhiteModelMaterialization ? 'white_model_materialization' : 'conservative_polish',
     sourceImageAssetId,
     qualityMode: 'balanced',
     batchCount: 1,
     targetCount: 1,
-    strength: enhanceMaterials ? 'balanced' : 'weak',
-    changeStrength: enhanceMaterials ? 'medium' : 'weak',
-    styleStrength: enhanceMaterials ? 'medium' : 'low',
+    strength: isWhiteModelMaterialization ? 'balanced' : 'weak',
+    changeStrength: isWhiteModelMaterialization ? 'medium' : 'weak',
+    styleStrength: isWhiteModelMaterialization ? 'medium' : 'low',
     preserveStructure: true,
     preserveCamera: true,
-    preserveColor: enhanceMaterials ? undefined : true,
-    preserveMaterialAppearance: enhanceMaterials ? undefined : true,
+    preserveColor: imagePolishControls.colorPreservation !== 'off',
+    preserveMaterialAppearance: !isWhiteModelMaterialization,
     preserveGeometry: true,
     keepOriginalAspectRatio: true,
     aspectRatio: 'source',

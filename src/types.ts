@@ -30,10 +30,44 @@ export type SelectableImageProvider = 'grsai-banana2' | 'apiyi-nano-banana2-edit
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
 export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
 export type QualityMode = 'draft' | 'fast' | 'balanced' | 'high';
+export type ImagePolishMode = 'conservative' | 'white-model-materialization';
+export type ImagePolishControlLevel = 'off' | 'low' | 'medium' | 'high';
+export interface ImagePolishControls {
+  clarity: ImagePolishControlLevel;
+  lightingOptimization: ImagePolishControlLevel;
+  materialDetail: ImagePolishControlLevel;
+  removeModelFeel: ImagePolishControlLevel;
+  colorPreservation: ImagePolishControlLevel;
+  structurePreservation: ImagePolishControlLevel;
+  denoise: ImagePolishControlLevel;
+  shadow: ImagePolishControlLevel;
+  reflection: ImagePolishControlLevel;
+}
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
 export type VariantChangeScope = 'material-only' | 'soft-decoration' | 'lighting' | 'furniture-layout' | 'color-palette' | 'full-design';
 export type VariantLock = 'structure' | 'camera' | 'walls-openings' | 'fixed-furniture' | 'floor-material' | 'ceiling' | 'main-color';
 export type DesignVariantBatchCount = 2 | 4 | 8;
+export type DesignVariantDiversity = 'low' | 'balanced' | 'high';
+export type DesignVariantVariableKey =
+  | 'material-system'
+  | 'color-system'
+  | 'lighting-atmosphere'
+  | 'furniture-style'
+  | 'furniture-layout'
+  | 'soft-decoration-richness'
+  | 'brand-character'
+  | 'overall-design-style';
+export type DesignVariantVariableValues = Partial<Record<DesignVariantVariableKey, string>>;
+export interface DesignVariantMatrixItem {
+  variantIndex: number;
+  changedVariables: DesignVariantVariableKey[];
+  lockedVariables: DesignVariantVariableKey[];
+  values: DesignVariantVariableValues;
+  description: string;
+  differenceSummary: string;
+  parentResultId?: string | null;
+  parentJobId?: string | null;
+}
 export type PlanColorizeBatchCount = 1 | 2 | 3 | 4 | 5 | 6;
 export type FloorplanMultiPlanBatchCount = 2 | 4 | 6;
 export type FloorplanMultiPlanMode = 'single' | 'multi';
@@ -41,6 +75,9 @@ export type FloorplanVariantType = 'material_style' | 'furniture_layout' | 'mixe
 export type FloorplanVariantFocus = 'material_style' | 'furniture_layout' | 'both';
 export type FloorplanRenderMode = 'flat-color' | 'semi-3d' | 'presentation';
 export type LineworkPreservation = 'strict' | 'high' | 'medium';
+export type FloorPlanExpressionMode = 'precise-material' | 'three-dimensional' | 'analysis' | 'multi-option';
+export type FloorPlanTextLanguage = 'zh-CN' | 'en' | 'none';
+export type FloorPlanRegionType = 'living' | 'dining' | 'bedroom' | 'kitchen' | 'bathroom' | 'circulation' | 'service' | 'outdoor' | 'commercial' | 'office' | 'other';
 export type VariantStyleKey =
   | 'modern-minimal'
   | 'wabi-sabi'
@@ -58,6 +95,9 @@ export type MaterialPatternScale = 'small' | 'medium' | 'large';
 export type MaterialDirection = 'auto' | 'horizontal' | 'vertical' | 'diagonal' | 'herringbone';
 export type MaterialFinish = 'matte' | 'satin' | 'glossy' | 'rough';
 export type MaterialReplaceScope = 'material-only' | 'material-and-soft-decor' | 'creative';
+export type MaterialCandidateCount = 2 | 3 | 4;
+export type MaterialTextureAlignment = 'auto' | 'surface' | 'center' | 'edge' | 'custom-origin';
+export interface MaterialTextureOrigin { x: number; y: number }
 export type SecondaryEditAction =
   | 'regenerate'
   | 'similar'
@@ -75,7 +115,8 @@ export type ResultSendTargetStep =
   | GenerationStep.MaterialReplace
   | GenerationStep.ObjectInsert
   | GenerationStep.DesignVariants
-  | GenerationStep.FreeReferenceImage;
+  | GenerationStep.FreeReferenceImage
+  | GenerationStep.ImagePolish;
 export type ContinuationAction = SecondaryEditAction | `send-to-${ResultSendTargetStep}`;
 export type FreeReferenceRole = 'style' | 'material' | 'furniture' | 'lighting' | 'composition' | 'color' | 'detail';
 export type FreeReferenceStrength = 'low' | 'medium' | 'high';
@@ -90,11 +131,19 @@ export type ObjectInsertType = 'sofa' | 'chair' | 'table' | 'lamp' | 'plant' | '
 export type ObjectFidelity = 'strict' | 'balanced' | 'loose';
 export type ObjectInsertUIMode = 'simple' | 'advanced';
 export type ObjectInsertCandidateStrategy = 'strict-placement' | 'natural-fit' | 'object-fidelity' | 'scene-harmony';
+export type ObjectInsertWorkflowMode = 'placement' | 'scene-enrichment';
+export type SceneEnrichmentLevel = 'few' | 'moderate' | 'many';
+export interface ObjectInsertSceneEnrichment {
+  plants: SceneEnrichmentLevel;
+  people: SceneEnrichmentLevel;
+  decorations: SceneEnrichmentLevel;
+}
 export type FloorplanRoomType = 'living-room' | 'dining-room' | 'bedroom' | 'kitchen' | 'bathroom' | 'balcony' | 'entry' | 'study' | 'office' | 'commercial' | 'custom';
 export type FloorplanTemplateId = 'residential-warm-wood' | 'premium-light-luxury' | 'commercial-presentation' | 'office-space' | 'landscape-masterplan' | 'minimal-grayscale';
 export type PlanDrawingType = 'residential' | 'commercial' | 'office' | 'hotel' | 'landscape' | 'site-plan' | 'custom';
 export type PlanExpressionTemplate = 'zoning-color' | 'colored-plan' | 'landscape-plan' | 'furniture-enhance' | 'annotation-plan' | 'circulation-analysis';
 export type MaterialReplaceEditMode = 'smart-type' | 'mask';
+export type MaterialMaskSelectionMode = 'smart' | 'precise';
 export type MaterialReplaceTargetObject =
   | 'floor'
   | 'wall'
@@ -107,6 +156,13 @@ export type MaterialReplaceTargetObject =
   | 'door-window'
   | 'feature-wall'
   | 'other';
+export interface SemanticObjectSelection {
+  id: string;
+  objectType: MaterialReplaceTargetObject;
+  x: number;
+  y: number;
+  label?: string;
+}
 export type MaterialReplaceTargetMaterial =
   | 'light-wood'
   | 'dark-wood'
@@ -130,7 +186,26 @@ export interface FreeReferenceReference {
   assetId: string;
   role: FreeReferenceRole;
   strength: FreeReferenceStrength;
+  /** 0-100. Kept optional so existing saved jobs remain valid. */
+  weight?: number;
+  /** Normalized crop rectangle in the original reference image. */
+  crop?: FreeReferenceCrop;
+  focusArea?: FreeReferenceFocusArea;
+  focusDescription?: string;
 }
+
+export interface FreeReferenceCrop {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type FreeReferenceFocusArea = 'full' | 'center' | 'foreground' | 'background' | 'left' | 'right' | 'custom';
+export type FreeReferenceStructureControl = 'strict' | 'balanced' | 'creative';
+export type FreeReferenceCandidateCount = 1 | 2 | 4;
+export type FreeReferenceAspectRatio = 'source' | '1:1' | '4:3' | '3:2' | '16:9' | '9:16' | '2:1' | '3:4';
+export type FreeReferenceWorkflowMode = 'custom' | 'quick-style';
 
 export interface FloorplanRoomLabel {
   id: string;
@@ -150,6 +225,7 @@ export type RegionEditOperation =
   | { type: 'erase'; regionId: string; point: [number, number]; radius: number }
   | { type: 'merge'; sourceRegionIds: string[]; outputRegionId: string }
   | { type: 'split'; sourceRegionId: string; outputRegionIds: string[] }
+  | { type: 'update-metadata'; regionId: string; regionType: FloorPlanRegionType | null; regionUsage: string }
   | { type: 'restore-auto' };
 
 export interface FloorPlanRegion {
@@ -159,6 +235,8 @@ export interface FloorPlanRegion {
   areaRatio: number;
   suggestedName: string | null;
   name: string;
+  regionType?: FloorPlanRegionType | null;
+  regionUsage?: string;
   confidence: number;
   maskAssetId: string | null;
   maskUrl: string | null;
@@ -267,6 +345,25 @@ export interface ModelSnapshotCamera {
   fov?: number;
 }
 
+export type ModelCameraPreset = 'interior' | 'exterior-front' | 'exterior-side' | 'bird-eye' | 'top' | 'custom';
+
+export interface ModelViewBookmark {
+  id: string;
+  name: string;
+  preset: ModelCameraPreset;
+  snapshotAssetId: string;
+  snapshotUrl: string;
+  width: number;
+  height: number;
+  camera?: ModelSnapshotCamera;
+  viewMode?: 'orbit' | 'walkthrough';
+  clippingEnabled?: boolean;
+  clippingHeight?: number;
+  xrayEnabled?: boolean;
+  edgesEnabled?: boolean;
+  createdAt: string;
+}
+
 export interface ModelSnapshotCapture {
   dataUrl: string;
   width: number;
@@ -328,6 +425,12 @@ export interface ModelSnapshotMetadata {
   clippingHeight?: number;
   xrayEnabled?: boolean;
   edgesEnabled?: boolean;
+  bookmarkId?: string;
+  bookmarkName?: string;
+  cameraPreset?: ModelCameraPreset;
+  batchGroupId?: string;
+  batchIndex?: number;
+  batchCount?: number;
   createdAt: string;
 }
 
@@ -338,6 +441,7 @@ export interface ModelOptimizationMetadata {
   conversionStatus?: 'idle' | 'converting' | 'succeeded' | 'failed';
   conversionError?: string | null;
   convertedAt?: string;
+  conversionStartedAt?: string;
   previewUrl?: string;
   optimizedUrl?: string;
   thumbnailUrl?: string;
@@ -351,6 +455,7 @@ export interface ModelOptimizationMetadata {
   originalFileSize: number;
   optimizedFileSize?: number;
   optimizationStatus: 'pending' | 'processing' | 'succeeded' | 'failed' | 'skipped';
+  optimizationStartedAt?: string;
   optimizationError?: string;
   faceCount?: number;
   optimizedFaceCount?: number;
@@ -359,9 +464,12 @@ export interface ModelOptimizationMetadata {
 }
 
 export interface GenerationConfig {
+  designWorkflowId?: string;
+  designWorkflowNodeId?: string;
+  designWorkflowStageKey?: DesignWorkflowStageKey;
   prompt: string;
   aiProvider?: SelectableImageProvider;
-  apiyiAspectRatio?: '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '5:4' | '4:5' | '3:2' | '2:3' | '21:9';
+  apiyiAspectRatio?: '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '5:4' | '4:5' | '3:2' | '2:3' | '2:1' | '21:9';
   apiyiImageSize?: '512' | '1K' | '2K' | '4K';
   step?: GenerationJobStep;
   style?: string;
@@ -391,16 +499,22 @@ export interface GenerationConfig {
   preserveColor?: boolean;
   preserveMaterialAppearance?: boolean;
   keepOriginalAspectRatio?: boolean;
+  imagePolishMode?: ImagePolishMode;
+  imagePolishControls?: ImagePolishControls;
+  /** @deprecated Use imagePolishMode and imagePolishControls. */
   enhanceMaterials?: boolean;
   negativePrompt?: string;
   styleStrength?: 'low' | 'medium' | 'high';
   targetCount?: number;
   feather?: number;
+  maskExpansion?: number;
   batchCount?: PlanColorizeBatchCount | DesignVariantBatchCount | FloorplanMultiPlanBatchCount;
   floorplanOutputMode?: FloorplanMultiPlanMode;
   floorplanVariantType?: FloorplanVariantType;
   floorplanVariantFocus?: FloorplanVariantFocus;
   floorplanRenderMode?: FloorplanRenderMode;
+  floorPlanExpressionMode?: FloorPlanExpressionMode;
+  floorPlanTextLanguage?: FloorPlanTextLanguage;
   lineworkPreservation?: LineworkPreservation;
   enableLegend?: boolean;
   enableAreaText?: boolean;
@@ -418,6 +532,10 @@ export interface GenerationConfig {
   variantChangeScope?: VariantChangeScope;
   variantLocks?: VariantLock[];
   variantStrategyNotes?: string[];
+  variantDiversity?: DesignVariantDiversity;
+  variantMatrixVariables?: DesignVariantVariableKey[];
+  variantVariableLocks?: DesignVariantVariableKey[];
+  variantMatrix?: DesignVariantMatrixItem[];
   retryVariantIndex?: number;
   targetVariantIndex?: number;
   customStyleLabel?: string;
@@ -431,7 +549,19 @@ export interface GenerationConfig {
   batchGroupId?: string;
   maskMode?: 'asset-mask' | 'full-image';
   maskAssetId?: string;
+  protectionMaskAssetId?: string;
+  hasProtectionMask?: boolean;
   editMode?: MaterialReplaceEditMode;
+  /**
+   * How a painted material-replacement mask is interpreted. This intentionally
+   * differs from maskMode, which describes the existing asset-mask transport.
+   */
+  maskSelectionMode?: MaterialMaskSelectionMode;
+  smartMaskConfirmed?: boolean;
+  smartMaskIsRefining?: boolean;
+  smartMaskDetectedObject?: string;
+  smartMaskConfidence?: number;
+  smartMaskRefinementMethod?: string;
   buildingType?: string;
   spaceType?: string;
   renderStyle?: string;
@@ -450,6 +580,12 @@ export interface GenerationConfig {
   customMaterialPrompt?: string;
   preserveLighting?: boolean;
   preserveGeometry?: boolean;
+  semanticObjectSelections?: SemanticObjectSelection[];
+  materialRealSizeMm?: number;
+  materialJointWidthMm?: number;
+  materialTextureAlignment?: MaterialTextureAlignment;
+  materialTextureOrigin?: MaterialTextureOrigin;
+  materialCandidateCount?: MaterialCandidateCount;
   sourceModelAssetId?: string;
   sourceImageAssetId?: string;
   featureKey?: string;
@@ -457,6 +593,13 @@ export interface GenerationConfig {
   promptMode?: 'fixed_internal_prompt' | string;
   generationStep?: GenerationJobStep;
   snapshotAssetId?: string;
+  modelViewBookmarks?: ModelViewBookmark[];
+  modelViewBookmarkId?: string;
+  modelViewBookmarkName?: string;
+  modelCameraPreset?: ModelCameraPreset;
+  modelViewBatchId?: string;
+  modelViewBatchIndex?: number;
+  modelViewBatchCount?: number;
   panoramaAssetId?: string;
   panoramaSourceAssetId?: string;
   panoramaReferenceAssetIds?: string[];
@@ -468,7 +611,12 @@ export interface GenerationConfig {
   referenceImageAssetIds?: string[];
   freeReferenceReferences?: FreeReferenceReference[];
   freeReferenceResolution?: 1024 | 1536 | 2048;
-  freeReferenceAspectRatio?: '1:1' | '4:3' | '3:4' | '16:9' | '9:16';
+  freeReferenceAspectRatio?: FreeReferenceAspectRatio;
+  freeReferenceStructureControl?: FreeReferenceStructureControl;
+  freeReferenceCandidateCount?: FreeReferenceCandidateCount;
+  freeReferenceWorkflowMode?: FreeReferenceWorkflowMode;
+  freeReferenceStylePresetId?: string;
+  freeReferenceStylePromptHint?: string;
   placementGuideAssetId?: string;
   placementPreviewAssetId?: string;
   placementMaskAssetId?: string;
@@ -477,6 +625,8 @@ export interface GenerationConfig {
   objectInsertMode?: 'object_insert_preview_fusion' | 'legacy_object_insert';
   objectInsertInputOrder?: Array<Record<string, unknown>>;
   objectInsertUIMode?: ObjectInsertUIMode;
+  objectInsertWorkflowMode?: ObjectInsertWorkflowMode;
+  objectInsertSceneEnrichment?: ObjectInsertSceneEnrichment;
   objectInsertCandidateStrategy?: ObjectInsertCandidateStrategy;
   objectInsertCandidateStrategies?: ObjectInsertCandidateStrategy[];
   objectInsertCandidatePromptHints?: string[];
@@ -550,6 +700,10 @@ export interface ObjectInsertItemConfig {
   maxScaleAdjustmentRatio?: number;
   maxRotationAdjustmentDeg?: number;
   extraPrompt?: string;
+  visible?: boolean;
+  locked?: boolean;
+  zIndex?: number;
+  backgroundRemovedAssetId?: string;
 }
 
 export interface ObjectInsertConfig {
@@ -589,6 +743,8 @@ export interface ObjectInsertConfig {
   objectInsertCandidateStrategy?: ObjectInsertCandidateStrategy;
   objectInsertCandidateStrategies?: ObjectInsertCandidateStrategy[];
   objectInsertCandidatePromptHints?: string[];
+  workflowMode?: ObjectInsertWorkflowMode;
+  sceneEnrichment?: ObjectInsertSceneEnrichment;
 }
 
 export interface GenerationResultOption {
@@ -613,6 +769,59 @@ export interface GenerationResultOption {
   lockedItemsLabel?: string;
   strategyNote?: string;
   designDescription?: string;
+  changedVariables?: DesignVariantVariableKey[];
+  lockedVariables?: DesignVariantVariableKey[];
+  variantVariableValues?: DesignVariantVariableValues;
+  differenceSummary?: string;
+  reportNarrative?: string;
+}
+
+export type GenerationQualityStatus = 'passed' | 'warning' | 'failed';
+export type GenerationQualityIssueSeverity = 'info' | 'warning' | 'error';
+export type GenerationQualityDecision = 'keep' | 'retry';
+
+export interface GenerationQualityIssue {
+  code: string;
+  severity: GenerationQualityIssueSeverity;
+  title: string;
+  message: string;
+  metric?: number;
+  threshold?: number;
+}
+
+export interface GenerationQualityImageInfo {
+  width: number;
+  height: number;
+  aspectRatio: number;
+}
+
+export interface GenerationQualityMetrics {
+  source: GenerationQualityImageInfo;
+  result: GenerationQualityImageInfo;
+  expectedWidth?: number;
+  expectedHeight?: number;
+  aspectRatioChangeRatio: number;
+  overallDifference: number;
+  structureEdgeDifference: number;
+  outsideMaskDifference?: number;
+  blackBorderRatio: number;
+  whiteBorderRatio: number;
+  seamScore: number;
+  watermarkSuspicionScore: number;
+  sharpnessScore: number;
+  meanLuminance: number;
+  darkPixelRatio: number;
+  brightPixelRatio: number;
+}
+
+export interface GenerationQualityReport {
+  version: 1;
+  status: GenerationQualityStatus;
+  score: number;
+  checkedAt: string;
+  issues: GenerationQualityIssue[];
+  warnings: string[];
+  metrics: GenerationQualityMetrics;
 }
 
 export type GenerationBatchItemStatus = 'queued' | 'running' | 'succeeded' | 'failed';
@@ -644,6 +853,53 @@ export interface ContinuationSource {
   createdAt: string;
 }
 
+export type DesignWorkflowStageKey =
+  | 'input'
+  | 'base-render'
+  | 'design-variants'
+  | 'material-replace'
+  | 'object-insert'
+  | 'continuous-edit'
+  | 'image-polish'
+  | 'delivery';
+
+export type DesignWorkflowStatus = 'active' | 'completed' | 'archived';
+export type DesignWorkflowNodeStatus = 'active' | 'completed' | 'skipped';
+
+export interface DesignWorkflow {
+  id: string;
+  userId: string;
+  projectId: string;
+  title: string;
+  status: DesignWorkflowStatus;
+  currentNodeId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DesignWorkflowNode {
+  id: string;
+  workflowId: string;
+  parentNodeId: string | null;
+  stageKey: DesignWorkflowStageKey;
+  status: DesignWorkflowNodeStatus;
+  sourceFeature: string | null;
+  inputAssetId: string | null;
+  parentJobId: string | null;
+  parentResultId: string | null;
+  outputJobId: string | null;
+  outputResultId: string | null;
+  outputAssetId: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DesignWorkflowDetail {
+  workflow: DesignWorkflow;
+  nodes: DesignWorkflowNode[];
+}
+
 export interface StepState {
   config: GenerationConfig;
   inputImage: UploadedImage | null;
@@ -651,6 +907,9 @@ export interface StepState {
   materialTextures: MaterialTexture[];
   furnitureReferences: ReferenceImage[];
   maskImage: UploadedImage | null;
+  /** Cached when the mask is committed, so render-time readiness never scans Canvas pixels. */
+  maskHasVisiblePixels?: boolean;
+  protectionMaskImage?: UploadedImage | null;
   useFullImageMask: boolean;
   outputImage: string | null;
   generationResults: GenerationResultOption[];
@@ -710,6 +969,8 @@ export interface EditSession {
   sourceAssetId: string;
   originalVersionId: string;
   currentVersionId: string;
+  primaryVersionId?: string | null;
+  finalVersionId?: string | null;
   title: string;
   permanentConstraints: Record<string, unknown>;
   aspectRatio: string | null;
@@ -738,7 +999,10 @@ export interface AssetVersion {
   assetId: string;
   sessionId: string;
   parentVersionId: string | null;
+  restoredFromVersionId?: string | null;
   versionNumber: number;
+  displayName?: string | null;
+  note?: string;
   storagePath: string;
   publicUrl: string;
   userInstruction: string;
@@ -748,6 +1012,7 @@ export interface AssetVersion {
   generationJobId: string | null;
   createdBy: string;
   createdAt: string;
+  exportedAt?: string | null;
 }
 
 export interface EditJobState {

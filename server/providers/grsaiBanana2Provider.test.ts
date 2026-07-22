@@ -120,6 +120,42 @@ describe('Grsai Banana2 provider timing, timeout and retry', () => {
     expect(body.aspectRatio).toBe('auto');
   });
 
+  it('compiles scene enrichment levels into the object_insert provider prompt', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: 'task-enrichment' }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { id: 'task-enrichment', status: 'succeeded', progress: 100, results: [{ url: tinyPngDataUrl }] } }));
+    globalThis.fetch = fetchMock;
+
+    await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage({
+      mode: 'inpaint',
+      step: 'object_insert',
+      inputImageDataUrl: tinyPngDataUrl,
+      referenceImageDataUrls: [tinyPngDataUrl],
+      prompt: 'enrich this scene',
+      config: {
+        objectInsertMode: 'object_insert_preview_fusion',
+        objectInsertWorkflowMode: 'scene-enrichment',
+        objectInsertSceneEnrichment: { plants: 'many', people: 'moderate', decorations: 'few' },
+        objectInsertCandidateStrategy: 'scene-harmony',
+        objectInsertCandidatePromptHint: 'Candidate strategy: scene-harmony. Prioritize lighting and shadow integration.',
+        objectInsert: {
+          mode: 'object_insert_preview_fusion',
+          workflowMode: 'scene-enrichment',
+          sceneEnrichment: { plants: 'many', people: 'moderate', decorations: 'few' },
+        },
+      },
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as { prompt: string; urls: string[] };
+    expect(body.urls).toHaveLength(2);
+    expect(body.prompt).toContain('This is an object_insert scene-enrichment task.');
+    expect(body.prompt).toContain('Plants level: many. Add 6-9 plants');
+    expect(body.prompt).toContain('People level: moderate. Add 3-5 naturally distributed people');
+    expect(body.prompt).toContain('Decorations level: few. Add 1-2 restrained decorative objects');
+    expect(body.prompt).toContain('Candidate strategy: scene-harmony. Prioritize lighting and shadow integration.');
+    expect(body.prompt).toContain('do not globally restyle the image');
+  });
+
   it('adds the floorplan English text requirement to floorplan prompts', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ code: 0, data: 'task-floorplan' }))

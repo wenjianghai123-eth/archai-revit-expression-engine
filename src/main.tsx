@@ -5,6 +5,7 @@ import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import './index.css';
 import './styles/workspace-theme.css';
 import {installImageFallback} from './utils/imageFallback';
+import { FullscreenImageViewerProvider } from './components/common/FullscreenImageViewer';
 
 installImageFallback();
 
@@ -16,7 +17,9 @@ if (!root) {
   createRoot(root).render(
     <StrictMode>
       <ErrorBoundary>
-        <App />
+        <FullscreenImageViewerProvider>
+          <App />
+        </FullscreenImageViewerProvider>
       </ErrorBoundary>
     </StrictMode>,
   );

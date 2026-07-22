@@ -719,9 +719,22 @@ function buildObjectInsertPrompt(input: GenerateImageInput): string {
 
 function buildObjectInsertPreviewFusionPrompt(input: GenerateImageInput): string {
   const userPrompt = readObjectInsertPreviewFusionUserPrompt(input.config, input.prompt);
+  if (readObjectInsertWorkflowMode(input.config) === 'scene-enrichment') {
+    return [
+      'Image 1 is the original architectural or interior scene and is the strict structure, camera, perspective, and composition reference.',
+      'Image 2 repeats the source scene as a full-canvas placement guide. Use it only to preserve the original framing and editable scene extent.',
+      buildObjectInsertSceneEnrichmentPrompt(input.config),
+      readObjectInsertCandidatePromptForProvider(input.config),
+      buildObjectInsertFusionQualityPrompt(input.config),
+      'This is an object_insert scene-enrichment task. Do not treat it as image polishing and do not globally restyle the image.',
+      'Keep walls, doors, windows, ceiling, fixed furniture, camera, geometry, layout, and all unrelated content unchanged.',
+      userPrompt ? `User extra instruction: ${userPrompt}` : '',
+    ].filter(isNonEmptyString).join('\n');
+  }
   return [
     'Image 1 is the original scene.',
     'Image 2 is the clean placement preview. It shows the object type, approximate location, approximate size, and approximate orientation intended by the user.',
+    readObjectInsertCandidatePromptForProvider(input.config),
     '',
     'Insert the object into the original scene near the position indicated in Image 2.',
     'The overlay position is a soft anchor, not a rigid bounding box.',
@@ -983,6 +996,74 @@ function buildObjectInsertNaturalScenePrompt(config: Record<string, unknown>): s
   ].join('\n');
 }
 
+function readObjectInsertWorkflowMode(config: Record<string, unknown>): 'placement' | 'scene-enrichment' {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.workflowMode === 'string' ? nested.workflowMode : config.objectInsertWorkflowMode;
+  return value === 'scene-enrichment' ? 'scene-enrichment' : 'placement';
+}
+
+function readObjectInsertCandidatePromptForProvider(config: Record<string, unknown>): string {
+  if (typeof config.objectInsertCandidatePromptHint === 'string' && config.objectInsertCandidatePromptHint.trim()) {
+    return config.objectInsertCandidatePromptHint.trim();
+  }
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  if (typeof nested.objectInsertCandidatePromptHint === 'string' && nested.objectInsertCandidatePromptHint.trim()) {
+    return nested.objectInsertCandidatePromptHint.trim();
+  }
+  const strategy = typeof config.objectInsertCandidateStrategy === 'string'
+    ? config.objectInsertCandidateStrategy
+    : typeof nested.objectInsertCandidateStrategy === 'string'
+      ? nested.objectInsertCandidateStrategy
+      : '';
+  const prompts: Record<string, string> = {
+    'strict-placement': 'Candidate strategy: strict-placement. Follow the user placement guide closely and minimize transform deviation.',
+    'natural-fit': 'Candidate strategy: natural-fit. Optimize contact, perspective and scale while staying near the requested position.',
+    'object-fidelity': 'Candidate strategy: object-fidelity. Prioritize the inserted object identity, shape, material and color.',
+    'scene-harmony': 'Candidate strategy: scene-harmony. Prioritize lighting, shadow, occlusion and atmospheric harmony.',
+  };
+  return prompts[strategy] || '';
+}
+
+function buildObjectInsertSceneEnrichmentPrompt(config: Record<string, unknown>): string {
+  if (readObjectInsertWorkflowMode(config) !== 'scene-enrichment') return '';
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const enrichment = isRecord(nested.sceneEnrichment)
+    ? nested.sceneEnrichment
+    : isRecord(config.objectInsertSceneEnrichment) ? config.objectInsertSceneEnrichment : {};
+  const descriptions: Record<string, Record<string, string>> = {
+    plants: {
+      few: 'Add 1-2 context-appropriate plants.',
+      moderate: 'Add 3-5 context-appropriate plants distributed with visual balance.',
+      many: 'Add 6-9 plants with varied scale, avoiding blocked circulation or visual clutter.',
+    },
+    people: {
+      few: 'Add 1-2 naturally posed people at plausible scale.',
+      moderate: 'Add 3-5 naturally distributed people with plausible activities and scale.',
+      many: 'Add 6-9 naturally distributed people while keeping circulation and focal areas clear.',
+    },
+    decorations: {
+      few: 'Add 1-2 restrained decorative objects appropriate to the scene.',
+      moderate: 'Add 3-5 coordinated decorative objects with a clear hierarchy.',
+      many: 'Add 6-9 coordinated decorative objects without cluttering the composition.',
+    },
+  };
+  const readLevel = (key: string, fallback: string) => {
+    const value = enrichment[key];
+    return value === 'few' || value === 'moderate' || value === 'many' ? value : fallback;
+  };
+  const plants = readLevel('plants', 'moderate');
+  const people = readLevel('people', 'few');
+  const decorations = readLevel('decorations', 'moderate');
+  return [
+    'Scene enrichment quantity controls:',
+    `- Plants level: ${plants}. ${descriptions.plants[plants]}`,
+    `- People level: ${people}. ${descriptions.people[people]}`,
+    `- Decorations level: ${decorations}. ${descriptions.decorations[decorations]}`,
+    '- Every new element must be inserted as a separate believable scene object with correct perspective, usable scale, contact, occlusion, light, and shadow.',
+    '- Do not replace existing objects, do not redesign the room, and do not add more elements than the requested ranges.',
+  ].join('\n');
+}
+
 function buildObjectInsertSpatialRelationPrompt(input: GenerateImageInput): string {
   const text = [
     input.prompt,
@@ -1137,6 +1218,11 @@ function buildInpaintPrompt(input: GenerateImageInput): string {
     pieces.push(
       '请基于输入参考图进行局部修饰，仅修改用户涂抹或遮罩区域，其他区域保持不变。请将 mask 图中的白色区域作为需要修改的区域，黑色区域保持不变。',
     );
+    if (input.config.maskSelectionMode === 'smart') {
+      pieces.push(
+        'The selected area is automatically detected by AI. Modify only the detected object region. Preserve the original geometry, lighting, perspective and surrounding objects.',
+      );
+    }
   } else {
     pieces.push(
       '请基于输入原图和用户提示词进行图像编辑。未提供遮罩时，请根据用户提示词判断需要修改的区域，并尽量保持原图的空间结构、构图、透视、比例和未涉及区域稳定。',

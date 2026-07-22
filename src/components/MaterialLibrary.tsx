@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { MaterialAsset } from '../types';
 import { MOCK_MATERIALS } from '../constants';
+import { useEnterpriseAssetPreferences } from '../hooks/useEnterpriseAssetPreferences';
 
 interface MaterialLibraryProps {
   isOpen: boolean;
@@ -67,6 +68,7 @@ function mapManifestMaterial(item: MaterialManifestItem): MaterialAsset {
 }
 
 export function MaterialLibrary({ isOpen, onClose, onSelect, selectedId }: MaterialLibraryProps) {
+  const { markUsed } = useEnterpriseAssetPreferences();
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<string>('全部');
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -113,6 +115,10 @@ export function MaterialLibrary({ isOpen, onClose, onSelect, selectedId }: Mater
   });
 
   const selectedMaterial = materials.find(m => m.id === (hoveredId || selectedId)) || filteredMaterials[0] || materials[0];
+  const handleSelect = (material: MaterialAsset) => {
+    markUsed(`material:${material.id}`);
+    onSelect(material);
+  };
 
   if (!isOpen) return null;
   if (!selectedMaterial) return null;
@@ -179,7 +185,7 @@ export function MaterialLibrary({ isOpen, onClose, onSelect, selectedId }: Mater
                 key={m.id}
                 onMouseEnter={() => setHoveredId(m.id)}
                 onMouseLeave={() => setHoveredId(null)}
-                onClick={() => onSelect(m)}
+                onClick={() => handleSelect(m)}
                 className={`group p-3 rounded-2xl border cursor-pointer transition-all flex items-center gap-4 ${m.id === selectedId ? 'bg-white border-blue-200 shadow-lg shadow-blue-500/5' : 'bg-transparent border-transparent hover:bg-white hover:border-slate-200'}`}
               >
                 <div className="w-16 h-16 rounded-xl overflow-hidden shrink-0 border border-slate-100 shadow-sm transition-transform group-hover:scale-105">
@@ -304,7 +310,7 @@ export function MaterialLibrary({ isOpen, onClose, onSelect, selectedId }: Mater
 
                      <div className="mt-12 pt-8 border-t border-slate-100 flex items-center gap-4">
                         <button 
-                          onClick={() => onSelect(selectedMaterial)}
+                          onClick={() => handleSelect(selectedMaterial)}
                           className="flex-1 bg-slate-900 text-white font-bold py-4 rounded-2xl hover:bg-black transition-all flex items-center justify-center gap-3 shadow-xl shadow-slate-200"
                         >
                           <Palette className="w-5 h-5 fill-current text-blue-400" />

@@ -1,0 +1,101 @@
+import type { GenerationConfig } from '../types';
+
+export type MaterialReplaceSelectionMode = 'smart' | 'precise' | 'semantic';
+export type MaterialReplacementMode = 'auto-enhance' | 'local-material' | 'local-furnishing';
+
+export const AUTO_MATERIAL_REPLACEMENT_PROMPT = [
+  '自动分析画面中可优化的主要材质和软装，生成一版自然、克制、可落地的材质软装优化预览。',
+  '严格保持原有空间结构、相机机位、透视、构图、门窗和主要设计内容不变。',
+  '不新增人物、家具或建筑构件，不重新设计空间。',
+].join('\n');
+
+export interface MaterialReplacePreviewButtonInput {
+  hasSourceImage: boolean;
+  isUploading: boolean;
+  isGeneratingPreview: boolean;
+  providerUnavailableReason?: string | null;
+}
+
+export interface MaterialReplacePreviewButtonState {
+  canClickPreview: boolean;
+  previewButtonHint: string | null;
+}
+
+export interface MaterialReplacePreviewValidationInput {
+  mode: MaterialReplacementMode;
+  hasSourceImage: boolean;
+  hasReference: boolean;
+  hasMask: boolean;
+  hasValidMaskPixels: boolean;
+  hasTargetObject: boolean;
+  selectionMode: MaterialReplaceSelectionMode;
+  maskConfirmed: boolean;
+  replacementPrompt: string;
+  useDefaultPreset: boolean;
+  isSegmenting: boolean;
+}
+
+export interface PreviewValidationResult {
+  valid: boolean;
+  missingItems: string[];
+}
+
+export function resolveMaterialReplacementMode(
+  editTarget: GenerationConfig['editTarget'],
+): MaterialReplacementMode {
+  if (editTarget === 'material') return 'local-material';
+  if (editTarget === 'furniture') return 'local-furnishing';
+  return 'auto-enhance';
+}
+
+/** The button itself is gated only by source/upload/generation readiness. */
+export function getMaterialReplacePreviewButtonState(
+  input: MaterialReplacePreviewButtonInput,
+): MaterialReplacePreviewButtonState {
+  const hint = input.providerUnavailableReason
+    || (!input.hasSourceImage ? '请先上传原始图片' : null)
+    || (input.isUploading ? '原图或参考图正在上传' : null)
+    || (input.isGeneratingPreview ? '正在生成预览' : null);
+
+  return {
+    canClickPreview: hint === null,
+    previewButtonHint: hint,
+  };
+}
+
+/** Local-mode requirements are checked on click and returned as a full list. */
+export function validateMaterialReplacePreviewInput(
+  input: MaterialReplacePreviewValidationInput,
+): PreviewValidationResult {
+  const missingItems: string[] = [];
+  if (!input.hasSourceImage) missingItems.push('请先上传原始图片');
+  if (input.mode === 'auto-enhance') return result(missingItems);
+
+  const targetLabel = input.mode === 'local-furnishing' ? '软装' : '材质';
+  const autoSelectEnabled = input.selectionMode === 'semantic' && input.hasTargetObject;
+
+  if (!input.hasMask && !autoSelectEnabled) {
+    missingItems.push(`请选择需要替换的${targetLabel}区域`);
+  } else if (input.hasMask && !input.hasValidMaskPixels) {
+    missingItems.push('蒙版为空，请重新涂抹');
+  }
+
+  if (!input.hasReference && !input.replacementPrompt.trim() && !input.useDefaultPreset) {
+    missingItems.push(`请上传${targetLabel}参考图或填写${targetLabel}替换描述，至少完成一项`);
+  }
+
+  if (input.isSegmenting) {
+    missingItems.push('正在识别替换区域，请稍候');
+  } else if (input.selectionMode === 'smart' && input.hasMask && !input.maskConfirmed) {
+    missingItems.push('请先确认智能识别的替换区域');
+  }
+
+  return result(missingItems);
+}
+
+function result(missingItems: string[]): PreviewValidationResult {
+  return {
+    valid: missingItems.length === 0,
+    missingItems,
+  };
+}

@@ -5,6 +5,7 @@ import { DEV_AUTH_USER_ID } from '../auth';
 import {
   AppDatabase,
   AdminDashboard,
+  ClaimGenerationJobInput,
   CreateGenerationJobInput,
   CreateGenerationRecordInput,
   CreateGenerationResultInput,
@@ -37,6 +38,8 @@ import {
   UpdateUserProfileInput,
   UserProfile,
   EditSession, EditMessage, AssetVersion, CreateEditSessionInput, CreateEditMessageInput, CreateAssetVersionInput,
+  DesignWorkflow, DesignWorkflowNode, CreateDesignWorkflowInput, CreateDesignWorkflowNodeInput,
+  UpdateDesignWorkflowInput, UpdateDesignWorkflowNodeInput,
 } from './types';
 
 const dataDir = path.resolve(process.cwd(), process.env.DATA_DIR || 'data');
@@ -58,9 +61,12 @@ const emptyDatabase: AppDatabase = {
   assetVersions: [],
   floorPlanRegionSets: [],
   floorPlanRegionMaterials: [],
+  designWorkflows: [],
+  designWorkflowNodes: [],
 };
 
 let writeQueue: Promise<void> = Promise.resolve();
+let atomicMutationQueue: Promise<void> = Promise.resolve();
 
 export class JsonStorageAdapter implements StorageAdapter {
   ensureReady(): Promise<void> {
@@ -131,6 +137,15 @@ export class JsonStorageAdapter implements StorageAdapter {
     return updateGenerationResult(id, userId, input);
   }
 
+  createDesignWorkflow(input: CreateDesignWorkflowInput) { return createDesignWorkflow(input); }
+  getActiveDesignWorkflow(projectId: string, userId: string) { return getActiveDesignWorkflow(projectId, userId); }
+  getDesignWorkflow(id: string, projectId: string, userId: string) { return getDesignWorkflow(id, projectId, userId); }
+  updateDesignWorkflow(id: string, projectId: string, userId: string, input: UpdateDesignWorkflowInput) { return updateDesignWorkflow(id, projectId, userId, input); }
+  listDesignWorkflowNodes(workflowId: string, projectId: string, userId: string) { return listDesignWorkflowNodes(workflowId, projectId, userId); }
+  getDesignWorkflowNode(id: string, workflowId: string, projectId: string, userId: string) { return getDesignWorkflowNode(id, workflowId, projectId, userId); }
+  createDesignWorkflowNode(input: CreateDesignWorkflowNodeInput) { return createDesignWorkflowNode(input); }
+  updateDesignWorkflowNode(id: string, input: UpdateDesignWorkflowNodeInput) { return updateDesignWorkflowNode(id, input); }
+
   createGenerationJob(input: CreateGenerationJobInput): Promise<GenerationJob | null> {
     return createGenerationJob(input);
   }
@@ -139,8 +154,24 @@ export class JsonStorageAdapter implements StorageAdapter {
     return getGenerationJob(id, userId);
   }
 
+  getGenerationJobByIdempotencyKey(userId: string, idempotencyKey: string): Promise<GenerationJob | null> {
+    return getGenerationJobByIdempotencyKey(userId, idempotencyKey);
+  }
+
   listRunnableGenerationJobs(): Promise<GenerationJob[]> {
     return listRunnableGenerationJobs();
+  }
+
+  claimGenerationJob(input: ClaimGenerationJobInput): Promise<GenerationJob | null> {
+    return claimGenerationJob(input);
+  }
+
+  renewGenerationJobLease(id: string, workerId: string, leaseDurationMs: number): Promise<boolean> {
+    return renewGenerationJobLease(id, workerId, leaseDurationMs);
+  }
+
+  updateGenerationJobWithLease(id: string, workerId: string, input: UpdateGenerationJobInput): Promise<GenerationJob | null> {
+    return updateGenerationJobWithLease(id, workerId, input);
   }
 
   updateGenerationJob(id: string, input: UpdateGenerationJobInput): Promise<GenerationJob | null> {
@@ -159,6 +190,10 @@ export class JsonStorageAdapter implements StorageAdapter {
     return getImageAsset(id, userId);
   }
 
+  listImageAssets(userId: string, limit = 40): Promise<ImageAsset[]> {
+    return listImageAssets(userId, limit);
+  }
+
   createFloorPlanRegionSet(input: CreateFloorPlanRegionSetInput) { return createFloorPlanRegionSet(input); }
   getFloorPlanRegionSet(id: string, userId: string) { return getFloorPlanRegionSet(id, userId); }
   getLatestFloorPlanRegionSet(sourceAssetId: string, userId: string) { return getLatestFloorPlanRegionSet(sourceAssetId, userId); }
@@ -167,11 +202,13 @@ export class JsonStorageAdapter implements StorageAdapter {
   saveFloorPlanRegionMaterials(regionSetId: string, userId: string, materials: SaveFloorPlanRegionMaterialInput[]) { return saveFloorPlanRegionMaterials(regionSetId, userId, materials); }
 
   createEditSession(input: CreateEditSessionInput, sourceAsset: ImageAsset) { return createEditSession(input, sourceAsset); }
+  listEditSessions(userId: string, projectId?: string | null) { return listEditSessions(userId, projectId); }
   getEditSession(id: string, userId: string) { return getEditSession(id, userId); }
-  updateEditSession(id: string, userId: string, input: Partial<Pick<EditSession, 'currentVersionId' | 'status' | 'title'>>) { return updateEditSession(id, userId, input); }
+  updateEditSession(id: string, userId: string, input: Partial<Pick<EditSession, 'currentVersionId' | 'primaryVersionId' | 'finalVersionId' | 'status' | 'title'>>) { return updateEditSession(id, userId, input); }
   listAssetVersions(sessionId: string, userId: string) { return listAssetVersions(sessionId, userId); }
   getAssetVersion(id: string, sessionId: string, userId: string) { return getAssetVersion(id, sessionId, userId); }
   createAssetVersion(input: CreateAssetVersionInput) { return createAssetVersion(input); }
+  updateAssetVersion(id: string, sessionId: string, userId: string, input: Partial<Pick<AssetVersion, 'displayName' | 'note' | 'exportedAt'>>) { return updateAssetVersion(id, sessionId, userId, input); }
   createEditMessage(input: CreateEditMessageInput) { return createEditMessage(input); }
   getEditMessage(id: string) { return getEditMessage(id); }
   getEditMessageByClientRequest(sessionId: string, clientRequestId: string) { return getEditMessageByClientRequest(sessionId, clientRequestId); }
@@ -218,6 +255,10 @@ export class JsonStorageAdapter implements StorageAdapter {
     return createShareLink(input);
   }
 
+  listProjectShareLinks(projectId: string, userId: string): Promise<ShareLink[]> {
+    return listProjectShareLinks(projectId, userId);
+  }
+
   getShareLinkByToken(token: string): Promise<ShareLink | null> {
     return getShareLinkByToken(token);
   }
@@ -240,6 +281,10 @@ export class JsonStorageAdapter implements StorageAdapter {
 
   getCreditTransactionByReference(userId: string, type: CreditTransaction['type'], referenceId: string): Promise<CreditTransaction | null> {
     return getCreditTransactionByReference(userId, type, referenceId);
+  }
+
+  refundGenerationJobOnce(jobId: string): Promise<boolean> {
+    return refundGenerationJobOnce(jobId);
   }
 
   getAdminDashboard(): Promise<AdminDashboard> {
@@ -479,6 +524,10 @@ async function createGenerationResult(input: CreateGenerationResultInput): Promi
   if (!project || !job) {
     return null;
   }
+  if (input.resultKey) {
+    const existing = db.generationResults.find(item => item.jobId === input.jobId && item.resultKey === input.resultKey);
+    if (existing) return existing;
+  }
 
   const now = new Date().toISOString();
   const result: GenerationResult = {
@@ -490,6 +539,7 @@ async function createGenerationResult(input: CreateGenerationResultInput): Promi
     imageUrl: input.imageUrl,
     isSelected: input.isSelected ?? false,
     isFavorite: input.isFavorite ?? false,
+    resultKey: input.resultKey ?? null,
     metadata: input.metadata,
     createdAt: now,
     updatedAt: now,
@@ -542,18 +592,12 @@ async function updateGenerationResult(id: string, userId: string, input: UpdateG
   return result;
 }
 
-async function createGenerationJob(input: {
-  userId: string;
-  projectId: string;
-  mode: GenerationJob['mode'];
-  step?: GenerationJob['step'];
-  prompt: string;
-  config: Record<string, unknown>;
-  inputAssetIds: string[];
-  provider: string;
-  creditCost?: number;
-}): Promise<GenerationJob | null> {
+async function createGenerationJob(input: CreateGenerationJobInput): Promise<GenerationJob | null> {
   const db = await readDatabase();
+  if (input.idempotencyKey) {
+    const existing = db.generationJobs.find(item => item.userId === input.userId && item.idempotencyKey === input.idempotencyKey);
+    if (existing) return existing;
+  }
   const project = db.projects.find(item => item.id === input.projectId && item.userId === input.userId && !item.deletedAt);
 
   if (!project) {
@@ -584,6 +628,20 @@ async function createGenerationJob(input: {
     creditCost: input.creditCost ?? 0,
     creditRefunded: false,
     failureReason: null,
+    idempotencyKey: input.idempotencyKey ?? null,
+    attemptCount: 0,
+    maxAttempts: Math.max(1, input.maxAttempts ?? readPositiveInteger(process.env.GENERATION_JOB_MAX_ATTEMPTS, 3)),
+    nextAttemptAt: null,
+    leaseOwner: null,
+    leaseExpiresAt: null,
+    heartbeatAt: null,
+    executionTimeoutAt: null,
+    providerStartedAt: null,
+    providerFinishedAt: null,
+    providerDurationMs: null,
+    lastErrorCode: null,
+    lastErrorCategory: null,
+    lastErrorRetryable: null,
     diagnostics: {
       phase: 'queued',
       timing: { jobCreatedAt: now },
@@ -601,11 +659,100 @@ async function getGenerationJob(id: string, userId?: string): Promise<Generation
   return db.generationJobs.find(job => job.id === id && (!userId || job.userId === userId)) ?? null;
 }
 
+async function getGenerationJobByIdempotencyKey(userId: string, idempotencyKey: string): Promise<GenerationJob | null> {
+  const db = await readDatabase();
+  return db.generationJobs.find(job => job.userId === userId && job.idempotencyKey === idempotencyKey) ?? null;
+}
+
 async function listRunnableGenerationJobs(): Promise<GenerationJob[]> {
   const db = await readDatabase();
+  const now = Date.now();
   return db.generationJobs
-    .filter(job => job.status === 'queued' || job.status === 'running')
+    .filter(job => (
+      job.status === 'queued'
+        ? !job.nextAttemptAt || new Date(job.nextAttemptAt).getTime() <= now
+        : job.status === 'running' && (!job.leaseExpiresAt || new Date(job.leaseExpiresAt).getTime() <= now)
+    ))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+function claimGenerationJob(input: ClaimGenerationJobInput): Promise<GenerationJob | null> {
+  return runAtomicMutation(() => claimGenerationJobInternal(input));
+}
+
+async function claimGenerationJobInternal(input: ClaimGenerationJobInput): Promise<GenerationJob | null> {
+  const db = await readDatabase();
+  const now = new Date();
+  const job = db.generationJobs
+    .filter(item => (
+      (!input.preferredJobId || item.id === input.preferredJobId)
+      && (
+        (item.status === 'queued'
+          && item.attemptCount < item.maxAttempts
+          && (!item.nextAttemptAt || new Date(item.nextAttemptAt).getTime() <= now.getTime()))
+        || (item.status === 'running'
+          && item.attemptCount <= item.maxAttempts
+          && (!item.leaseExpiresAt || new Date(item.leaseExpiresAt).getTime() <= now.getTime()))
+      )
+    ))
+    .sort((a, b) => {
+      if (input.preferredJobId) {
+        if (a.id === input.preferredJobId) return -1;
+        if (b.id === input.preferredJobId) return 1;
+      }
+      return a.createdAt.localeCompare(b.createdAt);
+    })[0];
+  if (!job) return null;
+
+  job.status = 'running';
+  job.attemptCount += 1;
+  job.leaseOwner = input.workerId;
+  job.leaseExpiresAt = new Date(now.getTime() + input.leaseDurationMs).toISOString();
+  job.heartbeatAt = now.toISOString();
+  job.executionTimeoutAt = new Date(now.getTime() + input.executionTimeoutMs).toISOString();
+  job.startedAt = job.startedAt || now.toISOString();
+  job.nextAttemptAt = null;
+  job.finishedAt = null;
+  job.updatedAt = now.toISOString();
+  await writeDatabase(db);
+  return job;
+}
+
+function renewGenerationJobLease(id: string, workerId: string, leaseDurationMs: number): Promise<boolean> {
+  return runAtomicMutation(() => renewGenerationJobLeaseInternal(id, workerId, leaseDurationMs));
+}
+
+async function renewGenerationJobLeaseInternal(id: string, workerId: string, leaseDurationMs: number): Promise<boolean> {
+  const db = await readDatabase();
+  const job = db.generationJobs.find(item => item.id === id && item.status === 'running' && item.leaseOwner === workerId);
+  if (!job) return false;
+  const now = new Date();
+  job.heartbeatAt = now.toISOString();
+  job.leaseExpiresAt = new Date(now.getTime() + leaseDurationMs).toISOString();
+  job.updatedAt = now.toISOString();
+  await writeDatabase(db);
+  return true;
+}
+
+function updateGenerationJobWithLease(
+  id: string,
+  workerId: string,
+  input: UpdateGenerationJobInput,
+): Promise<GenerationJob | null> {
+  return runAtomicMutation(() => updateGenerationJobWithLeaseInternal(id, workerId, input));
+}
+
+async function updateGenerationJobWithLeaseInternal(
+  id: string,
+  workerId: string,
+  input: UpdateGenerationJobInput,
+): Promise<GenerationJob | null> {
+  const db = await readDatabase();
+  const job = db.generationJobs.find(item => item.id === id && item.leaseOwner === workerId);
+  if (!job) return null;
+  applyGenerationJobUpdate(job, input);
+  await writeDatabase(db);
+  return job;
 }
 
 async function updateGenerationJob(
@@ -619,6 +766,12 @@ async function updateGenerationJob(
     return null;
   }
 
+  applyGenerationJobUpdate(job, input);
+  await writeDatabase(db);
+  return job;
+}
+
+function applyGenerationJobUpdate(job: GenerationJob, input: UpdateGenerationJobInput): void {
   if (input.status !== undefined) job.status = input.status;
   if (input.progress !== undefined) job.progress = input.progress;
   if (input.outputAssetId !== undefined) job.outputAssetId = input.outputAssetId;
@@ -629,11 +782,21 @@ async function updateGenerationJob(
   if (input.creditCost !== undefined) job.creditCost = input.creditCost;
   if (input.creditRefunded !== undefined) job.creditRefunded = input.creditRefunded;
   if (input.failureReason !== undefined) job.failureReason = input.failureReason;
+  if (input.attemptCount !== undefined) job.attemptCount = input.attemptCount;
+  if (input.maxAttempts !== undefined) job.maxAttempts = input.maxAttempts;
+  if (input.nextAttemptAt !== undefined) job.nextAttemptAt = input.nextAttemptAt;
+  if (input.leaseOwner !== undefined) job.leaseOwner = input.leaseOwner;
+  if (input.leaseExpiresAt !== undefined) job.leaseExpiresAt = input.leaseExpiresAt;
+  if (input.heartbeatAt !== undefined) job.heartbeatAt = input.heartbeatAt;
+  if (input.executionTimeoutAt !== undefined) job.executionTimeoutAt = input.executionTimeoutAt;
+  if (input.providerStartedAt !== undefined) job.providerStartedAt = input.providerStartedAt;
+  if (input.providerFinishedAt !== undefined) job.providerFinishedAt = input.providerFinishedAt;
+  if (input.providerDurationMs !== undefined) job.providerDurationMs = input.providerDurationMs;
+  if (input.lastErrorCode !== undefined) job.lastErrorCode = input.lastErrorCode;
+  if (input.lastErrorCategory !== undefined) job.lastErrorCategory = input.lastErrorCategory;
+  if (input.lastErrorRetryable !== undefined) job.lastErrorRetryable = input.lastErrorRetryable;
   if (input.diagnostics !== undefined) job.diagnostics = input.diagnostics;
   job.updatedAt = new Date().toISOString();
-
-  await writeDatabase(db);
-  return job;
 }
 
 async function cancelGenerationJob(id: string, userId?: string): Promise<GenerationJob | null> {
@@ -652,6 +815,9 @@ async function cancelGenerationJob(id: string, userId?: string): Promise<Generat
   job.status = 'cancelled';
   job.progress = Math.min(job.progress, 99);
   job.failureReason = 'cancelled';
+  job.leaseOwner = null;
+  job.leaseExpiresAt = null;
+  job.heartbeatAt = null;
   job.updatedAt = now;
   job.finishedAt = now;
   await writeDatabase(db);
@@ -689,6 +855,108 @@ async function createImageAsset(input: {
 async function getImageAsset(id: string, userId?: string): Promise<ImageAsset | null> {
   const db = await readDatabase();
   return db.imageAssets.find(asset => asset.id === id && (!userId || asset.userId === userId)) ?? null;
+}
+
+async function createDesignWorkflow(input: CreateDesignWorkflowInput): Promise<DesignWorkflow> {
+  const db = await readDatabase();
+  const now = new Date().toISOString();
+  const workflow: DesignWorkflow = {
+    id: `design_workflow_${randomUUID()}`,
+    userId: input.userId,
+    projectId: input.projectId,
+    title: input.title,
+    status: 'active',
+    currentNodeId: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  db.designWorkflows.unshift(workflow);
+  await writeDatabase(db);
+  return workflow;
+}
+
+async function getActiveDesignWorkflow(projectId: string, userId: string) {
+  const db = await readDatabase();
+  return db.designWorkflows
+    .filter(item => item.projectId === projectId && item.userId === userId && item.status !== 'archived')
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] || null;
+}
+
+async function getDesignWorkflow(id: string, projectId: string, userId: string) {
+  const db = await readDatabase();
+  return db.designWorkflows.find(item => (
+    item.id === id && item.projectId === projectId && item.userId === userId
+  )) || null;
+}
+
+async function updateDesignWorkflow(
+  id: string,
+  projectId: string,
+  userId: string,
+  input: UpdateDesignWorkflowInput,
+) {
+  const db = await readDatabase();
+  const workflow = db.designWorkflows.find(item => (
+    item.id === id && item.projectId === projectId && item.userId === userId
+  ));
+  if (!workflow) return null;
+  Object.assign(workflow, input, { updatedAt: new Date().toISOString() });
+  await writeDatabase(db);
+  return workflow;
+}
+
+async function listDesignWorkflowNodes(workflowId: string, projectId: string, userId: string) {
+  const workflow = await getDesignWorkflow(workflowId, projectId, userId);
+  if (!workflow) return [];
+  const db = await readDatabase();
+  return db.designWorkflowNodes
+    .filter(node => node.workflowId === workflowId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+async function getDesignWorkflowNode(
+  id: string,
+  workflowId: string,
+  projectId: string,
+  userId: string,
+) {
+  const nodes = await listDesignWorkflowNodes(workflowId, projectId, userId);
+  return nodes.find(node => node.id === id) || null;
+}
+
+async function createDesignWorkflowNode(
+  input: CreateDesignWorkflowNodeInput,
+): Promise<DesignWorkflowNode> {
+  const db = await readDatabase();
+  const now = new Date().toISOString();
+  const node: DesignWorkflowNode = {
+    ...input,
+    id: `design_workflow_node_${randomUUID()}`,
+    createdAt: now,
+    updatedAt: now,
+  };
+  db.designWorkflowNodes.push(node);
+  await writeDatabase(db);
+  return node;
+}
+
+async function updateDesignWorkflowNode(id: string, input: UpdateDesignWorkflowNodeInput) {
+  const db = await readDatabase();
+  const node = db.designWorkflowNodes.find(item => item.id === id);
+  if (!node) return null;
+  Object.assign(node, input, {
+    metadata: input.metadata ? { ...node.metadata, ...input.metadata } : node.metadata,
+    updatedAt: new Date().toISOString(),
+  });
+  await writeDatabase(db);
+  return node;
+}
+
+async function listImageAssets(userId: string, limit = 40): Promise<ImageAsset[]> {
+  const db = await readDatabase();
+  return db.imageAssets
+    .filter(asset => asset.userId === userId)
+    .slice(0, Math.max(1, Math.min(100, limit)));
 }
 
 async function createFloorPlanRegionSet(input: CreateFloorPlanRegionSetInput): Promise<FloorPlanRegionSet> {
@@ -777,28 +1045,45 @@ async function createEditSession(input: CreateEditSessionInput, sourceAsset: Ima
   const sessionId = `edit_session_${randomUUID()}`;
   const versionId = `asset_version_${randomUUID()}`;
   const version: AssetVersion = {
-    id: versionId, assetId: sourceAsset.id, sessionId, parentVersionId: null, versionNumber: 0,
+    id: versionId, assetId: sourceAsset.id, sessionId, parentVersionId: null, restoredFromVersionId: null, versionNumber: 0,
+    displayName: '原图', note: '',
     storagePath: sourceAsset.path || sourceAsset.filename, publicUrl: sourceAsset.publicUrl || sourceAsset.url,
     userInstruction: '', compiledPrompt: '', provider: null, model: null, generationJobId: null,
-    createdBy: input.userId, createdAt: now,
+    createdBy: input.userId, createdAt: now, exportedAt: null,
   };
   const session: EditSession = {
     id: sessionId, userId: input.userId, projectId: input.projectId, sourceAssetId: input.sourceAssetId,
-    originalVersionId: versionId, currentVersionId: versionId, title: input.title,
+    originalVersionId: versionId, currentVersionId: versionId, primaryVersionId: null, finalVersionId: null, title: input.title,
     permanentConstraints: input.permanentConstraints, aspectRatio: input.aspectRatio, status: 'active', createdAt: now, updatedAt: now,
   };
   db.editSessions.unshift(session); db.assetVersions.push(version); await writeDatabase(db);
   return { session, version };
 }
 
+async function listEditSessions(userId: string, projectId?: string | null) {
+  const db = await readDatabase();
+  return db.editSessions
+    .filter(item => item.userId === userId && (!projectId || item.projectId === projectId))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
 async function getEditSession(id: string, userId: string) { const db = await readDatabase(); return db.editSessions.find(item => item.id === id && item.userId === userId) || null; }
-async function updateEditSession(id: string, userId: string, input: Partial<Pick<EditSession, 'currentVersionId' | 'status' | 'title'>>) {
+async function updateEditSession(id: string, userId: string, input: Partial<Pick<EditSession, 'currentVersionId' | 'primaryVersionId' | 'finalVersionId' | 'status' | 'title'>>) {
   const db = await readDatabase(); const item = db.editSessions.find(value => value.id === id && value.userId === userId); if (!item) return null;
   Object.assign(item, input, { updatedAt: new Date().toISOString() }); await writeDatabase(db); return item;
 }
 async function listAssetVersions(sessionId: string, userId: string) { const db = await readDatabase(); const session = db.editSessions.find(item => item.id === sessionId && item.userId === userId); return session ? db.assetVersions.filter(item => item.sessionId === sessionId).sort((a,b) => a.versionNumber-b.versionNumber) : []; }
 async function getAssetVersion(id: string, sessionId: string, userId: string) { const versions = await listAssetVersions(sessionId, userId); return versions.find(item => item.id === id) || null; }
 async function createAssetVersion(input: CreateAssetVersionInput) { const db = await readDatabase(); const item: AssetVersion = { ...input, id: `asset_version_${randomUUID()}`, createdAt: new Date().toISOString() }; db.assetVersions.push(item); await writeDatabase(db); return item; }
+async function updateAssetVersion(id: string, sessionId: string, userId: string, input: Partial<Pick<AssetVersion, 'displayName' | 'note' | 'exportedAt'>>) {
+  const db = await readDatabase();
+  const session = db.editSessions.find(item => item.id === sessionId && item.userId === userId);
+  if (!session) return null;
+  const item = db.assetVersions.find(version => version.id === id && version.sessionId === sessionId);
+  if (!item) return null;
+  Object.assign(item, input);
+  await writeDatabase(db);
+  return item;
+}
 async function createEditMessage(input: CreateEditMessageInput) { const db = await readDatabase(); const existing=input.clientRequestId?db.editMessages.find(item=>item.sessionId===input.sessionId&&item.clientRequestId===input.clientRequestId):null;if(existing)return existing;const item: EditMessage = { ...input, id: `edit_message_${randomUUID()}`, outputVersionId: null, generationJobId: null, errorCode:null,errorMessage:null,createdAt: new Date().toISOString() }; db.editMessages.push(item); await writeDatabase(db); return item; }
 async function getEditMessage(id: string) { const db = await readDatabase(); return db.editMessages.find(item => item.id === id) || null; }
 async function getEditMessageByClientRequest(sessionId:string,clientRequestId:string){const db=await readDatabase();return db.editMessages.find(item=>item.sessionId===sessionId&&item.clientRequestId===clientRequestId)||null;}
@@ -992,6 +1277,17 @@ async function createShareLink(input: CreateShareLinkInput): Promise<ShareLink |
   return shareLink;
 }
 
+async function listProjectShareLinks(projectId: string, userId: string): Promise<ShareLink[]> {
+  const db = await readDatabase();
+  const project = db.projects.find(item => (
+    item.id === projectId && item.userId === userId && !item.deletedAt
+  ));
+  if (!project) return [];
+  return db.shareLinks
+    .filter(link => link.projectId === projectId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
 async function getShareLinkByToken(token: string): Promise<ShareLink | null> {
   const db = await readDatabase();
   return db.shareLinks.find(link => link.token === token) ?? null;
@@ -1088,6 +1384,56 @@ async function getCreditTransactionByReference(
   )) ?? null;
 }
 
+function refundGenerationJobOnce(jobId: string): Promise<boolean> {
+  return runAtomicMutation(() => refundGenerationJobOnceInternal(jobId));
+}
+
+async function refundGenerationJobOnceInternal(jobId: string): Promise<boolean> {
+  const db = await readDatabase();
+  const job = db.generationJobs.find(item => item.id === jobId);
+  if (!job || !isRefundableStatus(job.status)) return false;
+
+  const existingRefund = db.creditTransactions.find(transaction => (
+    transaction.userId === job.userId
+    && (transaction.type === 'generate_refund' || transaction.type === 'refund')
+    && transaction.referenceId === job.id
+  ));
+  if (existingRefund) {
+    job.creditRefunded = true;
+    job.updatedAt = new Date().toISOString();
+    await writeDatabase(db);
+    return false;
+  }
+
+  const debit = db.creditTransactions.find(transaction => (
+    transaction.userId === job.userId
+    && (transaction.type === 'generate_charge' || transaction.type === 'debit')
+    && transaction.referenceId === job.id
+    && transaction.amount < 0
+  ));
+  if (!debit) return false;
+
+  const balance = ensureCreditBalance(db, job.userId);
+  const now = new Date().toISOString();
+  balance.balance += Math.abs(debit.amount);
+  balance.updatedAt = now;
+  db.creditTransactions.unshift({
+    id: `credit_tx_${randomUUID()}`,
+    userId: job.userId,
+    type: 'generate_refund',
+    amount: Math.abs(debit.amount),
+    balanceAfter: balance.balance,
+    reason: `Refund generation job ${job.mode}: ${job.failureReason || job.errorMessage || job.status}`,
+    referenceType: 'generation_job',
+    referenceId: job.id,
+    createdAt: now,
+  });
+  job.creditRefunded = true;
+  job.updatedAt = now;
+  await writeDatabase(db);
+  return true;
+}
+
 function ensureCreditBalance(db: AppDatabase, userId: string): CreditBalance {
   let balance = db.creditBalances.find(item => item.userId === userId);
   if (balance) {
@@ -1137,6 +1483,10 @@ async function getAdminDashboard(): Promise<AdminDashboard> {
     .filter(job => job.status === 'failed' || job.status === 'timeout')
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .slice(0, 20);
+  const now = Date.now();
+  const providerDurations = db.generationJobs
+    .map(job => job.providerDurationMs)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0);
 
   return {
     stats: {
@@ -1150,6 +1500,16 @@ async function getAdminDashboard(): Promise<AdminDashboard> {
         if (transaction.type === 'generate_refund' || transaction.type === 'refund') return total - Math.abs(transaction.amount);
         return total;
       }, 0),
+      queuedJobCount: db.generationJobs.filter(job => job.status === 'queued').length,
+      runningJobCount: db.generationJobs.filter(job => job.status === 'running').length,
+      retryingJobCount: db.generationJobs.filter(job => job.status === 'queued' && job.attemptCount > 0).length,
+      expiredLeaseJobCount: db.generationJobs.filter(job => (
+        job.status === 'running' && (!job.leaseExpiresAt || new Date(job.leaseExpiresAt).getTime() <= now)
+      )).length,
+      leasedJobCount: db.generationJobs.filter(job => job.status === 'running' && Boolean(job.leaseOwner)).length,
+      averageProviderDurationMs: providerDurations.length > 0
+        ? Math.round(providerDurations.reduce((sum, value) => sum + value, 0) / providerDurations.length)
+        : 0,
     },
     recentJobs,
     recentErrorJobs,
@@ -1179,6 +1539,8 @@ async function readDatabase(): Promise<AppDatabase> {
     assetVersions: Array.isArray(parsed.assetVersions) ? parsed.assetVersions : [],
     floorPlanRegionSets: normalizeFloorPlanRegionSets(Array.isArray(parsed.floorPlanRegionSets) ? parsed.floorPlanRegionSets : []),
     floorPlanRegionMaterials: Array.isArray(parsed.floorPlanRegionMaterials) ? parsed.floorPlanRegionMaterials : [],
+    designWorkflows: Array.isArray(parsed.designWorkflows) ? parsed.designWorkflows : [],
+    designWorkflowNodes: Array.isArray(parsed.designWorkflowNodes) ? parsed.designWorkflowNodes : [],
   };
 }
 
@@ -1246,7 +1608,36 @@ function normalizeGenerationJobs(jobs: Array<GenerationJob & { userId: string }>
     creditCost: typeof job.creditCost === 'number' ? job.creditCost : 0,
     creditRefunded: typeof job.creditRefunded === 'boolean' ? job.creditRefunded : false,
     failureReason: typeof job.failureReason === 'string' ? job.failureReason : null,
+    idempotencyKey: typeof job.idempotencyKey === 'string' ? job.idempotencyKey : null,
+    attemptCount: typeof job.attemptCount === 'number' ? job.attemptCount : 0,
+    maxAttempts: typeof job.maxAttempts === 'number' ? Math.max(1, job.maxAttempts) : readPositiveInteger(process.env.GENERATION_JOB_MAX_ATTEMPTS, 3),
+    nextAttemptAt: typeof job.nextAttemptAt === 'string' ? job.nextAttemptAt : null,
+    leaseOwner: typeof job.leaseOwner === 'string' ? job.leaseOwner : null,
+    leaseExpiresAt: typeof job.leaseExpiresAt === 'string' ? job.leaseExpiresAt : null,
+    heartbeatAt: typeof job.heartbeatAt === 'string' ? job.heartbeatAt : null,
+    executionTimeoutAt: typeof job.executionTimeoutAt === 'string' ? job.executionTimeoutAt : null,
+    providerStartedAt: typeof job.providerStartedAt === 'string' ? job.providerStartedAt : null,
+    providerFinishedAt: typeof job.providerFinishedAt === 'string' ? job.providerFinishedAt : null,
+    providerDurationMs: typeof job.providerDurationMs === 'number' ? job.providerDurationMs : null,
+    lastErrorCode: typeof job.lastErrorCode === 'string' ? job.lastErrorCode : null,
+    lastErrorCategory: job.lastErrorCategory || null,
+    lastErrorRetryable: typeof job.lastErrorRetryable === 'boolean' ? job.lastErrorRetryable : null,
   }));
+}
+
+function isRefundableStatus(status: GenerationJob['status']): boolean {
+  return status === 'failed' || status === 'cancelled' || status === 'timeout';
+}
+
+function readPositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
+}
+
+function runAtomicMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = atomicMutationQueue.then(operation, operation);
+  atomicMutationQueue = result.then(() => undefined, () => undefined);
+  return result;
 }
 
 function readGenerationJobStep(config: Record<string, unknown> | undefined): GenerationJob['step'] {

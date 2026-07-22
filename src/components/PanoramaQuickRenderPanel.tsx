@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Box, Camera, CheckCircle2, Download, ExternalLink, ImageIcon, QrCode, Sparkles, Trash2, Upload } from 'lucide-react';
+import { AlertCircle, Box, Camera, CheckCircle2, ImageIcon, QrCode, Sparkles, Trash2, Upload } from 'lucide-react';
 import {
   AssetModel,
   GenerationConfig,
@@ -15,9 +15,9 @@ import {
 import { listModelAssets, uploadImageAsset, uploadModelAsset } from '../lib/api';
 import { saveGenerationRecord } from '../storage/history';
 import { savePanoramaRecord } from '../storage/panoramas';
-import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
 import { getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
-import { ModelViewer, ModelViewerHandle } from './ModelViewer';
+import type { ModelViewerHandle } from './ModelViewer';
+import { LazyModelViewer } from './LazyModelViewer';
 import {
   isLargeOriginalModel,
   mapModelAssetRecordToAssetModel,
@@ -30,6 +30,9 @@ import { PanoramaViewer } from './PanoramaViewer';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 import { GenerationImageViewer } from './common/GenerationImageViewer';
+import { GenerationResultActions } from './common/GenerationResultActions';
+import { GenerationProgress } from './common/GenerationProgress';
+import { normalizeGenerationTaskStatus, readGenerationProgressLabel, type NormalizedGenerationResult } from '../utils/normalizeGenerationResult';
 import { IMAGE_UPLOAD_ACCEPT } from '../utils/imageValidation';
 import { validateImageFile } from '../utils/file';
 import { resolveAssetUrl, warnImageLoadFailure } from '../utils/assetUrl';
@@ -891,7 +894,7 @@ export function PanoramaQuickRenderPanel({
               {primaryPreviewTab === 'panorama' ? (
                 <MainPanoramaPreview imageUrl={panoramaUrl} previewMode={previewMode} />
               ) : model ? (
-                <ModelViewer ref={viewerRef} asset={model} minHeight={560} initialView="interior" />
+                <LazyModelViewer ref={viewerRef} asset={model} minHeight={560} initialView="interior" />
               ) : (
                 <div className="flex h-full items-center justify-center bg-slate-50 p-8 text-center">
                   <div className="max-w-sm">
@@ -1339,32 +1342,21 @@ function PanoramaGenerationStateCard({
   if (!shouldShow) return null;
 
   const recentLogs = state.generationLogs.slice(-4);
+  const normalizedStatus = normalizeGenerationTaskStatus({
+    phase: state.generationJobDiagnostics?.phase,
+    jobStatus: state.generationJobStatus,
+    generationStatus: state.generationStatus,
+    isGenerating: state.isGenerating,
+  });
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-sm font-bold text-slate-900">AI 生成状态</p>
-          <p className="mt-1 text-[11px] leading-4 text-slate-500">
-            {pendingRenderAssetId
-              ? `正在准备槽位 ${pendingRenderSlotIndex || '-'} 的 AI 渲染任务...`
-              : readPanoramaGenerationStatusLabel(state.generationStatus)}
-          </p>
-        </div>
-        <span className="rounded bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">
-          {Math.max(0, Math.min(100, state.generationProgress || 0))}%
-        </span>
-      </div>
-      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
-        <div
-          className={`h-full rounded-full ${state.generationStatus === 'error' ? 'bg-red-500' : 'bg-blue-600'}`}
-          style={{ width: `${Math.max(pendingRenderAssetId ? 6 : 0, Math.min(100, state.generationProgress || 0))}%` }}
-        />
-      </div>
-      {state.generationError ? (
-        <div className="mt-3 whitespace-pre-wrap break-words rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[11px] leading-5 text-red-700">
-          {state.generationError}
-        </div>
-      ) : null}
+      <GenerationProgress
+        status={pendingRenderAssetId ? 'submitting' : normalizedStatus}
+        progress={state.generationJobId ? state.generationProgress : null}
+        label={pendingRenderAssetId ? `正在准备槽位 ${pendingRenderSlotIndex || '-'} 的 AI 渲染任务` : readGenerationProgressLabel(normalizedStatus)}
+        errorMessage={state.generationError}
+        compact
+      />
       {state.generationJobStatus ? (
         <p className="mt-2 text-[11px] leading-4 text-slate-500">任务状态：{state.generationJobStatus}</p>
       ) : null}
@@ -1406,36 +1398,23 @@ function ResultPreview({
   previewMode: 'image' | '360';
   onPreviewModeChange: (mode: 'image' | '360') => void;
 }) {
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
-
-  const handleDownload = async () => {
-    if (!imageUrl || isDownloading) return;
-    setIsDownloading(true);
-    setDownloadMessage(null);
-    setDownloadError(null);
-    try {
-      await downloadAsset({
-        url: imageUrl,
-        assetId,
-      }, buildResultImageFilename({
-        projectName,
-        featureLabel: previewKind === 'rendered' ? '全景快渲' : '全景截图',
-      }));
-      setDownloadMessage('已开始下载');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '';
-      setDownloadError(message === downloadFallbackMessage ? downloadFallbackMessage : '下载失败，请稍后重试');
-    } finally {
-      setIsDownloading(false);
-    }
+  const normalizedResult: NormalizedGenerationResult = {
+    originalImageUrl: sourceImageUrl || null,
+    originalAssetId: sourceImageAssetId,
+    resultImageUrl: resultImageUrl || null,
+    resultAssetId: resultImageAssetId,
+    taskId: null,
+    status: resultImageUrl ? 'completed' : 'idle',
+    progress: resultImageUrl ? 100 : null,
+    progressLabel: resultImageUrl ? '生成完成' : '等待提交',
+    errorMessage: null,
   };
 
   if (!imageUrl) {
     return (
-      <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-xs font-bold text-slate-400">
-        生成全景后将在这里显示 2:1 标准全景图和 360 预览。
+      <div className="space-y-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4">
+        <GenerationResultActions result={normalizedResult} featureName="全景快渲" projectName={projectName} compact />
+        <p className="text-center text-xs font-bold text-slate-400">生成全景后将在这里显示 2:1 标准全景图和 360 预览。</p>
       </div>
     );
   }
@@ -1445,23 +1424,7 @@ function ResultPreview({
       <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
         <p className="text-sm font-bold text-slate-900">{previewKind === 'rendered' ? 'AI 渲染后全景图' : '渲染前原始全景图'}</p>
         <div className="flex flex-wrap justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => window.open(imageUrl, '_blank', 'noopener,noreferrer')}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1 text-xs font-bold text-slate-700 shadow-sm hover:text-blue-700"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            查看原图
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleDownload()}
-            disabled={isDownloading}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1 text-xs font-bold text-slate-700 shadow-sm hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <Download className={`h-3.5 w-3.5 ${isDownloading ? 'animate-pulse' : ''}`} />
-            {isDownloading ? '正在下载...' : '保存到本地'}
-          </button>
+          <GenerationResultActions result={normalizedResult} featureName="全景快渲" projectName={projectName} compact />
           <div className="inline-flex rounded-lg bg-white p-1 text-xs font-bold shadow-sm">
             <button type="button" onClick={() => onPreviewKindChange('raw')} className={`rounded-md px-2 py-1 ${previewKind === 'raw' ? 'bg-slate-950 text-white' : 'text-slate-500'}`}>
               原图
@@ -1480,12 +1443,6 @@ function ResultPreview({
           </div>
         </div>
       </div>
-      {downloadMessage || downloadError ? (
-        <div className="border-b border-slate-200 px-3 py-2 text-xs font-semibold">
-          {downloadMessage ? <span className="text-emerald-700">{downloadMessage}</span> : null}
-          {downloadError ? <span className="text-amber-700">{downloadError}</span> : null}
-        </div>
-      ) : null}
       <GenerationImageViewer
         sourceImageUrl={sourceImageUrl}
         sourceImageAssetId={sourceImageAssetId}
@@ -1592,14 +1549,6 @@ function getBatchRenderButtonDisabledReason(input: {
   if (input.isGenerating) return 'AI 正在渲染中';
   if (input.isBatchRendering) return '批量渲染进行中';
   return '';
-}
-
-function readPanoramaGenerationStatusLabel(status: StepState['generationStatus']): string {
-  if (status === 'uploading') return '正在上传输入素材...';
-  if (status === 'generating') return '正在创建或执行 AI 生成任务...';
-  if (status === 'success') return 'AI 全景渲染已完成';
-  if (status === 'error') return 'AI 全景渲染失败';
-  return '等待生成';
 }
 
 function createRenderRequestId(): string {

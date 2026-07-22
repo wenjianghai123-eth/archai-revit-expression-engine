@@ -47,6 +47,16 @@ describe('createSupabaseStorageError', () => {
     expect(error.message).toContain('service_role');
   });
 
+  it('maps missing generation worker RPCs to a worker schema readiness error', () => {
+    const error = createSupabaseStorageError({
+      code: 'PGRST202',
+      message: 'Could not find the function public.claim_generation_job in the schema cache',
+    }, 'claiming generation job');
+
+    expect(error.code).toBe('GENERATION_WORKER_SCHEMA_NOT_READY');
+    expect(error.message).toContain('20260716002000_harden_generation_workers.sql');
+  });
+
   it('maps non-schema generation job insert failures to create job errors', () => {
     const error = createSupabaseStorageError({
       code: 'XX000',

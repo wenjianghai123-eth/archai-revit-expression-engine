@@ -6,7 +6,7 @@ const providerName = 'apiyi-nano-banana2-edit' as const;
 const defaultBaseUrl = 'https://api.apiyi.com';
 const defaultModel = 'gemini-3.1-flash-image-preview';
 const defaultTimeoutMs = 300_000;
-const supportedAspectRatios = new Set(['1:1', '4:3', '3:4', '16:9', '9:16', '5:4', '4:5', '3:2', '2:3', '21:9']);
+const supportedAspectRatios = new Set(['1:1', '4:3', '3:4', '16:9', '9:16', '5:4', '4:5', '3:2', '2:3', '2:1', '21:9']);
 const supportedImageSizes = new Set(['512', '1K', '2K', '4K']);
 const floorplanTextLanguageRequirement = [
   'Text language requirement:',
@@ -309,7 +309,18 @@ function resolveAspectRatio(input: GenerateImageInput): string {
     typeof input.config.aspectRatio === 'string' ? input.config.aspectRatio : undefined,
     typeof input.config.apiyiAspectRatio === 'string' ? input.config.apiyiAspectRatio : undefined,
   ];
-  return candidates.find(value => Boolean(value && supportedAspectRatios.has(value))) || '16:9';
+  const configured = candidates.find(value => Boolean(value && supportedAspectRatios.has(value)));
+  if (configured) return configured;
+  if (input.targetWidth && input.targetHeight) {
+    const target = input.targetWidth / input.targetHeight;
+    const ratios = ['1:1', '4:3', '3:2', '16:9', '2:1', '9:16', '3:4'] as const;
+    return ratios.reduce((best, value) => {
+      const [width, height] = value.split(':').map(Number);
+      const [bestWidth, bestHeight] = best.split(':').map(Number);
+      return Math.abs(width / height - target) < Math.abs(bestWidth / bestHeight - target) ? value : best;
+    }, '1:1' as typeof ratios[number]);
+  }
+  return '16:9';
 }
 
 function resolveImageSize(input: GenerateImageInput): string {

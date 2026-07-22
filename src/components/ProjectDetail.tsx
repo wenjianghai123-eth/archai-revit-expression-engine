@@ -8,10 +8,13 @@ import {
   Download,
   ExternalLink,
   FileDown,
+  FileJson,
   FolderKanban,
   ImageIcon,
   Link2,
   Loader2,
+  PackageOpen,
+  Repeat2,
   Share2,
   Sparkles,
   Square,
@@ -19,24 +22,35 @@ import {
 } from 'lucide-react';
 import {
   createShareLink,
+  EditSessionDetail,
   GenerationRecord,
   getProject,
+  listProjectEditSessions,
   listProjectGenerations,
+  listProjectShareLinks,
   Project,
   revokeShareLink,
   ShareLink,
 } from '../lib/api';
-import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
+import { buildResultImageFilename, downloadAsset, downloadFallbackMessage, downloadJson } from '../utils/downloadAsset';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
-import { resolveAssetUrl } from '../utils/assetUrl';
 import { AspectRatioImage } from './common/AspectRatioImage';
 import { ResultImageTabs } from './ResultImageTabs';
+import { ProjectDeliveryOverview } from './project/ProjectDeliveryOverview';
+import { ProjectReportPrintView } from './project/ProjectReportPrintView';
+import type { DesignWorkflowDetail, GenerationResultOption } from '../types';
+import { buildProjectReportKey, buildProjectReportPackage } from '../reporting/projectReport';
+import { downloadProjectReportArchive } from '../reporting/projectReportArchive';
 
 interface ProjectDetailProps {
   projectId: string;
   onBack: () => void;
   onOpenGenerate: () => void;
   onDeleteProject: (projectId: string) => Promise<void>;
+  onOpenEditSession: (sessionId: string) => void;
+  onStartContinuousEditResult: (result: GenerationResultOption, label: string) => Promise<void>;
+  designWorkflow?: DesignWorkflowDetail | null;
+  onBackDesignWorkflow?: () => void;
 }
 
 interface CreatedShareState {
@@ -51,9 +65,19 @@ interface ReportOption {
   label: string;
 }
 
-export function ProjectDetail({ projectId, onBack, onOpenGenerate, onDeleteProject }: ProjectDetailProps) {
+export function ProjectDetail({
+  projectId,
+  onBack,
+  onOpenGenerate,
+  onDeleteProject,
+  onOpenEditSession,
+  onStartContinuousEditResult,
+  designWorkflow,
+  onBackDesignWorkflow,
+}: ProjectDetailProps) {
   const [project, setProject] = useState<Project | null>(null);
   const [generations, setGenerations] = useState<GenerationRecord[]>([]);
+  const [editSessions, setEditSessions] = useState<EditSessionDetail[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [createdShare, setCreatedShare] = useState<CreatedShareState | null>(null);
@@ -63,6 +87,12 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate, onDeleteProje
   const [isRevokingShare, setIsRevokingShare] = useState(false);
   const [isDeletingProject, setIsDeletingProject] = useState(false);
   const [selectedReportKeys, setSelectedReportKeys] = useState<Record<string, boolean>>({});
+  const [isPackagingReport, setIsPackagingReport] = useState(false);
+  const [reportExportMessage, setReportExportMessage] = useState<string | null>(null);
+  const [reportExportError, setReportExportError] = useState<string | null>(null);
+  const [reportExportedAt, setReportExportedAt] = useState<string | null>(
+    () => window.localStorage.getItem(buildReportExportStorageKey(projectId)),
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -72,14 +102,22 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate, onDeleteProje
       setError(null);
 
       try {
-        const [nextProject, nextGenerations] = await Promise.all([
+        const [nextProject, nextGenerations, nextEditSessions, nextShareLinks] = await Promise.all([
           getProject(projectId),
           listProjectGenerations(projectId),
+          listProjectEditSessions(projectId),
+          listProjectShareLinks(projectId),
         ]);
 
         if (isMounted) {
           setProject(nextProject);
           setGenerations(nextGenerations);
+          setEditSessions(nextEditSessions);
+          const latestShare = nextShareLinks[0];
+          setCreatedShare(latestShare ? {
+            link: latestShare,
+            url: `${window.location.origin}/share/${latestShare.token}`,
+          } : null);
           setSelectedReportKeys(prev => mergeDefaultReportSelection(prev, nextGenerations));
         }
       } catch (loadError) {
@@ -102,6 +140,13 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate, onDeleteProje
 
   const reportOptions = useMemo(() => buildReportOptions(generations), [generations]);
   const selectedReportOptions = reportOptions.filter(option => selectedReportKeys[option.key]);
+  const reportData = useMemo(() => project ? buildProjectReportPackage({
+    project,
+    generations,
+    editSessions,
+    selectedResultKeys: selectedReportKeys,
+    share: createdShare,
+  }) : null, [createdShare, editSessions, generations, project, selectedReportKeys]);
   const hasGenerations = generations.length > 0;
   const hasSelectedReportOptions = selectedReportOptions.length > 0;
 
@@ -159,8 +204,47 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate, onDeleteProje
   };
 
   const handlePrintReport = () => {
-    if (!hasSelectedReportOptions) return;
+    if (!hasSelectedReportOptions || !reportData) return;
+    markReportExported();
     window.setTimeout(() => window.print(), 50);
+  };
+
+  const handleDownloadReportJson = () => {
+    if (!reportData) return;
+    setReportExportError(null);
+    downloadJson(reportData, `${sanitizeReportFilename(reportData.project.name)}-project-report.json`);
+    markReportExported();
+    setReportExportMessage('JSON 元数据已开始下载。');
+  };
+
+  const handleDownloadReportPackage = async () => {
+    if (!reportData || isPackagingReport) return;
+    setIsPackagingReport(true);
+    setReportExportError(null);
+    setReportExportMessage(null);
+    try {
+      const result = await downloadProjectReportArchive(reportData);
+      markReportExported();
+      setReportExportMessage(
+        result.skippedImages
+          ? `汇报包已生成：包含 ${result.includedImages} 张图片，${result.skippedImages} 张图片读取失败，JSON 中仍保留其资产信息。`
+          : `汇报包已生成，包含 JSON 元数据和 ${result.includedImages} 张图片。`,
+      );
+    } catch (packageError) {
+      console.error('[project-report] package export failed', {
+        projectId,
+        error: packageError instanceof Error ? packageError.message : String(packageError),
+      });
+      setReportExportError('生成汇报包失败，请稍后重试或先下载 JSON 元数据。');
+    } finally {
+      setIsPackagingReport(false);
+    }
+  };
+
+  const markReportExported = () => {
+    const exportedAt = new Date().toISOString();
+    setReportExportedAt(exportedAt);
+    window.localStorage.setItem(buildReportExportStorageKey(projectId), exportedAt);
   };
 
   const handleDeleteProject = async () => {
@@ -228,6 +312,23 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate, onDeleteProje
           ) : null}
         </header>
 
+        <ProjectDeliveryOverview
+          editSessions={editSessions}
+          customerShareStatus={
+            createdShare?.link.revokedAt
+              ? 'revoked'
+              : createdShare
+                ? 'active'
+                : 'not-created'
+          }
+          selectedReportCount={selectedReportOptions.length}
+          reportOptionCount={reportOptions.length}
+          reportExportedAt={reportExportedAt}
+          designWorkflow={designWorkflow}
+          onBackDesignWorkflow={onBackDesignWorkflow}
+          onOpenSession={onOpenEditSession}
+        />
+
         <main className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[1fr_340px]">
           <section className="arch-card flex min-h-0 flex-col p-4">
             <div className="mb-4 flex items-center justify-between gap-4">
@@ -261,6 +362,7 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate, onDeleteProje
                     projectName={project?.name || null}
                     selectedReportKeys={selectedReportKeys}
                     onToggleReportOption={handleToggleReportOption}
+                    onStartContinuousEditResult={onStartContinuousEditResult}
                   />
                 ))}
               </div>
@@ -271,7 +373,13 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate, onDeleteProje
             <ReportExportPanel
               reportOptions={reportOptions}
               selectedCount={selectedReportOptions.length}
+              reportData={reportData}
+              isPackaging={isPackagingReport}
+              exportMessage={reportExportMessage}
+              exportError={reportExportError}
               onPrint={handlePrintReport}
+              onDownloadJson={handleDownloadReportJson}
+              onDownloadPackage={() => void handleDownloadReportPackage()}
               onSelectAll={() => handleSetAllReportOptions(true)}
               onSelectNone={() => handleSetAllReportOptions(false)}
             />
@@ -311,12 +419,7 @@ export function ProjectDetail({ projectId, onBack, onOpenGenerate, onDeleteProje
         </main>
       </div>
 
-      {project ? (
-        <ProjectReportPrintView
-          project={project}
-          reportOptions={selectedReportOptions}
-        />
-      ) : null}
+      {reportData ? <ProjectReportPrintView report={reportData} /> : null}
     </div>
   );
 }
@@ -326,11 +429,13 @@ function GenerationCard({
   projectName,
   selectedReportKeys,
   onToggleReportOption,
+  onStartContinuousEditResult,
 }: {
   generation: GenerationRecord;
   projectName?: string | null;
   selectedReportKeys: Record<string, boolean>;
   onToggleReportOption: (key: string) => void;
+  onStartContinuousEditResult: (result: GenerationResultOption, label: string) => Promise<void>;
 }) {
   const resultImages = useMemo(() => getResultImages(generation), [generation]);
   const inputImage = generation.inputImageDataPreview || generation.inputImageUrl || null;
@@ -339,6 +444,8 @@ function GenerationCard({
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
+  const [continuousEditResultId, setContinuousEditResultId] = useState<string | null>(null);
+  const [continuousEditError, setContinuousEditError] = useState<string | null>(null);
 
   const handleDownload = async (key: string, result: { imageUrl: string; assetId?: string; metadata?: Record<string, unknown> }) => {
     if (downloadingKey) return;
@@ -361,6 +468,30 @@ function GenerationCard({
       setDownloadError(message === downloadFallbackMessage ? downloadFallbackMessage : '下载失败，请稍后重试');
     } finally {
       setDownloadingKey(null);
+    }
+  };
+
+  const handleStartContinuousEdit = async (
+    result: ReturnType<typeof getResultImages>[number],
+  ) => {
+    if (continuousEditResultId) return;
+    setContinuousEditResultId(result.id);
+    setContinuousEditError(null);
+    try {
+      await onStartContinuousEditResult({
+        ...result,
+        createdAt: generation.createdAt,
+        metadata: {
+          ...(result.metadata || {}),
+          sourceFeature: generation.step || generation.mode,
+        },
+      }, result.isFavorite ? '已收藏方案' : result.isSelected ? '当前方案' : '候选方案');
+    } catch (error) {
+      setContinuousEditError(
+        error instanceof Error ? error.message : '连续修改会话创建失败。',
+      );
+    } finally {
+      setContinuousEditResultId(null);
     }
   };
 
@@ -428,6 +559,15 @@ function GenerationCard({
                     featureName={modeLabel(generation.mode, generation.step)}
                     step={generation.step}
                   />
+                  <button
+                    type="button"
+                    onClick={() => void handleStartContinuousEdit(result)}
+                    disabled={Boolean(continuousEditResultId)}
+                    className="mt-2 flex w-full items-center justify-center gap-1 rounded-xl border bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:border-blue-300 hover:text-blue-700 disabled:opacity-50"
+                  >
+                    <Repeat2 className={`h-3.5 w-3.5 ${continuousEditResultId === result.id ? 'animate-spin' : ''}`} />
+                    {continuousEditResultId === result.id ? '正在创建会话…' : '连续修改'}
+                  </button>
                 </div>
               );
             })}
@@ -435,6 +575,7 @@ function GenerationCard({
         ) : null}
         {downloadMessage ? <p className="text-xs font-semibold text-emerald-700">{downloadMessage}</p> : null}
         {downloadError ? <p className="text-xs font-semibold text-amber-700">{downloadError}</p> : null}
+        {continuousEditError ? <p className="text-xs font-semibold text-red-700">{continuousEditError}</p> : null}
 
         <div>
           <p className="line-clamp-2 text-sm font-semibold leading-6 text-slate-800">
@@ -449,13 +590,25 @@ function GenerationCard({
 function ReportExportPanel({
   reportOptions,
   selectedCount,
+  reportData,
+  isPackaging,
+  exportMessage,
+  exportError,
   onPrint,
+  onDownloadJson,
+  onDownloadPackage,
   onSelectAll,
   onSelectNone,
 }: {
   reportOptions: ReportOption[];
   selectedCount: number;
+  reportData: ReturnType<typeof buildProjectReportPackage> | null;
+  isPackaging: boolean;
+  exportMessage: string | null;
+  exportError: string | null;
   onPrint: () => void;
+  onDownloadJson: () => void;
+  onDownloadPackage: () => void;
   onSelectAll: () => void;
   onSelectNone: () => void;
 }) {
@@ -463,8 +616,8 @@ function ReportExportPanel({
     <div className="arch-card p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-base font-bold text-slate-900">PDF 汇报</h2>
-          <p className="mt-1 text-xs leading-5 text-slate-500">选择方案后使用浏览器打印或另存为 PDF。</p>
+          <h2 className="text-base font-bold text-slate-900">项目汇报包</h2>
+          <p className="mt-1 text-xs leading-5 text-slate-500">同一份结构化报告数据用于浏览器打印、JSON 和图片归档。</p>
         </div>
         <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
           <FileDown className="h-4 w-4" />
@@ -475,11 +628,33 @@ function ReportExportPanel({
           <button onClick={onSelectAll} className="text-blue-600 hover:text-blue-700">全选</button>
           <button onClick={onSelectNone} className="text-slate-500 hover:text-slate-700">清空</button>
         </div>
+        <span>已选 {selectedCount}/{reportOptions.length}</span>
       </div>
-      <button onClick={onPrint} disabled={selectedCount === 0} className="arch-button-primary mt-4 w-full">
-        <FileDown className="h-4 w-4" />
-        导出汇报 PDF
-      </button>
+      {reportData ? (
+        <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] font-bold text-slate-600">
+          <span className="rounded-xl bg-slate-50 px-3 py-2">原图 {reportData.summary.sourceImageCount}</span>
+          <span className="rounded-xl bg-slate-50 px-3 py-2">方案 {reportData.summary.candidateSchemeCount}</span>
+          <span className="rounded-xl bg-slate-50 px-3 py-2">修改 {reportData.summary.modificationCount}</span>
+          <span className="rounded-xl bg-slate-50 px-3 py-2">图片文件 {reportData.summary.imageFileCount}</span>
+        </div>
+      ) : null}
+      <div className="mt-4 space-y-2">
+        <button onClick={onPrint} disabled={selectedCount === 0} className="arch-button-primary w-full">
+          <FileDown className="h-4 w-4" />
+          浏览器打印 PDF
+        </button>
+        <button onClick={onDownloadPackage} disabled={selectedCount === 0 || isPackaging} className="arch-button-secondary w-full justify-center">
+          {isPackaging ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageOpen className="h-4 w-4" />}
+          {isPackaging ? '正在整理图片文件…' : '下载结构化汇报包'}
+        </button>
+        <button onClick={onDownloadJson} disabled={selectedCount === 0} className="arch-button-secondary w-full justify-center">
+          <FileJson className="h-4 w-4" />
+          下载 JSON 元数据
+        </button>
+      </div>
+      <p className="mt-3 text-[10px] leading-4 text-slate-400">汇报包为 TAR 格式，包含 `project-report.json` 与 `images/` 图片目录。</p>
+      {exportMessage ? <p className="mt-3 text-xs font-semibold text-emerald-700">{exportMessage}</p> : null}
+      {exportError ? <p className="mt-3 text-xs font-semibold text-red-700">{exportError}</p> : null}
     </div>
   );
 }
@@ -555,55 +730,6 @@ function SharePanel({
   );
 }
 
-function ProjectReportPrintView({ project, reportOptions }: { project: Project; reportOptions: ReportOption[] }) {
-  return (
-    <section className="pdf-report-print">
-      <header className="pdf-report-header">
-        <p className="pdf-report-kicker">深圳广田股份有限公司 · 烛照AI 项目表达报告</p>
-        <h1>{project.name}</h1>
-        <p>{project.description || '暂无项目描述。'}</p>
-        <div className="pdf-report-meta">
-          <span>导出时间：{formatDate(new Date().toISOString())}</span>
-        </div>
-      </header>
-
-      {reportOptions.map((option, index) => {
-        const generation = option.generation;
-        const inputImage = generation.inputImageDataPreview || generation.inputImageUrl || null;
-        return (
-          <article key={option.key} className="pdf-report-item">
-            <div className="pdf-report-item-title">
-              <span>方案 {index + 1}</span>
-              <span>{modeLabel(generation.mode, generation.step)} · {formatDate(generation.createdAt)}</span>
-            </div>
-            <div className="pdf-report-images">
-              <PrintImage src={option.imageUrl} label={option.label} />
-              <PrintImage src={inputImage} label="原图" />
-              <PrintImage src={option.imageUrl} label="结果图" />
-            </div>
-            <div className="pdf-report-prompt">
-              <strong>Prompt</strong>
-              <p>{generation.prompt || '未填写提示词'}</p>
-            </div>
-          </article>
-        );
-      })}
-    </section>
-  );
-}
-
-function PrintImage({ src, label }: { src: string | null; label: string }) {
-  const resolvedSrc = resolveAssetUrl(src);
-  return (
-    <figure>
-      <div className="pdf-report-image-frame">
-        {resolvedSrc ? <img src={resolvedSrc} alt={label} referrerPolicy="no-referrer" /> : <span>暂无图片</span>}
-      </div>
-      <figcaption>{label}</figcaption>
-    </figure>
-  );
-}
-
 function PreviewImage({
   src,
   sourceImageUrl,
@@ -667,12 +793,13 @@ function mergeDefaultReportSelection(
   return nextSelection;
 }
 
-function getResultImages(generation: GenerationRecord): Array<{ id: string; imageUrl: string; assetId?: string; isSelected: boolean; isFavorite: boolean; metadata?: Record<string, unknown> }> {
+function getResultImages(generation: GenerationRecord): Array<{ id: string; imageUrl: string; assetId?: string; jobId?: string; isSelected: boolean; isFavorite: boolean; metadata?: Record<string, unknown> }> {
   if (generation.results && generation.results.length > 0) {
     return generation.results.map(result => ({
       id: result.id,
       imageUrl: getOriginalResultImageUrl(result, result.imageUrl) || result.imageUrl,
       assetId: getOriginalResultAssetId(result, result.assetId) || undefined,
+      jobId: generation.jobId || undefined,
       isSelected: result.isSelected,
       isFavorite: result.isFavorite,
       metadata: result.metadata,
@@ -684,6 +811,7 @@ function getResultImages(generation: GenerationRecord): Array<{ id: string; imag
     ? [{
         id: generation.id,
         imageUrl: fallbackImage,
+        jobId: generation.jobId || undefined,
         isSelected: true,
         isFavorite: false,
       }]
@@ -698,7 +826,19 @@ function readObjectInsertPlacementModeLabel(metadata: Record<string, unknown> | 
 }
 
 function buildReportKey(generationId: string, resultId: string): string {
-  return `${generationId}:${resultId}`;
+  return buildProjectReportKey(generationId, resultId);
+}
+
+function buildReportExportStorageKey(projectId: string) {
+  return `archai:project-report-exported:${projectId}`;
+}
+
+function sanitizeReportFilename(value: string): string {
+  return value
+    .replace(/[<>:"/\\|?*\u0000-\u001f]+/gu, '-')
+    .replace(/\s+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 80) || 'archai-project';
 }
 
 function modeLabel(mode: GenerationRecord['mode'], step?: GenerationRecord['step']): string {

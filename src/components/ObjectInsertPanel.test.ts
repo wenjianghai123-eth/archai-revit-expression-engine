@@ -37,8 +37,30 @@ describe('ObjectInsertPanel', () => {
     expect(html).toContain('简单模式');
     expect(html).toContain('高级模式');
     expect(html).toContain('物体参考图');
+    expect(html).toContain('基础设置');
+    expect(html).toContain('图层');
+    expect(html).toContain('自动去背景');
+    expect(html).toContain('对象素材库');
     expect(html).not.toContain('元素配置');
     expect(html).not.toContain('候选策略');
+  });
+
+  it('renders scene enrichment as an object insert workflow with real quantity controls', () => {
+    const html = renderToStaticMarkup(React.createElement(ObjectInsertPanel, {
+      ...defaultProps,
+      state: createState({
+        objectInsertUIMode: 'simple',
+        objectInsertWorkflowMode: 'scene-enrichment',
+        objectInsertSceneEnrichment: { plants: 'many', people: 'moderate', decorations: 'few' },
+      }),
+    }));
+
+    expect(html).toContain('场景丰富');
+    expect(html).toContain('绿植数量');
+    expect(html).toContain('人物数量');
+    expect(html).toContain('装饰数量');
+    expect(html).toContain('不会转到质感提升');
+    expect(html).not.toContain('物体参考图');
   });
 
   it('renders advanced controls when advanced mode is selected', () => {

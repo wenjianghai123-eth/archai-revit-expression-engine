@@ -1,7 +1,7 @@
-import { Download, FileText, Heart, ImagePlus, LayoutGrid, Printer, RefreshCcw, Sparkles, Star } from 'lucide-react';
-import { type ReactNode, useState } from 'react';
+import { Download, FileText, Heart, ImagePlus, LayoutGrid, Printer, RefreshCcw, Sparkles, Star, Trash2 } from 'lucide-react';
+import { type ReactNode, useMemo, useState } from 'react';
 import { designVariantPacks, getDesignVariantPack } from '../constants/designVariantPacks';
-import { DesignVariantBatchCount, GenerationConfig, GenerationResultOption, GenerationStep, ResultSendTargetStep, SecondaryEditAction, StepState, UploadedImage, VariantChangeScope, VariantLock, VariantStyleKey } from '../types';
+import { DesignVariantBatchCount, DesignVariantDiversity, DesignVariantMatrixItem, DesignVariantVariableKey, GenerationConfig, GenerationResultOption, GenerationStep, ResultSendTargetStep, SecondaryEditAction, StepState, UploadedImage, VariantChangeScope, VariantLock, VariantStyleKey } from '../types';
 import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
 import { getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
@@ -9,6 +9,14 @@ import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 import { ResultSendActions } from './workspace/SecondaryEditActions';
 import { AspectRatioImage } from './common/AspectRatioImage';
 import { GenerationImageViewer } from './common/GenerationImageViewer';
+import { ResultQualityReport } from './common/ResultQualityReport';
+import { DesignVariantComparison } from './design-variants/DesignVariantComparison';
+import { designVariantVariableDefinitions, findSimilarDesignVariantPairs, readDesignVariantDiversity, readDesignVariantVariableLabel, resolveDesignVariantMatrix } from '../utils/designVariantMatrix';
+import { normalizeStepGenerationResult, type NormalizedGenerationResult } from '../utils/normalizeGenerationResult';
+import { readAssetImageUrl } from '../utils/assetUrl';
+import { downloadImageFile } from '../utils/downloadImageFile';
+import { GenerationResultActions } from './common/GenerationResultActions';
+import { NormalizedGenerationProgress } from './common/GenerationProgress';
 
 interface DesignVariantsPanelProps {
   state: StepState;
@@ -27,6 +35,11 @@ interface DesignVariantsPanelProps {
   onSendResultToStep?: (resultId: string, targetStep: ResultSendTargetStep) => void;
   onRetryVariant?: (variantIndex: number) => void;
   onRenameGenerationResult: (resultId: string, variantName: string) => void;
+  onDeleteGenerationResult?: (resultId: string) => void;
+  canGenerate?: boolean;
+  disabledReason?: string | null;
+  onCancelGeneration?: () => void;
+  onReset?: () => void;
 }
 
 export const variantStyleOptions: Array<{ key: VariantStyleKey; label: string }> = [
@@ -99,11 +112,16 @@ export function DesignVariantsPanel({
   onSendResultToStep,
   onRetryVariant,
   onRenameGenerationResult,
+  onDeleteGenerationResult = () => undefined,
+  canGenerate = true,
+  disabledReason,
+  onCancelGeneration = () => undefined,
+  onReset = () => undefined,
 }: DesignVariantsPanelProps) {
   const [exportMode, setExportMode] = useState<'compare' | 'report' | null>(null);
-  const [previewDownloading, setPreviewDownloading] = useState(false);
-  const [previewDownloadMessage, setPreviewDownloadMessage] = useState<string | null>(null);
-  const [previewDownloadError, setPreviewDownloadError] = useState<string | null>(null);
+  const [compareResultIds, setCompareResultIds] = useState<string[]>([]);
+  const [isDownloadingAll, setIsDownloadingAll] = useState(false);
+  const [downloadAllMessage, setDownloadAllMessage] = useState<string | null>(null);
   const batchCount = readBatchCount(state.config.batchCount);
   const variantStrategy = state.config.variantStrategy || 'style-matrix';
   const stylePackId = state.config.stylePackId || 'interior-common';
@@ -112,30 +130,45 @@ export function DesignVariantsPanel({
   const variantChangeScope = readVariantChangeScope(state.config.variantChangeScope);
   const variantLocks = resolveVariantLocks(state.config.variantLocks);
   const variantStrategyNotes = resolveVariantStrategyNotes(state.config, batchCount);
+  const variantDiversity = readDesignVariantDiversity(state.config.variantDiversity);
+  const variantMatrix = useMemo(() => resolveDesignVariantMatrix(state.config, batchCount), [batchCount, state.config]);
+  const activeMatrixVariables = state.config.variantMatrixVariables || designVariantVariableDefinitions.map(item => item.key);
+  const lockedMatrixVariables = state.config.variantVariableLocks || [];
+  const similarPairs = useMemo(() => findSimilarDesignVariantPairs(variantMatrix), [variantMatrix]);
   const selectedResult = resultOptions.find(result => result.id === selectedResultId) || resultOptions.find(result => result.isSelected) || resultOptions[0] || null;
+  const sourceImageUrl = readAssetImageUrl(state.inputImage) || null;
+  const normalizedResult = normalizeStepGenerationResult(state, {
+    originalImageUrl: sourceImageUrl,
+    originalAssetId: state.inputImage?.assetId,
+    resultImageUrl: getOriginalResultImageUrl(selectedResult, previewImage),
+    resultAssetId: getOriginalResultAssetId(selectedResult),
+  });
 
   const handleBatchCountChange = (nextBatchCount: DesignVariantBatchCount) => {
     const pack = getDesignVariantPack(stylePackId);
-    onUpdateConfig({
+    const patch: Partial<GenerationConfig> = {
       batchCount: nextBatchCount,
       variantStyles: resolveSelectedStyles({ ...state.config, batchCount: nextBatchCount, variantStyles: pack.styles }, nextBatchCount),
       variantNames: resolveVariantNames({ ...state.config, batchCount: nextBatchCount }, nextBatchCount),
       variantStrategyNotes: resolveVariantStrategyNotes({ ...state.config, batchCount: nextBatchCount }, nextBatchCount),
-    });
+    };
+    onUpdateConfig({ ...patch, variantMatrix: resolveDesignVariantMatrix({ ...state.config, ...patch, variantMatrix: undefined }, nextBatchCount) });
   };
 
   const handlePackChange = (nextPackId: string) => {
     const pack = getDesignVariantPack(nextPackId);
-    onUpdateConfig({
+    const patch: Partial<GenerationConfig> = {
       stylePackId: pack.id,
       variantStyles: pack.styles.slice(0, batchCount),
-    });
+    };
+    onUpdateConfig({ ...patch, variantMatrix: resolveDesignVariantMatrix({ ...state.config, ...patch, variantMatrix: undefined }, batchCount) });
   };
 
   const handleStyleChange = (index: number, style: VariantStyleKey) => {
     const next = [...selectedStyles];
     next[index] = style;
-    onUpdateConfig({ variantStyles: next.slice(0, batchCount) });
+    const styles = next.slice(0, batchCount);
+    onUpdateConfig({ variantStyles: styles, variantMatrix: resolveDesignVariantMatrix({ ...state.config, variantStyles: styles, variantMatrix: undefined }, batchCount) });
   };
 
   const handleConfigNameChange = (index: number, name: string) => {
@@ -157,32 +190,57 @@ export function DesignVariantsPanel({
     onUpdateConfig({ variantLocks: next });
   };
 
+  const handleDiversityChange = (value: DesignVariantDiversity) => {
+    const nextConfig = { ...state.config, variantDiversity: value, variantMatrix: undefined };
+    onUpdateConfig({ variantDiversity: value, variantMatrix: resolveDesignVariantMatrix(nextConfig, batchCount) });
+  };
+
+  const handleMatrixVariableChange = (key: DesignVariantVariableKey, enabled: boolean) => {
+    const nextVariables = enabled
+      ? Array.from(new Set([...activeMatrixVariables, key]))
+      : activeMatrixVariables.filter(item => item !== key);
+    const nextLocks = enabled ? lockedMatrixVariables.filter(item => item !== key) : lockedMatrixVariables;
+    const nextConfig = { ...state.config, variantMatrixVariables: nextVariables, variantVariableLocks: nextLocks, variantMatrix: undefined };
+    onUpdateConfig({ variantMatrixVariables: nextVariables, variantVariableLocks: nextLocks, variantMatrix: resolveDesignVariantMatrix(nextConfig, batchCount) });
+  };
+
+  const handleMatrixVariableLock = (key: DesignVariantVariableKey, locked: boolean) => {
+    const nextLocks = locked ? Array.from(new Set([...lockedMatrixVariables, key])) : lockedMatrixVariables.filter(item => item !== key);
+    const nextVariables = locked ? activeMatrixVariables.filter(item => item !== key) : activeMatrixVariables;
+    const nextConfig = { ...state.config, variantMatrixVariables: nextVariables, variantVariableLocks: nextLocks, variantMatrix: undefined };
+    onUpdateConfig({ variantMatrixVariables: nextVariables, variantVariableLocks: nextLocks, variantMatrix: resolveDesignVariantMatrix(nextConfig, batchCount) });
+  };
+
+  const handleCompareToggle = (resultId: string) => {
+    setCompareResultIds(current => current.includes(resultId)
+      ? current.filter(id => id !== resultId)
+      : [...current.slice(-1), resultId]);
+  };
+
   const handleResultNameChange = (result: GenerationResultOption, index: number, name: string) => {
     handleConfigNameChange(index, name);
     onRenameGenerationResult(result.id, name || readVariantLabel(index));
   };
 
-  const handlePreviewDownload = async () => {
-    const originalPreviewImage = getOriginalResultImageUrl(selectedResult, previewImage);
-    const originalAssetId = getOriginalResultAssetId(selectedResult);
-    if (!originalPreviewImage || previewDownloading) return;
-    setPreviewDownloading(true);
-    setPreviewDownloadMessage(null);
-    setPreviewDownloadError(null);
+  const handleDownloadAll = async () => {
+    if (isDownloadingAll || resultOptions.length === 0) return;
+    setIsDownloadingAll(true);
+    setDownloadAllMessage(null);
     try {
-      await downloadAsset({
-        url: originalPreviewImage,
-        assetId: originalAssetId,
-      }, buildResultImageFilename({
-        projectName,
-        featureLabel: '方案变体',
-      }));
-      setPreviewDownloadMessage('已开始下载');
+      for (let index = 0; index < resultOptions.length; index += 1) {
+        const result = resultOptions[index];
+        await downloadImageFile({
+          imageUrl: getOriginalResultImageUrl(result, result.imageUrl),
+          assetId: getOriginalResultAssetId(result),
+          projectName,
+          featureName: `方案变体-${readVariantLabel(index)}`,
+        });
+      }
+      setDownloadAllMessage(`已开始保存 ${resultOptions.length} 张方案`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : '';
-      setPreviewDownloadError(message === downloadFallbackMessage ? downloadFallbackMessage : '下载失败，请稍后重试');
+      setDownloadAllMessage(error instanceof Error ? error.message : '保存全部失败，请稍后重试。');
     } finally {
-      setPreviewDownloading(false);
+      setIsDownloadingAll(false);
     }
   };
 
@@ -191,13 +249,14 @@ export function DesignVariantsPanel({
     results: resultOptions,
     variantNames,
     styles: selectedStyles,
+    matrix: variantMatrix,
     createdAt: new Date().toLocaleString('zh-CN', { hour12: false }),
   };
 
   return (
-    <section className="workspace-surface min-w-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
-      <div className="mx-auto flex max-w-7xl flex-col gap-4">
-        <div className="glass-panel flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-white/60 px-4 py-3">
+    <section className="workspace-surface flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4">
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-[1920px] flex-col gap-4">
+        <div className="glass-panel flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/60 px-4 py-3">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-950 text-white">
               <LayoutGrid className="h-5 w-5" />
@@ -216,15 +275,11 @@ export function DesignVariantsPanel({
               <FileText className="h-4 w-4" />
               一键生成汇报页
             </button>
-            <button type="button" onClick={onGenerate} disabled={!state.inputImage || state.isGenerating} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
-              <Sparkles className="h-4 w-4" />
-              {state.isGenerating ? `正在生成第 ${Math.max(1, resultOptions.length + 1)} / ${batchCount} 张方案...` : '生成方案组'}
-            </button>
           </div>
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[340px_1fr]">
-          <aside className="space-y-4">
+        <div className="variant-workspace grid min-h-0 min-w-0 flex-1 gap-4">
+          <aside className="variant-left-panel min-h-0 space-y-4 overflow-y-auto pr-1 custom-scrollbar">
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <p className="text-xs font-bold text-slate-500">原图</p>
               {state.inputImage ? (
@@ -254,6 +309,40 @@ export function DesignVariantsPanel({
               <SegmentedButton active={variantStrategy === 'style-matrix'} onClick={() => onUpdateConfig({ variantStrategy: 'style-matrix' })} label="多风格方案矩阵" />
               <SegmentedButton active={variantStrategy === 'same-style'} onClick={() => onUpdateConfig({ variantStrategy: 'same-style' })} label="同一风格多方案" />
             </ControlGroup>
+
+            <ControlGroup title="多样性强度">
+              <SegmentedButton active={variantDiversity === 'low'} onClick={() => handleDiversityChange('low')} label="低：相近方案" />
+              <SegmentedButton active={variantDiversity === 'balanced'} onClick={() => handleDiversityChange('balanced')} label="中：平衡差异" />
+              <SegmentedButton active={variantDiversity === 'high'} onClick={() => handleDiversityChange('high')} label="高：拉开方向" />
+            </ControlGroup>
+
+            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold text-slate-500">设计变量矩阵</p>
+                  <p className="mt-1 text-[11px] leading-5 text-slate-400">“变化”进入本方案差异，“锁定”要求所有方案保持稳定。</p>
+                </div>
+                <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700">8 类变量</span>
+              </div>
+              <div className="mt-3 space-y-2">
+                {designVariantVariableDefinitions.map(variable => {
+                  const changed = activeMatrixVariables.includes(variable.key);
+                  const locked = lockedMatrixVariables.includes(variable.key);
+                  return (
+                    <div key={variable.key} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-1 rounded-lg bg-slate-50 px-2 py-2">
+                      <span className="truncate text-xs font-bold text-slate-700">{variable.label}</span>
+                      <button type="button" onClick={() => handleMatrixVariableChange(variable.key, !changed)} className={`rounded-md px-2 py-1 text-[10px] font-black ${changed ? 'bg-blue-600 text-white' : 'bg-white text-slate-400'}`}>变化</button>
+                      <button type="button" onClick={() => handleMatrixVariableLock(variable.key, !locked)} className={`rounded-md px-2 py-1 text-[10px] font-black ${locked ? 'bg-amber-500 text-white' : 'bg-white text-slate-400'}`}>锁定</button>
+                    </div>
+                  );
+                })}
+              </div>
+              {similarPairs.length > 0 ? (
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
+                  相似方案提示：{similarPairs.slice(0, 3).map(pair => `方案 ${String.fromCharCode(65 + pair.leftIndex)} 与方案 ${String.fromCharCode(65 + pair.rightIndex)} 相似度 ${Math.round(pair.similarity * 100)}%`).join('；')}。可提高多样性或增加变化变量。
+                </div>
+              ) : null}
+            </div>
 
             <ControlGroup title="变化范围">
               {variantChangeScopeOptions.map(option => (
@@ -318,30 +407,18 @@ export function DesignVariantsPanel({
             </label>
           </aside>
 
-          <main className="min-w-0 space-y-4">
+          <main className="variant-center-panel min-h-0 min-w-0 space-y-4 overflow-y-auto pr-1 custom-scrollbar">
             <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
               <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
                 <div>
                   <p className="text-sm font-bold text-slate-900">当前大图预览</p>
                   <p className="mt-0.5 text-xs text-slate-500">{selectedResult?.variantName || selectedResult?.variantLabel || selectedResult?.variantStyleLabel || '等待生成方案组'}</p>
                 </div>
-                {previewImage ? (
-                  <button type="button" onClick={() => void handlePreviewDownload()} disabled={previewDownloading} className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60">
-                    <Download className="mr-1 inline h-3.5 w-3.5" />
-                    {previewDownloading ? '正在下载...' : '保存到本地'}
-                  </button>
-                ) : null}
               </div>
-              {previewDownloadMessage || previewDownloadError ? (
-                <div className="border-b border-slate-100 px-4 py-2 text-xs font-semibold">
-                  {previewDownloadMessage ? <span className="text-emerald-700">{previewDownloadMessage}</span> : null}
-                  {previewDownloadError ? <span className="text-amber-700">{previewDownloadError}</span> : null}
-                </div>
-              ) : null}
               <div className="bg-slate-50 p-3">
                 {previewImage ? (
                   <GenerationImageViewer
-                    sourceImageUrl={state.inputImage?.dataUrl || state.inputImage?.url}
+                    sourceImageUrl={sourceImageUrl}
                     sourceImageAssetId={state.inputImage?.assetId}
                     resultImageUrl={previewImage}
                     resultImageAssetId={getOriginalResultAssetId(selectedResult)}
@@ -358,7 +435,14 @@ export function DesignVariantsPanel({
                   </div>
                 )}
               </div>
+              {selectedResult ? (
+                <div className="border-t border-slate-100 p-3">
+                  <ResultQualityReport resultId={selectedResult.id} metadata={selectedResult.metadata} />
+                </div>
+              ) : null}
             </div>
+
+            {resultOptions.length > 0 ? <DesignVariantComparison results={resultOptions} selectedIds={compareResultIds} onToggle={handleCompareToggle} /> : null}
 
             <div className={`grid gap-3 ${batchCount === 2 ? 'lg:grid-cols-2' : batchCount === 8 ? 'md:grid-cols-2 2xl:grid-cols-4' : 'lg:grid-cols-2'}`}>
               {resultOptions.length > 0 ? resultOptions.map((result, index) => {
@@ -377,15 +461,50 @@ export function DesignVariantsPanel({
                     onFavorite={() => onToggleGenerationFavorite(result.id)}
                     onContinueEdit={() => onSecondaryEditResult?.(result.id, 'continue-edit')}
                     onSend={targetStep => onSendResultToStep?.(result.id, targetStep)}
+                    onOpenReport={() => setExportMode('report')}
                     onRetry={() => onRetryVariant?.(variantIndex)}
                     onRename={name => handleResultNameChange(result, variantIndex, name)}
+                    onDelete={() => onDeleteGenerationResult(result.id)}
                   />
                 );
               }) : Array.from({ length: batchCount }).map((_, index) => (
-                <PlaceholderCard key={index} index={index} style={selectedStyles[index]} name={variantNames[index]} note={variantStrategyNotes[index] || ''} onNameChange={name => handleConfigNameChange(index, name)} onStyleChange={style => handleStyleChange(index, style)} onNoteChange={note => handleVariantNoteChange(index, note)} />
+                <PlaceholderCard key={index} index={index} style={selectedStyles[index]} name={variantNames[index]} note={variantStrategyNotes[index] || ''} matrixItem={variantMatrix[index]} onNameChange={name => handleConfigNameChange(index, name)} onStyleChange={style => handleStyleChange(index, style)} onNoteChange={note => handleVariantNoteChange(index, note)} />
               ))}
             </div>
           </main>
+
+          <aside className="variant-right-panel min-h-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="variant-right-panel-content min-h-0 flex-1 space-y-4 overflow-y-auto p-4 custom-scrollbar">
+              <div>
+                <p className="text-sm font-black text-slate-900">生成任务</p>
+                <p className="mt-1 text-xs text-slate-500">确认本轮输出并提交方案矩阵。</p>
+              </div>
+              <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-50 p-3 text-xs">
+                <SummaryItem label="方案数量" value={`${batchCount} 张`} />
+                <SummaryItem label="方案模式" value={variantStrategy === 'style-matrix' ? '多风格矩阵' : '同风格变化'} />
+                <SummaryItem label="预计算力点" value={`${batchCount} 点`} />
+                <SummaryItem label="输出比例" value={state.config.targetAspectRatio || state.config.aspectRatio || '16:9'} />
+                <SummaryItem label="输出尺寸" value={state.config.apiyiImageSize || '1K'} />
+                <SummaryItem label="当前项目" value={projectName || '未命名项目'} />
+              </div>
+              <NormalizedGenerationProgress result={normalizedResult} />
+              <GenerationResultActions result={normalizedResult} featureName="方案变体" projectName={projectName} />
+              {!state.inputImage ? <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">请先上传原图。</p> : null}
+              {disabledReason && !canGenerate && !state.isGenerating ? <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">{disabledReason}</p> : null}
+              {state.generationError ? <p className="rounded-lg bg-rose-50 px-3 py-2 text-xs font-bold leading-5 text-rose-700">{state.generationError}</p> : null}
+              {downloadAllMessage ? <p className="text-xs font-semibold text-slate-600">{downloadAllMessage}</p> : null}
+            </div>
+            <div className="variant-right-panel-footer space-y-2 border-t border-slate-200 bg-white p-4">
+              <button type="button" onClick={onGenerate} disabled={!canGenerate} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45">
+                <Sparkles className={`h-4 w-4 ${state.isGenerating ? 'animate-pulse' : ''}`} />
+                {state.isGenerating ? `正在生成 ${batchCount} 个方案` : resultOptions.length ? '重新生成方案组' : '生成方案组'}
+              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={() => void handleDownloadAll()} disabled={resultOptions.length === 0 || isDownloadingAll} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-700 disabled:opacity-40"><Download className="h-4 w-4" />{isDownloadingAll ? '保存中' : '保存全部'}</button>
+                {state.isGenerating && state.generationJobId ? <button type="button" onClick={onCancelGeneration} className="h-10 rounded-lg bg-rose-50 text-xs font-bold text-rose-700">取消任务</button> : <button type="button" onClick={onReset} disabled={state.isGenerating} className="h-10 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 disabled:opacity-40">重置</button>}
+              </div>
+            </div>
+          </aside>
         </div>
       </div>
       {exportMode ? <DesignVariantPrintModal mode={exportMode} payload={exportPayload} onClose={() => setExportMode(null)} /> : null}
@@ -393,7 +512,7 @@ export function DesignVariantsPanel({
   );
 }
 
-function PlaceholderCard({ index, style, name, note, onNameChange, onStyleChange, onNoteChange }: { index: number; style: VariantStyleKey; name: string; note: string; onNameChange: (name: string) => void; onStyleChange: (style: VariantStyleKey) => void; onNoteChange: (note: string) => void }) {
+function PlaceholderCard({ index, style, name, note, matrixItem, onNameChange, onStyleChange, onNoteChange }: { index: number; style: VariantStyleKey; name: string; note: string; matrixItem: DesignVariantMatrixItem; onNameChange: (name: string) => void; onStyleChange: (style: VariantStyleKey) => void; onNoteChange: (note: string) => void }) {
   return (
     <div className="flex h-full flex-col space-y-3 rounded-xl border border-dashed border-slate-200 bg-white p-3">
       <input value={name} onChange={event => onNameChange(event.currentTarget.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm font-bold text-slate-900 outline-none focus:border-blue-300" />
@@ -407,6 +526,11 @@ function PlaceholderCard({ index, style, name, note, onNameChange, onStyleChange
         placeholder="方案备注，例如：更暖的木色、增强展示墙、减少金属感"
         className="h-20 w-full resize-none rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 outline-none focus:border-blue-300"
       />
+      <div className="rounded-lg bg-blue-50 px-3 py-2 text-[11px] leading-5 text-slate-600">
+        <p><span className="font-black text-blue-800">改变变量：</span>{matrixItem.changedVariables.map(readDesignVariantVariableLabel).join('、') || '无'}</p>
+        <p><span className="font-black text-amber-700">锁定变量：</span>{matrixItem.lockedVariables.map(readDesignVariantVariableLabel).join('、') || '无'}</p>
+        <p className="mt-1 text-slate-500">{matrixItem.differenceSummary}</p>
+      </div>
       <div className="flex aspect-video items-center justify-center rounded-xl bg-slate-50 text-sm font-bold text-slate-300">{readVariantLabel(index)}</div>
     </div>
   );
@@ -417,7 +541,14 @@ function readMetadataString(metadata: Record<string, unknown> | undefined, key: 
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
-function VariantCard({ result, index, active, style, fallbackName, projectName, sourceImage, onSelect, onFavorite, onContinueEdit, onSend, onRetry, onRename }: { result: GenerationResultOption; index: number; active: boolean; style: VariantStyleKey | undefined; fallbackName: string; projectName?: string | null; sourceImage: UploadedImage | null; onSelect: () => void; onFavorite: () => void; onContinueEdit: () => void; onSend?: (targetStep: ResultSendTargetStep) => void; onRetry?: () => void; onRename: (name: string) => void }) {
+function readMetadataVariableKeys(metadata: Record<string, unknown> | undefined, key: string): DesignVariantVariableKey[] {
+  const value = metadata?.[key];
+  if (!Array.isArray(value)) return [];
+  const allowed = new Set(designVariantVariableDefinitions.map(item => item.key));
+  return value.filter((item): item is DesignVariantVariableKey => typeof item === 'string' && allowed.has(item as DesignVariantVariableKey));
+}
+
+function VariantCard({ result, index, active, style, fallbackName, projectName, sourceImage, onSelect, onFavorite, onContinueEdit, onSend, onOpenReport, onRetry, onRename, onDelete }: { result: GenerationResultOption; index: number; active: boolean; style: VariantStyleKey | undefined; fallbackName: string; projectName?: string | null; sourceImage: UploadedImage | null; onSelect: () => void; onFavorite: () => void; onContinueEdit: () => void; onSend?: (targetStep: ResultSendTargetStep) => void; onOpenReport: () => void; onRetry?: () => void; onRename: (name: string) => void; onDelete: () => void }) {
   const label = result.variantName || result.variantLabel || fallbackName || readVariantLabel(index);
   const styleLabel = result.variantStyleLabel || readVariantStyleLabel(result.variantStyle || style);
   const designDirection = result.designDirection || readMetadataString(result.metadata, 'designDirection') || styleLabel;
@@ -432,11 +563,28 @@ function VariantCard({ result, index, active, style, fallbackName, projectName, 
     lockedItemsLabel,
     strategyNote,
   });
+  const changedVariables = result.changedVariables || readMetadataVariableKeys(result.metadata, 'changedVariables');
+  const lockedVariables = result.lockedVariables || readMetadataVariableKeys(result.metadata, 'lockedVariables');
+  const differenceSummary = result.differenceSummary || readMetadataString(result.metadata, 'differenceSummary');
+  const reportNarrative = result.reportNarrative || readMetadataString(result.metadata, 'reportNarrative');
+  const parentResultId = result.parentResultId || readMetadataString(result.metadata, 'parentResultId');
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const originalImageUrl = getOriginalResultImageUrl(result, result.imageUrl);
   const originalAssetId = getOriginalResultAssetId(result);
+  const sourceImageUrl = readAssetImageUrl(sourceImage) || null;
+  const cardResult: NormalizedGenerationResult = {
+    originalImageUrl: sourceImageUrl,
+    originalAssetId: sourceImage?.assetId || null,
+    resultImageUrl: originalImageUrl || result.imageUrl || null,
+    resultAssetId: originalAssetId || null,
+    taskId: result.jobId || null,
+    status: 'completed',
+    progress: 100,
+    progressLabel: '生成完成',
+    errorMessage: null,
+  };
 
   const handleDownload = async () => {
     if (isDownloading) return;
@@ -465,7 +613,7 @@ function VariantCard({ result, index, active, style, fallbackName, projectName, 
       <div className="block w-full text-left">
         <div className="relative bg-slate-100">
           <GenerationImageViewer
-            sourceImageUrl={sourceImage?.dataUrl || sourceImage?.url}
+            sourceImageUrl={sourceImageUrl}
             sourceImageAssetId={sourceImage?.assetId}
             resultImageUrl={originalImageUrl || result.imageUrl}
             resultImageAssetId={originalAssetId}
@@ -474,6 +622,7 @@ function VariantCard({ result, index, active, style, fallbackName, projectName, 
             frameClassName="rounded-none border-0 shadow-none"
             tabListClassName="m-2 mb-2"
             sourceMissingMessage="暂无原图，无法对比。"
+            showTabs={false}
           />
           {result.isSelected ? <span className="absolute left-3 top-3 rounded-full bg-blue-600 px-2.5 py-1 text-[11px] font-bold text-white">已设为主方案</span> : null}
         </div>
@@ -498,11 +647,21 @@ function VariantCard({ result, index, active, style, fallbackName, projectName, 
         <p className="rounded-md border border-slate-100 bg-white px-3 py-2 text-xs leading-5 text-slate-600">
           <span className="font-bold text-slate-800">方案说明：</span>{designDescription}
         </p>
+        {(changedVariables.length > 0 || lockedVariables.length > 0 || differenceSummary) ? (
+          <div className="rounded-md border border-blue-100 bg-blue-50/60 px-3 py-2 text-[11px] leading-5 text-slate-600">
+            {changedVariables.length > 0 ? <p><span className="font-bold text-blue-800">改变变量：</span>{changedVariables.map(readDesignVariantVariableLabel).join('、')}</p> : null}
+            {lockedVariables.length > 0 ? <p><span className="font-bold text-amber-700">锁定变量：</span>{lockedVariables.map(readDesignVariantVariableLabel).join('、')}</p> : null}
+            {differenceSummary ? <p><span className="font-bold text-slate-800">与原图差异：</span>{differenceSummary}</p> : null}
+            {parentResultId ? <p><span className="font-bold text-slate-800">版本关系：</span>源自结果 {parentResultId.slice(0, 8)}</p> : null}
+          </div>
+        ) : null}
+        {reportNarrative ? <p className="rounded-md bg-emerald-50 px-3 py-2 text-[11px] leading-5 text-emerald-800"><span className="font-black">汇报说明：</span>{reportNarrative}</p> : null}
         <div className="action-row mt-auto">
           <button type="button" onClick={onSelect} className="rounded-md bg-slate-900 px-2 py-2 text-xs font-bold text-white">{result.isSelected ? '已设为主方案' : '设为主方案'}</button>
           <button type="button" onClick={onFavorite} className="rounded-md bg-slate-100 px-2 py-2 text-xs font-bold text-slate-700">收藏</button>
-          <button type="button" onClick={() => void handleDownload()} disabled={isDownloading} className="rounded-md bg-slate-100 px-2 py-2 text-xs font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60">{isDownloading ? '正在下载...' : '保存到本地'}</button>
+          <button type="button" onClick={onDelete} className="inline-flex items-center justify-center gap-1 rounded-md bg-rose-50 px-2 py-2 text-xs font-bold text-rose-700"><Trash2 className="h-3.5 w-3.5" />删除</button>
         </div>
+        <GenerationResultActions result={cardResult} featureName={`方案变体-${label}`} projectName={projectName} compact />
         {downloadMessage ? <p className="text-xs font-semibold text-emerald-700">{downloadMessage}</p> : null}
         {downloadError ? <p className="text-xs font-semibold text-amber-700">{downloadError}</p> : null}
         <div className="flex flex-wrap gap-2">
@@ -517,7 +676,17 @@ function VariantCard({ result, index, active, style, fallbackName, projectName, 
         {onSend ? (
           <div className="rounded-md bg-slate-50 p-2">
             <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">发送到其他功能</p>
-            <ResultSendActions resultId={result.id} currentStep={GenerationStep.DesignVariants} onSend={(_, targetStep) => onSend(targetStep)} compact />
+            <ResultSendActions
+              resultId={result.id}
+              currentStep={GenerationStep.DesignVariants}
+              onSend={(_, targetStep) => onSend(targetStep)}
+              onSecondaryAction={() => onContinueEdit()}
+              onUtilityAction={action => {
+                if (action === 'pdf') onOpenReport();
+                if (action === 'download') void handleDownload();
+              }}
+              compact
+            />
           </div>
         ) : null}
       </div>
@@ -584,6 +753,8 @@ function PrintVariant({ result, name, style, showDescription }: { result: Genera
   const changeScopeLabel = result.changeScopeLabel || readMetadataString(result.metadata, 'changeScopeLabel');
   const lockedItemsLabel = result.lockedItemsLabel || readMetadataString(result.metadata, 'lockedItemsLabel');
   const strategyNote = result.strategyNote || readMetadataString(result.metadata, 'strategyNote');
+  const differenceSummary = result.differenceSummary || readMetadataString(result.metadata, 'differenceSummary');
+  const reportNarrative = result.reportNarrative || readMetadataString(result.metadata, 'reportNarrative');
   return (
     <article className="break-inside-avoid overflow-hidden rounded-lg border border-slate-200">
       <AspectRatioImage src={result.imageUrl} alt={name} className="rounded-none border-0 shadow-none" />
@@ -593,7 +764,8 @@ function PrintVariant({ result, name, style, showDescription }: { result: Genera
         {changeScopeLabel ? <p className="mt-2 text-xs leading-5 text-slate-600">变化范围：{changeScopeLabel}</p> : null}
         {lockedItemsLabel ? <p className="text-xs leading-5 text-slate-600">锁定项：{lockedItemsLabel}</p> : null}
         {strategyNote ? <p className="text-xs leading-5 text-slate-600">备注：{strategyNote}</p> : null}
-        {showDescription ? <p className="mt-2 text-xs leading-5 text-slate-600">{styleDescriptionByKey[style || 'custom'] || styleDescriptionByKey.custom}</p> : null}
+        {differenceSummary ? <p className="text-xs leading-5 text-slate-600">与原图差异：{differenceSummary}</p> : null}
+        {showDescription ? <p className="mt-2 text-xs leading-5 text-slate-600">{reportNarrative || result.designDescription || readMetadataString(result.metadata, 'designDescription') || styleDescriptionByKey[style || 'custom'] || styleDescriptionByKey.custom}</p> : null}
       </div>
     </article>
   );
@@ -659,6 +831,10 @@ function resolveVariantNames(config: GenerationConfig, batchCount: DesignVariant
 function resolveVariantStrategyNotes(config: GenerationConfig, batchCount: DesignVariantBatchCount): string[] {
   const notes = Array.isArray(config.variantStrategyNotes) ? [...config.variantStrategyNotes] : [];
   return Array.from({ length: batchCount }, (_, index) => notes[index] || '');
+}
+
+function SummaryItem({ label, value }: { label: string; value: string }) {
+  return <div className="min-w-0"><p className="text-[10px] font-bold text-slate-400">{label}</p><p className="mt-1 truncate font-black text-slate-800" title={value}>{value}</p></div>;
 }
 
 function readVariantChangeScope(value: GenerationConfig['variantChangeScope']): VariantChangeScope {

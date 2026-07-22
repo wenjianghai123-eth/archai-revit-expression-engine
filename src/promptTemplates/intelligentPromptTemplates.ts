@@ -1,3 +1,5 @@
+import type { FloorPlanTextLanguage } from '../types';
+
 export type SmartPromptMode =
   | 'floorplan'
   | 'style-render'
@@ -85,15 +87,33 @@ const floorplanEnglishLegendExamples = [
   'Service Area',
 ].join(', ');
 
-export const FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT = [
-  'Text language requirement:',
-  'All visible text, labels, legends, room names, annotations, and material notes in the generated image must be in English only.',
-  'Do not use Chinese characters. Do not mix Chinese and English.',
-  `If room labels are needed, use concise English labels such as ${floorplanEnglishRoomLabelExamples}.`,
-  `If a legend is generated, all legend entries must be in English, such as ${floorplanEnglishLegendExamples}.`,
-  'If the input plan contains Chinese room names or Chinese annotations, translate them into concise English labels in the output image. Do not copy Chinese text from the input plan.',
-  'All text visible in the generated plan must be English only, including room labels, legends, annotations, symbols, material names, and any explanatory notes.',
-].join(' ');
+export function buildFloorplanTextLanguageRequirement(language: FloorPlanTextLanguage = 'en'): string {
+  if (language === 'zh-CN') {
+    return [
+      'Text language requirement: Simplified Chinese.',
+      'All newly generated visible labels, legends, room names, annotations, and material notes must use concise Simplified Chinese only.',
+      'Do not translate existing Chinese plan annotations into English. Do not mix Chinese and English in newly generated text.',
+      'Keep original dimensions, axes, symbols and existing readable annotations unchanged wherever possible.',
+    ].join(' ');
+  }
+  if (language === 'none') {
+    return [
+      'Text language requirement: do not generate any new text.',
+      'Do not add room names, legends, annotations, material notes, captions, watermarks, letters or numbers.',
+      'Preserve existing source-plan text, dimensions, axes and symbols as drawing content; do not rewrite or translate them.',
+    ].join(' ');
+  }
+  return [
+    'Text language requirement: English.',
+    'All newly generated visible labels, legends, room names, annotations, and material notes must be in English only.',
+    'Do not use Chinese characters in newly generated text. Do not mix Chinese and English.',
+    `If room labels are needed, use concise English labels such as ${floorplanEnglishRoomLabelExamples}.`,
+    `If a legend is generated, all legend entries must be in English, such as ${floorplanEnglishLegendExamples}.`,
+    'If the input plan contains Chinese room names or Chinese annotations, translate only newly recreated labels into concise English; preserve geometry, dimensions, axes and symbols.',
+  ].join(' ');
+}
+
+export const FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT = buildFloorplanTextLanguageRequirement('en');
 
 const styleRenderBasePrompt = [
   'The input image is an architectural or interior reference image. Create a polished design rendering while preserving the original camera angle, perspective, spatial layout, major openings, composition, and object scale.',
@@ -319,6 +339,7 @@ export function readSmartPromptChangeStrength(config?: object, mode?: SmartPromp
 function buildFloorplanPrompt(input: BuildSmartPromptInput, userPrompt: string): string {
   const parts = [
     floorplanBasePrompt,
+    buildFloorPlanProductModePrompt(input.config),
     buildFloorplanExpressionControlPrompt(input.config),
     buildFloorplanTemplatePrompt(input.config),
     buildFloorplanRoomLabelsPrompt(input.config),
@@ -329,7 +350,7 @@ function buildFloorplanPrompt(input: BuildSmartPromptInput, userPrompt: string):
     userPrompt ? `用户补充要求：${userPrompt}` : '用户未输入补充要求，请根据结构化参数生成稳定、克制、专业的默认彩平效果。',
     '如补充要求与保持原始平面结构冲突，以保持结构、墙体、门窗、家具位置和画布比例为准。',
   ];
-  parts.push(FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT);
+  parts.push(buildFloorplanTextLanguageRequirement(readFloorPlanTextLanguage(input.config)));
   return joinPrompt(parts);
 }
 
@@ -338,6 +359,18 @@ const floorplanRenderModePrompts: Record<string, string> = {
   'semi-3d': 'Floor plan render mode: semi-3d. Create a layered semi-3D colored floor plan expression, while preserving the original floor plan structure, walls, openings, furniture outlines, and plan proportions.',
   presentation: 'Floor plan render mode: presentation. Strengthen presentation-board quality, material hierarchy, graphic completeness, clean composition, and readable spatial expression while preserving the original plan structure.',
 };
+
+const floorPlanProductModePrompts: Record<string, string> = {
+  'precise-material': 'Product mode: precise material colored plan. Follow confirmed region boundaries and material assignments exactly, with strict structure consistency.',
+  'three-dimensional': 'Product mode: three-dimensional colored plan. Enhance material, furniture and spatial depth while remaining a top-down plan.',
+  analysis: 'Product mode: analytical drawing expression. Prioritize zoning, circulation and diagram readability while preserving source geometry.',
+  'multi-option': 'Product mode: multi-option colored plans. Keep one common structure baseline and vary only the requested presentation direction.',
+};
+
+function buildFloorPlanProductModePrompt(config: object | undefined): string | undefined {
+  const mode = readConfigString(config, 'floorPlanExpressionMode');
+  return floorPlanProductModePrompts[mode];
+}
 
 const floorplanTemplatePrompts: Record<string, string> = {
   'residential-warm-wood': 'Floorplan color template: residential warm wood. Use warm wood tones, soft neutral materials, cozy residential zoning, and clear home-oriented function expression.',
@@ -354,13 +387,17 @@ function buildFloorplanTemplatePrompt(config: object | undefined): string | unde
 }
 
 function buildFloorplanRoomLabelsPrompt(config: object | undefined): string | undefined {
+  const language = readFloorPlanTextLanguage(config);
+  if (language === 'none') return undefined;
   const value = readConfigValue(config, 'floorplanRoomLabels');
   const labels = Array.isArray(value) ? value.filter(isRecord).slice(0, 20) : [];
   if (labels.length === 0) return undefined;
   const lines = labels.map((label, index) => {
-    const type = readFloorplanRoomTypeLabel(label);
-    const name = readFloorplanEnglishRoomName(readConfigString(label, 'name'), type || `Area ${index + 1}`);
-    const position = readEnglishPromptValue(readConfigString(label, 'positionDescription'), '');
+    const type = readFloorplanRoomTypeLabel(label, language);
+    const rawName = readConfigString(label, 'name');
+    const name = language === 'zh-CN' ? rawName || type || `区域 ${index + 1}` : readFloorplanEnglishRoomName(rawName, type || `Area ${index + 1}`);
+    const rawPosition = readConfigString(label, 'positionDescription');
+    const position = language === 'zh-CN' ? rawPosition : readEnglishPromptValue(rawPosition, '');
     return `Room ${index + 1}: ${name} = ${type}${position ? `, location: ${position}` : ''}.`;
   });
   return joinPrompt([
@@ -369,9 +406,13 @@ function buildFloorplanRoomLabelsPrompt(config: object | undefined): string | un
   ]);
 }
 
-function readFloorplanRoomTypeLabel(label: Record<string, unknown>): string {
+function readFloorplanRoomTypeLabel(label: Record<string, unknown>, language: FloorPlanTextLanguage = 'en'): string {
   const type = readConfigString(label, 'roomType') || 'custom';
-  if (type === 'custom') return readEnglishPromptValue(readConfigString(label, 'customTypeLabel'), 'Custom Room');
+  if (type === 'custom') return language === 'zh-CN' ? readConfigString(label, 'customTypeLabel') || '自定义区域' : readEnglishPromptValue(readConfigString(label, 'customTypeLabel'), 'Custom Room');
+  if (language === 'zh-CN') {
+    const chineseLabels: Record<string, string> = { 'living-room': '客厅', 'dining-room': '餐厅', bedroom: '卧室', kitchen: '厨房', bathroom: '卫生间', balcony: '阳台', entry: '玄关', study: '书房', office: '办公区', commercial: '商业区' };
+    return chineseLabels[type] || '区域';
+  }
   const labels: Record<string, string> = {
     'living-room': 'Living Room',
     'dining-room': 'Dining Area',
@@ -431,13 +472,21 @@ const lineworkPreservationPrompts: Record<string, string> = {
 function buildFloorplanExpressionControlPrompt(config: object | undefined): string {
   const renderMode = readConfigString(config, 'floorplanRenderMode') || 'semi-3d';
   const lineworkPreservation = readConfigString(config, 'lineworkPreservation') || 'high';
+  const language = readFloorPlanTextLanguage(config);
+  const textDisabled = language === 'none';
+  const languageLabel = language === 'zh-CN' ? 'Simplified Chinese' : 'English';
   return joinPrompt([
     floorplanRenderModePrompts[renderMode] || floorplanRenderModePrompts['semi-3d'],
     lineworkPreservationPrompts[lineworkPreservation] || lineworkPreservationPrompts.high,
-    readConfigValue(config, 'enableLegend') === true ? 'Add a concise graphic legend with English entries only where appropriate, without covering important plan content.' : undefined,
-    readConfigValue(config, 'enableAreaText') === true ? 'Add clear English area or functional text labels where appropriate; keep text minimal, legible, and aligned with the plan.' : undefined,
-    readConfigValue(config, 'enableMaterialLegend') === true ? 'Add an English material legend that explains key floor, wall, soft furnishing, and finish categories where appropriate.' : undefined,
+    !textDisabled && readConfigValue(config, 'enableLegend') === true ? `Add a concise graphic legend in ${languageLabel}, without covering important plan content.` : undefined,
+    !textDisabled && readConfigValue(config, 'enableAreaText') === true ? `Add clear area or functional labels in ${languageLabel}; keep text minimal, legible, and aligned with the plan.` : undefined,
+    !textDisabled && readConfigValue(config, 'enableMaterialLegend') === true ? `Add a material legend in ${languageLabel} that explains key floor, wall, soft furnishing, and finish categories.` : undefined,
   ]);
+}
+
+function readFloorPlanTextLanguage(config: object | undefined): FloorPlanTextLanguage {
+  const value = readConfigValue(config, 'floorPlanTextLanguage');
+  return value === 'zh-CN' || value === 'none' ? value : 'en';
 }
 
 function buildStyleRenderPrompt(input: BuildSmartPromptInput, userPrompt: string): string {
@@ -494,6 +543,12 @@ function buildInpaintPrompt(input: BuildSmartPromptInput, userPrompt: string): s
       : input.useFullImageMask
         ? 'The user allows full-image editing, but the original composition, spatial structure, camera view, canvas ratio, and main object relationships must remain stable.'
         : 'No mask was provided. Identify the target object or region from the request and keep unrelated areas stable.',
+    readConfigString(input.config, 'maskSelectionMode') === 'smart'
+      ? 'The selected area is automatically detected by AI. Modify only the detected object region. Preserve the original geometry, lighting, perspective and surrounding objects.'
+      : undefined,
+    readBooleanConfig(input.config, 'hasProtectionMask') ? 'A protection mask is present. Protected pixels must remain identical to the source and must never be edited.' : undefined,
+    readConfigNumber(input.config, 'feather', 0) > 0 ? `Blend the edited boundary using approximately ${Math.round(readConfigNumber(input.config, 'feather', 0))} pixels of feathering.` : undefined,
+    readConfigNumber(input.config, 'maskExpansion', 0) !== 0 ? `Follow the adjusted mask boundary after ${readConfigNumber(input.config, 'maskExpansion', 0) > 0 ? 'expansion' : 'contraction'} by ${Math.abs(Math.round(readConfigNumber(input.config, 'maskExpansion', 0)))} pixels.` : undefined,
     editTarget === 'material'
       ? 'Edit target: material replacement or material refinement. Only change material, color, texture, tactile quality, reflection, roughness, and surface detail in the target area.'
       : editTarget === 'furniture'
@@ -587,20 +642,57 @@ function buildMaterialReplacePrompt(input: BuildSmartPromptInput, userPrompt: st
   const materialDirection = readConfigString(input.config, 'materialDirection') || 'auto';
   const materialFinish = readConfigString(input.config, 'materialFinish') || 'matte';
   const replaceScope = readConfigString(input.config, 'materialReplaceScope') || 'material-only';
+  const realSizeMm = readConfigNumber(input.config, 'materialRealSizeMm', 600);
+  const jointWidthMm = readConfigNumber(input.config, 'materialJointWidthMm', 2);
+  const textureAlignment = readConfigString(input.config, 'materialTextureAlignment') || 'auto';
+  const textureOrigin = readMaterialTextureOrigin(input.config);
+  const semanticSelections = readSemanticObjectSelections(input.config);
+  const hasProtectionMask = Boolean(readConfigString(input.config, 'protectionMaskAssetId')) || readBooleanConfig(input.config, 'hasProtectionMask');
 
   return joinPrompt([
     basePrompt
       .replace('{targetObjectTypeLabel}', targetObjectTypeLabel)
       .replace('{targetMaterialLabel}', targetMaterialLabel),
+    editMode === 'mask' && readConfigString(input.config, 'maskSelectionMode') === 'smart'
+      ? 'The selected area is automatically detected by AI. Modify only the detected object region. Preserve the original geometry, lighting, perspective and surrounding objects.'
+      : undefined,
     input.hasMaterialReferences ? 'Use the material reference only for texture, color, finish, and material feeling. Do not copy its composition or objects.' : undefined,
     materialPatternScalePrompts[patternScale] || materialPatternScalePrompts.medium,
     materialDirectionPrompts[materialDirection] || materialDirectionPrompts.auto,
     materialFinishPrompts[materialFinish] || materialFinishPrompts.matte,
     materialReplaceScopePrompts[replaceScope] || materialReplaceScopePrompts['material-only'],
+    `Respect real-world material scale: approximately ${realSizeMm} mm per primary tile, board, slab, or repeat unit. Joint width: approximately ${jointWidthMm} mm. Keep scale and joints consistent with scene perspective.`,
+    `Texture alignment mode: ${textureAlignment}. Paving origin: (${textureOrigin.x.toFixed(3)}, ${textureOrigin.y.toFixed(3)}) in normalized source-image coordinates. Keep seams continuous across the same selected surface.`,
+    semanticSelections.length > 0 ? `Semantic object anchors (normalized image coordinates): ${semanticSelections.map((item, index) => `${index + 1}. ${item.objectType} at (${item.x.toFixed(3)}, ${item.y.toFixed(3)})`).join('; ')}. Treat every anchor as a selected target and do not merge unrelated objects.` : undefined,
+    hasProtectionMask ? 'A protection mask is supplied. Protected pixels are explicitly excluded from editing and must remain identical to the source image.' : undefined,
     buildStructuredContext(input.config, input.mode, { includeMaterial: false }),
     changeStrengthInstruction(readSmartPromptChangeStrength(input.config, input.mode), input.mode),
     userPrompt ? `User extra requirements: ${userPrompt}` : 'No extra user requirements. Use the selected target area and material to produce a stable material replacement.',
   ]);
+}
+
+function readSemanticObjectSelections(config: object | undefined): Array<{ objectType: string; x: number; y: number }> {
+  const value = readConfigValue(config, 'semanticObjectSelections');
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).slice(0, 24).map(item => ({
+    objectType: typeof item.objectType === 'string' ? item.objectType : 'other',
+    x: typeof item.x === 'number' && Number.isFinite(item.x) ? Math.max(0, Math.min(1, item.x)) : 0.5,
+    y: typeof item.y === 'number' && Number.isFinite(item.y) ? Math.max(0, Math.min(1, item.y)) : 0.5,
+  }));
+}
+
+function readConfigNumber(config: object | undefined, key: string, fallback: number): number {
+  const value = readConfigValue(config, key);
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function readMaterialTextureOrigin(config: object | undefined): { x: number; y: number } {
+  const value = readConfigValue(config, 'materialTextureOrigin');
+  if (!isRecord(value)) return { x: 0.5, y: 0.5 };
+  return {
+    x: typeof value.x === 'number' && Number.isFinite(value.x) ? Math.max(0, Math.min(1, value.x)) : 0.5,
+    y: typeof value.y === 'number' && Number.isFinite(value.y) ? Math.max(0, Math.min(1, value.y)) : 0.5,
+  };
 }
 
 function buildPlanColorizePrompt(input: BuildSmartPromptInput, userPrompt: string): string {
@@ -609,8 +701,10 @@ function buildPlanColorizePrompt(input: BuildSmartPromptInput, userPrompt: strin
   const selectedStyleName = readConfigString(input.config, 'selectedStyleName');
   const selectedStylePromptHint = readConfigString(input.config, 'selectedStylePromptHint');
   const labels = readStringArray(input.config, 'manualRoomLabels');
+  const textLanguage = readFloorPlanTextLanguage(input.config);
   return joinPrompt([
     planColorizeBasePrompt,
+    buildFloorPlanProductModePrompt(input.config),
     drawingTypePrompts[drawingType],
     planTemplatePrompts[template],
     selectedStyleName ? `Selected colored-plan style: ${selectedStyleName}.` : undefined,
@@ -618,15 +712,16 @@ function buildPlanColorizePrompt(input: BuildSmartPromptInput, userPrompt: strin
     'Keep the original plan structure, walls, doors, windows, room divisions, and circulation geometry unchanged. The selected style should only affect color palette, material fills, atmosphere, and presentation expression.',
     buildStructuredContext(input.config, input.mode),
     readBooleanConfig(input.config, 'enableZoningColor') ? 'Use distinct but harmonious colors for different functional areas.' : undefined,
-    readBooleanConfig(input.config, 'enableRoomLabels') ? 'Add concise room or area labels where appropriate.' : undefined,
+    textLanguage !== 'none' && readBooleanConfig(input.config, 'enableRoomLabels') ? `Add concise room or area labels in ${textLanguage === 'zh-CN' ? 'Simplified Chinese' : 'English'} where appropriate.` : undefined,
     readBooleanConfig(input.config, 'enableFurnitureEnhance') ? 'Enhance furniture and fixture symbols while preserving layout.' : undefined,
     readBooleanConfig(input.config, 'enableCirculationArrows') ? 'Add subtle circulation arrows without cluttering the plan.' : undefined,
     readBooleanConfig(input.config, 'enableScaleEnhance') ? 'Improve scale readability with furniture, paving, texture, and line hierarchy.' : undefined,
     readBooleanConfig(input.config, 'enableLandscapeFill') ? 'Add landscape fills such as planting, paving, lawn, water, and outdoor texture.' : undefined,
     readConfigValue(input.config, 'preserveLinework') !== false ? 'Keep the original linework crisp and visible.' : undefined,
-    labels.length > 0 ? `Use these labels when appropriate: ${labels.join(', ')}.` : undefined,
+    textLanguage !== 'none' && labels.length > 0 ? `Use these labels when appropriate: ${labels.join(', ')}.` : undefined,
     changeStrengthInstruction(readSmartPromptChangeStrength(input.config, input.mode), input.mode),
     userPrompt ? `User extra requirements: ${userPrompt}` : 'No extra user requirements. Follow the selected plan template and structured parameters.',
+    buildFloorplanTextLanguageRequirement(textLanguage),
   ]);
 }
 
@@ -962,11 +1057,11 @@ function buildCompactSmartPrompt(input: BuildSmartPromptInput): string {
   const note = input.userPrompt ? `Note: ${input.userPrompt}` : undefined;
 
   if (input.mode === 'floorplan') {
-    return joinPrompt(['Quick colored architectural plan. Preserve layout, walls, openings, linework, furniture positions, canvas ratio, and top-down plan view.', context, strength, note, FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT]);
+    return joinPrompt(['Quick colored architectural plan. Preserve layout, walls, openings, linework, furniture positions, canvas ratio, and top-down plan view.', buildFloorPlanProductModePrompt(input.config), context, strength, note, buildFloorplanTextLanguageRequirement(readFloorPlanTextLanguage(input.config))]);
   }
 
   if (input.mode === 'plan-colorize') {
-    return joinPrompt(['Quick colored architectural plan. Preserve layout, walls, openings, linework, furniture positions, canvas ratio, and top-down plan view.', context, strength, note]);
+    return joinPrompt(['Quick colored architectural plan. Preserve layout, walls, openings, linework, furniture positions, canvas ratio, and top-down plan view.', buildFloorPlanProductModePrompt(input.config), context, strength, note, buildFloorplanTextLanguageRequirement(readFloorPlanTextLanguage(input.config))]);
   }
 
   if (input.mode === 'style-render' || input.mode === 'design-variants') {

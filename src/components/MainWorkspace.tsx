@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { GenerationConfig, GenerationHistoryItem, GenerationProvider, GenerationRunStateOverride, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, ResultSendTargetStep, SecondaryEditAction, StepState, UploadedImage } from '../types';
 import { createLocalPreviewImage, createUploadedImage, hydrateUploadedImageDataUrl, revokeUploadedImagePreview, validateImageFile } from '../utils/file';
 import { getImageAsset, getProject, uploadImageAsset } from '../lib/api';
@@ -8,9 +8,7 @@ import { InpaintMaskPanel } from './workspace/InpaintMaskPanel';
 import { PromptConfigPanel } from './workspace/PromptConfigPanel';
 import { MaterialTexturesPanel, StyleSelectorPanel } from './workspace/ReferenceImagesPanel';
 import { ResultPreviewPanel } from './workspace/ResultPreviewPanel';
-import { getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
-import { ModelSnapshotRenderPanel } from './ModelSnapshotRenderPanel';
-import { PanoramaQuickRenderPanel } from './PanoramaQuickRenderPanel';
+import { getOriginalResultAssetId } from '../utils/resultImage';
 import { DesignVariantsPanel } from './DesignVariantsPanel';
 import { PlanColorizePanel } from './PlanColorizePanel';
 import { MaterialReplaceConfigPanel } from './MaterialReplaceConfigPanel';
@@ -27,9 +25,30 @@ import {
   floorPlanAssetStorageKey,
   suppressLatestFloorPlanRegionSet,
 } from '../utils/floorPlanWorkspace';
+import {
+  AUTO_MATERIAL_REPLACEMENT_PROMPT,
+  getMaterialReplacePreviewButtonState,
+  resolveMaterialReplacementMode,
+  validateMaterialReplacePreviewInput,
+} from '../utils/materialReplaceReadiness';
+import { createResultViewerData, ResultViewer } from './workspace/ResultViewer';
+import { DrawingToolNavigation } from './drawing-expression/DrawingToolNavigation';
+import { DrawingViewerToolbar } from './drawing-expression/DrawingViewerToolbar';
+import {
+  buildDrawingToolConfigPatch,
+  createDrawingExpressionUiState,
+  drawingExpressionUiReducer,
+  fromStepViewMode,
+  resolveDrawingWorkflowStage,
+  toStepViewMode,
+  usesFloorPlanRegionWorkflow,
+  type DrawingTool,
+} from './drawing-expression/drawingExpressionState';
 
 const MaterialLibrary = lazy(() => import('./MaterialLibrary').then(module => ({ default: module.MaterialLibrary })));
 const PromptTemplatePanel = lazy(() => import('./PromptTemplatePanel').then(module => ({ default: module.PromptTemplatePanel })));
+const ModelSnapshotRenderPanel = lazy(() => import('./ModelSnapshotRenderPanel').then(module => ({ default: module.ModelSnapshotRenderPanel })));
+const PanoramaQuickRenderPanel = lazy(() => import('./PanoramaQuickRenderPanel').then(module => ({ default: module.PanoramaQuickRenderPanel })));
 interface WorkspaceProps {
   step: GenerationStep;
   state: StepState;
@@ -39,7 +58,7 @@ interface WorkspaceProps {
   onUpdateMaterialImage: (image: UploadedImage | null) => void;
   onUpdateMaterialTextures: (textures: MaterialTexture[]) => void;
   onUpdateFurnitureReferences: (references: ReferenceImage[]) => void;
-  onUpdateMaskImage: (maskDataUrl: string | null, useFullImage: boolean, feather?: number) => void;
+  onUpdateMaskImage: (maskDataUrl: string | null, useFullImage: boolean, feather?: number, protectionMaskDataUrl?: string | null, expansion?: number, hasValidMaskPixels?: boolean) => void;
   onGenerate: (stateOverride?: GenerationRunStateOverride) => void;
   onRegenerate: () => void;
   onCancelGeneration: () => void;
@@ -49,6 +68,7 @@ interface WorkspaceProps {
   onSendResultToStep: (resultId: string, targetStep: ResultSendTargetStep) => void;
   onContinueObjectInsertRefine: (image: UploadedImage, source: { resultId?: string; label: string }) => void;
   onRenameGenerationResult: (resultId: string, variantName: string) => void;
+  onDeleteGenerationResult?: (resultId: string) => void;
   onSetViewMode: (viewMode: StepState['viewMode']) => void;
   onNextStep: () => void;
   onReset: () => void;
@@ -82,6 +102,7 @@ export function MainWorkspace({
   onSendResultToStep,
   onContinueObjectInsertRefine,
   onRenameGenerationResult,
+  onDeleteGenerationResult,
   onSetViewMode,
   onNextStep,
   onReset,
@@ -112,9 +133,31 @@ export function MainWorkspace({
   const floorPlanRestoreGenerationRef = useRef(0);
   const floorPlanUploadAbortRef = useRef<AbortController | null>(null);
   const floorPlanResettingRef = useRef(false);
+  const [drawingUiState, dispatchDrawingUi] = useReducer(drawingExpressionUiReducer, state, createDrawingExpressionUiState);
 
   const isFloorplanStep = step === GenerationStep.FloorplanTo3D;
+  const usesDrawingRegionWorkflow = isFloorplanStep && usesFloorPlanRegionWorkflow(drawingUiState.activeTool);
   const isStyleRenderStep = step === GenerationStep.StyleRender;
+
+  useEffect(() => {
+    if (!isFloorplanStep) return;
+    dispatchDrawingUi({ type: 'sync-workflow-stage', workflowStage: resolveDrawingWorkflowStage(state) });
+  }, [isFloorplanStep, state.generationStatus, state.inputImage, state.isGenerating]);
+
+  useEffect(() => {
+    if (!isFloorplanStep) return;
+    dispatchDrawingUi({ type: 'set-viewer-mode', viewerMode: fromStepViewMode(state.viewMode) });
+  }, [isFloorplanStep, state.viewMode]);
+
+  const handleSelectDrawingTool = useCallback((tool: DrawingTool) => {
+    dispatchDrawingUi({ type: 'select-tool', tool });
+    onUpdateConfig(buildDrawingToolConfigPatch(tool, state.config));
+  }, [onUpdateConfig, state.config]);
+
+  const handleSetDrawingViewerMode = useCallback((viewerMode: typeof drawingUiState.viewerMode) => {
+    dispatchDrawingUi({ type: 'set-viewer-mode', viewerMode });
+    onSetViewMode(toStepViewMode(viewerMode));
+  }, [onSetViewMode]);
 
   useEffect(() => {
     let active = true;
@@ -150,28 +193,118 @@ export function MainWorkspace({
   const isFreeReferenceImageStep = step === GenerationStep.FreeReferenceImage;
   const isImagePolishStep = step === GenerationStep.ImagePolish;
   const materialReplaceEditMode = state.config.editMode === 'mask' ? 'mask' : 'smart-type';
-  const hasMaterialReplaceTarget = Boolean(state.config.targetMaterial || state.materialTextures.length > 0 || (state.config.customMaterialPrompt || '').trim());
+  const materialMaskSelectionMode = state.config.maskSelectionMode === 'smart'
+    ? 'smart'
+    : 'precise';
+  const sourceImageUrl = state.inputImage ? getUploadedImageSrc(state.inputImage) : null;
+  const activeReplacementReference = state.materialTextures[0] || state.materialImage;
+  const activeReplacementReferenceUrl = activeReplacementReference
+    ? activeReplacementReference.previewUrl
+      || activeReplacementReference.publicUrl
+      || activeReplacementReference.url
+      || activeReplacementReference.thumbnailUrl
+      || activeReplacementReference.dataUrl
+    : null;
   const hasMaskSelection = Boolean(state.maskImage?.dataUrl || state.useFullImageMask);
-  const hasMaterialReplaceObject = Boolean(state.config.targetObjectType);
-  const canGenerate = Boolean(state.inputImage)
-    && !state.isGenerating
-    && !isCreditsInsufficient
-    && !providerUnavailableReason
-    && (!isMaterialReplaceStep || (
-      hasMaterialReplaceTarget
-      && (materialReplaceEditMode === 'mask' ? hasMaskSelection : hasMaterialReplaceObject)
-    ));
-  const generateDisabledReason = providerUnavailableReason
-    || (state.isGenerating ? '正在生成，请稍候。' : null)
-    || (!state.inputImage
-      ? '请先上传原图。'
-      : null)
-    || (isCreditsInsufficient ? '当前算力点余额不足。' : null)
-    || (isMaterialReplaceStep && !hasMaterialReplaceTarget ? '请选择材质、软装或输入替换要求。' : null)
-    || (isMaterialReplaceStep && materialReplaceEditMode === 'mask' && !hasMaskSelection ? '请选择需要替换的区域。' : null)
-    || (isMaterialReplaceStep && materialReplaceEditMode !== 'mask' && !hasMaterialReplaceObject ? '请选择需要替换的对象类型。' : null);
+  const materialReplaceSelectionMode = materialReplaceEditMode === 'smart-type'
+    ? 'semantic'
+    : materialMaskSelectionMode;
+  const hasValidMaskPixels = hasMaskSelection && (state.maskHasVisiblePixels ?? true);
+  const isReplacementUploadInProgress = state.inputImage?.uploadStatus === 'uploading'
+    || state.inputImage?.uploadStatus === 'local-preview'
+    || state.materialTextures.some(texture => texture.uploadStatus === 'uploading' || texture.uploadStatus === 'local-preview');
+  const materialReplacementMode = resolveMaterialReplacementMode(state.config.editTarget);
+  const materialReplaceButtonState = getMaterialReplacePreviewButtonState({
+    hasSourceImage: Boolean(sourceImageUrl),
+    isUploading: isReplacementUploadInProgress,
+    isGeneratingPreview: state.isGenerating,
+  });
+  const previewValidation = validateMaterialReplacePreviewInput({
+    mode: materialReplacementMode,
+    hasSourceImage: Boolean(sourceImageUrl),
+    hasReference: Boolean(activeReplacementReferenceUrl),
+    hasMask: hasMaskSelection,
+    hasValidMaskPixels,
+    hasTargetObject: Boolean(state.config.targetObjectType),
+    selectionMode: materialReplaceSelectionMode,
+    maskConfirmed: materialMaskSelectionMode !== 'smart' || state.config.smartMaskConfirmed === true,
+    replacementPrompt: state.config.customMaterialPrompt || state.config.prompt || '',
+    useDefaultPreset: Boolean(state.config.targetMaterial),
+    isSegmenting: state.config.smartMaskIsRefining === true,
+  });
+  const [previewValidationErrors, setPreviewValidationErrors] = useState<string[]>([]);
+  const previewValidationKey = previewValidation.missingItems.join('|');
+  const canClickPreview = materialReplaceButtonState.canClickPreview;
+  const previewButtonHint = materialReplaceButtonState.previewButtonHint;
+  const canGenerate = isMaterialReplaceStep
+    ? canClickPreview
+    : Boolean(state.inputImage)
+      && !state.isGenerating
+      && !isCreditsInsufficient
+      && !providerUnavailableReason;
+  const generateDisabledReason = isMaterialReplaceStep
+    ? previewButtonHint
+    : providerUnavailableReason
+      || (state.isGenerating ? '正在生成，请稍候。' : null)
+      || (!state.inputImage ? '请先上传原图。' : null)
+      || (isCreditsInsufficient ? '当前算力点余额不足。' : null);
+
+  useEffect(() => {
+    if (!isMaterialReplaceStep || previewValidationErrors.length === 0) return;
+    setPreviewValidationErrors(current => {
+      if (current.join('|') === previewValidationKey) return current;
+      return previewValidation.missingItems;
+    });
+  }, [isMaterialReplaceStep, previewValidation.missingItems, previewValidationErrors.length, previewValidationKey]);
+
+  const handleGeneratePreview = useCallback((stateOverride?: GenerationRunStateOverride) => {
+    if (!isMaterialReplaceStep) {
+      onGenerate(stateOverride);
+      return;
+    }
+    if (!previewValidation.valid) {
+      setPreviewValidationErrors(previewValidation.missingItems);
+      return;
+    }
+
+    setPreviewValidationErrors([]);
+    if (materialReplacementMode === 'auto-enhance') {
+      const existingPrompt = (state.config.customMaterialPrompt || state.config.prompt || '').trim();
+      onGenerate({
+        ...stateOverride,
+        config: {
+          ...stateOverride?.config,
+          editTarget: 'general',
+          editMode: 'smart-type',
+          targetObjectType: 'other',
+          semanticObjectSelections: [],
+          customMaterialPrompt: existingPrompt || AUTO_MATERIAL_REPLACEMENT_PROMPT,
+        },
+      });
+      return;
+    }
+    onGenerate(stateOverride);
+  }, [isMaterialReplaceStep, materialReplacementMode, onGenerate, previewValidation.missingItems, previewValidation.valid, state.config.customMaterialPrompt, state.config.prompt]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || import.meta.env.MODE === 'test' || !isMaterialReplaceStep) return;
+    console.debug('[MaterialReplacement] preview readiness', {
+      hasSourceImage: Boolean(sourceImageUrl),
+      replacementType: state.config.editTarget || 'material',
+      hasReference: Boolean(activeReplacementReferenceUrl),
+      maskMode: materialReplaceSelectionMode,
+      hasMask: hasMaskSelection,
+      hasValidMaskPixels,
+      maskConfirmed: materialMaskSelectionMode !== 'smart' || state.config.smartMaskConfirmed === true,
+      isUploading: isReplacementUploadInProgress,
+      isSegmenting: state.config.smartMaskIsRefining === true,
+      isGeneratingPreview: state.isGenerating,
+      canClickPreview,
+      previewButtonHint,
+      validationMissingItems: previewValidation.missingItems,
+    });
+  }, [activeReplacementReferenceUrl, canClickPreview, hasMaskSelection, hasValidMaskPixels, isMaterialReplaceStep, isReplacementUploadInProgress, materialMaskSelectionMode, materialReplaceSelectionMode, previewButtonHint, previewValidationKey, sourceImageUrl, state.config.editTarget, state.config.smartMaskConfirmed, state.config.smartMaskIsRefining, state.isGenerating]);
   const providerForStatus = backendProvider || state.generationProvider;
-  const originalImageUrl = state.inputImage ? getUploadedImageSrc(state.inputImage) : null;
   const resultOptions = state.generationResults.length > 0
     ? state.generationResults
     : state.outputImage
@@ -181,7 +314,13 @@ export function MainWorkspace({
     || resultOptions.find(result => result.isSelected)
     || resultOptions[0]
     || null;
-  const previewImage = getOriginalResultImageUrl(selectedResult, state.outputImage);
+  const resultViewerData = createResultViewerData({
+    inputImage: state.inputImage,
+    selectedResult,
+    outputImage: state.outputImage,
+  });
+  const originalImageUrl = resultViewerData.originalImage || null;
+  const previewImage = resultViewerData.resultImage || null;
   const generationStartedAt = state.generationJobDiagnostics?.timing?.jobStartedAt || state.generationCreatedAt;
   const statusLabel = readGenerationStatusLabel(state.generationJobDiagnostics?.phase, state.generationJobStatus, state.generationStatus);
   const resultPanelTitle = isModelSnapshotStep ? '白模快渲结果' : isFloorplanStep ? '材质设置与结果' : isStyleRenderStep ? '渲染设置与结果' : '输出 / 状态';
@@ -588,6 +727,10 @@ export function MainWorkspace({
     setIsCreatingContinuousEdit(false);
     setFloorPlanHasDerivedState(false);
     setFloorPlanWorkspaceRevision(current => current + 1);
+    dispatchDrawingUi({
+      type: 'reset',
+      state: { activeTool: 'region-recognition', viewerMode: 'original', workflowStage: 'uploaded', isInspectingResult: false },
+    });
   }, [invalidateFloorPlanRequests, onCancelGeneration, onReset, onUpdateInputImage, state]);
 
   const handleResetFloorPlanAll = useCallback(() => {
@@ -612,6 +755,10 @@ export function MainWorkspace({
     setIsCreatingContinuousEdit(false);
     setFloorPlanHasDerivedState(false);
     setFloorPlanWorkspaceRevision(current => current + 1);
+    dispatchDrawingUi({
+      type: 'reset',
+      state: { activeTool: 'region-recognition', viewerMode: 'original', workflowStage: 'empty', isInspectingResult: false },
+    });
     Promise.resolve().then(() => {
       floorPlanResettingRef.current = false;
     });
@@ -638,31 +785,10 @@ export function MainWorkspace({
           onSendResultToStep={onSendResultToStep}
           onRetryVariant={handleRetryDesignVariant}
           onRenameGenerationResult={onRenameGenerationResult}
-        />
-        <GenerationStatusPanel
-          step={step}
-          state={state}
-          title="方案变体结果"
-          statusLabel={statusLabel}
-          elapsedSeconds={elapsedSeconds}
+          onDeleteGenerationResult={onDeleteGenerationResult || (() => undefined)}
           canGenerate={canGenerate}
           disabledReason={generateDisabledReason}
-          previewImage={previewImage}
-          originalImageUrl={originalImageUrl}
-          resultOptions={resultOptions}
-          selectedResultId={selectedResult?.id || null}
-          viewModeOptions={viewModeOptions}
-          topPanels={null}
-          projectName={projectName || selectedProjectId || 'archai-project'}
-          onGenerate={onGenerate}
-          onRegenerate={onRegenerate}
           onCancelGeneration={onCancelGeneration}
-          onSelectGenerationResult={onSelectGenerationResult}
-          onToggleGenerationFavorite={onToggleGenerationFavorite}
-          onSecondaryEditResult={onSecondaryEditResult}
-          onSendResultToStep={onSendResultToStep}
-          onSetViewMode={onSetViewMode}
-          onNextStep={onGenerate}
           onReset={onReset}
         />
       </div>
@@ -671,16 +797,18 @@ export function MainWorkspace({
 
   if (isPlanColorizeStep) {
     return (
-      <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden">
+      <div className="workspace-layout workspace-surface flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto lg:flex-row lg:gap-0 lg:overflow-hidden">
         <input ref={inputFileRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} className="hidden" onChange={event => { void handleFileSelected('input', event.currentTarget.files); event.currentTarget.value = ''; }} />
         <PlanColorizePanel
           state={state}
-          previewImage={previewImage}
+          viewerData={resultViewerData}
+          projectName={projectName || selectedProjectId || 'archai-project'}
           uploadError={uploadErrors.input}
           onUploadInput={() => handleUploadClick('input')}
           onUpdateInputImage={onUpdateInputImage}
           onUpdateConfig={onUpdateConfig}
           onGenerate={onGenerate}
+          onSetViewMode={onSetViewMode}
         />
         <GenerationStatusPanel
           step={step}
@@ -707,6 +835,8 @@ export function MainWorkspace({
           onSetViewMode={onSetViewMode}
           onNextStep={onGenerate}
           onReset={onReset}
+          showResultViewer={false}
+          className="max-h-[65vh] lg:max-h-none"
         />
       </div>
     );
@@ -715,12 +845,14 @@ export function MainWorkspace({
   if (isModelSnapshotStep) {
     return (
       <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden">
-        <ModelSnapshotRenderPanel
-          state={state}
-          onUpdateConfig={onUpdateConfig}
-          onUpdateInputImage={onUpdateInputImage}
-          onGenerate={onGenerate}
-        />
+        <Suspense fallback={<ModelWorkspaceLoading label="正在加载白模快渲工作区…" />}>
+          <ModelSnapshotRenderPanel
+            state={state}
+            onUpdateConfig={onUpdateConfig}
+            onUpdateInputImage={onUpdateInputImage}
+            onGenerate={onGenerate}
+          />
+        </Suspense>
         <GenerationStatusPanel
           step={step}
           state={state}
@@ -754,18 +886,20 @@ export function MainWorkspace({
   if (isPanoramaQuickRenderStep) {
     return (
       <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden">
-        <PanoramaQuickRenderPanel
-          state={state}
-          config={state.config}
-          projectId={selectedProjectId}
-          projectName={projectName || selectedProjectId || 'archai-project'}
-          provider={providerForStatus}
-          onUpdateConfig={onUpdateConfig}
-          onUpdateInputImage={onUpdateInputImage}
-          onGenerate={onGenerate}
-          onHistoryRecord={onHistoryRecord}
-          onSecondaryEditResult={onSecondaryEditResult}
-        />
+        <Suspense fallback={<ModelWorkspaceLoading label="正在加载全景模型工作区…" />}>
+          <PanoramaQuickRenderPanel
+            state={state}
+            config={state.config}
+            projectId={selectedProjectId}
+            projectName={projectName || selectedProjectId || 'archai-project'}
+            provider={providerForStatus}
+            onUpdateConfig={onUpdateConfig}
+            onUpdateInputImage={onUpdateInputImage}
+            onGenerate={onGenerate}
+            onHistoryRecord={onHistoryRecord}
+            onSecondaryEditResult={onSecondaryEditResult}
+          />
+        </Suspense>
       </div>
     );
   }
@@ -780,6 +914,8 @@ export function MainWorkspace({
           onUpdateConfig={onUpdateConfig}
           onGenerate={onGenerate}
           onContinueRefineSource={onContinueObjectInsertRefine}
+          onSecondaryEditResult={onSecondaryEditResult}
+          onSendResultToStep={onSendResultToStep}
           projectName={projectName || selectedProjectId || 'archai-project'}
           isAdmin={isAdmin}
         />
@@ -797,6 +933,7 @@ export function MainWorkspace({
         onUpdateConfig={onUpdateConfig}
         onGenerate={onGenerate}
         onSendResultToStep={onSendResultToStep}
+        onSecondaryEditResult={onSecondaryEditResult}
       />
     );
   }
@@ -810,18 +947,30 @@ export function MainWorkspace({
         onUpdateConfig={onUpdateConfig}
         onGenerate={onGenerate}
         onSendResultToStep={onSendResultToStep}
+        onSecondaryEditResult={onSecondaryEditResult}
       />
     );
   }
 
   return (
-    <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden p-3">
+    <div className={`workspace-layout workspace-surface flex min-h-0 flex-1 ${isFloorplanStep ? 'flex-col overflow-hidden' : 'overflow-hidden p-3'}`}>
       <input ref={inputFileRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} className="hidden" onChange={event => { void handleFileSelected('input', event.currentTarget.files); event.currentTarget.value = ''; }} />
       <input ref={materialFileRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} className="hidden" onChange={event => { void handleFileSelected('material', event.currentTarget.files); event.currentTarget.value = ''; }} />
       <input ref={materialTextureFileRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} multiple className="hidden" onChange={event => { void handleTextureFiles(event.currentTarget.files); event.currentTarget.value = ''; }} />
       <input ref={furnitureReferenceFileRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} multiple className="hidden" onChange={event => { void handleFurnitureReferenceFiles(event.currentTarget.files); event.currentTarget.value = ''; }} />
 
-      <aside className="workspace-side-panel glass-panel flex w-80 shrink-0 flex-col overflow-y-auto rounded-l-3xl border border-white/60 p-4 custom-scrollbar">
+      {isFloorplanStep ? (
+        <DrawingToolNavigation
+          activeTool={drawingUiState.activeTool}
+          workflowStage={drawingUiState.workflowStage}
+          onSelectTool={handleSelectDrawingTool}
+        />
+      ) : null}
+
+      <div className={isFloorplanStep
+        ? 'drawing-workspace grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-4 overflow-hidden p-3'
+        : 'contents'}>
+      <aside data-testid={isFloorplanStep ? 'drawing-settings-panel' : undefined} className={`drawing-left-panel workspace-side-panel glass-panel flex shrink-0 flex-col overflow-y-auto overflow-x-hidden border border-white/60 p-4 custom-scrollbar ${isFloorplanStep ? 'w-full rounded-2xl lg:rounded-l-3xl' : 'w-80 rounded-l-3xl'}`}>
         <InputImagePanel
           step={step}
           inputImage={state.inputImage}
@@ -852,6 +1001,7 @@ export function MainWorkspace({
               config={state.config}
               isFloorplanStep={isFloorplanStep}
               compactInpaint={isLocalInpaintingStep(step)}
+              activeDrawingTool={isFloorplanStep ? drawingUiState.activeTool : undefined}
               onUpdateConfig={onUpdateConfig}
               onOpenPromptTemplatePanel={() => setIsPromptTemplatePanelOpen(true)}
             />
@@ -863,26 +1013,61 @@ export function MainWorkspace({
       </aside>
 
       {isFloorplanStep ? (
-        <FloorPlanRegionPanel
-          key={`floor-plan-workspace-${floorPlanWorkspaceRevision}`}
-          image={state.inputImage}
-          onUpload={() => handleUploadClick('input')}
-          onResetRegionsAndMaterials={handleResetFloorPlanRegionsAndMaterials}
-          onResetAll={handleResetFloorPlanAll}
-          onDerivedStateChange={setFloorPlanHasDerivedState}
-          creditBalance={creditBalance}
-          onRefreshCreditBalance={onRefreshCreditBalance}
-          onEnsureProject={onEnsureProject}
-        />
-      ) : step === GenerationStep.LocalInpainting || (isMaterialReplaceStep && materialReplaceEditMode === 'mask') ? (
+        <section data-testid="drawing-viewer" className="drawing-viewer relative z-[1] flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <DrawingViewerToolbar
+            viewerMode={drawingUiState.viewerMode}
+            hasOriginal={Boolean(originalImageUrl)}
+            hasResult={Boolean(previewImage)}
+            canReturnToEditor={usesDrawingRegionWorkflow && drawingUiState.isInspectingResult}
+            onChange={handleSetDrawingViewerMode}
+            onReturnToEditor={() => dispatchDrawingUi({ type: 'return-to-editor' })}
+          />
+          {usesDrawingRegionWorkflow && !drawingUiState.isInspectingResult ? (
+            <FloorPlanRegionPanel
+              key={`floor-plan-workspace-${floorPlanWorkspaceRevision}`}
+              image={state.inputImage}
+              onUpload={() => handleUploadClick('input')}
+              onResetRegionsAndMaterials={handleResetFloorPlanRegionsAndMaterials}
+              onResetAll={handleResetFloorPlanAll}
+              onDerivedStateChange={setFloorPlanHasDerivedState}
+              creditBalance={creditBalance}
+              onRefreshCreditBalance={onRefreshCreditBalance}
+              onEnsureProject={onEnsureProject}
+              config={state.config}
+              onUpdateConfig={onUpdateConfig}
+              activeTool={drawingUiState.activeTool}
+              onRequestTool={handleSelectDrawingTool}
+            />
+          ) : (
+            <ResultViewer
+              data={resultViewerData}
+              viewMode={toStepViewMode(drawingUiState.viewerMode)}
+              onViewModeChange={viewMode => handleSetDrawingViewerMode(fromStepViewMode(viewMode))}
+              isGenerating={state.isGenerating}
+              generationProgress={state.generationProgress}
+              projectName={projectName || selectedProjectId || 'archai-project'}
+              featureLabel="图纸表达"
+              className="h-full min-h-0 flex-1 rounded-none border-0 shadow-none"
+              showTabs={false}
+            />
+          )}
+        </section>
+      ) : step === GenerationStep.LocalInpainting || isMaterialReplaceStep ? (
         <InpaintMaskPanel
           inputImage={state.inputImage}
           maskImageDataUrl={state.maskImage?.dataUrl || null}
+          protectionMaskDataUrl={state.protectionMaskImage?.dataUrl || null}
           useFullImageMask={state.useFullImageMask}
           providerForStatus={providerForStatus}
           onUploadInput={() => handleUploadClick('input')}
           onUpdateMaskImage={onUpdateMaskImage}
           materialTexturesPanel={materialTexturesPanel}
+          mode={isMaterialReplaceStep ? 'material-replace' : 'local-inpaint'}
+          config={state.config}
+          resultImageUrl={previewImage}
+          resultAssetId={getOriginalResultAssetId(selectedResult)}
+          materialTextureUrl={state.materialTextures[0]?.previewUrl || state.materialTextures[0]?.publicUrl || state.materialTextures[0]?.url || null}
+          onUpdateConfig={onUpdateConfig}
         />
       ) : (
         <ResultPreviewPanel
@@ -918,9 +1103,10 @@ export function MainWorkspace({
             {isFloorplanStep || isMaterialReplaceStep ? materialTexturesPanel : null}
           </>
         )}
+        validationErrors={isMaterialReplaceStep ? previewValidationErrors : undefined}
         projectName={projectName || selectedProjectId || 'archai-project'}
-        onGenerate={onGenerate}
-        onRegenerate={onRegenerate}
+        onGenerate={isMaterialReplaceStep ? handleGeneratePreview : onGenerate}
+        onRegenerate={isMaterialReplaceStep ? () => handleGeneratePreview() : onRegenerate}
         onCancelGeneration={onCancelGeneration}
         onSelectGenerationResult={onSelectGenerationResult}
         onToggleGenerationFavorite={onToggleGenerationFavorite}
@@ -931,7 +1117,9 @@ export function MainWorkspace({
         onNextStep={onNextStep}
         onReset={isFloorplanStep ? handleResetFloorPlanAll : onReset}
         resetLabel={isFloorplanStep ? '全部重置' : undefined}
+        layout={isFloorplanStep ? 'floor-plan' : 'default'}
       />
+      </div>
 
       <Suspense fallback={null}>
         <MaterialLibrary
@@ -962,6 +1150,15 @@ function revokeFloorPlanDerivedBlobUrls(state: StepState): void {
   revokeUploadedImagePreview(state.maskImage);
   state.materialTextures.forEach(texture => revokeBlobUrl(texture.previewUrl));
   state.furnitureReferences.forEach(reference => revokeBlobUrl(reference.previewUrl));
+}
+
+function ModelWorkspaceLoading({ label }: { label: string }) {
+  return (
+    <div className="flex min-h-[420px] min-w-0 flex-1 flex-col items-center justify-center gap-4 bg-slate-50 text-slate-500">
+      <div className="h-11 w-11 animate-spin rounded-full border-4 border-blue-100 border-t-blue-500" />
+      <p className="text-sm font-bold">{label}</p>
+    </div>
+  );
 }
 
 function revokeFloorPlanAllBlobUrls(state: StepState): void {

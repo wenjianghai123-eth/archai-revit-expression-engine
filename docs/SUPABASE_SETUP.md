@@ -319,6 +319,14 @@ create table if not exists public.credit_transactions (
 
 For an existing Supabase project, run the repeatable migration in [20260609_supabase_schema_alignment.sql](migrations/20260609_supabase_schema_alignment.sql), then run the Supabase migration `supabase/migrations/20260615001000_upgrade_prompt_templates_previews.sql` if the project already has an older `prompt_templates` table. These scripts create missing tables, add missing columns with `add column if not exists`, refresh indexes, replace `adjust_credits_atomic`, remove strict `step` checks, and end with `select pg_notify('pgrst', 'reload schema');`.
 
+For durable production generation workers, also apply
+`supabase/migrations/20260716002000_harden_generation_workers.sql`. It adds
+generation job lease/retry/timeout/idempotency columns, job-scoped result keys,
+`claim_generation_job`, `renew_generation_job_lease`, and the atomic
+`refund_generation_job_once` RPC. Run the API with
+`GENERATION_WORKER_MODE=external` and run `npm run start:worker` as a separate
+service using the same Supabase, file-storage, and provider environment.
+
 ## Indexes
 
 ```sql
@@ -755,7 +763,7 @@ Current role values are `admin` and `member` only. Do not create or migrate prof
 
 This setup is enough for a developer to initialize Supabase and run the current app, but it is not a complete production operations plan.
 
-- The in-process generation worker should be replaced or backed by a durable queue before serious production traffic.
+- Keep the embedded worker for JSON/local development only. Production should run the Supabase-backed standalone worker and monitor expired leases/retry exhaustion.
 - Add database backups, monitoring, alerting, provider health checks, and operational dashboards.
 - Keep `ENABLE_LEGACY_GENERATION_ENDPOINTS=false` in production.
 - Keep `ENABLE_PROVIDER_FALLBACK=false` in production if mock output must never be shown for failed real-provider jobs.

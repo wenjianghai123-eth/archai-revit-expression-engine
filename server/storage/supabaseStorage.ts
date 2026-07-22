@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
   CreateGenerationJobInput,
+  ClaimGenerationJobInput,
   AdminDashboard,
   CreateGenerationRecordInput,
   CreateGenerationResultInput,
@@ -34,6 +35,8 @@ import {
   UpdateUserProfileInput,
   UserProfile,
   EditSession, EditMessage, AssetVersion, CreateEditSessionInput, CreateEditMessageInput, CreateAssetVersionInput,
+  DesignWorkflow, DesignWorkflowNode, CreateDesignWorkflowInput, CreateDesignWorkflowNodeInput,
+  UpdateDesignWorkflowInput, UpdateDesignWorkflowNodeInput,
 } from './types';
 
 type ProjectRow = {
@@ -89,6 +92,20 @@ type GenerationJobRow = {
   credit_refunded?: boolean | null;
   failure_reason?: string | null;
   diagnostics?: unknown;
+  idempotency_key?: string | null;
+  attempt_count?: number | null;
+  max_attempts?: number | null;
+  next_attempt_at?: string | null;
+  lease_owner?: string | null;
+  lease_expires_at?: string | null;
+  heartbeat_at?: string | null;
+  execution_timeout_at?: string | null;
+  provider_started_at?: string | null;
+  provider_finished_at?: string | null;
+  provider_duration_ms?: number | null;
+  last_error_code?: string | null;
+  last_error_category?: GenerationJob['lastErrorCategory'];
+  last_error_retryable?: boolean | null;
 };
 
 type GenerationResultRow = {
@@ -100,7 +117,37 @@ type GenerationResultRow = {
   image_url: string;
   is_selected: boolean;
   is_favorite: boolean;
+  result_key?: string | null;
   metadata?: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type DesignWorkflowRow = {
+  id: string;
+  user_id: string;
+  project_id: string;
+  title: string;
+  status: DesignWorkflow['status'];
+  current_node_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type DesignWorkflowNodeRow = {
+  id: string;
+  workflow_id: string;
+  parent_node_id: string | null;
+  stage_key: DesignWorkflowNode['stageKey'];
+  status: DesignWorkflowNode['status'];
+  source_feature: string | null;
+  input_asset_id: string | null;
+  parent_job_id: string | null;
+  parent_result_id: string | null;
+  output_job_id: string | null;
+  output_result_id: string | null;
+  output_asset_id: string | null;
+  metadata: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 };
@@ -149,9 +196,9 @@ type FloorPlanRegionMaterialRow = {
   updated_at: string;
 };
 
-type EditSessionRow = { id:string; user_id:string; project_id:string|null; source_asset_id:string; original_version_id:string|null; current_version_id:string|null; title:string; permanent_constraints:Record<string,unknown>; aspect_ratio:string|null; status:EditSession['status']; created_at:string; updated_at:string };
+type EditSessionRow = { id:string; user_id:string; project_id:string|null; source_asset_id:string; original_version_id:string|null; current_version_id:string|null; primary_version_id?:string|null; final_version_id?:string|null; title:string; permanent_constraints:Record<string,unknown>; aspect_ratio:string|null; status:EditSession['status']; created_at:string; updated_at:string };
 type EditMessageRow = { id:string; session_id:string; role:EditMessage['role']; content:string; base_version_id:string|null; output_version_id:string|null; generation_job_id:string|null; status:EditMessage['status']; client_request_id:string|null; error_code:string|null; error_message:string|null; created_at:string };
-type AssetVersionRow = { id:string; asset_id:string; session_id:string; parent_version_id:string|null; version_number:number; storage_path:string; public_url:string; user_instruction:string; compiled_prompt:string; provider:string|null; model:string|null; generation_job_id:string|null; created_by:string; created_at:string };
+type AssetVersionRow = { id:string; asset_id:string; session_id:string; parent_version_id:string|null; restored_from_version_id?:string|null; version_number:number; display_name?:string|null; note?:string|null; storage_path:string; public_url:string; user_instruction:string; compiled_prompt:string; provider:string|null; model:string|null; generation_job_id:string|null; created_by:string; created_at:string; exported_at?:string|null };
 
 type PromptTemplateRow = {
   id: string;
@@ -268,6 +315,7 @@ export class SupabaseStorageError extends Error {
     | 'SUPABASE_SCHEMA_MISMATCH'
     | 'SUPABASE_DATABASE_ERROR'
     | 'CREDIT_RPC_MISSING'
+    | 'GENERATION_WORKER_SCHEMA_NOT_READY'
     | 'GENERATION_JOB_CREATE_FAILED'
     | 'SUPABASE_STORAGE_ERROR';
   readonly supabaseCode?: string;
@@ -518,6 +566,16 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     const project = await this.getProject(input.projectId, input.userId);
     const job = await this.getGenerationJob(input.jobId, input.userId);
     if (!project || !job) return null;
+    if (input.resultKey) {
+      const existing = await this.client
+        .from('generation_results')
+        .select('*')
+        .eq('job_id', input.jobId)
+        .eq('result_key', input.resultKey)
+        .maybeSingle();
+      assertNoSupabaseError(existing.error, 'reading idempotent generation result');
+      if (existing.data) return mapGenerationResultRow(existing.data as GenerationResultRow);
+    }
 
     if (input.isSelected) {
       await this.client
@@ -537,6 +595,7 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       image_url: input.imageUrl,
       is_selected: input.isSelected ?? false,
       is_favorite: input.isFavorite ?? false,
+      result_key: input.resultKey ?? null,
       metadata: input.metadata ?? null,
       created_at: now,
       updated_at: now,
@@ -616,8 +675,25 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       credit_cost: input.creditCost ?? 0,
       credit_refunded: false,
       failure_reason: null,
+      idempotency_key: input.idempotencyKey ?? null,
+      attempt_count: 0,
+      max_attempts: Math.max(1, input.maxAttempts ?? readPositiveInteger(process.env.GENERATION_JOB_MAX_ATTEMPTS, 3)),
+      next_attempt_at: null,
+      lease_owner: null,
+      lease_expires_at: null,
+      heartbeat_at: null,
+      execution_timeout_at: null,
+      provider_started_at: null,
+      provider_finished_at: null,
+      provider_duration_ms: null,
+      last_error_code: null,
+      last_error_category: null,
+      last_error_retryable: null,
     };
     const { data, error } = await this.client.from('generation_jobs').insert(row).select('*').single();
+    if (error && input.idempotencyKey && error.code === '23505') {
+      return this.getGenerationJobByIdempotencyKey(input.userId, input.idempotencyKey);
+    }
     assertNoSupabaseError(error, 'creating generation job');
 
     await this.client.from('projects').update({ updated_at: now }).eq('id', input.projectId).eq('user_id', input.userId);
@@ -633,6 +709,17 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     return data ? mapGenerationJobRow(data as GenerationJobRow) : null;
   }
 
+  async getGenerationJobByIdempotencyKey(userId: string, idempotencyKey: string): Promise<GenerationJob | null> {
+    const { data, error } = await this.client
+      .from('generation_jobs')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('idempotency_key', idempotencyKey)
+      .maybeSingle();
+    assertNoSupabaseError(error, 'reading idempotent generation job');
+    return data ? mapGenerationJobRow(data as GenerationJobRow) : null;
+  }
+
   async listRunnableGenerationJobs(): Promise<GenerationJob[]> {
     const { data, error } = await this.client
       .from('generation_jobs')
@@ -644,7 +731,45 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     return ((data ?? []) as GenerationJobRow[]).map(mapGenerationJobRow);
   }
 
+  async claimGenerationJob(input: ClaimGenerationJobInput): Promise<GenerationJob | null> {
+    const { data, error } = await this.client.rpc('claim_generation_job', {
+      p_worker_id: input.workerId,
+      p_lease_seconds: Math.max(1, Math.ceil(input.leaseDurationMs / 1000)),
+      p_timeout_seconds: Math.max(1, Math.ceil(input.executionTimeoutMs / 1000)),
+      p_job_id: input.preferredJobId ?? null,
+    });
+    assertNoSupabaseError(error, 'claiming generation job');
+    const row = Array.isArray(data) ? data[0] as GenerationJobRow | undefined : data as GenerationJobRow | null;
+    return row ? mapGenerationJobRow(row) : null;
+  }
+
+  async renewGenerationJobLease(id: string, workerId: string, leaseDurationMs: number): Promise<boolean> {
+    const { data, error } = await this.client.rpc('renew_generation_job_lease', {
+      p_job_id: id,
+      p_worker_id: workerId,
+      p_lease_seconds: Math.max(1, Math.ceil(leaseDurationMs / 1000)),
+    });
+    assertNoSupabaseError(error, 'renewing generation job lease');
+    return data === true;
+  }
+
+  async updateGenerationJobWithLease(
+    id: string,
+    workerId: string,
+    input: UpdateGenerationJobInput,
+  ): Promise<GenerationJob | null> {
+    return this.updateGenerationJobInternal(id, input, workerId);
+  }
+
   async updateGenerationJob(id: string, input: UpdateGenerationJobInput): Promise<GenerationJob | null> {
+    return this.updateGenerationJobInternal(id, input);
+  }
+
+  private async updateGenerationJobInternal(
+    id: string,
+    input: UpdateGenerationJobInput,
+    workerId?: string,
+  ): Promise<GenerationJob | null> {
     const patch: Partial<GenerationJobRow> = { updated_at: new Date().toISOString() };
     if (input.status !== undefined) patch.status = input.status;
     if (input.progress !== undefined) patch.progress = input.progress;
@@ -656,6 +781,19 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     if (input.creditCost !== undefined) patch.credit_cost = input.creditCost;
     if (input.creditRefunded !== undefined) patch.credit_refunded = input.creditRefunded;
     if (input.failureReason !== undefined) patch.failure_reason = input.failureReason;
+    if (input.attemptCount !== undefined) patch.attempt_count = input.attemptCount;
+    if (input.maxAttempts !== undefined) patch.max_attempts = input.maxAttempts;
+    if (input.nextAttemptAt !== undefined) patch.next_attempt_at = input.nextAttemptAt;
+    if (input.leaseOwner !== undefined) patch.lease_owner = input.leaseOwner;
+    if (input.leaseExpiresAt !== undefined) patch.lease_expires_at = input.leaseExpiresAt;
+    if (input.heartbeatAt !== undefined) patch.heartbeat_at = input.heartbeatAt;
+    if (input.executionTimeoutAt !== undefined) patch.execution_timeout_at = input.executionTimeoutAt;
+    if (input.providerStartedAt !== undefined) patch.provider_started_at = input.providerStartedAt;
+    if (input.providerFinishedAt !== undefined) patch.provider_finished_at = input.providerFinishedAt;
+    if (input.providerDurationMs !== undefined) patch.provider_duration_ms = input.providerDurationMs;
+    if (input.lastErrorCode !== undefined) patch.last_error_code = input.lastErrorCode;
+    if (input.lastErrorCategory !== undefined) patch.last_error_category = input.lastErrorCategory;
+    if (input.lastErrorRetryable !== undefined) patch.last_error_retryable = input.lastErrorRetryable;
     if (input.diagnostics !== undefined) {
       const current = await this.getGenerationJob(id);
       patch.config = {
@@ -664,12 +802,12 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       };
     }
 
-    const { data, error } = await this.client
+    let query = this.client
       .from('generation_jobs')
       .update(patch)
-      .eq('id', id)
-      .select('*')
-      .maybeSingle();
+      .eq('id', id);
+    if (workerId) query = query.eq('lease_owner', workerId);
+    const { data, error } = await query.select('*').maybeSingle();
 
     assertNoSupabaseError(error, 'updating generation job');
     return data ? mapGenerationJobRow(data as GenerationJobRow) : null;
@@ -688,6 +826,9 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       progress: Math.min(current.progress, 99),
       failureReason: 'cancelled',
       finishedAt: now,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      heartbeatAt: null,
     });
   }
 
@@ -714,6 +855,169 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     const { data, error } = await query.maybeSingle();
     assertNoSupabaseError(error, 'reading image asset');
     return data ? mapImageAssetRow(data as ImageAssetRow) : null;
+  }
+
+  async createDesignWorkflow(input: CreateDesignWorkflowInput): Promise<DesignWorkflow> {
+    const now = new Date().toISOString();
+    const row: DesignWorkflowRow = {
+      id: `design_workflow_${randomUUID()}`,
+      user_id: input.userId,
+      project_id: input.projectId,
+      title: input.title,
+      status: 'active',
+      current_node_id: null,
+      created_at: now,
+      updated_at: now,
+    };
+    const { data, error } = await this.client
+      .from('project_design_workflows')
+      .insert(row)
+      .select('*')
+      .single();
+    assertNoSupabaseError(error, 'creating project design workflow');
+    return mapDesignWorkflowRow(data as DesignWorkflowRow);
+  }
+
+  async getActiveDesignWorkflow(projectId: string, userId: string) {
+    const { data, error } = await this.client
+      .from('project_design_workflows')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('user_id', userId)
+      .neq('status', 'archived')
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    assertNoSupabaseError(error, 'reading active project design workflow');
+    return data ? mapDesignWorkflowRow(data as DesignWorkflowRow) : null;
+  }
+
+  async getDesignWorkflow(id: string, projectId: string, userId: string) {
+    const { data, error } = await this.client
+      .from('project_design_workflows')
+      .select('*')
+      .eq('id', id)
+      .eq('project_id', projectId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    assertNoSupabaseError(error, 'reading project design workflow');
+    return data ? mapDesignWorkflowRow(data as DesignWorkflowRow) : null;
+  }
+
+  async updateDesignWorkflow(
+    id: string,
+    projectId: string,
+    userId: string,
+    input: UpdateDesignWorkflowInput,
+  ) {
+    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (input.currentNodeId !== undefined) patch.current_node_id = input.currentNodeId;
+    if (input.status !== undefined) patch.status = input.status;
+    if (input.title !== undefined) patch.title = input.title;
+    const { data, error } = await this.client
+      .from('project_design_workflows')
+      .update(patch)
+      .eq('id', id)
+      .eq('project_id', projectId)
+      .eq('user_id', userId)
+      .select('*')
+      .maybeSingle();
+    assertNoSupabaseError(error, 'updating project design workflow');
+    return data ? mapDesignWorkflowRow(data as DesignWorkflowRow) : null;
+  }
+
+  async listDesignWorkflowNodes(workflowId: string, projectId: string, userId: string) {
+    const workflow = await this.getDesignWorkflow(workflowId, projectId, userId);
+    if (!workflow) return [];
+    const { data, error } = await this.client
+      .from('project_design_workflow_nodes')
+      .select('*')
+      .eq('workflow_id', workflowId)
+      .order('created_at', { ascending: true });
+    assertNoSupabaseError(error, 'listing project design workflow nodes');
+    return ((data || []) as DesignWorkflowNodeRow[]).map(mapDesignWorkflowNodeRow);
+  }
+
+  async getDesignWorkflowNode(
+    id: string,
+    workflowId: string,
+    projectId: string,
+    userId: string,
+  ) {
+    const workflow = await this.getDesignWorkflow(workflowId, projectId, userId);
+    if (!workflow) return null;
+    const { data, error } = await this.client
+      .from('project_design_workflow_nodes')
+      .select('*')
+      .eq('id', id)
+      .eq('workflow_id', workflowId)
+      .maybeSingle();
+    assertNoSupabaseError(error, 'reading project design workflow node');
+    return data ? mapDesignWorkflowNodeRow(data as DesignWorkflowNodeRow) : null;
+  }
+
+  async createDesignWorkflowNode(input: CreateDesignWorkflowNodeInput) {
+    const now = new Date().toISOString();
+    const row: DesignWorkflowNodeRow = {
+      id: `design_workflow_node_${randomUUID()}`,
+      workflow_id: input.workflowId,
+      parent_node_id: input.parentNodeId,
+      stage_key: input.stageKey,
+      status: input.status,
+      source_feature: input.sourceFeature,
+      input_asset_id: input.inputAssetId,
+      parent_job_id: input.parentJobId,
+      parent_result_id: input.parentResultId,
+      output_job_id: input.outputJobId,
+      output_result_id: input.outputResultId,
+      output_asset_id: input.outputAssetId,
+      metadata: input.metadata,
+      created_at: now,
+      updated_at: now,
+    };
+    const { data, error } = await this.client
+      .from('project_design_workflow_nodes')
+      .insert(row)
+      .select('*')
+      .single();
+    assertNoSupabaseError(error, 'creating project design workflow node');
+    return mapDesignWorkflowNodeRow(data as DesignWorkflowNodeRow);
+  }
+
+  async updateDesignWorkflowNode(id: string, input: UpdateDesignWorkflowNodeInput) {
+    const current = await this.client
+      .from('project_design_workflow_nodes')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    assertNoSupabaseError(current.error, 'reading project design workflow node');
+    if (!current.data) return null;
+    const existing = current.data as DesignWorkflowNodeRow;
+    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (input.status !== undefined) patch.status = input.status;
+    if (input.outputJobId !== undefined) patch.output_job_id = input.outputJobId;
+    if (input.outputResultId !== undefined) patch.output_result_id = input.outputResultId;
+    if (input.outputAssetId !== undefined) patch.output_asset_id = input.outputAssetId;
+    if (input.metadata !== undefined) patch.metadata = { ...(existing.metadata || {}), ...input.metadata };
+    const { data, error } = await this.client
+      .from('project_design_workflow_nodes')
+      .update(patch)
+      .eq('id', id)
+      .select('*')
+      .maybeSingle();
+    assertNoSupabaseError(error, 'updating project design workflow node');
+    return data ? mapDesignWorkflowNodeRow(data as DesignWorkflowNodeRow) : null;
+  }
+
+  async listImageAssets(userId: string, limit = 40): Promise<ImageAsset[]> {
+    const { data, error } = await this.client
+      .from('image_assets')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(Math.max(1, Math.min(100, limit)));
+    assertNoSupabaseError(error, 'listing image assets');
+    return ((data || []) as ImageAssetRow[]).map(mapImageAssetRow);
   }
 
   async createFloorPlanRegionSet(input: CreateFloorPlanRegionSetInput): Promise<FloorPlanRegionSet> {
@@ -799,18 +1103,20 @@ export class SupabaseStorageAdapter implements StorageAdapter {
 
   async createEditSession(input: CreateEditSessionInput, sourceAsset: ImageAsset): Promise<{ session: EditSession; version: AssetVersion }> {
     const now = new Date().toISOString(); const sessionId = `edit_session_${randomUUID()}`; const versionId = `asset_version_${randomUUID()}`;
-    const sessionRow: EditSessionRow = { id:sessionId, user_id:input.userId, project_id:input.projectId, source_asset_id:input.sourceAssetId, original_version_id:null, current_version_id:null, title:input.title, permanent_constraints:input.permanentConstraints, aspect_ratio:input.aspectRatio, status:'active', created_at:now, updated_at:now };
+    const sessionRow: EditSessionRow = { id:sessionId, user_id:input.userId, project_id:input.projectId, source_asset_id:input.sourceAssetId, original_version_id:null, current_version_id:null, primary_version_id:null, final_version_id:null, title:input.title, permanent_constraints:input.permanentConstraints, aspect_ratio:input.aspectRatio, status:'active', created_at:now, updated_at:now };
     const createdSession = await this.client.from('edit_sessions').insert(sessionRow).select('*').single(); assertNoSupabaseError(createdSession.error, 'creating edit session');
-    const versionRow: AssetVersionRow = { id:versionId, asset_id:sourceAsset.id, session_id:sessionId, parent_version_id:null, version_number:0, storage_path:sourceAsset.path || sourceAsset.filename, public_url:sourceAsset.publicUrl || sourceAsset.url, user_instruction:'', compiled_prompt:'', provider:null, model:null, generation_job_id:null, created_by:input.userId, created_at:now };
+    const versionRow: AssetVersionRow = { id:versionId, asset_id:sourceAsset.id, session_id:sessionId, parent_version_id:null, restored_from_version_id:null, version_number:0, display_name:'原图', note:'', storage_path:sourceAsset.path || sourceAsset.filename, public_url:sourceAsset.publicUrl || sourceAsset.url, user_instruction:'', compiled_prompt:'', provider:null, model:null, generation_job_id:null, created_by:input.userId, created_at:now, exported_at:null };
     const createdVersion = await this.client.from('asset_versions').insert(versionRow).select('*').single(); assertNoSupabaseError(createdVersion.error, 'creating original asset version');
     const updatedSession = await this.client.from('edit_sessions').update({ original_version_id:versionId, current_version_id:versionId, updated_at:now }).eq('id',sessionId).select('*').single(); assertNoSupabaseError(updatedSession.error, 'linking original edit version');
     return { session: mapEditSessionRow(updatedSession.data as EditSessionRow), version: mapAssetVersionRow(createdVersion.data as AssetVersionRow) };
   }
+  async listEditSessions(userId:string,projectId?:string|null) { let query=this.client.from('edit_sessions').select('*').eq('user_id',userId).order('updated_at',{ascending:false});if(projectId)query=query.eq('project_id',projectId);const {data,error}=await query;assertNoSupabaseError(error,'listing edit sessions');return ((data||[]) as EditSessionRow[]).map(mapEditSessionRow); }
   async getEditSession(id:string,userId:string) { const {data,error}=await this.client.from('edit_sessions').select('*').eq('id',id).eq('user_id',userId).maybeSingle(); assertNoSupabaseError(error,'reading edit session'); return data?mapEditSessionRow(data as EditSessionRow):null; }
-  async updateEditSession(id:string,userId:string,input:Partial<Pick<EditSession,'currentVersionId'|'status'|'title'>>) { const patch:Record<string,unknown>={updated_at:new Date().toISOString()}; if(input.currentVersionId!==undefined)patch.current_version_id=input.currentVersionId;if(input.status!==undefined)patch.status=input.status;if(input.title!==undefined)patch.title=input.title; const {data,error}=await this.client.from('edit_sessions').update(patch).eq('id',id).eq('user_id',userId).select('*').maybeSingle();assertNoSupabaseError(error,'updating edit session');return data?mapEditSessionRow(data as EditSessionRow):null; }
+  async updateEditSession(id:string,userId:string,input:Partial<Pick<EditSession,'currentVersionId'|'primaryVersionId'|'finalVersionId'|'status'|'title'>>) { const patch:Record<string,unknown>={updated_at:new Date().toISOString()}; if(input.currentVersionId!==undefined)patch.current_version_id=input.currentVersionId;if(input.primaryVersionId!==undefined)patch.primary_version_id=input.primaryVersionId;if(input.finalVersionId!==undefined)patch.final_version_id=input.finalVersionId;if(input.status!==undefined)patch.status=input.status;if(input.title!==undefined)patch.title=input.title; const {data,error}=await this.client.from('edit_sessions').update(patch).eq('id',id).eq('user_id',userId).select('*').maybeSingle();assertNoSupabaseError(error,'updating edit session');return data?mapEditSessionRow(data as EditSessionRow):null; }
   async listAssetVersions(sessionId:string,userId:string) { const session=await this.getEditSession(sessionId,userId);if(!session)return [];const {data,error}=await this.client.from('asset_versions').select('*').eq('session_id',sessionId).order('version_number',{ascending:true});assertNoSupabaseError(error,'listing asset versions');return ((data||[]) as AssetVersionRow[]).map(mapAssetVersionRow); }
   async getAssetVersion(id:string,sessionId:string,userId:string) { const session=await this.getEditSession(sessionId,userId);if(!session)return null;const {data,error}=await this.client.from('asset_versions').select('*').eq('id',id).eq('session_id',sessionId).maybeSingle();assertNoSupabaseError(error,'reading asset version');return data?mapAssetVersionRow(data as AssetVersionRow):null; }
-  async createAssetVersion(input:CreateAssetVersionInput) { const row:AssetVersionRow={id:`asset_version_${randomUUID()}`,asset_id:input.assetId,session_id:input.sessionId,parent_version_id:input.parentVersionId,version_number:input.versionNumber,storage_path:input.storagePath,public_url:input.publicUrl,user_instruction:input.userInstruction,compiled_prompt:input.compiledPrompt,provider:input.provider,model:input.model,generation_job_id:input.generationJobId,created_by:input.createdBy,created_at:new Date().toISOString()};const {data,error}=await this.client.from('asset_versions').insert(row).select('*').single();assertNoSupabaseError(error,'creating asset version');return mapAssetVersionRow(data as AssetVersionRow); }
+  async createAssetVersion(input:CreateAssetVersionInput) { const row:AssetVersionRow={id:`asset_version_${randomUUID()}`,asset_id:input.assetId,session_id:input.sessionId,parent_version_id:input.parentVersionId,restored_from_version_id:input.restoredFromVersionId||null,version_number:input.versionNumber,display_name:input.displayName||null,note:input.note||'',storage_path:input.storagePath,public_url:input.publicUrl,user_instruction:input.userInstruction,compiled_prompt:input.compiledPrompt,provider:input.provider,model:input.model,generation_job_id:input.generationJobId,created_by:input.createdBy,created_at:new Date().toISOString(),exported_at:input.exportedAt||null};const {data,error}=await this.client.from('asset_versions').insert(row).select('*').single();assertNoSupabaseError(error,'creating asset version');return mapAssetVersionRow(data as AssetVersionRow); }
+  async updateAssetVersion(id:string,sessionId:string,userId:string,input:Partial<Pick<AssetVersion,'displayName'|'note'|'exportedAt'>>) { const session=await this.getEditSession(sessionId,userId);if(!session)return null;const patch:Record<string,unknown>={};if(input.displayName!==undefined)patch.display_name=input.displayName;if(input.note!==undefined)patch.note=input.note;if(input.exportedAt!==undefined)patch.exported_at=input.exportedAt;if(Object.keys(patch).length===0)return this.getAssetVersion(id,sessionId,userId);const {data,error}=await this.client.from('asset_versions').update(patch).eq('id',id).eq('session_id',sessionId).select('*').maybeSingle();assertNoSupabaseError(error,'updating asset version');return data?mapAssetVersionRow(data as AssetVersionRow):null; }
   async createEditMessage(input:CreateEditMessageInput) { if(input.clientRequestId){const existing=await this.getEditMessageByClientRequest(input.sessionId,input.clientRequestId);if(existing)return existing;}const row:EditMessageRow={id:`edit_message_${randomUUID()}`,session_id:input.sessionId,role:input.role,content:input.content,base_version_id:input.baseVersionId,output_version_id:null,generation_job_id:null,status:input.status,client_request_id:input.clientRequestId,error_code:null,error_message:null,created_at:new Date().toISOString()};const {data,error}=await this.client.from('edit_messages').insert(row).select('*').single();assertNoSupabaseError(error,'creating edit message');return mapEditMessageRow(data as EditMessageRow); }
   async getEditMessage(id:string) { const {data,error}=await this.client.from('edit_messages').select('*').eq('id',id).maybeSingle();assertNoSupabaseError(error,'reading edit message');return data?mapEditMessageRow(data as EditMessageRow):null; }
   async getEditMessageByClientRequest(sessionId:string,clientRequestId:string){const {data,error}=await this.client.from('edit_messages').select('*').eq('session_id',sessionId).eq('client_request_id',clientRequestId).maybeSingle();assertNoSupabaseError(error,'reading idempotent edit message');return data?mapEditMessageRow(data as EditMessageRow):null;}
@@ -996,6 +1302,18 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     return mapShareLinkRow(data as ShareLinkRow);
   }
 
+  async listProjectShareLinks(projectId: string, userId: string): Promise<ShareLink[]> {
+    const project = await this.getProject(projectId, userId);
+    if (!project) return [];
+    const { data, error } = await this.client
+      .from('share_links')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
+    assertNoSupabaseError(error, 'listing project share links');
+    return ((data || []) as ShareLinkRow[]).map(mapShareLinkRow);
+  }
+
   async getShareLinkByToken(token: string): Promise<ShareLink | null> {
     const { data, error } = await this.client.from('share_links').select('*').eq('token', token).maybeSingle();
     assertNoSupabaseError(error, 'reading share link by token');
@@ -1080,6 +1398,14 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     return data ? mapCreditTransactionRow(data as CreditTransactionRow) : null;
   }
 
+  async refundGenerationJobOnce(jobId: string): Promise<boolean> {
+    const { data, error } = await this.client.rpc('refund_generation_job_once', {
+      p_job_id: jobId,
+    });
+    assertNoSupabaseError(error, 'refunding generation job once');
+    return data === true;
+  }
+
   async getAdminDashboard(): Promise<AdminDashboard> {
     const [profiles, projects, jobs, balances, transactions] = await Promise.all([
       this.client.from('profiles').select('*'),
@@ -1108,6 +1434,10 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     for (const job of jobRows) userIds.add(job.user_id);
     for (const balance of balanceRows) userIds.add(balance.user_id);
     for (const transaction of transactionRows) userIds.add(transaction.user_id);
+    const now = Date.now();
+    const providerDurations = mappedJobs
+      .map(job => job.providerDurationMs)
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0);
 
     return {
       stats: {
@@ -1121,6 +1451,16 @@ export class SupabaseStorageAdapter implements StorageAdapter {
           if (transaction.type === 'generate_refund' || transaction.type === 'refund') return total - Math.abs(transaction.amount);
           return total;
         }, 0),
+        queuedJobCount: mappedJobs.filter(job => job.status === 'queued').length,
+        runningJobCount: mappedJobs.filter(job => job.status === 'running').length,
+        retryingJobCount: mappedJobs.filter(job => job.status === 'queued' && job.attemptCount > 0).length,
+        expiredLeaseJobCount: mappedJobs.filter(job => (
+          job.status === 'running' && (!job.leaseExpiresAt || new Date(job.leaseExpiresAt).getTime() <= now)
+        )).length,
+        leasedJobCount: mappedJobs.filter(job => job.status === 'running' && Boolean(job.leaseOwner)).length,
+        averageProviderDurationMs: providerDurations.length > 0
+          ? Math.round(providerDurations.reduce((sum, value) => sum + value, 0) / providerDurations.length)
+          : 0,
       },
       recentJobs: [...mappedJobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 20),
       recentErrorJobs: mappedJobs
@@ -1202,12 +1542,26 @@ function mapGenerationJobRow(row: GenerationJobRow): GenerationJob {
     creditCost: row.credit_cost ?? readNumberFromConfig(row.config, 'creditCost') ?? 0,
     creditRefunded: row.credit_refunded ?? readBooleanFromConfig(row.config, 'creditRefunded') ?? false,
     failureReason: row.failure_reason ?? readStringFromConfig(row.config, 'failureReason') ?? null,
+    idempotencyKey: row.idempotency_key ?? null,
+    attemptCount: row.attempt_count ?? 0,
+    maxAttempts: row.max_attempts ?? readPositiveInteger(process.env.GENERATION_JOB_MAX_ATTEMPTS, 3),
+    nextAttemptAt: row.next_attempt_at ?? null,
+    leaseOwner: row.lease_owner ?? null,
+    leaseExpiresAt: row.lease_expires_at ?? null,
+    heartbeatAt: row.heartbeat_at ?? null,
+    executionTimeoutAt: row.execution_timeout_at ?? null,
+    providerStartedAt: row.provider_started_at ?? null,
+    providerFinishedAt: row.provider_finished_at ?? null,
+    providerDurationMs: row.provider_duration_ms ?? diagnostics?.timing?.providerDurationMs ?? null,
+    lastErrorCode: row.last_error_code ?? null,
+    lastErrorCategory: row.last_error_category ?? null,
+    lastErrorRetryable: row.last_error_retryable ?? null,
   };
 }
 
-function mapEditSessionRow(row:EditSessionRow):EditSession { return {id:row.id,userId:row.user_id,projectId:row.project_id,sourceAssetId:row.source_asset_id,originalVersionId:row.original_version_id || '',currentVersionId:row.current_version_id || '',title:row.title,permanentConstraints:row.permanent_constraints || {},aspectRatio:row.aspect_ratio,status:row.status,createdAt:row.created_at,updatedAt:row.updated_at}; }
+function mapEditSessionRow(row:EditSessionRow):EditSession { return {id:row.id,userId:row.user_id,projectId:row.project_id,sourceAssetId:row.source_asset_id,originalVersionId:row.original_version_id || '',currentVersionId:row.current_version_id || '',primaryVersionId:row.primary_version_id||null,finalVersionId:row.final_version_id||null,title:row.title,permanentConstraints:row.permanent_constraints || {},aspectRatio:row.aspect_ratio,status:row.status,createdAt:row.created_at,updatedAt:row.updated_at}; }
 function mapEditMessageRow(row:EditMessageRow):EditMessage { return {id:row.id,sessionId:row.session_id,role:row.role,content:row.content,baseVersionId:row.base_version_id,outputVersionId:row.output_version_id,generationJobId:row.generation_job_id,status:row.status,clientRequestId:row.client_request_id,errorCode:row.error_code,errorMessage:row.error_message,createdAt:row.created_at}; }
-function mapAssetVersionRow(row:AssetVersionRow):AssetVersion { return {id:row.id,assetId:row.asset_id,sessionId:row.session_id,parentVersionId:row.parent_version_id,versionNumber:row.version_number,storagePath:row.storage_path,publicUrl:row.public_url,userInstruction:row.user_instruction,compiledPrompt:row.compiled_prompt,provider:row.provider,model:row.model,generationJobId:row.generation_job_id,createdBy:row.created_by,createdAt:row.created_at}; }
+function mapAssetVersionRow(row:AssetVersionRow):AssetVersion { return {id:row.id,assetId:row.asset_id,sessionId:row.session_id,parentVersionId:row.parent_version_id,restoredFromVersionId:row.restored_from_version_id||null,versionNumber:row.version_number,displayName:row.display_name||null,note:row.note||'',storagePath:row.storage_path,publicUrl:row.public_url,userInstruction:row.user_instruction,compiledPrompt:row.compiled_prompt,provider:row.provider,model:row.model,generationJobId:row.generation_job_id,createdBy:row.created_by,createdAt:row.created_at,exportedAt:row.exported_at||null}; }
 
 function readDiagnostics(row: GenerationJobRow): GenerationJob['diagnostics'] {
   if (isRecord(row.diagnostics)) return row.diagnostics as GenerationJob['diagnostics'];
@@ -1230,6 +1584,11 @@ function readBooleanFromConfig(config: Record<string, unknown>, key: string): bo
 function readStringFromConfig(config: Record<string, unknown>, key: string): string | undefined {
   const value = config[key];
   return typeof value === 'string' ? value : undefined;
+}
+
+function readPositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
 }
 
 function readGenerationJobStep(config: Record<string, unknown> | undefined): GenerationJob['step'] {
@@ -1262,6 +1621,7 @@ function mapGenerationResultRow(row: GenerationResultRow): GenerationResult {
     imageUrl: row.image_url,
     isSelected: row.is_selected,
     isFavorite: row.is_favorite,
+    resultKey: row.result_key ?? null,
     metadata: row.metadata ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1282,6 +1642,39 @@ function mapImageAssetRow(row: ImageAssetRow): ImageAsset {
     mimeType: row.mime_type,
     size: row.size,
     createdAt: row.created_at,
+  };
+}
+
+function mapDesignWorkflowRow(row: DesignWorkflowRow): DesignWorkflow {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    projectId: row.project_id,
+    title: row.title,
+    status: row.status,
+    currentNodeId: row.current_node_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapDesignWorkflowNodeRow(row: DesignWorkflowNodeRow): DesignWorkflowNode {
+  return {
+    id: row.id,
+    workflowId: row.workflow_id,
+    parentNodeId: row.parent_node_id,
+    stageKey: row.stage_key,
+    status: row.status,
+    sourceFeature: row.source_feature,
+    inputAssetId: row.input_asset_id,
+    parentJobId: row.parent_job_id,
+    parentResultId: row.parent_result_id,
+    outputJobId: row.output_job_id,
+    outputResultId: row.output_result_id,
+    outputAssetId: row.output_asset_id,
+    metadata: row.metadata || {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -1487,6 +1880,19 @@ export function createSupabaseStorageError(error: SupabaseErrorLike, action: str
     return new SupabaseStorageError(
       'CREDIT_RPC_MISSING',
       `${message} Create public.adjust_credits_atomic and grant execute to service_role using docs/SUPABASE_SETUP.md.`,
+      error.code,
+    );
+  }
+
+  if (
+    (action === 'claiming generation job'
+      || action === 'renewing generation job lease'
+      || action === 'refunding generation job once')
+    && isMissingSupabaseFunction(error)
+  ) {
+    return new SupabaseStorageError(
+      'GENERATION_WORKER_SCHEMA_NOT_READY',
+      `${message} Apply supabase/migrations/20260716002000_harden_generation_workers.sql and reload the PostgREST schema.`,
       error.code,
     );
   }

@@ -38,6 +38,7 @@ describe('secondary edit utilities', () => {
       GenerationStep.ObjectInsert,
       GenerationStep.DesignVariants,
       GenerationStep.FreeReferenceImage,
+      GenerationStep.ImagePolish,
     ]);
   });
 });

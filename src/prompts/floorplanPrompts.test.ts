@@ -8,8 +8,8 @@ describe('buildFloorplanColorPrompt', () => {
     const prompt = buildFloorplanColorPrompt();
 
     expect(prompt).toBe(`${DEFAULT_FLOORPLAN_COLOR_PROMPT}\n\n${FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT}`);
-    expect(prompt).toContain('All visible text, labels, legends, room names, annotations, and material notes');
-    expect(prompt).toContain('Do not use Chinese characters');
+    expect(prompt).toContain('All newly generated visible labels, legends, room names, annotations, and material notes');
+    expect(prompt).toContain('Do not use Chinese characters in newly generated text');
     expect(prompt).toContain('室内平面彩平图');
     expect(prompt).toContain('户型结构');
     expect(prompt).toContain('墙体');
@@ -76,9 +76,9 @@ describe('floorplan expression controls', () => {
     expect(prompt).toContain('pure flat colored plan expression');
     expect(prompt).toContain('Linework preservation: strict.');
     expect(prompt).toContain('Extremely strictly preserve the original linework');
-    expect(prompt).toContain('Add a concise graphic legend with English entries only');
-    expect(prompt).toContain('Add clear English area or functional text labels');
-    expect(prompt).toContain('Add an English material legend');
+    expect(prompt).toContain('Add a concise graphic legend in English');
+    expect(prompt).toContain('Add clear area or functional labels in English');
+    expect(prompt).toContain('Add a material legend in English');
     expect(prompt).toContain('If a legend is generated, all legend entries must be in English');
   });
 
@@ -119,7 +119,7 @@ describe('floorplan expression controls', () => {
     expect(controlledPrompt).toContain('Strengthen presentation-board quality');
     expect(controlledPrompt).toContain('Linework preservation: medium.');
     expect(defaultPrompt).toContain('Text language requirement:');
-    expect(controlledPrompt).toContain('Add a concise graphic legend with English entries only');
+    expect(controlledPrompt).toContain('Add a concise graphic legend in English');
   });
 
   it('adds template and room labels to smart floorplan prompt', () => {
@@ -135,7 +135,29 @@ describe('floorplan expression controls', () => {
 
     expect(prompt).toContain('Floorplan color template: commercial presentation.');
     expect(prompt).toContain('Manual room labels');
-    expect(prompt).toContain('Do not copy Chinese text from the input plan');
+    expect(prompt).toContain('translate only newly recreated labels into concise English');
     expect(prompt).toContain('Commercial Area = Commercial Area');
+  });
+
+  it('supports Chinese labels and an explicit no-new-text mode', () => {
+    const chinese = buildFloorplanColorPrompt({
+      floorPlanTextLanguage: 'zh-CN',
+      floorPlanExpressionMode: 'analysis',
+      enableLegend: true,
+      floorplanRoomLabels: [{ id: 'r1', name: '客厅', roomType: 'living-room', positionDescription: '南侧' }],
+    });
+    const noText = buildFloorplanColorPrompt({
+      floorPlanTextLanguage: 'none',
+      enableLegend: true,
+      enableAreaText: true,
+      floorplanRoomLabels: [{ id: 'r1', name: '客厅', roomType: 'living-room', positionDescription: '南侧' }],
+    });
+
+    expect(chinese).toContain('Product mode: analytical drawing expression');
+    expect(chinese).toContain('Text language requirement: Simplified Chinese.');
+    expect(chinese).toContain('客厅 = 客厅');
+    expect(noText).toContain('Text language requirement: do not generate any new text.');
+    expect(noText).not.toContain('Room label guidance');
+    expect(noText).not.toContain('Add a concise graphic legend');
   });
 });

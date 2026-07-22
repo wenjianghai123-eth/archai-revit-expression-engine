@@ -50,6 +50,7 @@ export interface ModelSnapshotMetadata {
   camera?: {
     position?: number[];
     rotation?: number[];
+    quaternion?: number[];
     target?: number[];
     fov?: number;
   };
@@ -58,6 +59,12 @@ export interface ModelSnapshotMetadata {
   clippingHeight?: number;
   xrayEnabled?: boolean;
   edgesEnabled?: boolean;
+  bookmarkId?: string;
+  bookmarkName?: string;
+  cameraPreset?: 'interior' | 'exterior-front' | 'exterior-side' | 'bird-eye' | 'top' | 'custom';
+  batchGroupId?: string;
+  batchIndex?: number;
+  batchCount?: number;
   createdAt: string;
 }
 
@@ -110,7 +117,36 @@ export interface GenerationJob {
   creditCost: number;
   creditRefunded: boolean;
   failureReason: string | null;
+  idempotencyKey: string | null;
+  attemptCount: number;
+  maxAttempts: number;
+  nextAttemptAt: string | null;
+  leaseOwner: string | null;
+  leaseExpiresAt: string | null;
+  heartbeatAt: string | null;
+  executionTimeoutAt: string | null;
+  providerStartedAt: string | null;
+  providerFinishedAt: string | null;
+  providerDurationMs: number | null;
+  lastErrorCode: string | null;
+  lastErrorCategory: GenerationErrorCategory | null;
+  lastErrorRetryable: boolean | null;
 }
+
+export type GenerationErrorCategory =
+  | 'timeout'
+  | 'rate_limit'
+  | 'authentication'
+  | 'invalid_request'
+  | 'content_policy'
+  | 'provider_unavailable'
+  | 'network'
+  | 'input_asset'
+  | 'storage'
+  | 'database'
+  | 'cancelled'
+  | 'lease_lost'
+  | 'unknown';
 
 export type GenerationJobPhase =
   | 'queued'
@@ -204,6 +240,7 @@ export interface GenerationResult {
   imageUrl: string;
   isSelected: boolean;
   isFavorite: boolean;
+  resultKey?: string | null;
   metadata?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
@@ -223,7 +260,47 @@ export interface ImageAsset {
   createdAt: string;
 }
 
+export type DesignWorkflowStageKey =
+  | 'input'
+  | 'base-render'
+  | 'design-variants'
+  | 'material-replace'
+  | 'object-insert'
+  | 'continuous-edit'
+  | 'image-polish'
+  | 'delivery';
+
+export interface DesignWorkflow {
+  id: string;
+  userId: string;
+  projectId: string;
+  title: string;
+  status: 'active' | 'completed' | 'archived';
+  currentNodeId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DesignWorkflowNode {
+  id: string;
+  workflowId: string;
+  parentNodeId: string | null;
+  stageKey: DesignWorkflowStageKey;
+  status: 'active' | 'completed' | 'skipped';
+  sourceFeature: string | null;
+  inputAssetId: string | null;
+  parentJobId: string | null;
+  parentResultId: string | null;
+  outputJobId: string | null;
+  outputResultId: string | null;
+  outputAssetId: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type RegionPolygon = [number, number][];
+export type FloorPlanRegionType = 'living' | 'dining' | 'bedroom' | 'kitchen' | 'bathroom' | 'circulation' | 'service' | 'outdoor' | 'commercial' | 'office' | 'other';
 
 export type RegionEditOperation =
   | { type: 'rename'; regionId: string; name: string }
@@ -233,6 +310,7 @@ export type RegionEditOperation =
   | { type: 'erase'; regionId: string; point: [number, number]; radius: number }
   | { type: 'merge'; sourceRegionIds: string[]; outputRegionId: string }
   | { type: 'split'; sourceRegionId: string; outputRegionIds: string[] }
+  | { type: 'update-metadata'; regionId: string; regionType: FloorPlanRegionType | null; regionUsage: string }
   | { type: 'restore-auto' };
 
 export interface FloorPlanRegion {
@@ -242,6 +320,8 @@ export interface FloorPlanRegion {
   areaRatio: number;
   suggestedName: string | null;
   name: string;
+  regionType?: FloorPlanRegionType | null;
+  regionUsage?: string;
   confidence: number;
   maskAssetId: string | null;
   maskUrl: string | null;
@@ -297,6 +377,8 @@ export interface EditSession {
   sourceAssetId: string;
   originalVersionId: string;
   currentVersionId: string;
+  primaryVersionId?: string | null;
+  finalVersionId?: string | null;
   title: string;
   permanentConstraints: Record<string, unknown>;
   aspectRatio: string | null;
@@ -325,7 +407,10 @@ export interface AssetVersion {
   assetId: string;
   sessionId: string;
   parentVersionId: string | null;
+  restoredFromVersionId?: string | null;
   versionNumber: number;
+  displayName?: string | null;
+  note?: string;
   storagePath: string;
   publicUrl: string;
   userInstruction: string;
@@ -335,6 +420,7 @@ export interface AssetVersion {
   generationJobId: string | null;
   createdBy: string;
   createdAt: string;
+  exportedAt?: string | null;
 }
 
 export type CreateEditSessionInput = Omit<EditSession, 'id' | 'originalVersionId' | 'currentVersionId' | 'status' | 'createdAt' | 'updatedAt'>;
@@ -403,6 +489,7 @@ export interface ModelAsset {
   conversionStatus?: 'idle' | 'converting' | 'succeeded' | 'failed';
   conversionError?: string | null;
   convertedAt?: string;
+  conversionStartedAt?: string;
   previewUrl?: string;
   optimizedUrl?: string;
   thumbnailUrl?: string;
@@ -424,6 +511,7 @@ export interface ModelOptimizationMetadata {
   conversionStatus?: 'idle' | 'converting' | 'succeeded' | 'failed';
   conversionError?: string | null;
   convertedAt?: string;
+  conversionStartedAt?: string;
   previewUrl?: string;
   optimizedUrl?: string;
   thumbnailUrl?: string;
@@ -437,6 +525,7 @@ export interface ModelOptimizationMetadata {
   originalFileSize: number;
   optimizedFileSize?: number;
   optimizationStatus: 'pending' | 'processing' | 'succeeded' | 'failed' | 'skipped';
+  optimizationStartedAt?: string;
   optimizationError?: string;
   faceCount?: number;
   optimizedFaceCount?: number;
@@ -490,6 +579,12 @@ export interface AdminDashboard {
     succeededJobCount: number;
     failedJobCount: number;
     totalCreditsConsumed: number;
+    queuedJobCount: number;
+    runningJobCount: number;
+    retryingJobCount: number;
+    expiredLeaseJobCount: number;
+    leasedJobCount: number;
+    averageProviderDurationMs: number;
   };
   recentJobs: GenerationJob[];
   recentErrorJobs: GenerationJob[];
@@ -512,6 +607,8 @@ export interface AppDatabase {
   assetVersions: AssetVersion[];
   floorPlanRegionSets: FloorPlanRegionSet[];
   floorPlanRegionMaterials: FloorPlanRegionMaterial[];
+  designWorkflows: DesignWorkflow[];
+  designWorkflowNodes: DesignWorkflowNode[];
 }
 
 export type CreateUserProfileInput = {
@@ -562,12 +659,46 @@ export type CreateGenerationJobInput = {
   inputAssetIds: string[];
   provider: string;
   creditCost?: number;
+  idempotencyKey?: string | null;
+  maxAttempts?: number;
 };
 
 export type UpdateGenerationJobInput = Partial<
-  Pick<GenerationJob, 'status' | 'progress' | 'outputAssetId' | 'outputAssetIds' | 'errorMessage' | 'startedAt' | 'finishedAt' | 'creditCost' | 'creditRefunded' | 'failureReason'>
+  Pick<
+    GenerationJob,
+    | 'status'
+    | 'progress'
+    | 'outputAssetId'
+    | 'outputAssetIds'
+    | 'errorMessage'
+    | 'startedAt'
+    | 'finishedAt'
+    | 'creditCost'
+    | 'creditRefunded'
+    | 'failureReason'
+    | 'attemptCount'
+    | 'maxAttempts'
+    | 'nextAttemptAt'
+    | 'leaseOwner'
+    | 'leaseExpiresAt'
+    | 'heartbeatAt'
+    | 'executionTimeoutAt'
+    | 'providerStartedAt'
+    | 'providerFinishedAt'
+    | 'providerDurationMs'
+    | 'lastErrorCode'
+    | 'lastErrorCategory'
+    | 'lastErrorRetryable'
+  >
 > & {
   diagnostics?: GenerationJobDiagnostics;
+};
+
+export type ClaimGenerationJobInput = {
+  workerId: string;
+  leaseDurationMs: number;
+  executionTimeoutMs: number;
+  preferredJobId?: string;
 };
 
 export type CreateGenerationResultInput = {
@@ -578,6 +709,7 @@ export type CreateGenerationResultInput = {
   imageUrl: string;
   isSelected?: boolean;
   isFavorite?: boolean;
+  resultKey?: string | null;
   metadata?: Record<string, unknown>;
 };
 
@@ -590,6 +722,14 @@ export type CreateImageAssetInput = {
   mimeType: string;
   size: number;
 };
+
+export type CreateDesignWorkflowInput = Pick<DesignWorkflow, 'userId' | 'projectId' | 'title'>;
+export type UpdateDesignWorkflowInput = Partial<Pick<DesignWorkflow, 'currentNodeId' | 'status' | 'title'>>;
+export type CreateDesignWorkflowNodeInput = Omit<DesignWorkflowNode, 'id' | 'createdAt' | 'updatedAt'>;
+export type UpdateDesignWorkflowNodeInput = Partial<Pick<
+  DesignWorkflowNode,
+  'status' | 'outputJobId' | 'outputResultId' | 'outputAssetId' | 'metadata'
+>>;
 
 export type CreateFloorPlanRegionSetInput = Omit<FloorPlanRegionSet, 'id' | 'status' | 'versionNumber' | 'baseRegionSetId' | 'lockedAt' | 'confirmedAt' | 'createdAt' | 'updatedAt'> & {
   versionNumber?: number;
@@ -705,14 +845,28 @@ export interface StorageAdapter {
   createGenerationResult(input: CreateGenerationResultInput): Promise<GenerationResult | null>;
   updateGenerationResult(id: string, userId: string, input: UpdateGenerationResultInput): Promise<GenerationResult | null>;
 
+  createDesignWorkflow(input: CreateDesignWorkflowInput): Promise<DesignWorkflow>;
+  getActiveDesignWorkflow(projectId: string, userId: string): Promise<DesignWorkflow | null>;
+  getDesignWorkflow(id: string, projectId: string, userId: string): Promise<DesignWorkflow | null>;
+  updateDesignWorkflow(id: string, projectId: string, userId: string, input: UpdateDesignWorkflowInput): Promise<DesignWorkflow | null>;
+  listDesignWorkflowNodes(workflowId: string, projectId: string, userId: string): Promise<DesignWorkflowNode[]>;
+  getDesignWorkflowNode(id: string, workflowId: string, projectId: string, userId: string): Promise<DesignWorkflowNode | null>;
+  createDesignWorkflowNode(input: CreateDesignWorkflowNodeInput): Promise<DesignWorkflowNode>;
+  updateDesignWorkflowNode(id: string, input: UpdateDesignWorkflowNodeInput): Promise<DesignWorkflowNode | null>;
+
   createGenerationJob(input: CreateGenerationJobInput): Promise<GenerationJob | null>;
   getGenerationJob(id: string, userId?: string): Promise<GenerationJob | null>;
+  getGenerationJobByIdempotencyKey(userId: string, idempotencyKey: string): Promise<GenerationJob | null>;
   listRunnableGenerationJobs(): Promise<GenerationJob[]>;
+  claimGenerationJob(input: ClaimGenerationJobInput): Promise<GenerationJob | null>;
+  renewGenerationJobLease(id: string, workerId: string, leaseDurationMs: number): Promise<boolean>;
+  updateGenerationJobWithLease(id: string, workerId: string, input: UpdateGenerationJobInput): Promise<GenerationJob | null>;
   updateGenerationJob(id: string, input: UpdateGenerationJobInput): Promise<GenerationJob | null>;
   cancelGenerationJob(id: string, userId?: string): Promise<GenerationJob | null>;
 
   createImageAsset(input: CreateImageAssetInput): Promise<ImageAsset>;
   getImageAsset(id: string, userId?: string): Promise<ImageAsset | null>;
+  listImageAssets(userId: string, limit?: number): Promise<ImageAsset[]>;
   createFloorPlanRegionSet(input: CreateFloorPlanRegionSetInput): Promise<FloorPlanRegionSet>;
   getFloorPlanRegionSet(id: string, userId: string): Promise<FloorPlanRegionSet | null>;
   getLatestFloorPlanRegionSet(sourceAssetId: string, userId: string): Promise<FloorPlanRegionSet | null>;
@@ -721,11 +875,13 @@ export interface StorageAdapter {
   saveFloorPlanRegionMaterials(regionSetId: string, userId: string, materials: SaveFloorPlanRegionMaterialInput[]): Promise<FloorPlanRegionMaterial[]>;
 
   createEditSession(input: CreateEditSessionInput, sourceAsset: ImageAsset): Promise<{ session: EditSession; version: AssetVersion }>;
+  listEditSessions(userId: string, projectId?: string | null): Promise<EditSession[]>;
   getEditSession(id: string, userId: string): Promise<EditSession | null>;
-  updateEditSession(id: string, userId: string, input: Partial<Pick<EditSession, 'currentVersionId' | 'status' | 'title'>>): Promise<EditSession | null>;
+  updateEditSession(id: string, userId: string, input: Partial<Pick<EditSession, 'currentVersionId' | 'primaryVersionId' | 'finalVersionId' | 'status' | 'title'>>): Promise<EditSession | null>;
   listAssetVersions(sessionId: string, userId: string): Promise<AssetVersion[]>;
   getAssetVersion(id: string, sessionId: string, userId: string): Promise<AssetVersion | null>;
   createAssetVersion(input: CreateAssetVersionInput): Promise<AssetVersion>;
+  updateAssetVersion(id: string, sessionId: string, userId: string, input: Partial<Pick<AssetVersion, 'displayName' | 'note' | 'exportedAt'>>): Promise<AssetVersion | null>;
   createEditMessage(input: CreateEditMessageInput): Promise<EditMessage>;
   getEditMessage(id: string): Promise<EditMessage | null>;
   getEditMessageByClientRequest(sessionId: string, clientRequestId: string): Promise<EditMessage | null>;
@@ -744,6 +900,7 @@ export interface StorageAdapter {
   deleteModelAsset(id: string, userId: string): Promise<ModelAsset | null>;
 
   createShareLink(input: CreateShareLinkInput): Promise<ShareLink | null>;
+  listProjectShareLinks(projectId: string, userId: string): Promise<ShareLink[]>;
   getShareLinkByToken(token: string): Promise<ShareLink | null>;
   revokeShareLink(projectId: string, userId: string, shareLinkId: string): Promise<ShareLink | null>;
 
@@ -751,6 +908,7 @@ export interface StorageAdapter {
   listCreditTransactions(userId: string): Promise<CreditTransaction[]>;
   adjustCredits(input: CreditTransactionInput): Promise<{ balance: CreditBalance; transaction: CreditTransaction } | null>;
   getCreditTransactionByReference(userId: string, type: CreditTransaction['type'], referenceId: string): Promise<CreditTransaction | null>;
+  refundGenerationJobOnce(jobId: string): Promise<boolean>;
 
   getAdminDashboard(): Promise<AdminDashboard>;
 }

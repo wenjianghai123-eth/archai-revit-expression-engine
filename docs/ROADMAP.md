@@ -26,7 +26,7 @@
 - No custom password auth; production login relies on Supabase Auth.
 - No payment checkout, subscriptions, invoices, or billing webhooks.
 - No database migration framework; Supabase is initialized from `docs/SUPABASE_SETUP.md`.
-- The generation worker is in-process. It is acceptable for local/dev and simple deployments, but not a durable production queue.
+- JSON development mode can still use the embedded generation worker. Supabase production mode supports a separately deployed worker with database leasing, heartbeat, retries, timeout, cancellation, idempotency, expired-lease recovery, and atomic one-time refunds.
 - Rate limiting is lightweight per-process generation job limiting, not distributed abuse protection.
 - Local file storage serves `/uploads/...` directly. Sensitive deployments should use private object storage plus signed URL support.
 - No real Revit plugin support.
@@ -38,7 +38,7 @@
 
 - Extract the remaining backend routes into smaller route modules after the first `server/index.ts` thinning pass.
 - Finish frontend workflow extraction by moving the async generation runner out of `src/App.tsx`.
-- Add a durable queue/worker model for generation jobs, retries, cancellation, and job recovery.
+- Operate the standalone generation worker as a separate production process and add deployment-level alerting for expired leases and retry exhaustion.
 - Add structured audit logs for admin actions, credits changes, share-link changes, and generation job lifecycle events.
 - Add stronger production rate limits and abuse protection across API routes.
 - Add provider health checks, timeout budgets, retry policy, and operational alerts.

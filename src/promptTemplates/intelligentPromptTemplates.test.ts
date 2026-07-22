@@ -37,7 +37,25 @@ describe('intelligent prompt templates', () => {
     expect(prompt).toContain('Living Room = Living Room');
     expect(prompt).toContain('Master Bedroom = Bedroom');
     expect(prompt).not.toContain('location: 平面中部');
-    expect(prompt).toContain('Do not copy Chinese text from the input plan');
+    expect(prompt).toContain('translate only newly recreated labels into concise English');
+  });
+
+  it('applies product mode and text language to the classic plan-colorize prompt', () => {
+    const chinese = buildSmartPrompt({
+      mode: 'plan-colorize',
+      config: { floorPlanExpressionMode: 'analysis', floorPlanTextLanguage: 'zh-CN', enableRoomLabels: true },
+    });
+    const noText = buildSmartPrompt({
+      mode: 'plan-colorize',
+      config: { floorPlanExpressionMode: 'three-dimensional', floorPlanTextLanguage: 'none', enableRoomLabels: true, manualRoomLabels: ['客厅'] },
+    });
+
+    expect(chinese).toContain('Product mode: analytical drawing expression');
+    expect(chinese).toContain('labels in Simplified Chinese');
+    expect(chinese).toContain('Text language requirement: Simplified Chinese.');
+    expect(noText).toContain('Product mode: three-dimensional colored plan');
+    expect(noText).toContain('do not generate any new text');
+    expect(noText).not.toContain('Use these labels when appropriate');
   });
 
   it('treats visible text as supplemental requirements', () => {
@@ -83,6 +101,15 @@ describe('intelligent prompt templates', () => {
         materialDirection: 'herringbone',
         materialFinish: 'satin',
         materialReplaceScope: 'material-only',
+        materialRealSizeMm: 900,
+        materialJointWidthMm: 3,
+        materialTextureAlignment: 'custom-origin',
+        materialTextureOrigin: { x: 0.2, y: 0.75 },
+        semanticObjectSelections: [
+          { id: 'floor-left', objectType: 'floor', x: 0.25, y: 0.6 },
+          { id: 'wall-right', objectType: 'wall', x: 0.8, y: 0.35 },
+        ],
+        hasProtectionMask: true,
         strength: 'balanced',
       },
       hasMaterialReferences: true,
@@ -93,6 +120,29 @@ describe('intelligent prompt templates', () => {
     expect(prompt).toContain('Surface finish: satin.');
     expect(prompt).toContain('Replacement scope: material only.');
     expect(prompt).toContain('do not change geometry, furniture shape, furniture layout');
+    expect(prompt).toContain('approximately 900 mm');
+    expect(prompt).toContain('Joint width: approximately 3 mm');
+    expect(prompt).toContain('Paving origin: (0.200, 0.750)');
+    expect(prompt).toContain('floor at (0.250, 0.600)');
+    expect(prompt).toContain('wall at (0.800, 0.350)');
+    expect(prompt).toContain('Protected pixels are explicitly excluded');
+  });
+
+  it('keeps a smart refined mask limited to the detected object', () => {
+    const prompt = buildSmartPrompt({
+      mode: 'material-replace',
+      hasMask: true,
+      config: {
+        editMode: 'mask',
+        maskSelectionMode: 'smart',
+        targetObjectType: 'sofa',
+        targetMaterial: 'fabric',
+      },
+    });
+
+    expect(prompt).toContain('automatically detected by AI');
+    expect(prompt).toContain('Modify only the detected object region');
+    expect(prompt).toContain('Preserve the original geometry, lighting, perspective and surrounding objects');
   });
 
   it('adds professional object insert constraints to the prompt', () => {

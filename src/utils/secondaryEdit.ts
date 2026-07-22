@@ -23,6 +23,7 @@ export const resultSendTargets: Array<{ step: ResultSendTargetStep; label: strin
   { step: GenerationStep.ObjectInsert, label: '发送到元素植入', shortLabel: '元素植入' },
   { step: GenerationStep.DesignVariants, label: '基于此图做方案变体', shortLabel: '方案变体' },
   { step: GenerationStep.FreeReferenceImage, label: '发送到自由参考生图', shortLabel: '自由参考' },
+  { step: GenerationStep.ImagePolish, label: '发送到质感提升', shortLabel: '质感提升' },
 ];
 
 export const secondaryEditActionLabels: Record<SecondaryEditAction, string> = Object.fromEntries(

@@ -1,6 +1,20 @@
 import React from 'react';
 import { Box, Camera, FileImage, Layers, LayoutGrid, Paintbrush, ScanLine, Sparkles, Wand2 } from 'lucide-react';
+import { demoImageFallbacks } from './constants/demoImageFallbacks';
+import type { FeatureMaturity, WorkflowCategory } from './constants/productWorkflows';
 import { GenerationStep } from './types';
+
+export interface FeatureShowcaseAsset {
+  sourceImage: string;
+  resultImage: string;
+  sourcePreviousUi?: string;
+  resultPreviousUi?: string;
+  sourceFallback?: string;
+  resultFallback?: string;
+  sourceFinalFallback?: string;
+  resultFinalFallback?: string;
+  thumbnail?: string;
+}
 
 export interface FeatureDefinition {
   id: string;
@@ -12,6 +26,15 @@ export interface FeatureDefinition {
   componentName: string;
   icon: React.ComponentType<{ className?: string }>;
   image: string;
+  previousUiImage?: string;
+  fallbackImage?: string;
+  finalFallbackImage?: string;
+  imageAlt?: string;
+  category?: WorkflowCategory;
+  scenarios?: string[];
+  maturity?: FeatureMaturity;
+  recommendedNextSteps?: string[];
+  showcaseAsset?: FeatureShowcaseAsset;
 }
 
 export const visibleFeatureIdsStorageKey = 'visibleFeatureIds';
@@ -29,14 +52,26 @@ export const defaultFeatureIds = [
 export const allFeatures: FeatureDefinition[] = [
   {
     id: 'floor_plan_color',
-    title: '平面彩平',
-    desc: '上传平面图，统一生成彩平、三维彩平或多方案表达。',
+    title: '图纸表达中心',
+    desc: '识别并校正平面区域，形成精准材质彩平、三维彩平、分析表达图或多方案彩平。',
     input: '输入：平面图',
-    output: '输出：彩平 / 多方案',
+    output: '输出：材质彩平 / 三维 / 分析 / 多方案',
     step: GenerationStep.FloorplanTo3D,
     componentName: 'FloorplanTo3DWorkspace',
     icon: ScanLine,
-    image: 'https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&q=80&w=900',
+    image: demoImageFallbacks.floor_plan_color.localSrc || '',
+    previousUiImage: demoImageFallbacks.floor_plan_color.previousUiSrc,
+    fallbackImage: demoImageFallbacks.floor_plan_color.fallbackSrc,
+    finalFallbackImage: demoImageFallbacks.floor_plan_color.finalFallbackSrc,
+    imageAlt: demoImageFallbacks.floor_plan_color.alt,
+    category: '快速形成方案',
+    scenarios: ['快速做汇报', '平面图汇报'],
+    maturity: '演示增强',
+    recommendedNextSteps: ['scheme_variant', 'free_reference_image'],
+    showcaseAsset: {
+      sourceImage: '/cases/floor-plan-report-source.jpg',
+      resultImage: '/cases/floor-plan-report-result.jpg',
+    },
   },
   {
     id: 'free_reference_image',
@@ -47,7 +82,19 @@ export const allFeatures: FeatureDefinition[] = [
     step: GenerationStep.FreeReferenceImage,
     componentName: 'FreeReferenceImagePanel',
     icon: FileImage,
-    image: 'https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&q=80&w=900',
+    image: demoImageFallbacks.free_reference_image.localSrc || '',
+    previousUiImage: demoImageFallbacks.free_reference_image.previousUiSrc,
+    fallbackImage: demoImageFallbacks.free_reference_image.fallbackSrc,
+    finalFallbackImage: demoImageFallbacks.free_reference_image.finalFallbackSrc,
+    imageAlt: demoImageFallbacks.free_reference_image.alt,
+    category: '快速形成方案',
+    scenarios: ['快速做汇报', '灵感参考转方案'],
+    maturity: '稳定可用',
+    recommendedNextSteps: ['material_replace', 'object_insert', 'scheme_variant'],
+    showcaseAsset: {
+      sourceImage: '/cases/client-iteration-source.jpg',
+      resultImage: '/cases/client-iteration-result.jpg',
+    },
   },
   {
     id: 'material_replace',
@@ -58,7 +105,19 @@ export const allFeatures: FeatureDefinition[] = [
     step: GenerationStep.MaterialReplace,
     componentName: 'MaterialReplaceConfigPanel',
     icon: Layers,
-    image: 'https://images.unsplash.com/photo-1600566752355-35792bedcfea?auto=format&fit=crop&q=80&w=900',
+    image: demoImageFallbacks.material_replace.localSrc || '',
+    previousUiImage: demoImageFallbacks.material_replace.previousUiSrc,
+    fallbackImage: demoImageFallbacks.material_replace.fallbackSrc,
+    finalFallbackImage: demoImageFallbacks.material_replace.finalFallbackSrc,
+    imageAlt: demoImageFallbacks.material_replace.alt,
+    category: '精细修改方案',
+    scenarios: ['客户连续改稿', '材质与软装确认'],
+    maturity: '稳定可用',
+    recommendedNextSteps: ['object_insert', 'continuous_edit', 'image_polish'],
+    showcaseAsset: {
+      sourceImage: '/cases/client-iteration-source.jpg',
+      resultImage: '/cases/client-iteration-result.jpg',
+    },
   },
   {
     id: 'object_insert',
@@ -69,7 +128,19 @@ export const allFeatures: FeatureDefinition[] = [
     step: GenerationStep.ObjectInsert,
     componentName: 'ObjectInsertPanel',
     icon: Layers,
-    image: 'https://images.unsplash.com/photo-1618220179428-22790b461013?auto=format&fit=crop&q=80&w=900',
+    image: demoImageFallbacks.object_insert.localSrc || '',
+    previousUiImage: demoImageFallbacks.object_insert.previousUiSrc,
+    fallbackImage: demoImageFallbacks.object_insert.fallbackSrc,
+    finalFallbackImage: demoImageFallbacks.object_insert.finalFallbackSrc,
+    imageAlt: demoImageFallbacks.object_insert.alt,
+    category: '精细修改方案',
+    scenarios: ['客户连续改稿', '家具与元素确认'],
+    maturity: '稳定可用',
+    recommendedNextSteps: ['continuous_edit', 'image_polish'],
+    showcaseAsset: {
+      sourceImage: '/cases/client-iteration-source.jpg',
+      resultImage: '/cases/client-iteration-result.jpg',
+    },
   },
   {
     id: 'scheme_variant',
@@ -80,7 +151,19 @@ export const allFeatures: FeatureDefinition[] = [
     step: GenerationStep.DesignVariants,
     componentName: 'DesignVariantsPanel',
     icon: LayoutGrid,
-    image: 'https://images.unsplash.com/photo-1600607688969-a5bfcd646154?auto=format&fit=crop&q=80&w=900',
+    image: demoImageFallbacks.scheme_variant.localSrc || '',
+    previousUiImage: demoImageFallbacks.scheme_variant.previousUiSrc,
+    fallbackImage: demoImageFallbacks.scheme_variant.fallbackSrc,
+    finalFallbackImage: demoImageFallbacks.scheme_variant.finalFallbackSrc,
+    imageAlt: demoImageFallbacks.scheme_variant.alt,
+    category: '快速形成方案',
+    scenarios: ['多方案比选', '客户方案汇报'],
+    maturity: '稳定可用',
+    recommendedNextSteps: ['material_replace', 'continuous_edit', 'pdf_report'],
+    showcaseAsset: {
+      sourceImage: '/cases/white-model-render-source.jpg',
+      resultImage: '/cases/white-model-render-result.jpg',
+    },
   },
   {
     id: 'image_polish',
@@ -91,29 +174,61 @@ export const allFeatures: FeatureDefinition[] = [
     step: GenerationStep.ImagePolish,
     componentName: 'ImagePolishPanel',
     icon: Sparkles,
-    image: 'https://images.unsplash.com/photo-1600566753151-384129cf4e3e?auto=format&fit=crop&q=80&w=900',
+    image: demoImageFallbacks.image_polish.localSrc || '',
+    previousUiImage: demoImageFallbacks.image_polish.previousUiSrc,
+    fallbackImage: demoImageFallbacks.image_polish.fallbackSrc,
+    finalFallbackImage: demoImageFallbacks.image_polish.finalFallbackSrc,
+    imageAlt: demoImageFallbacks.image_polish.alt,
+    category: '形成交付成果',
+    scenarios: ['高清定稿', '汇报成果优化'],
+    maturity: '稳定可用',
+    recommendedNextSteps: ['download', 'share', 'pdf_report'],
+    showcaseAsset: {
+      sourceImage: '/cases/white-model-render-source.jpg',
+      resultImage: '/cases/white-model-render-result.jpg',
+    },
   },
   {
     id: 'drawing_expression',
-    title: '图纸智能表达',
-    desc: '上传 CAD 导出的黑白平面图，生成彩色分区、标注和表达图。',
+    title: '图纸表达中心 · 快速表达',
+    desc: '保留经典入口，快速生成三维彩平、分析表达图和多方案彩平。',
     input: '输入：黑白平面图',
     output: '输出：彩色图纸表达',
     step: GenerationStep.PlanColorize,
     componentName: 'PlanColorizePanel',
     icon: FileImage,
-    image: 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&q=80&w=900',
+    image: demoImageFallbacks.floor_plan_color.localSrc || '',
+    previousUiImage: demoImageFallbacks.floor_plan_color.previousUiSrc,
+    fallbackImage: demoImageFallbacks.floor_plan_color.fallbackSrc,
+    finalFallbackImage: demoImageFallbacks.floor_plan_color.finalFallbackSrc,
+    imageAlt: demoImageFallbacks.floor_plan_color.alt,
+    category: '形成交付成果',
+    scenarios: ['快速做汇报', '平面图汇报'],
+    maturity: '稳定可用',
+    recommendedNextSteps: ['scheme_variant', 'pdf_report'],
+    showcaseAsset: {
+      sourceImage: '/cases/floor-plan-report-source.jpg',
+      resultImage: '/cases/floor-plan-report-result.jpg',
+    },
   },
   {
     id: 'style_render',
-    title: '参考图风格渲染',
-    desc: '基于参考图生成现代、侘寂、北欧、轻奢等建筑与室内效果。',
-    input: '输入：参考图',
+    title: '快速风格预设',
+    desc: '从现代、侘寂、北欧、轻奢等预设快速进入自由参考生图，继续调整角色、权重与结构保持。',
+    input: '输入：原图 + 可选参考图',
     output: '输出：风格效果图',
-    step: GenerationStep.StyleRender,
-    componentName: 'StyleRenderWorkspace',
+    step: GenerationStep.FreeReferenceImage,
+    componentName: 'FreeReferenceImagePanel',
     icon: Wand2,
-    image: 'https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?auto=format&fit=crop&q=80&w=900',
+    image: demoImageFallbacks.free_reference_image.localSrc || '',
+    previousUiImage: demoImageFallbacks.free_reference_image.previousUiSrc,
+    fallbackImage: demoImageFallbacks.free_reference_image.fallbackSrc,
+    finalFallbackImage: demoImageFallbacks.free_reference_image.finalFallbackSrc,
+    imageAlt: demoImageFallbacks.free_reference_image.alt,
+    category: '快速形成方案',
+    scenarios: ['风格探索', '参考方案转化'],
+    maturity: '持续优化',
+    recommendedNextSteps: ['material_replace', 'scheme_variant'],
   },
   {
     id: 'local_inpainting',
@@ -124,7 +239,15 @@ export const allFeatures: FeatureDefinition[] = [
     step: GenerationStep.LocalInpainting,
     componentName: 'LocalInpaintingWorkspace',
     icon: Paintbrush,
-    image: 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&q=80&w=900',
+    image: demoImageFallbacks.material_replace.localSrc || '',
+    previousUiImage: demoImageFallbacks.material_replace.previousUiSrc,
+    fallbackImage: demoImageFallbacks.material_replace.fallbackSrc,
+    finalFallbackImage: demoImageFallbacks.material_replace.finalFallbackSrc,
+    imageAlt: demoImageFallbacks.material_replace.alt,
+    category: '精细修改方案',
+    scenarios: ['局部修正', '客户改稿'],
+    maturity: '持续优化',
+    recommendedNextSteps: ['image_polish'],
   },
   {
     id: 'model_snapshot_render',
@@ -135,7 +258,19 @@ export const allFeatures: FeatureDefinition[] = [
     step: GenerationStep.ModelSnapshotRender,
     componentName: 'ModelSnapshotRenderPanel',
     icon: Box,
-    image: 'https://images.unsplash.com/photo-1486718448742-163732cd1544?auto=format&fit=crop&q=80&w=900',
+    image: demoImageFallbacks.model_snapshot_render.localSrc || '',
+    previousUiImage: demoImageFallbacks.model_snapshot_render.previousUiSrc,
+    fallbackImage: demoImageFallbacks.model_snapshot_render.fallbackSrc,
+    finalFallbackImage: demoImageFallbacks.model_snapshot_render.finalFallbackSrc,
+    imageAlt: demoImageFallbacks.model_snapshot_render.alt,
+    category: '快速形成方案',
+    scenarios: ['白模快速出图', '早期方案汇报'],
+    maturity: '稳定可用',
+    recommendedNextSteps: ['scheme_variant', 'material_replace', 'object_insert', 'image_polish'],
+    showcaseAsset: {
+      sourceImage: '/cases/white-model-render-source.jpg',
+      resultImage: '/cases/white-model-render-result.jpg',
+    },
   },
   {
     id: 'panorama_quick_render',
@@ -146,7 +281,15 @@ export const allFeatures: FeatureDefinition[] = [
     step: GenerationStep.PanoramaQuickRender,
     componentName: 'PanoramaQuickRenderPanel',
     icon: Camera,
-    image: 'https://images.unsplash.com/photo-1518005020951-eccb494ad742?auto=format&fit=crop&q=80&w=900',
+    image: demoImageFallbacks.panorama_render.localSrc || '',
+    previousUiImage: demoImageFallbacks.panorama_render.previousUiSrc,
+    fallbackImage: demoImageFallbacks.panorama_render.fallbackSrc,
+    finalFallbackImage: demoImageFallbacks.panorama_render.finalFallbackSrc,
+    imageAlt: demoImageFallbacks.panorama_render.alt,
+    category: '形成交付成果',
+    scenarios: ['空间漫游汇报', '沉浸式展示'],
+    maturity: '持续优化',
+    recommendedNextSteps: ['share'],
   },
 ];
 

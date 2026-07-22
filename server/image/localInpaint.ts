@@ -18,6 +18,7 @@ export interface LocalInpaintInput {
 
 export interface LocalInpaintContext {
   originalImageDataUrl: string;
+  originalMaskDataUrl: string;
   originalWidth: number;
   originalHeight: number;
   maskWidth: number;
@@ -25,6 +26,25 @@ export interface LocalInpaintContext {
   bbox: MaskBoundingBox;
   cropImageDataUrl: string;
   cropMaskDataUrl: string;
+}
+
+export async function prepareEditableMask(input: { maskImageDataUrl: string; protectionMaskDataUrl?: string; expansion?: number }): Promise<string> {
+  const parsed = parseImageDataUrl(input.maskImageDataUrl);
+  const metadata = await sharp(parsed.content).metadata();
+  if (!metadata.width || !metadata.height) return input.maskImageDataUrl;
+  const radius = Math.min(30, Math.abs(Math.round(input.expansion || 0)));
+  let pipeline = sharp(parsed.content).resize(metadata.width, metadata.height, { fit: 'fill' }).greyscale().threshold(10);
+  // libvips treats black as the foreground for these morphology operations,
+  // so erode expands our white edit mask while dilate contracts it.
+  if (radius > 0) pipeline = input.expansion && input.expansion < 0 ? pipeline.dilate(radius) : pipeline.erode(radius);
+  const edit = await pipeline.raw().toBuffer();
+  if (input.protectionMaskDataUrl) {
+    const protection = parseImageDataUrl(input.protectionMaskDataUrl);
+    const protectedPixels = await sharp(protection.content).resize(metadata.width, metadata.height, { fit: 'fill', kernel: sharp.kernel.nearest }).greyscale().threshold(10).raw().toBuffer();
+    for (let index = 0; index < edit.length; index += 1) if (protectedPixels[index] > 10) edit[index] = 0;
+  }
+  const output = await sharp(edit, { raw: { width: metadata.width, height: metadata.height, channels: 1 } }).png().toBuffer();
+  return toImageDataUrl(output, 'image/png');
 }
 
 export async function createLocalInpaintContext(input: LocalInpaintInput): Promise<LocalInpaintContext | null> {
@@ -54,6 +74,7 @@ export async function createLocalInpaintContext(input: LocalInpaintInput): Promi
 
   return {
     originalImageDataUrl: input.inputImageDataUrl,
+    originalMaskDataUrl: input.maskImageDataUrl,
     originalWidth: imageMeta.width,
     originalHeight: imageMeta.height,
     maskWidth: imageMeta.width,

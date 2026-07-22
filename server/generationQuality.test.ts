@@ -1,7 +1,8 @@
 import sharp from 'sharp';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { prepareGenerateInputForProvider, resolveProviderImageSettings } from './generationService';
+import { applyFreeReferenceCrops, prepareGenerateInputForProvider, resolveProviderImageSettings } from './generationService';
+import { getImageSizeFromDataUrl } from './image/imageMetadata';
 import { toImageDataUrl } from './image/imageMetadata';
 
 describe('generation quality preprocessing', () => {
@@ -90,6 +91,25 @@ describe('generation quality preprocessing', () => {
     expect(result.imageDiagnostics.referenceCount).toBe(2);
     expect(result.input.referenceImageDataUrls).toHaveLength(2);
     expect(result.imageDiagnostics.payloadBytesApprox).toEqual(expect.any(Number));
+  });
+
+  it('keeps up to six formal free-reference inputs in balanced mode', async () => {
+    const input = await createImage(32, 32, '#ffffff');
+    const references = await Promise.all(Array.from({ length: 6 }, (_, index) => createImage(24, 24, index % 2 ? '#ff0000' : '#0000ff')));
+    const result = await prepareGenerateInputForProvider({
+      mode: 'style-render', step: 'free_reference_image', inputImageDataUrl: input, referenceImageDataUrls: references,
+      prompt: 'render', config: { step: 'free_reference_image' }, qualityMode: 'balanced',
+    });
+    expect(result.input.referenceImageDataUrls).toHaveLength(6);
+    expect(result.imageDiagnostics.referenceCount).toBe(6);
+  });
+
+  it('applies normalized crop controls before provider preprocessing', async () => {
+    const input = await createImage(100, 80, '#ffffff');
+    const [cropped] = await applyFreeReferenceCrops([input], {
+      freeReferenceReferences: [{ crop: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 } }],
+    });
+    await expect(getImageSizeFromDataUrl(cropped)).resolves.toEqual({ width: 50, height: 40 });
   });
 });
 

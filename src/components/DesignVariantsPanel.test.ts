@@ -32,6 +32,10 @@ describe('DesignVariantsPanel', () => {
     expect(html).toContain('方案 D');
     expect(html).toContain('风格包');
     expect(html).toContain('8 张');
+    expect(html).toContain('设计变量矩阵');
+    expect(html).toContain('材质体系');
+    expect(html).toContain('家具布局');
+    expect(html).toContain('多样性强度');
   });
 
   it('renders a 2-result variant matrix with selected and favorite actions', () => {
@@ -51,6 +55,29 @@ describe('DesignVariantsPanel', () => {
     expect(html).toContain('设为主方案');
     expect(html).toContain('已设为主方案');
     expect(html).toContain('收藏');
+    expect(html).toContain('两方案对比');
+    expect(html).toContain('查看原图');
+    expect(html).toContain('查看结果图');
+    expect(html).toContain('保存文件');
+    expect(html).toContain('保存全部');
+    expect(html).toContain('删除');
+  });
+
+  it('keeps configuration, canvas and task actions mounted in the three-column workspace', () => {
+    const html = renderToStaticMarkup(React.createElement(DesignVariantsPanel, {
+      ...defaultProps,
+      state: createState({ batchCount: 4 }),
+      canGenerate: false,
+      disabledReason: '请先上传原图',
+    }));
+
+    expect(html).toContain('variant-workspace');
+    expect(html).toContain('variant-left-panel');
+    expect(html).toContain('variant-center-panel');
+    expect(html).toContain('variant-right-panel');
+    expect(html).toContain('生成任务');
+    expect(html).toContain('请先上传原图');
+    expect(html).toContain('生成方案组');
   });
 
   it('renders an 8-slot matrix and export actions', () => {
@@ -84,6 +111,11 @@ describe('DesignVariantsPanel', () => {
           changeScopeLabel: '整体方案',
           lockedItemsLabel: '结构、视角、门窗',
           strategyNote: '强化展示墙',
+          changedVariables: ['material-system', 'lighting-atmosphere'],
+          lockedVariables: ['furniture-layout'],
+          differenceSummary: '材质改为浅色石材，灯光改为暖光。',
+          reportNarrative: '方案 C 通过材质和灯光形成更精致的汇报方向。',
+          parentResultId: 'parent-result-1234',
         },
       ],
       selectedResultId: 'c',
@@ -95,6 +127,10 @@ describe('DesignVariantsPanel', () => {
     expect(html).toContain('强化展示墙');
     expect(html).toContain('重试此方案');
     expect(html).toContain('整体方案');
+    expect(html).toContain('改变变量');
+    expect(html).toContain('与原图差异');
+    expect(html).toContain('汇报说明');
+    expect(html).toContain('源自结果');
   });
 });
 

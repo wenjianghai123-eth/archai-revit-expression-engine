@@ -1,4 +1,5 @@
-import { ImagePlus, Layers, Paintbrush, RefreshCw, Send, Settings2, Sparkles, Zap } from 'lucide-react';
+import { Download, FileText, ImagePlus, Layers, Paintbrush, RefreshCw, Send, Settings2, Share2, Sparkles, Zap } from 'lucide-react';
+import { getResultRecommendations, type ResultRecommendation } from '../../constants/productWorkflows';
 import { GenerationStep, ResultSendTargetStep, SecondaryEditAction } from '../../types';
 import { materialRepairActions, resultSendTargets, secondaryEditActions } from '../../utils/secondaryEdit';
 import { RelatedFeatureChips } from '../common/RelatedFeatureChips';
@@ -36,6 +37,24 @@ export function SecondaryEditActions({
   );
 }
 
+export function ContinuousEditAction({
+  resultId,
+  disabled = false,
+  onAction,
+}: SecondaryEditActionsProps) {
+  return (
+    <button
+      type="button"
+      onClick={() => onAction(resultId, 'continue-edit')}
+      disabled={disabled}
+      className="inline-flex items-center justify-center gap-1 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 transition hover:border-blue-200 hover:bg-blue-100 disabled:opacity-50"
+    >
+      <ImagePlus className="h-3.5 w-3.5" />
+      连续修改
+    </button>
+  );
+}
+
 export function MaterialRepairActions({
   resultId,
   disabled = false,
@@ -68,6 +87,8 @@ interface ResultSendActionsProps {
   disabled?: boolean;
   compact?: boolean;
   onSend: (resultId: string, targetStep: ResultSendTargetStep) => void;
+  onSecondaryAction?: (resultId: string, action: SecondaryEditAction) => void;
+  onUtilityAction?: (action: 'download' | 'share' | 'pdf') => void;
 }
 
 export function ResultSendActions({
@@ -76,22 +97,43 @@ export function ResultSendActions({
   disabled = false,
   compact = false,
   onSend,
+  onSecondaryAction,
+  onUtilityAction,
 }: ResultSendActionsProps) {
-  const targets = resultSendTargets.filter(item => item.step !== currentStep);
+  const configuredRecommendations = getResultRecommendations(currentStep);
+  const recommendations: ResultRecommendation[] = configuredRecommendations.length > 0
+    ? configuredRecommendations
+    : resultSendTargets
+        .filter(item => item.step !== currentStep)
+        .map(item => ({ id: `send-${item.step}`, label: readResultSendLabel(item.step), kind: 'send' as const, targetStep: item.step }));
 
   return (
     <RelatedFeatureChips
-      title={compact ? undefined : '相关功能'}
-      items={targets.map(item => ({
-        id: String(item.step),
-        label: readResultSendLabel(item.step),
-        icon: <SendIcon step={item.step} />,
-        disabled,
+      title={compact ? undefined : '推荐下一步'}
+      items={recommendations.map(item => ({
+        id: item.id,
+        label: item.label,
+        icon: <RecommendationIcon recommendation={item} />,
+        disabled: disabled || (item.kind === 'secondary' && !onSecondaryAction) || (item.kind === 'utility' && !onUtilityAction),
       }))}
-      onSelect={id => onSend(resultId, Number(id) as ResultSendTargetStep)}
+      onSelect={id => {
+        const recommendation = recommendations.find(item => item.id === id);
+        if (!recommendation) return;
+        if (recommendation.kind === 'send') onSend(resultId, recommendation.targetStep);
+        if (recommendation.kind === 'secondary') onSecondaryAction?.(resultId, recommendation.action);
+        if (recommendation.kind === 'utility') onUtilityAction?.(recommendation.action);
+      }}
       variant="chips"
     />
   );
+}
+
+function RecommendationIcon({ recommendation }: { recommendation: ResultRecommendation }) {
+  if (recommendation.kind === 'send') return <SendIcon step={recommendation.targetStep} />;
+  if (recommendation.kind === 'secondary') return <RefreshCw className="h-3 w-3 shrink-0" />;
+  if (recommendation.action === 'download') return <Download className="h-3 w-3 shrink-0" />;
+  if (recommendation.action === 'share') return <Share2 className="h-3 w-3 shrink-0" />;
+  return <FileText className="h-3 w-3 shrink-0" />;
 }
 
 function SecondaryEditIcon({ action }: { action: SecondaryEditAction }) {
@@ -108,6 +150,7 @@ function SendIcon({ step }: { step: ResultSendTargetStep }) {
   if (step === GenerationStep.MaterialReplace) return <Paintbrush className="h-3 w-3 shrink-0" />;
   if (step === GenerationStep.ObjectInsert) return <ImagePlus className="h-3 w-3 shrink-0" />;
   if (step === GenerationStep.DesignVariants) return <Layers className="h-3 w-3 shrink-0" />;
+  if (step === GenerationStep.ImagePolish) return <Sparkles className="h-3 w-3 shrink-0" />;
   return <Send className="h-3 w-3 shrink-0" />;
 }
 
@@ -115,5 +158,6 @@ function readResultSendLabel(step: ResultSendTargetStep): string {
   if (step === GenerationStep.MaterialReplace) return '材质软装替换';
   if (step === GenerationStep.ObjectInsert) return '元素植入';
   if (step === GenerationStep.DesignVariants) return '方案变体';
+  if (step === GenerationStep.ImagePolish) return '质感提升';
   return '自由参考生图';
 }

@@ -55,6 +55,8 @@ export function createFloorPlanRouter(): Router {
         areaRatio: candidate.areaRatio,
         suggestedName: null,
         name: `区域 ${index + 1}`,
+        regionType: null,
+        regionUsage: '',
         confidence: candidate.confidence,
         maskAssetId: null,
         maskUrl: null,
@@ -460,6 +462,8 @@ function readRegion(value: unknown, index: number): FloorPlanRegion | null {
     areaRatio: polygonArea(polygon),
     suggestedName: typeof value.suggestedName === 'string' ? value.suggestedName : null,
     name: typeof value.name === 'string' ? value.name.trim().slice(0, 80) : '',
+    regionType: readRegionType(value.regionType),
+    regionUsage: typeof value.regionUsage === 'string' ? value.regionUsage.trim().slice(0, 120) : '',
     confidence: typeof value.confidence === 'number' ? Math.max(0, Math.min(1, value.confidence)) : 1,
     maskAssetId: null,
     maskUrl: null,
@@ -522,9 +526,17 @@ function normalizeStoredRegion(region: FloorPlanRegion, index: number): FloorPla
     areaRatio: Number.isFinite(region.areaRatio) ? Math.max(0, Math.min(1, region.areaRatio)) : polygonArea(region.polygon),
     suggestedName: region.suggestedName ?? null,
     name: region.name ?? '',
+    regionType: region.regionType ?? null,
+    regionUsage: region.regionUsage ?? '',
     maskAssetId: region.maskAssetId ?? null,
     maskUrl: region.maskUrl ?? null,
   };
+}
+
+function readRegionType(value: unknown): NonNullable<FloorPlanRegion['regionType']> | null {
+  type RegionType = NonNullable<FloorPlanRegion['regionType']>;
+  const types = new Set<RegionType>(['living', 'dining', 'bedroom', 'kitchen', 'bathroom', 'circulation', 'service', 'outdoor', 'commercial', 'office', 'other']);
+  return typeof value === 'string' && types.has(value as RegionType) ? value as RegionType : null;
 }
 
 function polygonArea(points: [number, number][]): number {

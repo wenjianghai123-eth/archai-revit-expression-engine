@@ -85,12 +85,25 @@ const replaceScopeOptions = [
   ['creative', '创意优化'],
 ] as const;
 
+const textureAlignmentOptions = [
+  ['auto', '自动对齐'],
+  ['surface', '顺表面对齐'],
+  ['center', '中心起铺'],
+  ['edge', '边缘起铺'],
+  ['custom-origin', '自定义起点'],
+] as const;
+
 export function MaterialReplaceConfigPanel({
   config,
   materialReferenceCount = 0,
   onUpdateConfig,
 }: MaterialReplaceConfigPanelProps) {
   const editMode = config.editMode === 'mask' ? 'mask' : 'smart-type';
+  const maskSelectionMode = config.maskSelectionMode === 'smart'
+    ? 'smart'
+    : config.maskSelectionMode === 'precise'
+      ? 'precise'
+      : 'precise';
   const activeObject = config.targetObjectType;
   const activeStrength = config.strength === 'subtle' || config.strength === 'strong' ? config.strength : 'balanced';
   const activePatternScale = config.materialPatternScale || 'medium';
@@ -99,29 +112,68 @@ export function MaterialReplaceConfigPanel({
   const activeReplaceScope = config.materialReplaceScope || 'material-only';
   const recommendations = activeObject ? recommendedMaterials[activeObject] || [] : [];
   const selectedObjectLabel = targetObjectOptions.find(([value]) => value === activeObject)?.[1] || '未选择';
+  const semanticSelectionCount = config.semanticObjectSelections?.length || 0;
+  const candidateCount = config.materialCandidateCount || 2;
 
   return (
     <div className="space-y-5 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-3">
       <div>
         <h3 className="text-sm font-bold text-slate-900">智能材质替换</h3>
-        <p className="mt-1 text-[11px] leading-5 text-slate-500">点击区域类型，直接替换对应部分。</p>
+        <p className="mt-1 text-[11px] leading-5 text-slate-500">智能涂抹会先识别并补全目标对象边界；精致涂抹保留原有手动精确控制。</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          onClick={() => onUpdateConfig({ editMode: 'smart-type' })}
-          className={`rounded-lg border px-3 py-2 text-xs font-bold ${editMode === 'smart-type' ? 'border-emerald-600 bg-white text-emerald-700' : 'border-slate-200 bg-white/80 text-slate-600'}`}
-        >
-          智能替换
-        </button>
-        <button
-          type="button"
-          onClick={() => onUpdateConfig({ editMode: 'mask' })}
-          className={`rounded-lg border px-3 py-2 text-xs font-bold ${editMode === 'mask' ? 'border-emerald-600 bg-white text-emerald-700' : 'border-slate-200 bg-white/80 text-slate-600'}`}
-        >
-          精细涂抹
-        </button>
+      <div className="space-y-2">
+        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">区域选择模式</label>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => onUpdateConfig({
+              editMode: 'mask',
+              maskSelectionMode: 'smart',
+              smartMaskConfirmed: false,
+              smartMaskIsRefining: false,
+              smartMaskDetectedObject: undefined,
+              smartMaskConfidence: undefined,
+              smartMaskRefinementMethod: undefined,
+            })}
+            className={`rounded-xl border p-3 text-left ${editMode === 'mask' && maskSelectionMode === 'smart' ? 'border-emerald-600 bg-white text-emerald-800 shadow-sm' : 'border-slate-200 bg-white/80 text-slate-600'}`}
+          >
+            <span className="block text-xs font-black">智能涂抹（默认）</span>
+            <span className="mt-1 block text-[10px] leading-4">粗略标记目标区域，AI 自动识别完整对象</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onUpdateConfig({
+              editMode: 'mask',
+              maskSelectionMode: 'precise',
+              smartMaskConfirmed: undefined,
+              smartMaskIsRefining: false,
+              smartMaskDetectedObject: undefined,
+              smartMaskConfidence: undefined,
+              smartMaskRefinementMethod: undefined,
+            })}
+            className={`rounded-xl border p-3 text-left ${editMode === 'mask' && maskSelectionMode === 'precise' ? 'border-emerald-600 bg-white text-emerald-800 shadow-sm' : 'border-slate-200 bg-white/80 text-slate-600'}`}
+          >
+            <span className="block text-xs font-black">精致涂抹</span>
+            <span className="mt-1 block text-[10px] leading-4">手动精确控制修改范围</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-dashed border-emerald-200 bg-white/70 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-xs font-bold text-slate-800">语义对象点击（高级）</p>
+            <p className="mt-1 text-[10px] leading-4 text-slate-500">保留原有对象类型与多锚点选择方式。</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onUpdateConfig({ editMode: 'smart-type', smartMaskIsRefining: false })}
+            className={`rounded-lg border px-3 py-2 text-xs font-bold ${editMode === 'smart-type' ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-600'}`}
+          >
+            {editMode === 'smart-type' ? '正在使用' : '切换使用'}
+          </button>
+        </div>
       </div>
 
       <SmartPromptAssistant
@@ -153,6 +205,7 @@ export function MaterialReplaceConfigPanel({
             </button>
           ))}
         </div>
+        {editMode === 'smart-type' ? <p className="rounded-lg bg-white px-2.5 py-2 text-[11px] font-semibold text-slate-500">已在图中标记 {semanticSelectionCount} 个对象，可继续切换类型并点击添加。</p> : null}
       </div>
 
       <div className="space-y-2">
@@ -210,6 +263,33 @@ export function MaterialReplaceConfigPanel({
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="rounded-xl border border-slate-200 bg-white p-2 text-[10px] font-bold text-slate-500">材质真实尺寸（mm）
+          <input type="number" min="20" max="5000" step="10" value={config.materialRealSizeMm || 600} onChange={event => onUpdateConfig({ materialRealSizeMm: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-800" />
+        </label>
+        <label className="rounded-xl border border-slate-200 bg-white p-2 text-[10px] font-bold text-slate-500">拼缝宽度（mm）
+          <input type="number" min="0" max="50" step="0.5" value={config.materialJointWidthMm ?? 2} onChange={event => onUpdateConfig({ materialJointWidthMm: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-800" />
+        </label>
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">纹理对齐与起点</label>
+        <select value={config.materialTextureAlignment || 'auto'} onChange={event => onUpdateConfig({ materialTextureAlignment: event.target.value as GenerationConfig['materialTextureAlignment'] })} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700">
+          {textureAlignmentOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        {config.materialTextureAlignment === 'custom-origin' ? <div className="grid grid-cols-2 gap-2">
+          {(['x', 'y'] as const).map(axis => <label key={axis} className="text-[10px] font-bold text-slate-500">起点 {axis.toUpperCase()} {Math.round((config.materialTextureOrigin?.[axis] ?? 0.5) * 100)}%<input type="range" min="0" max="1" step="0.01" value={config.materialTextureOrigin?.[axis] ?? 0.5} onChange={event => onUpdateConfig({ materialTextureOrigin: { x: config.materialTextureOrigin?.x ?? 0.5, y: config.materialTextureOrigin?.y ?? 0.5, [axis]: Number(event.target.value) } })} className="block w-full accent-emerald-600" /></label>)}
+        </div> : null}
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">铺贴候选</label>
+        <div className="grid grid-cols-3 gap-2">
+          {([2, 3, 4] as const).map(count => <button key={count} type="button" onClick={() => onUpdateConfig({ materialCandidateCount: count, batchCount: count })} className={`rounded-lg border px-3 py-2 text-xs font-black ${candidateCount === count ? 'border-emerald-600 bg-white text-emerald-700' : 'border-slate-200 bg-white/80 text-slate-500'}`}>{count} 种</button>)}
+        </div>
+        <p className="text-[10px] font-semibold text-slate-500">按候选结果数扣除算力点，失败候选沿用任务退款机制。</p>
       </div>
 
       <div className="space-y-2">

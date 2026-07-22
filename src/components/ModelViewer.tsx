@@ -27,24 +27,27 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { ColladaLoader } from 'three/examples/jsm/loaders/ColladaLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import { AssetModel, ModelSnapshotCapture, PanoramaImageCapture } from '../types';
+import { AssetModel, ModelCameraPreset, ModelSnapshotCapture, ModelSnapshotCamera, ModelViewBookmark, PanoramaImageCapture } from '../types';
 import { resolvePreferredModelUrl } from './modelAssetUtils';
 
 export interface ModelViewerHandle {
   captureSnapshot: () => Promise<ModelSnapshotCapture>;
   capturePanorama: (options?: { width?: number; height?: number }) => Promise<PanoramaImageCapture>;
+  applyCameraPreset: (preset: ModelCameraPreset) => boolean;
+  applyCameraView: (view: Pick<ModelViewBookmark, 'camera' | 'viewMode'>) => boolean;
 }
 
-interface ModelViewerProps {
+export interface ModelViewerProps {
   asset: AssetModel;
   minHeight?: number;
   initialView?: 'fit' | 'interior';
+  defaultEdgesEnabled?: boolean;
 }
 
 type SupportedModelFormat = Exclude<AssetModel['fileType'], 'unknown' | 'zip'>;
 type LoaderKind = 'GLTFLoader' | 'OBJLoader' | 'ColladaLoader' | 'STLLoader';
 type ViewMode = 'orbit' | 'walkthrough';
-type ViewPreset = 'fit' | 'top' | 'front' | 'side';
+type ViewPreset = 'fit' | 'top' | 'front' | 'side' | 'bird-eye';
 type WalkSpeedPreset = 'slow' | 'standard' | 'fast';
 type LensPreset = 'wide' | 'standard' | 'telephoto' | 'custom';
 
@@ -70,6 +73,7 @@ interface ModelBoundsInfo {
 interface ViewerCommandApi {
   fitView: (preset?: ViewPreset) => void;
   enterInterior: () => boolean;
+  applyCamera: (camera: ModelSnapshotCamera) => boolean;
 }
 
 export interface StableModelLoadIdentity {
@@ -177,7 +181,7 @@ export function getModelPreviewError(asset: AssetModel): string | null {
 }
 
 export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(function ModelViewer(
-  { asset, minHeight = 420, initialView = 'fit' },
+  { asset, minHeight = 420, initialView = 'fit', defaultEdgesEnabled = false },
   ref,
 ) {
   const { ref: sizeRef, size } = useElementSize<HTMLDivElement>();
@@ -222,20 +226,48 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
       }
       return capture;
     },
+    applyCameraPreset(preset) {
+      if (preset === 'interior') {
+        const entered = commandRef.current?.enterInterior() === true;
+        if (entered) setViewMode('walkthrough');
+        return entered;
+      }
+      setViewMode('orbit');
+      const viewPreset: ViewPreset = preset === 'exterior-front'
+        ? 'front'
+        : preset === 'exterior-side'
+          ? 'side'
+          : preset === 'bird-eye'
+            ? 'bird-eye'
+            : preset === 'top'
+              ? 'top'
+              : 'fit';
+      commandRef.current?.fitView(viewPreset);
+      return Boolean(commandRef.current);
+    },
+    applyCameraView(view) {
+      if (!view.camera) return false;
+      if (typeof view.camera.fov === 'number') {
+        setCustomFov(view.camera.fov);
+        setLensPreset('custom');
+      }
+      if (view.viewMode) setViewMode(view.viewMode);
+      return commandRef.current?.applyCamera(view.camera) === true;
+    },
   }), []);
 
   useEffect(() => {
     setViewMode(initialView === 'interior' ? 'walkthrough' : 'orbit');
     setClippingEnabled(false);
     setXrayEnabled(false);
-    setEdgesEnabled(false);
+    setEdgesEnabled(defaultEdgesEnabled);
     setPerformanceMode(true);
     setWalkSpeedPreset('slow');
     setLensPreset('standard');
     setCustomFov(DEFAULT_CUSTOM_FOV);
     setModelInfo(null);
     setViewerMessage(null);
-  }, [asset.id, initialView]);
+  }, [asset.id, defaultEdgesEnabled, initialView]);
 
   const handleLensPresetChange = useCallback((preset: LensPreset) => {
     if (preset === 'custom') {
@@ -248,10 +280,10 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
     setModelInfo(info);
     if (!info) return;
     setClippingHeight(info.defaultClippingHeight);
-    setEdgesEnabled(false);
+    setEdgesEnabled(defaultEdgesEnabled && info.edgesAvailableByDefault);
     const largeByGeometry = info.vertexCount > EDGE_VERTEX_LIMIT || info.triangleCount > EDGE_TRIANGLE_LIMIT;
     setViewerMessage(largeByGeometry ? '模型较大，建议使用转换后的 GLB 或开启性能模式。' : null);
-  }, []);
+  }, [defaultEdgesEnabled]);
 
   useEffect(() => {
     if (isLargeModel && !viewerMessage) {
@@ -315,7 +347,10 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
         onXrayEnabledChange={setXrayEnabled}
         onEdgesEnabledChange={setEdgesEnabled}
       />
-      <PreviewErrorBoundary resetKey={`${loadIdentity.fileType}:${loadIdentity.modelUrl}`} fallback={<LoadFailed minHeight={minHeight} />}>
+      <PreviewErrorBoundary
+        resetKey={`${loadIdentity.fileType}:${loadIdentity.modelUrl}`}
+        fallback={runtimeError => <LoadFailed asset={asset} runtimeError={runtimeError} minHeight={minHeight} />}
+      >
         <Canvas
           className="h-full w-full"
           style={{ width: '100%', height: '100%' }}
@@ -429,7 +464,7 @@ function PreviewToolbar({
         <ToolButton label="高质量" active={!performanceMode} onClick={() => onPerformanceModeChange(false)} />
         <ToolButton label="开屋顶" active={clippingEnabled} disabled={disabled} onClick={() => onClippingEnabledChange(!clippingEnabled)} />
         <ToolButton label="X 光显示" active={xrayEnabled} disabled={disabled} onClick={() => onXrayEnabledChange(!xrayEnabled)} />
-        <ToolButton label="显示边线" active={edgesEnabled} disabled={disabled} onClick={() => onEdgesEnabledChange(!edgesEnabled)} />
+        <ToolButton label="白模结构线" active={edgesEnabled} disabled={disabled} onClick={() => onEdgesEnabledChange(!edgesEnabled)} />
       </div>
       <div className="pointer-events-auto flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white/95 px-3 py-2 text-xs text-slate-600 shadow-sm backdrop-blur">
         <label className="flex items-center gap-2 font-bold text-slate-700">
@@ -629,6 +664,26 @@ function Scene({
         const entered = enterModelInterior(camera as ThreePerspectiveCamera, controlsRef.current, modelInfoRef.current);
         if (entered) invalidate();
         return entered;
+      },
+      applyCamera: cameraState => {
+        if (!Array.isArray(cameraState.position) || cameraState.position.length < 3) return false;
+        camera.position.fromArray(cameraState.position);
+        if (Array.isArray(cameraState.quaternion) && cameraState.quaternion.length >= 4) {
+          camera.quaternion.fromArray(cameraState.quaternion);
+        } else if (Array.isArray(cameraState.rotation) && cameraState.rotation.length >= 3) {
+          camera.rotation.set(cameraState.rotation[0], cameraState.rotation[1], cameraState.rotation[2]);
+        }
+        if (typeof cameraState.fov === 'number' && camera instanceof ThreePerspectiveCamera) {
+          camera.fov = clamp(cameraState.fov, 20, 100);
+          camera.updateProjectionMatrix();
+        }
+        if (controlsRef.current && Array.isArray(cameraState.target) && cameraState.target.length >= 3) {
+          controlsRef.current.target.fromArray(cameraState.target);
+          controlsRef.current.update();
+        }
+        camera.updateMatrixWorld(true);
+        invalidate();
+        return true;
       },
     });
     return () => onCommandsReady(null);
@@ -1148,6 +1203,7 @@ function fitCameraToObject(
     top: new Vector3(0, distance * 1.15, 0.001),
     front: new Vector3(0, distance * 0.22, distance * 1.25),
     side: new Vector3(distance * 1.25, distance * 0.22, 0),
+    'bird-eye': new Vector3(distance * 0.92, distance * 1.12, distance * 0.92),
   };
 
   camera.position.copy(center).add(offsets[preset]);
@@ -1387,23 +1443,23 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 class PreviewErrorBoundary extends React.Component<
-  { children: React.ReactNode; fallback: React.ReactNode; resetKey: string },
-  { hasError: boolean }
+  { children: React.ReactNode; fallback: (errorMessage?: string) => React.ReactNode; resetKey: string },
+  { hasError: boolean; errorMessage?: string }
 > {
-  state = { hasError: false };
+  state: { hasError: boolean; errorMessage?: string } = { hasError: false };
 
-  static getDerivedStateFromError() {
-    return { hasError: true };
+  static getDerivedStateFromError(error: unknown) {
+    return { hasError: true, errorMessage: error instanceof Error ? error.message : String(error) };
   }
 
   componentDidUpdate(previousProps: { resetKey: string }) {
     if (previousProps.resetKey !== this.props.resetKey && this.state.hasError) {
-      this.setState({ hasError: false });
+      this.setState({ hasError: false, errorMessage: undefined });
     }
   }
 
   render() {
-    return this.state.hasError ? this.props.fallback : this.props.children;
+    return this.state.hasError ? this.props.fallback(this.state.errorMessage) : this.props.children;
   }
 }
 
@@ -1424,16 +1480,30 @@ function UnsupportedPreview({ asset, errorMessage, minHeight }: { asset: AssetMo
   );
 }
 
-function LoadFailed({ minHeight }: { minHeight: number }) {
+export function getModelLoadDiagnostics(asset: AssetModel, runtimeError?: string): string[] {
+  const diagnostics = [
+    runtimeError ? `加载器返回：${runtimeError}` : '',
+    asset.conversionStatus === 'failed' && asset.conversionError ? `格式转换失败：${asset.conversionError}` : '',
+    asset.optimizationStatus === 'failed' && asset.optimizationError ? `轻量化失败：${asset.optimizationError}` : '',
+    asset.fileType === 'gltf' ? 'GLTF 可能缺少外部 .bin 或贴图文件，建议导出为单文件 GLB。' : '',
+    !resolveModelPreviewUrl(asset) ? '模型 URL 不存在或当前登录用户无权访问。' : '',
+    '检查模型文件是否损坏、浏览器显存是否充足，以及服务端返回的 Content-Type 和跨域配置。',
+    '支持 GLB、GLTF、OBJ、DAE、STL；不支持原生 FBX 或 SKP。',
+  ].filter(Boolean);
+  return Array.from(new Set(diagnostics));
+}
+
+function LoadFailed({ asset, runtimeError, minHeight }: { asset: AssetModel; runtimeError?: string; minHeight: number }) {
+  const diagnostics = getModelLoadDiagnostics(asset, runtimeError);
   return (
     <div className="flex h-full w-full flex-col items-center justify-center bg-slate-50 px-8 text-center" style={{ minHeight }}>
       <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-amber-100 bg-amber-50">
         <BoxIcon className="h-8 w-8 text-amber-500" />
       </div>
       <h3 className="text-sm font-bold text-slate-800">模型加载失败。建议将模型转换为 GLB 后重新上传。</h3>
-      <p className="mt-2 max-w-md text-xs leading-6 text-slate-500">
-        GLTF 如果缺少外部 .bin 或贴图文件，建议优先导出为单文件 GLB。
-      </p>
+      <ul className="mt-3 max-w-lg space-y-1 text-left text-xs leading-5 text-slate-500">
+        {diagnostics.map(item => <li key={item}>• {item}</li>)}
+      </ul>
     </div>
   );
 }

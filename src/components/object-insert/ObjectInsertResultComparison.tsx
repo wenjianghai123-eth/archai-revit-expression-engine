@@ -1,0 +1,7 @@
+import type { GenerationResultOption } from '../../types';
+import { getOriginalResultImageUrl } from '../../utils/resultImage';
+
+export function ObjectInsertResultComparison({ results, selectedId, onSelect }: { results: GenerationResultOption[]; selectedId?: string | null; onSelect: (id: string) => void }) {
+  if (results.length < 2) return null;
+  return <section className="mb-4 rounded-2xl border border-slate-200 bg-white p-3"><div className="mb-2 flex items-center justify-between"><p className="text-xs font-black text-slate-900">多候选并排比较</p><span className="text-[10px] font-bold text-slate-400">{results.length} 个结果</span></div><div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{results.map((result, index) => { const url = getOriginalResultImageUrl(result, result.imageUrl) || result.imageUrl; const active = result.id === selectedId || (!selectedId && index === 0); return <button key={result.id} type="button" onClick={() => onSelect(result.id)} className={`overflow-hidden rounded-xl border text-left ${active ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200'}`}><div className="aspect-video bg-slate-50"><img src={url} alt={`候选 ${index + 1}`} className="h-full w-full object-contain" /></div><div className="flex items-center justify-between px-2 py-1.5 text-[10px] font-bold text-slate-600"><span>候选 {index + 1}</span><span>{String(result.metadata?.objectInsertCandidateStrategy || '')}</span></div></button>; })}</div></section>;
+}

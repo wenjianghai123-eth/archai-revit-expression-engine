@@ -7,7 +7,6 @@ import express, { NextFunction, Request, Response } from 'express';
 import { attachAuthUser, devAuthUser, getRequiredCurrentUser, readAuthMode, requireAuth, signAuthToken } from './auth';
 import { createStoredFilename, fileStorageProvider, uploadsDir } from './fileStorage';
 import {
-  cancelGenerationJob,
   adjustCredits,
   AdminDashboard,
   createGenerationRecord,
@@ -19,13 +18,13 @@ import {
   createUserProfile,
   createGenerationResult,
   createShareLink,
+  listProjectShareLinks,
   deleteModelAsset,
   ensureAppDatabase,
   CreditBalance,
   CreditTransaction,
   GenerationJob,
   GenerationRecord,
-  getGenerationJob,
   getFloorPlanRegionSet,
   getImageAsset,
   getAdminDashboard,
@@ -36,7 +35,6 @@ import {
   getUserProfile,
   getUserProfileByEmail,
   ImageAsset,
-  listGenerationResults,
   listFloorPlanRegionMaterials,
   listPromptTemplates,
   getModelAsset,
@@ -53,8 +51,6 @@ import {
   ShareLink,
   softDeleteProject,
   deletePromptTemplate,
-  updateGenerationJob,
-  updateGenerationResult,
   updateProject,
   updateUserProfile,
   UserProfile,
@@ -66,7 +62,6 @@ import {
   apiOk,
   configureCors,
   createErrorHandler,
-  createGenerationJobRateLimiter,
   requireAdmin,
   sanitizeLogText,
 } from './http';
@@ -80,30 +75,28 @@ import {
   sniffModelFile,
 } from './upload';
 import {
-  enqueueGenerationJob,
   generateWithFallbackResponse,
   getGenerationProviderName,
   getSelectableGenerationProviders,
-  isGenerationWorkerDisabled,
   isLegacyGenerationEndpointEnabled,
   normalizeGenerationProviderName,
-  refundGenerationJobCredits,
-  removeQueuedGenerationJob,
   restorePendingGenerationJobs,
 } from './generationService';
 import { defaultPlanColorizeStyleId, maxPlanColorizeBatchCount, resolvePlanColorizeStyles } from '../src/constants/planColorizeStyles';
 import { findFloorplanColorTemplate, resolveFloorplanBatchCount, resolveFloorplanVariantPlans, readFloorplanVariantFocus, readFloorplanVariantType } from '../src/constants/floorplanVariants';
-import { getGenerationCreditCost, getGenerationOutputCount } from '../src/utils/generationCredits';
+import { designVariantVariableKeys, isDesignVariantVariableKey, readDesignVariantDiversity } from '../src/utils/designVariantMatrix';
 import { createAssetsRouter } from './routes/assets';
 import { createEditSessionsRouter } from './routes/editSessions';
+import { createProjectWorkflowsRouter } from './routes/projectWorkflows';
 import { createFloorPlanRouter } from './routes/floorPlan';
+import { createImageRouter } from './routes/image';
+import { createGenerationJobsRouter } from './routes/generationJobs';
 import { authenticateSupabasePassword, createSupabaseAuthUser, getSupabaseAdminClient, resetSupabaseAuthUserPassword, updateSupabaseAuthUserMetadata } from './supabaseAdmin';
 import { getModelConversionConfig } from './modelConversionService';
 import { getModelOptimizationConfig } from './modelOptimizationService';
 import { polishPromptText, PromptPolishRequest, PromptPolishResult } from './promptPolishService';
 import { resolveImagePolishPrompts } from './prompts/imagePolishPrompt';
 import { compileFloorPlanMaterialPrompt, readFloorPlanMaterialPromptInput } from './prompts/floorPlanMaterialPrompt';
-import { failEditGeneration } from './editSessionLifecycle';
 
 export const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -181,7 +174,6 @@ type CreditBalanceRow = { user_id: string; balance: number; updated_at: string }
 
 const queuedGenerationJobIds: string[] = [];
 let isGenerationWorkerRunning = false;
-const rateLimitGenerationJobCreate = createGenerationJobRateLimiter(generationJobRateLimitPerMinute);
 
 const loginHandler = async (
   req: Request,
@@ -534,7 +526,9 @@ app.delete('/api/prompt-templates/:id', requireAuth, requireAdmin, async (
 
 app.use('/api/assets', createAssetsRouter({ maxImageMb, maxModelMb }));
 app.use('/api/edit-sessions', createEditSessionsRouter());
+app.use('/api/projects/:projectId/design-workflow', createProjectWorkflowsRouter());
 app.use('/api/floor-plan', createFloorPlanRouter());
+app.use('/api/image', createImageRouter());
 app.post('/api/upload', requireAuth, legacyImageUploadHandler);
 
 app.get('/api/billing/credits', requireAuth, creditBalanceHandler);
@@ -743,212 +737,12 @@ app.post('/api/admin/credits/grant', requireAuth, requireAdmin, async (
   }
 });
 
-app.post('/api/generation-jobs', requireAuth, rateLimitGenerationJobCreate, async (
-  req: Request,
-  res: Response<ApiResponse<{ job: GenerationJob }>>,
-  next: NextFunction,
-) => {
-  logGenerationJobCreateStage(req, 'validate body');
-  const body = validateGenerationJobCreateBody(req.body);
-  if (body.ok === false) {
-    logGenerationJobCreateStage(req, 'validate body failed', { errorCode: body.error.code });
-    res.status(400).json(apiError(body.error.message, body.error.code));
-    return;
-  }
-
-  try {
-    const user = getRequiredCurrentUser(req);
-    logGenerationJobModeStepDebug('route accepted body', { mode: body.value.mode, step: body.value.step });
-    if (process.env.NODE_ENV !== 'production') {
-      console.debug({
-        event: 'generation_job_create',
-        mode: body.value.mode,
-        step: body.value.step,
-        generationStep: body.value.config.generationStep || body.value.step,
-        provider: body.value.provider,
-        inputAssetCount: body.value.inputAssetIds.length,
-      });
-    }
-    logGenerationJobCreateStage(req, 'get project', { userId: user.id, projectId: body.value.projectId, mode: body.value.mode, step: body.value.step });
-    const project = await getProject(body.value.projectId, user.id);
-    if (!project) {
-      logGenerationJobCreateStage(req, 'get project failed', { userId: user.id, projectId: body.value.projectId });
-      res.status(404).json(apiError('Project not found.', 'PROJECT_NOT_FOUND'));
-      return;
-    }
-
-    logGenerationJobCreateStage(req, 'validate assets', {
-      userId: user.id,
-      projectId: body.value.projectId,
-      mode: body.value.mode,
-      step: body.value.step,
-      inputAssetCount: body.value.inputAssetIds.length,
-    });
-    const assetValidation = await validateGenerationJobAssets(body.value.inputAssetIds, body.value.mode, body.value.step, body.value.config, user.id);
-    if (assetValidation.ok === false) {
-      logGenerationJobCreateStage(req, 'validate assets failed', { errorCode: assetValidation.error.code });
-      const status = assetValidation.error.code === 'GENERATION_JOB_SOURCE_MODEL_NOT_FOUND' ? 403 : 404;
-      res.status(status).json(apiError(assetValidation.error.message, assetValidation.error.code));
-      return;
-    }
-
-    const creditsCost = getGenerationCreditCost(body.value.mode, body.value.config);
-    logGenerationJobCreateStage(req, 'create generation job', {
-      userId: user.id,
-      projectId: body.value.projectId,
-      mode: body.value.mode,
-      step: body.value.step,
-      creditsCost,
-    });
-    const job = await createGenerationJob({
-      ...body.value,
-      userId: user.id,
-      creditCost: creditsCost,
-    });
-    if (!job) {
-      logGenerationJobCreateStage(req, 'create generation job failed', { userId: user.id, projectId: body.value.projectId });
-      res.status(404).json(apiError('Project not found.', 'PROJECT_NOT_FOUND'));
-      return;
-    }
-
-    if (process.env.NODE_ENV !== 'production') {
-      console.debug({
-        event: 'generation_job_created',
-        jobId: job.id,
-        requestedProvider: body.requestedProvider,
-        normalizedProvider: job.provider,
-        step: job.step,
-        mode: job.mode,
-        inputAssetCount: job.inputAssetIds.length,
-      });
-      if (job.step === 'image_polish' || job.config.generationStep === 'image_polish') {
-        console.debug({
-          event: 'image_polish_job_create_requested',
-          jobId: job.id,
-          enhanceMaterials: job.config.enhanceMaterials === true,
-          promptMode: typeof job.config.promptMode === 'string' ? job.config.promptMode : undefined,
-          provider: job.provider,
-          inputAssetCount: job.inputAssetIds.length,
-        });
-      }
-    }
-
-    logGenerationJobCreateStage(req, 'debit credits', { userId: user.id, jobId: job.id, creditsCost });
-    let debit: Awaited<ReturnType<typeof adjustCredits>>;
-    try {
-      debit = await adjustCredits({
-        userId: user.id,
-        type: 'generate_charge',
-        amount: -creditsCost,
-        reason: `Generation job ${job.mode} x${getGenerationOutputCount(body.value.mode, body.value.config)}`,
-        referenceType: 'generation_job',
-        referenceId: job.id,
-      });
-    } catch (error) {
-      logGenerationJobCreateStage(req, 'debit credits failed', {
-        userId: user.id,
-        jobId: job.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      await markGenerationJobCancelledAfterDebitFailure(job.id, error);
-      throw error;
-    }
-    if (!debit) {
-      logGenerationJobCreateStage(req, 'debit credits insufficient', { userId: user.id, jobId: job.id, creditsCost });
-      await updateGenerationJob(job.id, {
-        status: 'cancelled',
-        progress: 0,
-        errorMessage: 'Credits are insufficient.',
-        failureReason: 'Credits are insufficient.',
-        finishedAt: new Date().toISOString(),
-      });
-      res.status(402).json(apiError('Credits are insufficient.', 'CREDITS_INSUFFICIENT'));
-      return;
-    }
-
-    logGenerationJobCreateStage(req, 'enqueue worker', {
-      userId: user.id,
-      jobId: job.id,
-      workerDisabled: isGenerationWorkerDisabled(),
-    });
-    if (!isGenerationWorkerDisabled()) {
-      enqueueGenerationJob(job.id);
-    }
-    res.status(201).json(apiOk({ job }));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get('/api/generation-jobs/:id', requireAuth, async (
-  req: Request,
-  res: Response<ApiResponse<{ job: GenerationJob }>>,
-  next: NextFunction,
-) => {
-  try {
-    const job = await getGenerationJob(req.params.id, getRequiredCurrentUser(req).id);
-    if (!job) {
-      res.status(404).json(apiError('Generation job not found.', 'GENERATION_JOB_NOT_FOUND'));
-      return;
-    }
-
-    if (isRefundableGenerationJobStatus(job.status) && !job.creditRefunded) {
-      await refundGenerationJobCredits(job.id);
-    }
-    const latestJob = await getGenerationJob(req.params.id, getRequiredCurrentUser(req).id);
-    res.json(apiOk({ job: { ...(latestJob || job), results: await listGenerationResults(job.id, getRequiredCurrentUser(req).id) } }));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post('/api/generation-jobs/:id/cancel', requireAuth, async (
-  req: Request,
-  res: Response<ApiResponse<{ job: GenerationJob }>>,
-  next: NextFunction,
-) => {
-  try {
-    const job = await cancelGenerationJob(req.params.id, getRequiredCurrentUser(req).id);
-    if (!job) {
-      res.status(404).json(apiError('Generation job not found.', 'GENERATION_JOB_NOT_FOUND'));
-      return;
-    }
-
-    removeQueuedGenerationJob(job.id);
-    if (job.status === 'cancelled') {
-      await refundGenerationJobCredits(job.id);
-      await failEditGeneration(job, 'cancelled');
-    }
-    const latestJob = await getGenerationJob(job.id, getRequiredCurrentUser(req).id);
-    res.json(apiOk({ job: latestJob || job }));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.patch('/api/generation-results/:id', requireAuth, async (
-  req: Request,
-  res: Response<ApiResponse<{ result: Awaited<ReturnType<typeof updateGenerationResult>> }>>,
-  next: NextFunction,
-) => {
-  const body = validateGenerationResultUpdateBody(req.body);
-  if (body.ok === false) {
-    res.status(400).json(apiError(body.error.message, body.error.code));
-    return;
-  }
-
-  try {
-    const result = await updateGenerationResult(req.params.id, getRequiredCurrentUser(req).id, body.value);
-    if (!result) {
-      res.status(404).json(apiError('Generation result not found.', 'GENERATION_RESULT_NOT_FOUND'));
-      return;
-    }
-
-    res.json(apiOk({ result }));
-  } catch (error) {
-    next(error);
-  }
-});
+app.use('/api', createGenerationJobsRouter({
+  rateLimitPerMinute: generationJobRateLimitPerMinute,
+  validateCreateBody: validateGenerationJobCreateBody,
+  validateAssets: validateGenerationJobAssets,
+  logModeStepDebug: logGenerationJobModeStepDebug,
+}));
 
 app.post('/api/generate/floorplan', requireLegacyGenerationEndpoint, requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   const body = validateGenerateBody(req.body, { promptRequired: false });
@@ -1097,6 +891,24 @@ app.post('/api/projects/:id/share-links', requireAuth, async (
     }
 
     res.status(201).json(apiOk({ shareLink, url: buildShareUrl(req, shareLink.token) }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/projects/:id/share-links', requireAuth, async (
+  req: Request,
+  res: Response<ApiResponse<{ shareLinks: ShareLink[] }>>,
+  next: NextFunction,
+) => {
+  try {
+    const project = await getProject(req.params.id, getRequiredCurrentUser(req).id);
+    if (!project) {
+      res.status(404).json(apiError('Project not found.', 'PROJECT_NOT_FOUND'));
+      return;
+    }
+    const shareLinks = await listProjectShareLinks(project.id, project.userId);
+    res.json(apiOk({ shareLinks }));
   } catch (error) {
     next(error);
   }
@@ -1906,6 +1718,7 @@ const materialPatternScales = new Set(['small', 'medium', 'large']);
 const materialDirections = new Set(['auto', 'horizontal', 'vertical', 'diagonal', 'herringbone']);
 const materialFinishes = new Set(['matte', 'satin', 'glossy', 'rough']);
 const materialReplaceScopes = new Set(['material-only', 'material-and-soft-decor', 'creative']);
+const materialTextureAlignments = new Set(['auto', 'surface', 'center', 'edge', 'custom-origin']);
 const objectInsertSurfaces = new Set(['floor', 'wall', 'ceiling', 'tabletop', 'outdoor-ground', 'auto']);
 const objectInsertTypes = new Set(['sofa', 'chair', 'table', 'lamp', 'plant', 'artwork', 'sculpture', 'car', 'person', 'tree', 'signage', 'custom']);
 const objectFidelities = new Set(['strict', 'balanced', 'loose']);
@@ -1919,13 +1732,19 @@ function normalizeDesignVariantConfig(
     return { ok: true };
   }
   if (mode !== 'design-variants') {
-    config.batchCount = isObjectInsertRequestConfig(config) ? readObjectInsertCandidateCount(config) : 1;
+    config.batchCount = mode === 'material-replace'
+      ? config.batchCount
+      : isObjectInsertRequestConfig(config) ? readObjectInsertCandidateCount(config) : 1;
     delete config.variantStrategy;
     delete config.variantStyles;
     delete config.variantNames;
     delete config.variantChangeScope;
     delete config.variantLocks;
     delete config.variantStrategyNotes;
+    delete config.variantDiversity;
+    delete config.variantMatrixVariables;
+    delete config.variantVariableLocks;
+    delete config.variantMatrix;
     delete config.retryVariantIndex;
     delete config.targetVariantIndex;
     delete config.stylePackId;
@@ -1987,6 +1806,10 @@ function normalizeDesignVariantConfig(
   config.variantStrategyNotes = readStringArray(config.variantStrategyNotes)
     .slice(0, batchCount)
     .map(item => item.trim().slice(0, 200));
+  config.variantDiversity = readDesignVariantDiversity(config.variantDiversity);
+  config.variantMatrixVariables = readDesignVariantVariableKeys(config.variantMatrixVariables, Array.from(designVariantVariableKeys));
+  config.variantVariableLocks = readDesignVariantVariableKeys(config.variantVariableLocks, []);
+  config.variantMatrix = normalizeDesignVariantMatrix(config.variantMatrix, batchCount, retryVariantIndex);
   config.stylePackId = typeof config.stylePackId === 'string' && designVariantPackIds.has(config.stylePackId) ? config.stylePackId : 'interior-common';
   config.variantNames = readStringArray(config.variantNames)
     .slice(0, batchCount)
@@ -2027,12 +1850,64 @@ function normalizeMaterialReplaceConfig(
     delete config.materialFinish;
     delete config.materialReplaceScope;
     delete config.preserveLighting;
+    delete config.semanticObjectSelections;
+    delete config.materialRealSizeMm;
+    delete config.materialJointWidthMm;
+    delete config.materialTextureAlignment;
+    delete config.materialTextureOrigin;
+    delete config.materialCandidateCount;
+    delete config.maskSelectionMode;
+    delete config.smartMaskConfirmed;
+    delete config.smartMaskDetectedObject;
+    delete config.smartMaskConfidence;
+    delete config.smartMaskRefinementMethod;
     return { ok: true };
   }
 
-  config.batchCount = 1;
+  const requestedCandidateCount = config.materialCandidateCount ?? config.batchCount;
+  const isLegacySingleResult = requestedCandidateCount === undefined
+    || (config.materialCandidateCount === undefined && requestedCandidateCount === 1);
+  const candidateCount = isLegacySingleResult ? 1 : requestedCandidateCount;
+  if (candidateCount !== 1 && candidateCount !== 2 && candidateCount !== 3 && candidateCount !== 4) {
+    return { ok: false, error: { message: '材质铺贴候选数只支持 2、3 或 4。', code: 'GENERATION_JOB_MATERIAL_CANDIDATE_COUNT_INVALID' } };
+  }
+  if (candidateCount === 1) delete config.materialCandidateCount;
+  else config.materialCandidateCount = candidateCount;
+  config.batchCount = candidateCount;
   config.editTarget = 'material';
   config.editMode = config.editMode === 'mask' ? 'mask' : 'smart-type';
+  if (config.editMode === 'mask') {
+    if (config.maskSelectionMode === undefined || config.maskSelectionMode === null || config.maskSelectionMode === '') {
+      config.maskSelectionMode = 'precise';
+    } else if (config.maskSelectionMode !== 'smart' && config.maskSelectionMode !== 'precise') {
+      return { ok: false, error: { message: 'maskSelectionMode must be smart or precise.', code: 'GENERATION_JOB_MASK_SELECTION_MODE_INVALID' } };
+    }
+    if (config.maskSelectionMode === 'smart') {
+      config.smartMaskConfirmed = config.smartMaskConfirmed === true;
+      if (typeof config.smartMaskDetectedObject === 'string' && config.smartMaskDetectedObject.trim()) {
+        config.smartMaskDetectedObject = config.smartMaskDetectedObject.trim().slice(0, 64);
+      } else {
+        delete config.smartMaskDetectedObject;
+      }
+      config.smartMaskConfidence = normalizeBoundedNumber(config.smartMaskConfidence, 0, 0, 1);
+      if (typeof config.smartMaskRefinementMethod === 'string' && config.smartMaskRefinementMethod.trim()) {
+        config.smartMaskRefinementMethod = config.smartMaskRefinementMethod.trim().slice(0, 80);
+      } else {
+        delete config.smartMaskRefinementMethod;
+      }
+    } else {
+      delete config.smartMaskConfirmed;
+      delete config.smartMaskDetectedObject;
+      delete config.smartMaskConfidence;
+      delete config.smartMaskRefinementMethod;
+    }
+  } else {
+    delete config.maskSelectionMode;
+    delete config.smartMaskConfirmed;
+    delete config.smartMaskDetectedObject;
+    delete config.smartMaskConfidence;
+    delete config.smartMaskRefinementMethod;
+  }
   config.preserveLighting = config.preserveLighting !== false;
   config.preserveGeometry = config.preserveGeometry !== false;
   config.preserveStructure = config.preserveStructure !== false;
@@ -2041,6 +1916,13 @@ function normalizeMaterialReplaceConfig(
   config.materialDirection = typeof config.materialDirection === 'string' && materialDirections.has(config.materialDirection) ? config.materialDirection : 'auto';
   config.materialFinish = typeof config.materialFinish === 'string' && materialFinishes.has(config.materialFinish) ? config.materialFinish : 'matte';
   config.materialReplaceScope = typeof config.materialReplaceScope === 'string' && materialReplaceScopes.has(config.materialReplaceScope) ? config.materialReplaceScope : 'material-only';
+  config.materialRealSizeMm = normalizeBoundedNumber(config.materialRealSizeMm, 600, 20, 5000);
+  config.materialJointWidthMm = normalizeBoundedNumber(config.materialJointWidthMm, 2, 0, 50);
+  config.materialTextureAlignment = typeof config.materialTextureAlignment === 'string' && materialTextureAlignments.has(config.materialTextureAlignment) ? config.materialTextureAlignment : 'auto';
+  config.materialTextureOrigin = normalizeMaterialTextureOrigin(config.materialTextureOrigin);
+  config.semanticObjectSelections = normalizeSemanticObjectSelections(config.semanticObjectSelections);
+  config.feather = normalizeBoundedNumber(config.feather, 0, 0, 30);
+  config.maskExpansion = normalizeBoundedNumber(config.maskExpansion, 0, -30, 30);
 
   if (config.targetObjectType === undefined || config.targetObjectType === null || config.targetObjectType === '') {
     delete config.targetObjectType;
@@ -2092,6 +1974,8 @@ function normalizeMaterialReplaceConfig(
 
 const planDrawingTypes = new Set(['residential', 'commercial', 'office', 'hotel', 'landscape', 'site-plan', 'custom']);
 const planExpressionTemplates = new Set(['zoning-color', 'colored-plan', 'landscape-plan', 'furniture-enhance', 'annotation-plan', 'circulation-analysis']);
+const floorPlanExpressionModes = new Set(['precise-material', 'three-dimensional', 'analysis', 'multi-option']);
+const floorPlanTextLanguages = new Set(['zh-CN', 'en', 'none']);
 
 function normalizePlanColorizeConfig(
   mode: GenerationRecord['mode'],
@@ -2452,12 +2336,24 @@ function validateGenerationJobCreateBody(
     } else {
       delete config.freeReferenceReferences;
     }
-    config.batchCount = 1;
-    config.targetAspectRatio = typeof config.freeReferenceAspectRatio === 'string'
-      ? config.freeReferenceAspectRatio
-      : typeof config.targetAspectRatio === 'string'
-        ? config.targetAspectRatio
-        : '1:1';
+    const requestedAspectRatio = normalizeFreeReferenceAspectRatio(config.freeReferenceAspectRatio);
+    if (!requestedAspectRatio) {
+      return { ok: false, error: { message: '自由参考生图比例不受支持。', code: 'GENERATION_JOB_FREE_REFERENCE_ASPECT_RATIO_INVALID' } };
+    }
+    const candidateCount = config.freeReferenceCandidateCount ?? config.batchCount ?? 1;
+    if (candidateCount !== 1 && candidateCount !== 2 && candidateCount !== 4) {
+      return { ok: false, error: { message: '自由参考生图候选数只支持 1、2 或 4。', code: 'GENERATION_JOB_FREE_REFERENCE_CANDIDATE_COUNT_INVALID' } };
+    }
+    config.freeReferenceAspectRatio = requestedAspectRatio;
+    config.freeReferenceCandidateCount = candidateCount;
+    config.batchCount = candidateCount;
+    config.freeReferenceStructureControl = normalizeFreeReferenceStructureControl(config.freeReferenceStructureControl);
+    config.freeReferenceWorkflowMode = config.freeReferenceWorkflowMode === 'quick-style' ? 'quick-style' : 'custom';
+    config.targetAspectRatio = requestedAspectRatio === 'source'
+      ? (typeof config.targetAspectRatio === 'string' ? config.targetAspectRatio : '1:1')
+      : requestedAspectRatio;
+    config.aspectRatio = config.targetAspectRatio;
+    config.apiyiAspectRatio = requestedAspectRatio === 'source' ? undefined : requestedAspectRatio;
   } else {
     delete config.freeReferenceReferences;
   }
@@ -2467,13 +2363,23 @@ function validateGenerationJobCreateBody(
     if (!sourceImageAssetId || !inputAssetIds.includes(sourceImageAssetId)) {
       return { ok: false, error: { message: '请先上传原图。', code: 'GENERATION_JOB_IMAGE_POLISH_SOURCE_REQUIRED' } };
     }
-    const enhanceMaterials = config.enhanceMaterials === true;
-    const promptMode = enhanceMaterials ? 'material_enhance' : 'default_polish';
-    const imagePolishPrompts = resolveImagePolishPrompts(enhanceMaterials);
+    const imagePolishPrompts = resolveImagePolishPrompts({
+      mode: config.imagePolishMode === 'conservative' || config.imagePolishMode === 'white-model-materialization'
+        ? config.imagePolishMode
+        : undefined,
+      controls: isRecord(config.imagePolishControls) ? config.imagePolishControls : undefined,
+      enhanceMaterials: config.enhanceMaterials === true,
+    });
+    const imagePolishMode = imagePolishPrompts.mode;
+    const imagePolishControls = imagePolishPrompts.controls;
+    const enhanceMaterials = imagePolishMode === 'white-model-materialization';
+    const promptMode = enhanceMaterials ? 'white_model_materialization' : 'conservative_polish';
     config.sourceImageAssetId = sourceImageAssetId;
     config.generationStep = 'image_polish';
     config.featureKey = 'image_polish';
     config.featureName = '质感提升';
+    config.imagePolishMode = imagePolishMode;
+    config.imagePolishControls = imagePolishControls;
     config.enhanceMaterials = enhanceMaterials;
     config.promptMode = promptMode;
     config.batchCount = 1;
@@ -2485,13 +2391,8 @@ function validateGenerationJobCreateBody(
     config.styleStrength = enhanceMaterials ? 'medium' : 'low';
     config.preserveStructure = true;
     config.preserveCamera = true;
-    if (enhanceMaterials) {
-      delete config.preserveColor;
-      delete config.preserveMaterialAppearance;
-    } else {
-      config.preserveColor = true;
-      config.preserveMaterialAppearance = true;
-    }
+    config.preserveColor = imagePolishControls.colorPreservation !== 'off';
+    config.preserveMaterialAppearance = !enhanceMaterials;
     config.preserveGeometry = true;
     config.keepOriginalAspectRatio = true;
     delete config.maskMode;
@@ -2530,6 +2431,7 @@ function validateGenerationJobCreateBody(
   if (planColorizeConfig.ok === false) {
     return { ok: false, error: planColorizeConfig.error };
   }
+  normalizeFloorPlanExpressionConfig(generationMode, config);
   const floorPlanMaterialPromptInput = readFloorPlanMaterialPromptInput(config);
   if (config.floorPlanMaterialMapping === true) {
     if (generationMode !== 'plan-colorize' || generationStep !== 'plan_colorize' || !floorPlanMaterialPromptInput) {
@@ -2551,6 +2453,24 @@ function validateGenerationJobCreateBody(
     if (isNonEmptyString(config.sourceImageAssetId)) config.sourceImageAssetId = config.sourceImageAssetId.trim();
     if (isNonEmptyString(config.snapshotAssetId)) config.snapshotAssetId = config.snapshotAssetId.trim();
     if (isNonEmptyString(config.sourceModelAssetId)) config.sourceModelAssetId = config.sourceModelAssetId.trim();
+    config.modelViewBookmarkId = isNonEmptyString(config.modelViewBookmarkId) ? config.modelViewBookmarkId.trim().slice(0, 160) : undefined;
+    config.modelViewBookmarkName = isNonEmptyString(config.modelViewBookmarkName) ? config.modelViewBookmarkName.trim().slice(0, 120) : undefined;
+    config.modelCameraPreset = config.modelCameraPreset === 'interior'
+      || config.modelCameraPreset === 'exterior-front'
+      || config.modelCameraPreset === 'exterior-side'
+      || config.modelCameraPreset === 'bird-eye'
+      || config.modelCameraPreset === 'top'
+      || config.modelCameraPreset === 'custom'
+      ? config.modelCameraPreset
+      : undefined;
+    config.modelViewBatchId = isNonEmptyString(config.modelViewBatchId) ? config.modelViewBatchId.trim().slice(0, 160) : undefined;
+    config.modelViewBatchIndex = typeof config.modelViewBatchIndex === 'number' && Number.isInteger(config.modelViewBatchIndex) && config.modelViewBatchIndex >= 0
+      ? config.modelViewBatchIndex
+      : undefined;
+    config.modelViewBatchCount = typeof config.modelViewBatchCount === 'number' && Number.isInteger(config.modelViewBatchCount) && config.modelViewBatchCount > 0 && config.modelViewBatchCount <= 20
+      ? config.modelViewBatchCount
+      : undefined;
+    delete config.modelViewBookmarks;
   }
   if (generationMode === 'panorama-roam-render') {
     const panoramaAssetId = isNonEmptyString(config.panoramaAssetId)
@@ -2594,6 +2514,8 @@ function validateGenerationJobCreateBody(
     const enforceContactShadow = readObjectInsertBooleanConstraint(config, 'enforceContactShadow');
     const enforceOcclusion = readObjectInsertBooleanConstraint(config, 'enforceOcclusion');
     const enforcePerspectiveScale = readObjectInsertBooleanConstraint(config, 'enforcePerspectiveScale');
+    const objectInsertWorkflowMode = readObjectInsertWorkflowMode(config);
+    const objectInsertSceneEnrichment = readObjectInsertSceneEnrichment(config);
     const needsObject = previewFusionMode ? false : objectInsertIncludesObject(debugMode);
     const needsPreview = previewFusionMode ? true : objectInsertIncludesPreview(debugMode);
     const needsMask = previewFusionMode ? false : objectInsertIncludesMask(debugMode);
@@ -2726,6 +2648,8 @@ function validateGenerationJobCreateBody(
     config.enforceContactShadow = enforceContactShadow;
     config.enforceOcclusion = enforceOcclusion;
     config.enforcePerspectiveScale = enforcePerspectiveScale;
+    config.objectInsertWorkflowMode = objectInsertWorkflowMode;
+    config.objectInsertSceneEnrichment = objectInsertSceneEnrichment;
     config.allowAutoAdjustPosition = allowAutoAdjustPosition;
     config.allowAutoAdjustRotation = allowAutoAdjustRotation;
     config.allowAutoAdjustScale = allowAutoAdjustScale;
@@ -2774,6 +2698,8 @@ function validateGenerationJobCreateBody(
       objectInsertCandidateStrategy: candidateStrategy,
       objectInsertCandidateStrategies: candidateStrategies,
       objectInsertCandidatePromptHints: candidatePromptHints,
+      workflowMode: objectInsertWorkflowMode,
+      sceneEnrichment: objectInsertSceneEnrichment,
     };
     if (needsMask) {
       config.maskMode = 'asset-mask';
@@ -2800,6 +2726,8 @@ function validateGenerationJobCreateBody(
     delete config.objectInsertCandidateStrategy;
     delete config.objectInsertCandidateStrategies;
     delete config.objectInsertCandidatePromptHints;
+    delete config.objectInsertWorkflowMode;
+    delete config.objectInsertSceneEnrichment;
     if (isRecord(config.objectInsert)) {
       delete config.objectInsert.objectType;
       delete config.objectInsert.objectInsertSurface;
@@ -2810,6 +2738,8 @@ function validateGenerationJobCreateBody(
       delete config.objectInsert.objectInsertCandidateStrategy;
       delete config.objectInsert.objectInsertCandidateStrategies;
       delete config.objectInsert.objectInsertCandidatePromptHints;
+      delete config.objectInsert.workflowMode;
+      delete config.objectInsert.sceneEnrichment;
     }
   }
   if (config.editTarget !== undefined && config.editTarget !== 'general' && config.editTarget !== 'material' && config.editTarget !== 'furniture') {
@@ -2823,13 +2753,12 @@ function validateGenerationJobCreateBody(
   if (config.targetAspectRatio !== undefined && typeof config.targetAspectRatio !== 'string') {
     return { ok: false, error: { message: 'targetAspectRatio must be a string.', code: 'GENERATION_JOB_ASPECT_RATIO_INVALID' } };
   }
-  if (usesStandardImageAspectRatio(generationMode)) {
+  if (usesStandardImageAspectRatio(generationMode) && generationStep !== 'free_reference_image') {
     config.targetAspectRatio = '16:9';
     config.aspectRatio = '16:9';
     config.apiyiAspectRatio = '16:9';
     config.targetWidth = 2048;
     config.targetHeight = 1152;
-    if (generationStep === 'free_reference_image') config.freeReferenceAspectRatio = '16:9';
   }
   if (config.furnitureReferenceAssetIds !== undefined && !isStringArrayWithLimit(config.furnitureReferenceAssetIds, 3)) {
     return { ok: false, error: { message: 'furnitureReferenceAssetIds must contain at most 3 asset ids.', code: 'GENERATION_JOB_FURNITURE_REFERENCES_INVALID' } };
@@ -2848,6 +2777,16 @@ function validateGenerationJobCreateBody(
     config.sourceImageAssetId = sourceImageAssetId;
   }
   if (generationMode === 'inpaint' || generationMode === 'material-replace' || generationStep === 'object_insert') {
+    if (isNonEmptyString(config.protectionMaskAssetId)) {
+      config.protectionMaskAssetId = config.protectionMaskAssetId.trim();
+      if (!body.inputAssetIds.includes(config.protectionMaskAssetId)) {
+        return { ok: false, error: { message: '保护区域素材无效或不属于当前任务。', code: 'GENERATION_JOB_PROTECTION_MASK_INVALID' } };
+      }
+      config.hasProtectionMask = true;
+    } else {
+      delete config.protectionMaskAssetId;
+      config.hasProtectionMask = false;
+    }
     if (config.maskMode === undefined || config.maskMode === null || config.maskMode === '') {
       if (generationMode === 'material-replace' && config.editMode === 'mask') {
         return { ok: false, error: { message: '精细涂抹模式下请先选择需要替换的区域', code: 'GENERATION_JOB_MASK_REQUIRED' } };
@@ -2880,17 +2819,38 @@ function validateGenerationJobCreateBody(
       } else {
         delete config.maskAssetId;
       }
+      if (
+        generationMode === 'material-replace'
+        && config.editMode === 'mask'
+        && config.maskSelectionMode === 'smart'
+        && config.smartMaskConfirmed !== true
+      ) {
+        return {
+          ok: false,
+          error: {
+            message: '请先确认智能 Mask 识别范围。',
+            code: 'GENERATION_JOB_SMART_MASK_NOT_CONFIRMED',
+          },
+        };
+      }
     }
   } else {
     delete config.maskMode;
     delete config.maskAssetId;
+    delete config.protectionMaskAssetId;
   }
 
   const normalizedInputAssetIds = generationStep === 'image_polish' && isNonEmptyString(config.sourceImageAssetId)
     ? [config.sourceImageAssetId]
     : body.inputAssetIds.map(item => item.trim());
   const normalizedPrompt = generationStep === 'image_polish'
-    ? resolveImagePolishPrompts(config.enhanceMaterials === true).prompt
+    ? resolveImagePolishPrompts({
+        mode: config.imagePolishMode === 'conservative' || config.imagePolishMode === 'white-model-materialization'
+          ? config.imagePolishMode
+          : undefined,
+        controls: isRecord(config.imagePolishControls) ? config.imagePolishControls : undefined,
+        enhanceMaterials: config.enhanceMaterials === true,
+      }).prompt
     : floorPlanMaterialPromptInput
       ? compileFloorPlanMaterialPrompt(floorPlanMaterialPromptInput)
       : body.prompt;
@@ -2908,45 +2868,6 @@ function validateGenerationJobCreateBody(
       provider: normalizedProvider,
     },
   };
-}
-
-function validateGenerationResultUpdateBody(
-  body: unknown,
-): { ok: true; value: Parameters<typeof updateGenerationResult>[2] } | { ok: false; error: ApiError } {
-  if (!isRecord(body)) {
-    return { ok: false, error: { message: 'Request body must be a JSON object.', code: 'INVALID_REQUEST_BODY' } };
-  }
-
-  const value: Parameters<typeof updateGenerationResult>[2] = {};
-  if (body.isSelected !== undefined) {
-    if (typeof body.isSelected !== 'boolean') {
-      return { ok: false, error: { message: 'isSelected must be a boolean.', code: 'GENERATION_RESULT_SELECTED_INVALID' } };
-    }
-    value.isSelected = body.isSelected;
-  }
-
-  if (body.isFavorite !== undefined) {
-    if (typeof body.isFavorite !== 'boolean') {
-      return { ok: false, error: { message: 'isFavorite must be a boolean.', code: 'GENERATION_RESULT_FAVORITE_INVALID' } };
-    }
-    value.isFavorite = body.isFavorite;
-  }
-
-  if (body.metadata !== undefined) {
-    if (!isRecord(body.metadata)) {
-      return { ok: false, error: { message: 'metadata must be an object.', code: 'GENERATION_RESULT_METADATA_INVALID' } };
-    }
-    const metadata: Record<string, unknown> = {};
-    if (typeof body.metadata.variantName === 'string') metadata.variantName = body.metadata.variantName.trim().slice(0, 80);
-    if (typeof body.metadata.variantCode === 'string') metadata.variantCode = body.metadata.variantCode.trim().slice(0, 8);
-    value.metadata = metadata;
-  }
-
-  if (Object.keys(value).length === 0) {
-    return { ok: false, error: { message: 'At least one result field is required.', code: 'GENERATION_RESULT_UPDATE_EMPTY' } };
-  }
-
-  return { ok: true, value };
 }
 
 function createShareToken(): string {
@@ -3241,6 +3162,60 @@ function readObjectInsertFusionPreference(config: Record<string, unknown>): Obje
 
 function readObjectInsertCandidateCount(config: Record<string, unknown>): 1 | 2 | 3 {
   return config.batchCount === 2 || config.batchCount === 3 ? config.batchCount : 1;
+}
+
+function readDesignVariantVariableKeys(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return [...fallback];
+  return Array.from(new Set(value.filter(isDesignVariantVariableKey)));
+}
+
+function normalizeDesignVariantMatrix(value: unknown, batchCount: number, retryVariantIndex: number | undefined): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  const allowedIndexes = typeof retryVariantIndex === 'number'
+    ? new Set([retryVariantIndex])
+    : new Set(Array.from({ length: batchCount }, (_, index) => index));
+  return value.slice(0, 8).flatMap(item => {
+    if (!isRecord(item) || typeof item.variantIndex !== 'number') return [];
+    const variantIndex = Math.floor(item.variantIndex);
+    if (!allowedIndexes.has(variantIndex)) return [];
+    const values = isRecord(item.values)
+      ? Object.fromEntries(Object.entries(item.values).flatMap(([key, candidate]) => isDesignVariantVariableKey(key) && typeof candidate === 'string'
+        ? [[key, candidate.trim().slice(0, 120)]]
+        : []))
+      : {};
+    return [{
+      variantIndex,
+      changedVariables: readDesignVariantVariableKeys(item.changedVariables, []),
+      lockedVariables: readDesignVariantVariableKeys(item.lockedVariables, []),
+      values,
+      description: typeof item.description === 'string' ? item.description.trim().slice(0, 500) : '',
+      differenceSummary: typeof item.differenceSummary === 'string' ? item.differenceSummary.trim().slice(0, 500) : '',
+      parentResultId: typeof item.parentResultId === 'string' ? item.parentResultId.trim().slice(0, 100) : undefined,
+      parentJobId: typeof item.parentJobId === 'string' ? item.parentJobId.trim().slice(0, 100) : undefined,
+    }];
+  });
+}
+
+function readObjectInsertWorkflowMode(config: Record<string, unknown>): 'placement' | 'scene-enrichment' {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = typeof nested.workflowMode === 'string' ? nested.workflowMode : config.objectInsertWorkflowMode;
+  return value === 'scene-enrichment' ? 'scene-enrichment' : 'placement';
+}
+
+function readObjectInsertSceneEnrichment(config: Record<string, unknown>): { plants: 'few' | 'moderate' | 'many'; people: 'few' | 'moderate' | 'many'; decorations: 'few' | 'moderate' | 'many' } {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const value = isRecord(nested.sceneEnrichment)
+    ? nested.sceneEnrichment
+    : isRecord(config.objectInsertSceneEnrichment) ? config.objectInsertSceneEnrichment : {};
+  const readLevel = (key: string, fallback: 'few' | 'moderate' | 'many') => {
+    const level = value[key];
+    return level === 'few' || level === 'moderate' || level === 'many' ? level : fallback;
+  };
+  return {
+    plants: readLevel('plants', 'moderate'),
+    people: readLevel('people', 'few'),
+    decorations: readLevel('decorations', 'moderate'),
+  };
 }
 
 function readObjectInsertCandidateStrategy(config: Record<string, unknown>): string {
@@ -3628,6 +3603,28 @@ async function validateGenerationJobAssets(
   return { ok: true };
 }
 
+function normalizeFloorPlanExpressionConfig(mode: GenerationRecord['mode'], config: Record<string, unknown>): void {
+  if (mode !== 'floorplan' && mode !== 'plan-colorize') {
+    delete config.floorPlanExpressionMode;
+    delete config.floorPlanTextLanguage;
+    return;
+  }
+  config.floorPlanExpressionMode = typeof config.floorPlanExpressionMode === 'string' && floorPlanExpressionModes.has(config.floorPlanExpressionMode)
+    ? config.floorPlanExpressionMode
+    : mode === 'floorplan'
+      ? config.floorplanOutputMode === 'multi' ? 'multi-option' : config.floorplanRenderMode === 'flat-color' ? 'precise-material' : 'three-dimensional'
+      : config.planColorizeBatchEnabled === true ? 'multi-option' : config.template === 'colored-plan' ? 'three-dimensional' : 'analysis';
+  config.floorPlanTextLanguage = typeof config.floorPlanTextLanguage === 'string' && floorPlanTextLanguages.has(config.floorPlanTextLanguage)
+    ? config.floorPlanTextLanguage
+    : 'en';
+  if (config.floorPlanTextLanguage === 'none') {
+    config.enableLegend = false;
+    config.enableAreaText = false;
+    config.enableMaterialLegend = false;
+    config.enableRoomLabels = false;
+  }
+}
+
 async function validateFloorPlanMaterialGenerationAssets(
   inputAssetIds: string[],
   step: GenerationJob['step'],
@@ -3677,47 +3674,6 @@ async function validateFloorPlanMaterialGenerationAssets(
     return { ok: false, error: { message: '区域材质彩平输入图片顺序无效。', code: 'FLOOR_PLAN_MATERIAL_INPUT_ORDER_INVALID' } };
   }
   return { ok: true };
-}
-
-async function markGenerationJobCancelledAfterDebitFailure(jobId: string, error: unknown): Promise<void> {
-  const message = error instanceof Error ? error.message : 'Credit debit failed.';
-  try {
-    await updateGenerationJob(jobId, {
-      status: 'cancelled',
-      progress: 0,
-      errorMessage: message,
-      failureReason: message,
-      finishedAt: new Date().toISOString(),
-    });
-  } catch (updateError) {
-    console.error('Failed to cancel generation job after credit debit error', {
-      jobId: sanitizeLogText(jobId),
-      error: updateError instanceof Error ? sanitizeLogText(updateError.message) : sanitizeLogText(String(updateError)),
-    });
-  }
-}
-
-function isRefundableGenerationJobStatus(status: GenerationJob['status']): boolean {
-  return status === 'failed' || status === 'cancelled' || status === 'timeout';
-}
-
-function logGenerationJobCreateStage(req: Request, stage: string, fields: Record<string, unknown> = {}): void {
-  const requestId = req.headers['x-request-id'];
-  const safeRequestId = typeof requestId === 'string' ? sanitizeLogText(requestId) : undefined;
-  console.info('Generation job create stage', {
-    requestId: safeRequestId,
-    method: req.method,
-    path: req.path,
-    stage,
-    ...sanitizeLogFields(fields),
-  });
-}
-
-function sanitizeLogFields(fields: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(fields).map(([key, value]) => [
-    key,
-    typeof value === 'string' ? sanitizeLogText(value) : value,
-  ]));
 }
 
 function readOptionalNullableString(
@@ -3772,7 +3728,59 @@ function normalizeFreeReferenceReferences(value: unknown, allowedAssetIds: strin
     const strength = isRecord(matched) && typeof matched.strength === 'string' && allowedStrengths.has(matched.strength)
       ? matched.strength
       : 'medium';
-    return { assetId, role, strength };
+    const weight = isRecord(matched) && typeof matched.weight === 'number' && Number.isFinite(matched.weight)
+      ? Math.max(0, Math.min(100, Math.round(matched.weight)))
+      : strength === 'high' ? 85 : strength === 'low' ? 30 : 60;
+    const crop = isRecord(matched) ? normalizeFreeReferenceCrop(matched.crop) : undefined;
+    const allowedFocusAreas = new Set(['full', 'center', 'foreground', 'background', 'left', 'right', 'custom']);
+    const focusArea = isRecord(matched) && typeof matched.focusArea === 'string' && allowedFocusAreas.has(matched.focusArea) ? matched.focusArea : 'full';
+    const focusDescription = isRecord(matched) && typeof matched.focusDescription === 'string' ? matched.focusDescription.trim().slice(0, 160) : '';
+    return { assetId, role, strength, weight, crop, focusArea, focusDescription: focusDescription || undefined };
+  });
+}
+
+function normalizeFreeReferenceAspectRatio(value: unknown): string | null {
+  const allowed = new Set(['source', '1:1', '4:3', '3:2', '16:9', '9:16', '2:1', '3:4']);
+  if (value === undefined || value === null || value === '') return '16:9';
+  return typeof value === 'string' && allowed.has(value) ? value : null;
+}
+
+function normalizeFreeReferenceStructureControl(value: unknown): 'strict' | 'balanced' | 'creative' {
+  return value === 'strict' || value === 'creative' ? value : 'balanced';
+}
+
+function normalizeFreeReferenceCrop(value: unknown): { x: number; y: number; width: number; height: number } | undefined {
+  if (!isRecord(value)) return undefined;
+  const x = typeof value.x === 'number' && Number.isFinite(value.x) ? Math.max(0, Math.min(1, value.x)) : 0;
+  const y = typeof value.y === 'number' && Number.isFinite(value.y) ? Math.max(0, Math.min(1, value.y)) : 0;
+  const width = typeof value.width === 'number' && Number.isFinite(value.width) ? Math.max(0.05, Math.min(1 - x, value.width)) : 1 - x;
+  const height = typeof value.height === 'number' && Number.isFinite(value.height) ? Math.max(0.05, Math.min(1 - y, value.height)) : 1 - y;
+  return { x, y, width, height };
+}
+
+function normalizeBoundedNumber(value: unknown, fallback: number, min: number, max: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
+}
+
+function normalizeMaterialTextureOrigin(value: unknown): { x: number; y: number } {
+  if (!isRecord(value)) return { x: 0.5, y: 0.5 };
+  return {
+    x: normalizeBoundedNumber(value.x, 0.5, 0, 1),
+    y: normalizeBoundedNumber(value.y, 0.5, 0, 1),
+  };
+}
+
+function normalizeSemanticObjectSelections(value: unknown): Array<{ id: string; objectType: string; x: number; y: number; label?: string }> {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).slice(0, 24).flatMap((item, index) => {
+    if (typeof item.objectType !== 'string' || !materialReplaceObjectTypes.has(item.objectType)) return [];
+    return [{
+      id: typeof item.id === 'string' && item.id.trim() ? item.id.trim().slice(0, 120) : `semantic-${index + 1}`,
+      objectType: item.objectType,
+      x: normalizeBoundedNumber(item.x, 0.5, 0, 1),
+      y: normalizeBoundedNumber(item.y, 0.5, 0, 1),
+      label: typeof item.label === 'string' && item.label.trim() ? item.label.trim().slice(0, 80) : undefined,
+    }];
   });
 }
 

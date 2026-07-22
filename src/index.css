@@ -63,6 +63,39 @@
   @apply flex min-h-52 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200/80 bg-white p-6 text-center shadow-sm;
 }
 
+.result-viewer-compare {
+  display: grid;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+.result-viewer-compare-source {
+  border-bottom: 1px solid rgb(226 232 240);
+}
+
+@media (min-width: 768px) {
+  .result-viewer-compare {
+    display: block;
+  }
+
+  .result-viewer-compare-source,
+  .result-viewer-compare-result {
+    inset: 0;
+    position: absolute;
+  }
+
+  .result-viewer-compare-source {
+    border-bottom: 0;
+  }
+
+  .result-viewer-compare-result {
+    clip-path: inset(0 calc(100% - var(--result-compare-position)) 0 0);
+  }
+
+  .result-viewer-compare-divider {
+    left: var(--result-compare-position);
+  }
+}
+
 .image-frame {
   @apply relative flex w-full items-center justify-center overflow-hidden rounded-2xl border border-slate-200/80 shadow-inner;
   background-color: #f8fafc;
@@ -165,6 +198,181 @@
   background: rgba(100, 116, 139, 0.65);
 }
 
+/* Drawing expression workspace: the application sidebar already consumes 288px
+   at desktop widths, so these tracks are based on the remaining content area. */
+.drawing-workspace {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.drawing-left-panel,
+.drawing-right-panel,
+.drawing-viewer {
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+}
+
+.drawing-left-panel,
+.drawing-right-panel-content {
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+}
+
+.drawing-left-panel {
+  order: 2;
+}
+
+.drawing-viewer {
+  order: 1;
+  min-height: clamp(360px, 55dvh, 640px);
+  isolation: isolate;
+  container-name: drawing-viewer;
+  container-type: inline-size;
+}
+
+.drawing-right-panel {
+  order: 3;
+  overscroll-behavior: contain;
+}
+
+.drawing-canvas-container,
+.canvas-stage {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.drawing-canvas-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.drawing-canvas-container img,
+.drawing-canvas-container canvas,
+.canvas-stage img,
+.canvas-stage canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.canvas-stage > .canvas-overlay {
+  position: absolute;
+  inset: 0;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.floor-plan-region-workspace {
+  overflow-x: hidden;
+}
+
+.floor-plan-region-canvas {
+  min-height: 320px;
+}
+
+.floor-plan-region-editor {
+  max-height: 320px;
+  overscroll-behavior: contain;
+}
+
+/* 900–1199px: preserve the canvas and action panel; move settings above them. */
+@media (min-width: 900px) and (max-width: 1199px) {
+  .drawing-workspace {
+    grid-template-columns: minmax(0, 1fr) minmax(250px, 280px);
+    grid-template-rows: clamp(112px, 16vh, 140px) minmax(240px, 1fr);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .drawing-left-panel {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    order: initial;
+  }
+
+  .drawing-viewer {
+    grid-column: 1;
+    grid-row: 2;
+    order: initial;
+    min-height: 0;
+  }
+
+  .drawing-right-panel {
+    grid-column: 2;
+    grid-row: 2;
+    order: initial;
+  }
+}
+
+/* 1200–1439px: compact side tracks leave the main canvas the flexible space. */
+@media (min-width: 1200px) and (max-width: 1439px) {
+  .drawing-workspace {
+    grid-template-columns: minmax(230px, 250px) minmax(0, 1fr) minmax(250px, 270px);
+    grid-template-rows: minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .drawing-left-panel,
+  .drawing-viewer,
+  .drawing-right-panel {
+    grid-row: 1;
+    order: initial;
+    min-height: 0;
+  }
+
+  .drawing-left-panel { grid-column: 1; }
+  .drawing-viewer { grid-column: 2; }
+  .drawing-right-panel { grid-column: 3; }
+}
+
+/* ≥1440px: balanced presentation widths while the canvas owns all surplus. */
+@media (min-width: 1440px) {
+  .drawing-workspace {
+    grid-template-columns: minmax(270px, 290px) minmax(0, 1fr) minmax(290px, 310px);
+    grid-template-rows: minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .drawing-left-panel,
+  .drawing-viewer,
+  .drawing-right-panel {
+    grid-row: 1;
+    order: initial;
+    min-height: 0;
+  }
+
+  .drawing-left-panel { grid-column: 1; }
+  .drawing-viewer { grid-column: 2; }
+  .drawing-right-panel { grid-column: 3; }
+}
+
+/* The region editor becomes a side panel only when its actual viewer is wide. */
+@container drawing-viewer (min-width: 640px) {
+  .floor-plan-region-workspace {
+    flex-direction: row;
+    overflow: hidden;
+  }
+
+  .floor-plan-region-canvas {
+    min-height: 0;
+  }
+
+  .floor-plan-region-editor {
+    width: 300px;
+    max-height: none;
+    border-top: 0;
+    border-left: 1px solid rgb(226 232 240);
+  }
+}
+
 .pdf-report-print {
   display: none;
 }
@@ -187,6 +395,37 @@
     display: block !important;
     color: #0f172a;
     font-family: "Inter", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", ui-sans-serif, system-ui, sans-serif;
+  }
+
+  .pdf-report-cover {
+    break-after: page;
+    display: grid;
+    gap: 18px;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 42%);
+    min-height: 245mm;
+    place-items: center stretch;
+  }
+
+  .pdf-report-cover-copy h1 {
+    font-size: 34px;
+    line-height: 1.18;
+    margin: 0;
+  }
+
+  .pdf-report-cover-copy > p:not(.pdf-report-kicker) {
+    color: #475569;
+    font-size: 13px;
+    line-height: 1.8;
+    margin: 14px 0 0;
+  }
+
+  .pdf-report-cover-image {
+    margin: 0;
+  }
+
+  .pdf-report-cover-image .pdf-report-image-frame {
+    aspect-ratio: 3 / 4;
+    border-radius: 16px;
   }
 
   .pdf-report-header {
@@ -234,6 +473,11 @@
     padding: 12px;
   }
 
+  .pdf-report-item-primary {
+    border-color: #2563eb;
+    border-width: 2px;
+  }
+
   .pdf-report-item-title {
     align-items: center;
     display: flex;
@@ -253,6 +497,10 @@
     display: grid;
     gap: 8px;
     grid-template-columns: repeat(3, 1fr);
+  }
+
+  .pdf-report-images-compare {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .pdf-report-images figure {
@@ -308,5 +556,219 @@
     font-size: 11px;
     line-height: 1.7;
     margin: 0;
+  }
+
+  .pdf-report-section {
+    break-before: auto;
+    margin-bottom: 18px;
+  }
+
+  .pdf-report-section > h2 {
+    border-bottom: 2px solid #0f172a;
+    font-size: 18px;
+    margin: 0 0 12px;
+    padding-bottom: 7px;
+  }
+
+  .pdf-report-body-copy {
+    color: #334155;
+    font-size: 12px;
+    line-height: 1.8;
+  }
+
+  .pdf-report-meta-grid {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin-top: 12px;
+  }
+
+  .pdf-report-meta-grid > div {
+    background: #f8fafc;
+    border-radius: 8px;
+    padding: 9px;
+  }
+
+  .pdf-report-meta-grid span,
+  .pdf-report-meta-grid strong {
+    display: block;
+  }
+
+  .pdf-report-meta-grid span {
+    color: #64748b;
+    font-size: 9px;
+    margin-bottom: 4px;
+  }
+
+  .pdf-report-meta-grid strong {
+    font-size: 11px;
+  }
+
+  .pdf-report-share-link {
+    background: #eff6ff;
+    border-radius: 8px;
+    margin-top: 10px;
+    padding: 10px;
+  }
+
+  .pdf-report-share-link strong,
+  .pdf-report-share-link span {
+    display: block;
+    font-size: 10px;
+  }
+
+  .pdf-report-share-link span {
+    color: #1d4ed8;
+    margin-top: 4px;
+    overflow-wrap: anywhere;
+  }
+
+  .pdf-report-description-grid {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 10px;
+  }
+
+  .pdf-report-description-grid > div {
+    background: #f8fafc;
+    border-radius: 8px;
+    padding: 10px;
+  }
+
+  .pdf-report-description-grid strong {
+    font-size: 10px;
+  }
+
+  .pdf-report-description-grid p {
+    color: #334155;
+    font-size: 10px;
+    line-height: 1.65;
+    margin: 5px 0 0;
+  }
+
+  .pdf-report-note-list {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pdf-report-note-list > div {
+    background: #f8fafc;
+    border-radius: 8px;
+    padding: 10px;
+  }
+
+  .pdf-report-note-list strong,
+  .pdf-report-note-list span {
+    display: block;
+    font-size: 10px;
+  }
+
+  .pdf-report-note-list span {
+    color: #475569;
+    margin-top: 4px;
+  }
+
+  .pdf-report-history {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .pdf-report-history li {
+    align-items: flex-start;
+    break-inside: avoid;
+    display: flex;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .pdf-report-history li > span {
+    align-items: center;
+    background: #dbeafe;
+    border-radius: 999px;
+    color: #1d4ed8;
+    display: flex;
+    flex: 0 0 auto;
+    font-size: 9px;
+    font-weight: 800;
+    height: 22px;
+    justify-content: center;
+    width: 22px;
+  }
+
+  .pdf-report-history strong {
+    font-size: 10px;
+  }
+
+  .pdf-report-history p {
+    color: #64748b;
+    font-size: 9px;
+    margin: 3px 0 0;
+  }
+
+  .pdf-report-footer {
+    border-top: 1px solid #cbd5e1;
+    color: #64748b;
+    display: flex;
+    font-size: 9px;
+    justify-content: space-between;
+    margin-top: 18px;
+    padding-top: 8px;
+  }
+}
+.variant-workspace {
+  display: grid;
+  grid-template-columns: minmax(260px, 290px) minmax(0, 1fr) minmax(280px, 320px);
+  width: 100%;
+}
+
+.variant-right-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 1439px) {
+  .variant-workspace {
+    grid-template-columns: minmax(220px, 240px) minmax(0, 1fr) minmax(240px, 260px);
+  }
+}
+
+@media (max-width: 1199px) {
+  .variant-workspace {
+    grid-template-columns: minmax(220px, 250px) minmax(0, 1fr);
+    overflow-y: auto;
+  }
+
+  .variant-right-panel {
+    grid-column: 2;
+  }
+}
+
+@media (max-width: 899px) {
+  .variant-workspace {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .variant-center-panel {
+    order: 1;
+  }
+
+  .variant-left-panel {
+    order: 2;
+  }
+
+  .variant-right-panel {
+    order: 3;
+  }
+
+  .variant-center-panel,
+  .variant-left-panel,
+  .variant-right-panel {
+    flex: 0 0 auto;
+    overflow: visible;
   }
 }

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
-import { ArrowLeft, Check, Copy, Download, ExternalLink, ImagePlus, Layers3, LoaderCircle, RefreshCw, RotateCcw, Save, Sparkles, Trash2 } from 'lucide-react';
+import { ArrowLeft, Check, Copy, ImagePlus, LoaderCircle, RefreshCw, RotateCcw, Save, Sparkles, Trash2 } from 'lucide-react';
 import type {
   FloorPlanRegionMaterial,
   FloorPlanRegionSet,
+  GenerationConfig,
   SaveFloorPlanRegionMaterialInput,
 } from '../types';
 import {
@@ -17,8 +18,11 @@ import {
 } from '../lib/api';
 import { resolveAssetUrl } from '../utils/assetUrl';
 import { getGenerationCreditCost } from '../utils/generationCredits';
-import { buildResultImageFilename, downloadAsset } from '../utils/downloadAsset';
 import { ImageOverlayCompare } from './common/ImageOverlayCompare';
+import { findAdjacentFloorPlanRegionIds, isFloorPlanMaterialComplete } from '../utils/floorPlanExpression';
+import { GenerationResultActions } from './common/GenerationResultActions';
+import { GenerationProgress } from './common/GenerationProgress';
+import type { NormalizedGenerationResult } from '../utils/normalizeGenerationResult';
 
 interface Props {
   regionSet: FloorPlanRegionSet;
@@ -29,15 +33,18 @@ interface Props {
   creditBalance?: number | null;
   onRefreshCreditBalance?: () => Promise<void>;
   onEnsureProject?: () => Promise<string>;
+  config?: GenerationConfig;
+  onUpdateConfig?: (config: Partial<GenerationConfig>) => void;
 }
 
 type MaterialDraft = SaveFloorPlanRegionMaterialInput & { materialUrl: string | null };
 type ResultView = 'original' | 'regions' | 'control' | 'final' | 'compare';
+type InspectionView = 'original' | 'control' | 'final';
 interface FloorPlanFinalVersion { jobId: string; assetId: string; imageUrl: string; createdAt: string }
 
 const COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 
-export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onResetRegionsAndMaterials, onResetAll, creditBalance = null, onRefreshCreditBalance, onEnsureProject }: Props) {
+export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onResetRegionsAndMaterials, onResetAll, creditBalance = null, onRefreshCreditBalance, onEnsureProject, config, onUpdateConfig }: Props) {
   const [materials, setMaterials] = useState<MaterialDraft[]>(() => createDefaultDrafts(regionSet));
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -51,7 +58,7 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onRe
   const [finalVersions, setFinalVersions] = useState<FloorPlanFinalVersion[]>([]);
   const [selectedFinalJobId, setSelectedFinalJobId] = useState<string | null>(null);
   const [resultView, setResultView] = useState<ResultView>('control');
-  const [isDownloading, setIsDownloading] = useState(false);
+  const [inspectionView, setInspectionView] = useState<InspectionView>('original');
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
   const [uploadErrors, setUploadErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -116,10 +123,29 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onRe
   const finalCreditCost = getGenerationCreditCost('plan-colorize', { batchCount: 1 });
   const insufficientCredits = creditBalance !== null && creditBalance < finalCreditCost;
   const selectedFinal = finalVersions.find(version => version.jobId === selectedFinalJobId) || finalVersions[0] || null;
+  const finalTaskStatus = isGeneratingFinal
+    ? generationStatus?.includes('排队') ? 'queued' as const : generationStatus?.includes('创建') ? 'submitting' as const : 'generating' as const
+    : generationStatus?.includes('失败') ? 'failed' as const : selectedFinal ? 'completed' as const : 'idle' as const;
+  const normalizedFinalResult: NormalizedGenerationResult = {
+    originalImageUrl: sourceImageUrl,
+    originalAssetId: regionSet.sourceAssetId,
+    resultImageUrl: selectedFinal?.imageUrl || null,
+    resultAssetId: selectedFinal?.assetId || null,
+    taskId: selectedFinal?.jobId || null,
+    status: finalTaskStatus,
+    progress: generationStatus ? generationProgress : selectedFinal ? 100 : null,
+    progressLabel: generationStatus || (selectedFinal ? '生成完成' : '等待提交'),
+    errorMessage: finalTaskStatus === 'failed' ? error : null,
+  };
   const configuredCount = useMemo(
-    () => materials.filter(material => material.fallbackMode !== 'ai-auto' || Boolean(material.materialName)).length,
+    () => materials.filter(isFloorPlanMaterialComplete).length,
     [materials],
   );
+  const incompleteRegions = useMemo(
+    () => regionSet.regions.filter(region => !isFloorPlanMaterialComplete(materials.find(material => material.regionId === region.id) || createDefaultDraft(region.id))),
+    [materials, regionSet.regions],
+  );
+  const completionPercent = regionSet.regions.length ? Math.round((configuredCount / regionSet.regions.length) * 100) : 0;
 
   const updateMaterial = (regionId: string, patch: Partial<MaterialDraft>) => {
     setMaterials(current => current.map(material => material.regionId === regionId ? { ...material, ...patch } : material));
@@ -180,7 +206,12 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onRe
   const useFallback = (regionId: string, fallbackMode: 'default' | 'ai-auto') => {
     releaseBlobUrl(regionId);
     setUploadErrors(current => omitKey(current, regionId));
-    updateMaterial(regionId, { materialAssetId: null, materialUrl: null, fallbackMode });
+    updateMaterial(regionId, {
+      materialAssetId: null,
+      materialUrl: null,
+      fallbackMode,
+      materialName: fallbackMode === 'default' ? '默认材质' : 'AI 自动判断',
+    });
   };
 
   const clearMaterial = (regionId: string) => {
@@ -209,6 +240,18 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onRe
       jointMode: source.jointMode,
       fallbackMode: source.fallbackMode,
     });
+  };
+
+  const copyAdjacentMaterial = (targetRegionId: string) => {
+    const adjacentIds = findAdjacentFloorPlanRegionIds(regionSet.regions, targetRegionId);
+    const source = adjacentIds
+      .map(regionId => materials.find(material => material.regionId === regionId))
+      .find((material): material is MaterialDraft => Boolean(material && isFloorPlanMaterialComplete(material)));
+    if (!source) {
+      setError('没有找到已完成材质设置的相邻区域，请先配置相邻区域或手动选择复制来源。');
+      return;
+    }
+    copyMaterial(targetRegionId, source.regionId);
   };
 
   const save = async (): Promise<MaterialDraft[] | null> => {
@@ -245,6 +288,10 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onRe
       setError('请等待所有材质参考图上传完成。');
       return;
     }
+    if (incompleteRegions.length) {
+      setError(`还有 ${incompleteRegions.length} 个区域未完成材质设置：${incompleteRegions.map(region => `区域 ${region.number}`).join('、')}。请选择参考材质、默认材质或 AI 自动判断。`);
+      return;
+    }
     setIsGeneratingPreview(true);
     setError(null);
     const { controller, generation } = beginRequest();
@@ -260,6 +307,7 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onRe
       if (!isActiveRequest(generation)) return;
       setPreviewControlAsset(asset);
       setResultView('control');
+      setInspectionView('control');
     } catch (previewError) {
       if (!isActiveRequest(generation) || controller.signal.aborted) return;
       console.error('[floor-plan-materials] control preview failed', { regionSetId: regionSet.id, error: previewError });
@@ -276,6 +324,7 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onRe
     if (!previewControlAsset?.id) { setError('请先生成并检查材质控制图。'); return; }
     if (isDirty) { setError('材质配置已修改，请先重新生成材质控制图。'); return; }
     if (insufficientCredits) { setError(`算力点不足，本次预计需要 ${finalCreditCost} 点。`); return; }
+    if (incompleteRegions.length) { setError(`还有 ${incompleteRegions.length} 个区域未完成材质设置，不能生成最终图。`); return; }
     const invalid = materials.find(material => material.fallbackMode === 'reference' && !material.materialAssetId);
     if (invalid) { setError(`区域 ${invalid.regionId} 缺少材质参考图。`); return; }
     setIsGeneratingFinal(true);
@@ -310,13 +359,15 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onRe
           floorPlanControlAssetId: previewControlAsset.id,
           floorPlanMaterialAssignments: assignments,
           floorPlanMaterialReferenceAssetIds: materialReferenceAssetIds,
+          floorPlanExpressionMode: 'precise-material',
+          floorPlanTextLanguage: config?.floorPlanTextLanguage || 'zh-CN',
           batchCount: 1,
           planColorizeBatchEnabled: false,
           drawingType: 'residential',
           template: 'colored-plan',
           preserveLinework: true,
           enableFurnitureEnhance: true,
-          enableRoomLabels: false,
+          enableRoomLabels: (config?.floorPlanTextLanguage || 'zh-CN') !== 'none',
           enableZoningColor: false,
           apiyiImageSize: '2K',
           apiyiAspectRatio: aspectRatio,
@@ -359,6 +410,7 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onRe
       setGenerationProgress(100);
       setGenerationStatus('材质彩平生成完成');
       setResultView('final');
+      setInspectionView('final');
       await onRefreshCreditBalance?.().catch(() => undefined);
     } catch (generationError) {
       if (!isActiveRequest(generation)) return;
@@ -368,18 +420,6 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onRe
       await onRefreshCreditBalance?.().catch(() => undefined);
     } finally {
       if (isActiveRequest(generation)) setIsGeneratingFinal(false);
-    }
-  };
-
-  const downloadFinal = async () => {
-    if (!selectedFinal) return;
-    setIsDownloading(true);
-    try {
-      await downloadAsset({ assetId: selectedFinal.assetId, url: selectedFinal.imageUrl }, buildResultImageFilename({ featureLabel: '区域材质彩平' }));
-    } catch (downloadError) {
-      setError(downloadError instanceof Error ? downloadError.message : '结果下载失败。');
-    } finally {
-      setIsDownloading(false);
     }
   };
 
@@ -398,7 +438,7 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onRe
         <button type="button" onClick={() => void save()} disabled={isLoading || isSaving || hasUploads || !isDirty || isGeneratingPreview} className="inline-flex items-center gap-1 rounded-lg border border-emerald-600 bg-white px-4 py-2 text-xs font-bold text-emerald-700 disabled:border-slate-200 disabled:text-slate-400">
           {isSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}{isSaving ? '正在保存…' : hasUploads ? '等待上传完成' : '保存材质配置'}
         </button>
-        <button type="button" onClick={() => void generateControlPreview()} disabled={isLoading || isSaving || hasUploads || isGeneratingPreview} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white disabled:bg-slate-300">
+        <button type="button" onClick={() => void generateControlPreview()} disabled={isLoading || isSaving || hasUploads || isGeneratingPreview || incompleteRegions.length > 0} title={incompleteRegions.length ? `还有 ${incompleteRegions.length} 个区域未完成` : undefined} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white disabled:bg-slate-300">
           {isGeneratingPreview ? <LoaderCircle className="h-4 w-4 animate-spin" /> : previewControlAsset ? <RefreshCw className="h-4 w-4" /> : <ImagePlus className="h-4 w-4" />}{isGeneratingPreview ? '正在合成控制图…' : previewControlAsset ? '更新控制图' : '生成材质控制图'}
         </button>
       </div>
@@ -411,34 +451,53 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onRe
         <img src={sourceImageUrl} alt="已确认平面图" className="h-16 w-24 rounded-lg bg-white object-contain" />
         <div className="min-w-0">
           <div className="flex items-center gap-1 text-sm font-bold text-emerald-800"><Check className="h-4 w-4" />区域划分已确认</div>
-          <p className="mt-1 text-xs text-emerald-700">材质始终按稳定的 regionId 绑定，区域编号变化不会改变对应关系。本阶段仅保存映射，不启动 AI 渲染。</p>
+          <p className="mt-1 text-xs text-emerald-700">材质始终按稳定的 regionId 绑定。原图是严格结构基准，控制图只规定区域边界与材质，最终生成不得移动墙体、门窗、家具、文字、尺寸和轴线。</p>
         </div>
       </div>
 
-      {previewControlAsset ? <section className="mx-auto mb-4 max-w-6xl overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-sm">
-        <div className="flex items-center justify-between gap-3 border-b border-blue-100 bg-blue-50 px-4 py-3">
-          <div><h4 className="text-sm font-bold text-blue-900">材质映射控制图</h4><p className="text-xs text-blue-700">这是服务端正式合成结果，可在调用 AI 前检查材质是否串区、边界是否正确。</p></div>
-          <a href={resolveAssetUrl(previewControlAsset.publicUrl || previewControlAsset.url)} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-blue-300 bg-white px-3 py-2 text-xs font-bold text-blue-700"><ExternalLink className="h-4 w-4" />查看原图</a>
+      <section className="mx-auto mb-4 max-w-6xl rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><h4 className="text-sm font-black text-slate-900">材质映射完成度 {completionPercent}%</h4><p className="mt-1 text-xs text-slate-500">已完成 {configuredCount}/{regionSet.regions.length} 个区域</p></div>
+          <div className="h-2 w-48 max-w-full overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${completionPercent}%` }} /></div>
         </div>
-        <div className="bg-slate-100 p-4"><img src={resolveAssetUrl(previewControlAsset.publicUrl || previewControlAsset.url)} alt="材质映射控制图" className="mx-auto max-h-[70vh] max-w-full rounded-lg bg-white object-contain shadow" /></div>
-      </section> : null}
+        {incompleteRegions.length ? <div role="status" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">未完成区域：{incompleteRegions.map(region => `区域 ${region.number}${region.name ? `（${region.name}）` : ''}`).join('、')}。每个区域须选择参考材质、默认材质或 AI 自动判断。</div> : <div className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">所有区域材质已完成，可以生成控制图。</div>}
+        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">{regionSet.regions.map((region, index) => {
+          const material = materials.find(candidate => candidate.regionId === region.id) || createDefaultDraft(region.id);
+          return <div key={region.id} className="w-24 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+            <div className="h-14 bg-white">{material.materialUrl ? <img src={resolveAssetUrl(material.materialUrl)} alt={`区域 ${region.number} 材质缩略图`} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-[10px] font-bold text-slate-400">{isFloorPlanMaterialComplete(material) ? fallbackLabel(material.fallbackMode) : '未完成'}</div>}</div>
+            <div className="truncate px-2 py-1 text-[10px] font-bold" style={{ color: COLORS[index % COLORS.length] }}>区域 {region.number}</div>
+          </div>;
+        })}</div>
+      </section>
+
+      <section className="mx-auto mb-4 max-w-6xl overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between gap-3 border-b border-blue-100 bg-blue-50 px-4 py-3">
+          <div><h4 className="text-sm font-bold text-blue-900">原图 / 材质控制图 / 最终图</h4><p className="text-xs text-blue-700">三视图使用同一结构基准，便于检查边界、材质对应和最终结构一致性。</p></div>
+          <div className="flex flex-wrap gap-1">{([['original', '原图'], ['control', '材质控制图'], ['final', '最终图']] as Array<[InspectionView, string]>).map(([value, label]) => <button key={value} type="button" onClick={() => setInspectionView(value)} disabled={(value === 'control' && !previewControlAsset) || (value === 'final' && !selectedFinal)} className={`rounded-lg px-3 py-1.5 text-xs font-bold disabled:opacity-40 ${inspectionView === value ? 'bg-blue-700 text-white' : 'border border-blue-200 bg-white text-blue-700'}`}>{label}</button>)}</div>
+        </div>
+        <div className="bg-slate-100 p-4">
+          {inspectionView === 'control' && !previewControlAsset ? <p className="py-16 text-center text-sm text-slate-500">完成全部区域材质后生成控制图。</p> : inspectionView === 'final' && !selectedFinal ? <p className="py-16 text-center text-sm text-slate-500">生成最终彩平后可在此检查。</p> : <img src={resolveAssetUrl(inspectionView === 'original' ? sourceImageUrl : inspectionView === 'control' ? previewControlAsset?.publicUrl || previewControlAsset?.url || '' : selectedFinal?.imageUrl || '')} alt={inspectionView === 'original' ? '原始平面图' : inspectionView === 'control' ? '材质映射控制图' : '最终彩平'} className="mx-auto max-h-[70vh] max-w-full rounded-lg bg-white object-contain shadow" />}
+        </div>
+      </section>
 
       <section className="mx-auto mb-4 max-w-6xl overflow-hidden rounded-2xl border border-violet-200 bg-white shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-violet-100 bg-violet-50 px-4 py-3">
           <div><h4 className="flex items-center gap-1 text-sm font-bold text-violet-900"><Sparkles className="h-4 w-4" />最终区域材质彩平</h4><p className="text-xs text-violet-700">预计消耗 {finalCreditCost} 算力点 · 当前余额 {creditBalance ?? '读取中'} · 每次生成保存为独立结果版本</p></div>
-          <button type="button" onClick={() => void generateFinalFloorPlan()} disabled={!previewControlAsset || isDirty || hasUploads || isGeneratingFinal || insufficientCredits} className="inline-flex items-center gap-1 rounded-lg bg-violet-600 px-4 py-2 text-xs font-bold text-white disabled:bg-slate-300">
+          <button type="button" onClick={() => void generateFinalFloorPlan()} disabled={!previewControlAsset || isDirty || hasUploads || isGeneratingFinal || insufficientCredits || incompleteRegions.length > 0} className="inline-flex items-center gap-1 rounded-lg bg-violet-600 px-4 py-2 text-xs font-bold text-white disabled:bg-slate-300">
             {isGeneratingFinal ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{isGeneratingFinal ? '正在生成…' : finalVersions.length ? '重新生成新版本' : '生成材质彩平'}
           </button>
         </div>
         {!previewControlAsset ? <p className="p-4 text-sm text-slate-500">请先生成并检查材质控制图，才能提交最终彩平任务。</p> : null}
-        {generationStatus ? <div className="border-b border-slate-100 px-4 py-3"><div className="flex justify-between text-xs font-semibold text-slate-600"><span>{generationStatus}</span><span>{generationProgress}%</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${generationProgress}%` }} /></div></div> : null}
+        <div className="grid gap-3 border-b border-slate-100 px-4 py-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
+          <GenerationProgress status={normalizedFinalResult.status} progress={normalizedFinalResult.progress} label={normalizedFinalResult.progressLabel} errorMessage={normalizedFinalResult.errorMessage} compact />
+          <GenerationResultActions result={normalizedFinalResult} featureName="区域材质彩平" compact />
+        </div>
 
         {selectedFinal ? <div>
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
             <div className="flex flex-wrap gap-1">{([
               ['original', '原始平面'], ['regions', '区域编号图'], ['control', '材质控制图'], ['final', '最终彩平'], ['compare', '滑动对比'],
             ] as Array<[ResultView, string]>).map(([value, label]) => <button key={value} type="button" onClick={() => setResultView(value)} className={`rounded-lg px-3 py-1.5 text-xs font-bold ${resultView === value ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>{label}</button>)}</div>
-            <button type="button" onClick={() => void downloadFinal()} disabled={isDownloading} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 disabled:opacity-50"><Download className="h-4 w-4" />{isDownloading ? '正在下载…' : '下载最终彩平'}</button>
           </div>
           <div className="h-[min(68vh,720px)] min-h-[360px] bg-slate-100 p-3">
             {resultView === 'compare' ? <ImageOverlayCompare sourceImageUrl={previewControlAsset?.publicUrl || previewControlAsset?.url} resultImageUrl={selectedFinal.imageUrl} sourceLabel="材质控制图" resultLabel="最终彩平" className="h-full rounded-xl" />
@@ -484,7 +543,9 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onRe
                   <label className="block text-xs font-bold text-slate-600">纹理尺度<input type="number" min="0.1" max="20" step="0.1" value={material.scale} onChange={event => updateMaterial(region.id, { scale: clampNumber(event.target.value, 0.1, 20, 1) })} className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal" /></label>
                   <label className="block text-xs font-bold text-slate-600">旋转角度<input type="number" min="-360" max="360" step="1" value={material.rotation} onChange={event => updateMaterial(region.id, { rotation: clampNumber(event.target.value, -360, 360, 0) })} className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal" /></label>
                 </div>
+                {!isFloorPlanMaterialComplete(material) ? <p className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs font-bold text-amber-700">此区域材质尚未完成</p> : null}
                 <label className="block text-xs font-bold text-slate-600"><span className="inline-flex items-center gap-1"><Copy className="h-3.5 w-3.5" />复制其他区域材质</span><select defaultValue="" onChange={event => { copyMaterial(region.id, event.target.value); event.currentTarget.value = ''; }} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm font-normal"><option value="">选择来源区域…</option>{regionSet.regions.filter(candidate => candidate.id !== region.id).map(candidate => <option key={candidate.id} value={candidate.id}>区域 {candidate.number} · {candidate.name || '未命名'}</option>)}</select></label>
+                <button type="button" onClick={() => copyAdjacentMaterial(region.id)} className="inline-flex w-full items-center justify-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700"><Copy className="h-3.5 w-3.5" />一键复制相邻区域材质</button>
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={() => useFallback(region.id, 'default')} className={`rounded-lg border px-2.5 py-1.5 text-xs font-bold ${material.fallbackMode === 'default' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600'}`}>使用默认材质</button>
                   <button type="button" onClick={() => useFallback(region.id, 'ai-auto')} className={`rounded-lg border px-2.5 py-1.5 text-xs font-bold ${material.fallbackMode === 'ai-auto' ? 'border-violet-500 bg-violet-50 text-violet-700' : 'border-slate-200 text-slate-600'}`}>AI 自动判断</button>
@@ -568,6 +629,8 @@ function buildGenerationAssignments(regionSet: FloorPlanRegionSet, materials: Ma
       regionId: region.id,
       number: region.number,
       roomName: region.name || '',
+      regionType: region.regionType || '',
+      regionUsage: region.regionUsage || '',
       materialName: material.materialName,
       materialAssetId: material.materialAssetId,
       fallbackMode: material.fallbackMode,

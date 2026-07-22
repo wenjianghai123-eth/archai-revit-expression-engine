@@ -1,7 +1,12 @@
+import { buildFloorplanTextLanguageRequirement } from '../../src/promptTemplates/intelligentPromptTemplates';
+import type { FloorPlanTextLanguage } from '../../src/types';
+
 export interface FloorPlanMaterialAssignmentSummary {
   regionId: string;
   number: number;
   roomName: string;
+  regionType?: string;
+  regionUsage?: string;
   materialName: string;
   materialAssetId: string | null;
   fallbackMode: 'reference' | 'default' | 'ai-auto';
@@ -17,6 +22,7 @@ export interface FloorPlanMaterialPromptInput {
   regionSetId: string;
   assignments: FloorPlanMaterialAssignmentSummary[];
   referenceAssetIds?: string[];
+  textLanguage?: FloorPlanTextLanguage;
 }
 
 export function compileFloorPlanMaterialPrompt(input: FloorPlanMaterialPromptInput): string {
@@ -34,7 +40,8 @@ export function compileFloorPlanMaterialPrompt(input: FloorPlanMaterialPromptInp
       const reference = assignment.materialAssetId && referenceImageIndex.has(assignment.materialAssetId)
         ? ` Optional material reference: Image ${referenceImageIndex.get(assignment.materialAssetId)}.`
         : '';
-      return `Region ${assignment.number}: ${room} — ${material}. Placement direction: ${assignment.direction}; texture scale: ${assignment.scale}; rotation: ${assignment.rotation} degrees; joints: ${assignment.jointMode}.${reference}`;
+      const metadata = [assignment.regionType ? `type: ${assignment.regionType}` : '', assignment.regionUsage ? `use: ${assignment.regionUsage}` : ''].filter(Boolean).join('; ');
+      return `Region ${assignment.number}: ${room} — ${material}.${metadata ? ` ${metadata}.` : ''} Placement direction: ${assignment.direction}; texture scale: ${assignment.scale}; rotation: ${assignment.rotation} degrees; joints: ${assignment.jointMode}.${reference}`;
     });
 
   return [
@@ -50,6 +57,7 @@ export function compileFloorPlanMaterialPrompt(input: FloorPlanMaterialPromptInp
     'Do not move, enlarge, merge, split or redesign any room.',
     'Do not change the canvas, aspect ratio or framing.',
     'Keep all plan annotations readable, including labels, dimensions, symbols and axes.',
+    buildFloorplanTextLanguageRequirement(input.textLanguage || 'en'),
     'Render non-floor areas naturally and professionally.',
     'Improve furniture, walls, doors, glazing and shadows only where appropriate, without changing their positions or geometry.',
     'Maintain a high-end architectural presentation floor-plan style.',
@@ -91,6 +99,8 @@ export function readFloorPlanMaterialPromptInput(config: Record<string, unknown>
       regionId,
       number,
       roomName: readString(value.roomName)?.slice(0, 80) || '',
+      regionType: readString(value.regionType)?.slice(0, 40) || '',
+      regionUsage: readString(value.regionUsage)?.slice(0, 120) || '',
       materialName: readString(value.materialName)?.slice(0, 80) || '',
       materialAssetId,
       fallbackMode,
@@ -104,7 +114,8 @@ export function readFloorPlanMaterialPromptInput(config: Record<string, unknown>
   const referenceAssetIds = Array.isArray(config.floorPlanMaterialReferenceAssetIds)
     ? config.floorPlanMaterialReferenceAssetIds.filter((value): value is string => typeof value === 'string' && assignmentAssetIds.has(value.trim())).map(value => value.trim()).slice(0, 2)
     : [];
-  return assignments.length ? { sourceAssetId, controlAssetId, regionSetId, assignments, referenceAssetIds } : null;
+  const textLanguage = config.floorPlanTextLanguage === 'zh-CN' || config.floorPlanTextLanguage === 'none' ? config.floorPlanTextLanguage : 'en';
+  return assignments.length ? { sourceAssetId, controlAssetId, regionSetId, assignments, referenceAssetIds, textLanguage } : null;
 }
 
 function readString(value: unknown): string {

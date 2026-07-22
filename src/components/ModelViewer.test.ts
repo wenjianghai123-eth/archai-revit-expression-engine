@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getModelLoaderDefinition, getModelPreviewError, getStableModelLoadIdentity, resolveModelPreviewUrl, shouldReloadModel } from './ModelViewer';
+import { getModelLoadDiagnostics, getModelLoaderDefinition, getModelPreviewError, getStableModelLoadIdentity, resolveModelPreviewUrl, shouldReloadModel } from './ModelViewer';
 import type { AssetModel } from '../types';
 
 function createAsset(overrides: Partial<AssetModel> = {}): AssetModel {
@@ -111,5 +111,21 @@ describe('stable model preview identity', () => {
     expect(getModelPreviewError(createAsset({ modelUrl: undefined }))).toBe('模型地址不可访问');
     expect(getModelPreviewError(createAsset({ fileType: 'unknown', modelUrl: '/uploads/test.fbx' }))).toBe('当前格式暂不支持');
     expect(getModelPreviewError(createAsset())).toBeNull();
+  });
+
+  it('returns actionable load diagnostics without claiming FBX or SKP support', () => {
+    const diagnostics = getModelLoadDiagnostics(createAsset({
+      fileType: 'gltf',
+      conversionStatus: 'failed',
+      conversionError: 'Missing textures',
+      optimizationStatus: 'failed',
+      optimizationError: 'Blender unavailable',
+    }), 'HTTP 403 while loading model');
+
+    expect(diagnostics.join('\n')).toContain('HTTP 403');
+    expect(diagnostics.join('\n')).toContain('格式转换失败');
+    expect(diagnostics.join('\n')).toContain('轻量化失败');
+    expect(diagnostics.join('\n')).toContain('单文件 GLB');
+    expect(diagnostics.join('\n')).toContain('不支持原生 FBX 或 SKP');
   });
 });

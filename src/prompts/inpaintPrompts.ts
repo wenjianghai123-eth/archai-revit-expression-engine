@@ -7,6 +7,10 @@ export interface BuildInpaintPromptInput {
   hasMaterialReference: boolean;
   hasFurnitureReference?: boolean;
   editTarget?: InpaintEditTarget;
+  hasProtectionMask?: boolean;
+  feather?: number;
+  maskExpansion?: number;
+  maskSelectionMode?: 'smart' | 'precise';
 }
 
 export function buildInpaintPrompt(input: BuildInpaintPromptInput): string {
@@ -22,6 +26,13 @@ export function buildInpaintPrompt(input: BuildInpaintPromptInput): string {
       'The white area of the mask is the editable region. Keep the black area and all unmasked areas as unchanged as possible.',
       'Do not repaint the whole image. Only edit the masked or clearly selected target region.',
     );
+    if (input.maskSelectionMode === 'smart') {
+      pieces.push(
+        'The selected area is automatically detected by AI.',
+        'Modify only the detected object region.',
+        'Preserve the original geometry, lighting, perspective and surrounding objects.',
+      );
+    }
   } else if (input.useFullImageMask) {
     pieces.push(
       'The user allows full-image editing, but the original composition, spatial structure, camera view, canvas ratio, and main object relationships must remain stable.',
@@ -31,6 +42,12 @@ export function buildInpaintPrompt(input: BuildInpaintPromptInput): string {
       'No mask was provided. Identify the target object or region from the user request, and keep unrelated areas as stable as possible.',
     );
   }
+
+  if (input.hasProtectionMask) {
+    pieces.push('A separate protection mask is present. Protected pixels must remain identical to the source and must never be repainted.');
+  }
+  if (input.feather && input.feather > 0) pieces.push(`Blend the editable boundary naturally using approximately ${Math.round(input.feather)} pixels of feathering.`);
+  if (input.maskExpansion) pieces.push(`The editable mask has been ${input.maskExpansion > 0 ? 'expanded' : 'contracted'} by ${Math.abs(Math.round(input.maskExpansion))} pixels; follow the adjusted boundary exactly.`);
 
   if (editTarget === 'material') {
     pieces.push(

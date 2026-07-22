@@ -52,8 +52,19 @@ export function AdminPage({ currentUser, onBackToApp, onSignOut }: AdminPageProp
   };
 
   useEffect(() => {
-    if (currentUser.role === 'admin') void load();
-    else setIsLoading(false);
+    if (currentUser.role !== 'admin') {
+      setIsLoading(false);
+      return;
+    }
+    void load();
+    const timer = window.setInterval(() => {
+      void getAdminDashboard()
+        .then(setDashboard)
+        .catch(refreshError => console.error('[admin] generation monitor refresh failed', {
+          error: refreshError instanceof Error ? refreshError.message : String(refreshError),
+        }));
+    }, 10_000);
+    return () => window.clearInterval(timer);
   }, [currentUser.role]);
 
   const handleCreateUser = async (event: React.FormEvent) => {
@@ -227,6 +238,66 @@ export function AdminPage({ currentUser, onBackToApp, onSignOut }: AdminPageProp
           </section>
         ) : null}
 
+        {dashboard ? (
+          <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div>
+              <h2 className="text-base font-bold text-slate-950">生成任务监控</h2>
+              <p className="mt-1 text-xs text-slate-500">监控持久化队列、worker lease、重试和 provider 耗时。</p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+              <StatCard label="等待领取" value={dashboard.stats.queuedJobCount} />
+              <StatCard label="正在运行" value={dashboard.stats.runningJobCount} />
+              <StatCard label="等待重试" value={dashboard.stats.retryingJobCount} />
+              <StatCard label="已租赁" value={dashboard.stats.leasedJobCount} />
+              <StatCard label="过期租赁" value={dashboard.stats.expiredLeaseJobCount} />
+              <StatCard label="平均模型耗时(ms)" value={dashboard.stats.averageProviderDurationMs} />
+            </div>
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="min-w-[1050px] text-left text-xs">
+                <thead className="bg-slate-50 text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2">任务</th>
+                    <th className="px-3 py-2">状态</th>
+                    <th className="px-3 py-2">Provider</th>
+                    <th className="px-3 py-2">尝试</th>
+                    <th className="px-3 py-2">模型耗时</th>
+                    <th className="px-3 py-2">Lease</th>
+                    <th className="px-3 py-2">错误分类</th>
+                    <th className="px-3 py-2">更新时间</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {dashboard.recentJobs.map(job => (
+                    <tr key={job.id}>
+                      <td className="max-w-56 px-3 py-3">
+                        <div className="truncate font-mono text-[11px] text-slate-700" title={job.id}>{job.id}</div>
+                        <div className="mt-1 text-slate-400">{job.mode}</div>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className={`rounded-full px-2 py-1 font-bold ${generationStatusClassName(job.status)}`}>
+                          {generationStatusLabel(job.status)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-slate-600">{job.provider}</td>
+                      <td className="px-3 py-3 font-semibold text-slate-700">{job.attemptCount}/{job.maxAttempts}</td>
+                      <td className="px-3 py-3 text-slate-600">{job.providerDurationMs == null ? '—' : `${job.providerDurationMs} ms`}</td>
+                      <td className="px-3 py-3 text-slate-600">
+                        <div>{job.leaseOwner ? '已领取' : '—'}</div>
+                        {job.leaseExpiresAt ? <div className="mt-1 text-[10px] text-slate-400">{formatAdminDate(job.leaseExpiresAt)}</div> : null}
+                      </td>
+                      <td className="max-w-48 px-3 py-3">
+                        <div className="truncate font-semibold text-slate-700" title={job.lastErrorCode || undefined}>{job.lastErrorCategory || '—'}</div>
+                        {job.lastErrorCode ? <div className="mt-1 truncate text-[10px] text-slate-400">{job.lastErrorCode}</div> : null}
+                      </td>
+                      <td className="px-3 py-3 text-slate-500">{formatAdminDate(job.updatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ) : null}
+
         <section className="grid gap-4 xl:grid-cols-[380px_1fr]">
           <form onSubmit={handleCreateUser} className="h-fit rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-4 flex items-center gap-2">
@@ -375,4 +446,26 @@ function StatCard({ label, value }: { label: string; value: number }) {
       <p className="mt-2 text-2xl font-black text-slate-950">{value.toLocaleString('zh-CN')}</p>
     </div>
   );
+}
+
+function generationStatusLabel(status: string): string {
+  if (status === 'queued') return '排队中';
+  if (status === 'running') return '运行中';
+  if (status === 'succeeded') return '成功';
+  if (status === 'cancelled') return '已取消';
+  if (status === 'timeout') return '超时';
+  return '失败';
+}
+
+function generationStatusClassName(status: string): string {
+  if (status === 'succeeded') return 'bg-emerald-50 text-emerald-700';
+  if (status === 'running') return 'bg-blue-50 text-blue-700';
+  if (status === 'queued') return 'bg-amber-50 text-amber-700';
+  if (status === 'cancelled') return 'bg-slate-100 text-slate-600';
+  return 'bg-red-50 text-red-700';
+}
+
+function formatAdminDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false });
 }

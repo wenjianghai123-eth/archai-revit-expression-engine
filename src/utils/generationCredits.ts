@@ -6,6 +6,15 @@ export function getGenerationCreditCost(mode: GenerationMode, config: object = {
 
 export function getGenerationOutputCount(mode: GenerationMode, config: object = {}): number {
   const batchCount = 'batchCount' in config ? config.batchCount : undefined;
+  const materialCandidateCount = 'materialCandidateCount' in config ? config.materialCandidateCount : undefined;
+  const step = 'step' in config ? config.step : 'generationStep' in config ? config.generationStep : undefined;
+  if (step === 'free_reference_image') {
+    return batchCount === 2 || batchCount === 4 ? batchCount : 1;
+  }
+  if (mode === 'material-replace' || step === 'material_replace') {
+    const candidateCount = materialCandidateCount ?? batchCount;
+    return candidateCount === 2 || candidateCount === 3 || candidateCount === 4 ? candidateCount : 1;
+  }
   if (mode === 'floorplan') {
     const outputMode = 'floorplanOutputMode' in config ? config.floorplanOutputMode : undefined;
     if (outputMode === 'multi' && batchCount === 1) return 1;

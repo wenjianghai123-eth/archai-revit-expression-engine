@@ -76,6 +76,7 @@ export async function optimizeModelAsset(assetId: string): Promise<ModelAsset | 
     metadata: {
       ...baseMetadata,
       optimizationStatus: 'processing',
+      optimizationStartedAt: new Date().toISOString(),
       optimizationError: undefined,
     },
   });

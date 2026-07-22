@@ -1,6 +1,6 @@
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
-import { composeLocalInpaintResult, createLocalInpaintContext, cropImageDataUrlToBox, getMaskBoundingBox } from './localInpaint';
+import { composeLocalInpaintResult, createLocalInpaintContext, cropImageDataUrlToBox, getMaskBoundingBox, prepareEditableMask } from './localInpaint';
 import { toImageDataUrl } from './imageMetadata';
 
 describe('local inpaint image helpers', () => {
@@ -73,6 +73,16 @@ describe('local inpaint image helpers', () => {
     const metadata = await sharp(Buffer.from(croppedGuide.split(',')[1], 'base64')).metadata();
     expect(metadata.width).toBe(35);
     expect(metadata.height).toBe(35);
+  });
+
+  it('expands editable masks and subtracts protected regions', async () => {
+    const edit = await createMask(20, 20, { x: 8, y: 8, width: 4, height: 4 });
+    const protect = await createMask(20, 20, { x: 9, y: 9, width: 2, height: 2 });
+    const prepared = await prepareEditableMask({ maskImageDataUrl: toImageDataUrl(edit, 'image/png'), protectionMaskDataUrl: toImageDataUrl(protect, 'image/png'), expansion: 2 });
+    const bbox = await getMaskBoundingBox(prepared);
+    expect(bbox?.width).toBeGreaterThan(4);
+    const raw = await sharp(Buffer.from(prepared.split(',')[1], 'base64')).greyscale().raw().toBuffer();
+    expect(raw[9 * 20 + 9]).toBe(0);
   });
 });
 

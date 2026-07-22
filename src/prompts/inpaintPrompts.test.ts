@@ -65,6 +65,28 @@ describe('buildInpaintPrompt', () => {
     expect(prompt).toContain('Keep the black area and all unmasked areas');
   });
 
+  it('adds detected-object constraints for a confirmed smart mask', () => {
+    const prompt = buildInpaintPrompt({
+      userPrompt: 'replace the sofa upholstery',
+      hasMask: true,
+      useFullImageMask: false,
+      hasMaterialReference: true,
+      editTarget: 'material',
+      maskSelectionMode: 'smart',
+    });
+
+    expect(prompt).toContain('automatically detected by AI');
+    expect(prompt).toContain('Modify only the detected object region');
+    expect(prompt).toContain('Preserve the original geometry, lighting, perspective and surrounding objects');
+  });
+
+  it('describes protection, feathering and adjusted mask boundaries', () => {
+    const prompt = buildInpaintPrompt({ userPrompt: 'replace stone', hasMask: true, useFullImageMask: false, hasMaterialReference: true, editTarget: 'material', hasProtectionMask: true, feather: 8, maskExpansion: -3 });
+    expect(prompt).toContain('protection mask');
+    expect(prompt).toContain('8 pixels of feathering');
+    expect(prompt).toContain('contracted by 3 pixels');
+  });
+
   it('does not mention mask white area when no mask exists', () => {
     const prompt = buildInpaintPrompt({
       userPrompt: 'change the lounge chair',

@@ -1,6 +1,6 @@
 import { findFloorplanColorTemplate } from '../constants/floorplanVariants';
-import { FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT } from '../promptTemplates/intelligentPromptTemplates';
-import { FloorplanRoomLabel, FloorplanTemplateId } from '../types';
+import { buildFloorplanTextLanguageRequirement } from '../promptTemplates/intelligentPromptTemplates';
+import { FloorPlanExpressionMode, FloorPlanTextLanguage, FloorplanRoomLabel, FloorplanTemplateId } from '../types';
 
 interface FloorplanPromptInput {
   userPrompt?: string;
@@ -13,6 +13,8 @@ interface FloorplanPromptInput {
   enableMaterialLegend?: boolean;
   floorplanTemplateId?: FloorplanTemplateId;
   floorplanRoomLabels?: FloorplanRoomLabel[];
+  floorPlanExpressionMode?: FloorPlanExpressionMode;
+  floorPlanTextLanguage?: FloorPlanTextLanguage;
 }
 
 export const DEFAULT_FLOORPLAN_COLOR_PROMPT = [
@@ -41,6 +43,13 @@ const LINEWORK_PRESERVATION_PROMPTS: Record<NonNullable<FloorplanPromptInput['li
   medium: 'Linework preservation: medium. Keep the structure unchanged while allowing stronger graphic enhancement and clearer material hierarchy.',
 };
 
+const EXPRESSION_MODE_PROMPTS: Record<FloorPlanExpressionMode, string> = {
+  'precise-material': 'Product mode: precise material colored plan. Follow region boundaries and material assignments exactly; prioritize deterministic placement and strict structure consistency.',
+  'three-dimensional': 'Product mode: three-dimensional colored plan. Enhance material, furniture and spatial depth while remaining a top-down plan.',
+  analysis: 'Product mode: analytical drawing expression. Prioritize zoning, circulation and diagram readability while preserving the source drawing.',
+  'multi-option': 'Product mode: multi-option colored plans. Keep a common structure baseline and vary only the requested material or presentation direction.',
+};
+
 export function buildFloorplanColorPrompt(input?: string | FloorplanPromptInput): string {
   const normalizedInput = typeof input === 'string' ? { userPrompt: input } : input || {};
   const trimmedUserPrompt = normalizedInput.userPrompt?.trim();
@@ -49,6 +58,9 @@ export function buildFloorplanColorPrompt(input?: string | FloorplanPromptInput)
     .filter(Boolean);
 
   const pieces = [DEFAULT_FLOORPLAN_COLOR_PROMPT];
+  const textLanguage = normalizedInput.floorPlanTextLanguage || 'en';
+
+  if (normalizedInput.floorPlanExpressionMode) pieces.push('', EXPRESSION_MODE_PROMPTS[normalizedInput.floorPlanExpressionMode]);
 
   if (normalizedInput.floorplanRenderMode || normalizedInput.lineworkPreservation || normalizedInput.enableLegend || normalizedInput.enableAreaText || normalizedInput.enableMaterialLegend) {
     pieces.push(
@@ -56,9 +68,10 @@ export function buildFloorplanColorPrompt(input?: string | FloorplanPromptInput)
       FLOORPLAN_RENDER_MODE_PROMPTS[normalizedInput.floorplanRenderMode || 'semi-3d'],
       LINEWORK_PRESERVATION_PROMPTS[normalizedInput.lineworkPreservation || 'high'],
     );
-    if (normalizedInput.enableLegend) pieces.push('Add a concise graphic legend with English entries only where appropriate, without covering important plan content.');
-    if (normalizedInput.enableAreaText) pieces.push('Add clear English area or functional text labels where appropriate; keep text minimal, legible, and aligned with the plan.');
-    if (normalizedInput.enableMaterialLegend) pieces.push('Add an English material legend that explains key floor, wall, soft furnishing, and finish categories where appropriate.');
+    const languageLabel = textLanguage === 'zh-CN' ? 'Simplified Chinese' : 'English';
+    if (textLanguage !== 'none' && normalizedInput.enableLegend) pieces.push(`Add a concise graphic legend in ${languageLabel}, without covering important plan content.`);
+    if (textLanguage !== 'none' && normalizedInput.enableAreaText) pieces.push(`Add clear area or functional labels in ${languageLabel}; keep text minimal, legible, and aligned with the plan.`);
+    if (textLanguage !== 'none' && normalizedInput.enableMaterialLegend) pieces.push(`Add a material legend in ${languageLabel} that explains key floor, wall, soft furnishing, and finish categories.`);
   }
 
   const template = normalizedInput.floorplanTemplateId ? findFloorplanColorTemplate(normalizedInput.floorplanTemplateId) : undefined;
@@ -66,7 +79,7 @@ export function buildFloorplanColorPrompt(input?: string | FloorplanPromptInput)
     pieces.push('', `彩平模板：${template.name}`, template.promptHint);
   }
 
-  const roomLabelPrompt = buildFloorplanRoomLabelsPrompt(normalizedInput.floorplanRoomLabels || []);
+  const roomLabelPrompt = buildFloorplanRoomLabelsPrompt(normalizedInput.floorplanRoomLabels || [], textLanguage);
   if (roomLabelPrompt) {
     pieces.push('', roomLabelPrompt);
   }
@@ -87,17 +100,18 @@ export function buildFloorplanColorPrompt(input?: string | FloorplanPromptInput)
     );
   }
 
-  pieces.push('', FLOORPLAN_TEXT_LANGUAGE_REQUIREMENT);
+  pieces.push('', buildFloorplanTextLanguageRequirement(textLanguage));
 
   return pieces.join('\n');
 }
 
-function buildFloorplanRoomLabelsPrompt(labels: FloorplanRoomLabel[]): string {
+function buildFloorplanRoomLabelsPrompt(labels: FloorplanRoomLabel[], language: FloorPlanTextLanguage): string {
+  if (language === 'none') return '';
   const sanitized = labels
     .map(label => ({
-      type: readFloorplanRoomTypeLabel(label),
-      name: readFloorplanEnglishRoomName(label.name.trim(), readFloorplanRoomTypeLabel(label)),
-      position: readEnglishPromptValue(label.positionDescription.trim(), ''),
+      type: readFloorplanRoomTypeLabel(label, language),
+      name: language === 'zh-CN' ? label.name.trim() || readFloorplanRoomTypeLabel(label, language) : readFloorplanEnglishRoomName(label.name.trim(), readFloorplanRoomTypeLabel(label, language)),
+      position: language === 'zh-CN' ? label.positionDescription.trim() : readEnglishPromptValue(label.positionDescription.trim(), ''),
     }))
     .filter(label => label.name || label.type || label.position)
     .slice(0, 20);
@@ -108,8 +122,12 @@ function buildFloorplanRoomLabelsPrompt(labels: FloorplanRoomLabel[]): string {
   ].join('\n');
 }
 
-function readFloorplanRoomTypeLabel(label: FloorplanRoomLabel): string {
-  if (label.roomType === 'custom') return readEnglishPromptValue(label.customTypeLabel?.trim() || '', 'Custom Room');
+function readFloorplanRoomTypeLabel(label: FloorplanRoomLabel, language: FloorPlanTextLanguage): string {
+  if (label.roomType === 'custom') return language === 'zh-CN' ? label.customTypeLabel?.trim() || '自定义区域' : readEnglishPromptValue(label.customTypeLabel?.trim() || '', 'Custom Room');
+  if (language === 'zh-CN') {
+    const chineseLabels: Record<FloorplanRoomLabel['roomType'], string> = { 'living-room': '客厅', 'dining-room': '餐厅', bedroom: '卧室', kitchen: '厨房', bathroom: '卫生间', balcony: '阳台', entry: '玄关', study: '书房', office: '办公区', commercial: '商业区', custom: '自定义区域' };
+    return chineseLabels[label.roomType] || '区域';
+  }
   const labels: Record<FloorplanRoomLabel['roomType'], string> = {
     'living-room': 'Living Room',
     'dining-room': 'Dining Area',

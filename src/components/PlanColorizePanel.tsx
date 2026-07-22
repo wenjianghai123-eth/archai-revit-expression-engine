@@ -1,4 +1,4 @@
-import { ArrowRight, ImagePlus, Map, Sparkles } from 'lucide-react';
+import { ImagePlus, Map, Sparkles } from 'lucide-react';
 import type { ReactNode } from 'react';
 import {
   findPlanColorizeStyle,
@@ -11,15 +11,19 @@ import { GenerationConfig, GenerationStep, PlanDrawingType, PlanExpressionTempla
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 import { AspectRatioImage } from './common/AspectRatioImage';
+import { FloorPlanExpressionModeSelector } from './common/FloorPlanExpressionModeSelector';
+import { ResultViewer, type ResultViewerData } from './workspace/ResultViewer';
 
 interface PlanColorizePanelProps {
   state: StepState;
-  previewImage: string | null | undefined;
+  viewerData: ResultViewerData;
+  projectName?: string | null;
   uploadError: string | null;
   onUploadInput: () => void;
   onUpdateInputImage: (image: UploadedImage | null) => void;
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
   onGenerate: () => void;
+  onSetViewMode?: (viewMode: StepState['viewMode']) => void;
 }
 
 const drawingTypes: Array<{ value: PlanDrawingType; label: string }> = [
@@ -53,14 +57,16 @@ const enhancementOptions: Array<{ key: keyof GenerationConfig; label: string }> 
 
 export function PlanColorizePanel({
   state,
-  previewImage,
+  viewerData,
+  projectName,
   uploadError,
   onUploadInput,
   onUpdateInputImage,
   onUpdateConfig,
   onGenerate,
+  onSetViewMode,
 }: PlanColorizePanelProps) {
-  const sourceImage = state.inputImage?.previewUrl || state.inputImage?.publicUrl || state.inputImage?.url || state.inputImage?.thumbnailUrl || state.inputImage?.dataUrl;
+  const sourceImage = viewerData.originalImage;
   const batchEnabled = state.config.planColorizeBatchEnabled === true;
   const selectedStyleIds = readPlanColorizeStyleIds(state.config);
   const activeStyles = batchEnabled
@@ -69,8 +75,25 @@ export function PlanColorizePanel({
   const outputCount = batchEnabled ? Math.min(Math.max(selectedStyleIds.length || 1, 1), maxPlanColorizeBatchCount) : 1;
   const generateButtonLabel = outputCount > 1 ? `批量生成 ${outputCount} 张彩平` : '生成彩平';
 
+  const updateExpressionConfig = (patch: Partial<GenerationConfig>) => {
+    const nextPatch: Partial<GenerationConfig> = { ...patch };
+    if (patch.floorPlanTextLanguage === 'none') nextPatch.enableRoomLabels = false;
+    if (patch.planColorizeBatchEnabled === true) {
+      const styles = planColorizeStyleOptions.slice(0, Math.min(4, maxPlanColorizeBatchCount));
+      nextPatch.planColorizeStyleIds = styles.map(style => style.id);
+      nextPatch.planColorizeStyleNames = styles.map(style => style.name);
+      nextPatch.planColorizeStylePromptHints = styles.map(style => style.promptHint);
+      nextPatch.selectedStyleId = styles[0]?.id;
+      nextPatch.selectedStyleName = styles[0]?.name;
+      nextPatch.selectedStylePromptHint = styles[0]?.promptHint;
+      nextPatch.batchCount = styles.length as GenerationConfig['batchCount'];
+    }
+    onUpdateConfig(nextPatch);
+  };
+
   const applySingleStyle = (style: PlanColorizeStyleOption) => {
     onUpdateConfig({
+      ...(state.config.floorPlanExpressionMode === 'multi-option' ? { floorPlanExpressionMode: 'three-dimensional' as const } : {}),
       planColorizeBatchEnabled: false,
       planColorizeStyleIds: [style.id],
       planColorizeStyleNames: [style.name],
@@ -93,6 +116,7 @@ export function PlanColorizePanel({
     const primaryStyle = nextStyles[0] || activeStyles[0] || planColorizeStyleOptions[0];
 
     onUpdateConfig({
+      floorPlanExpressionMode: 'multi-option',
       planColorizeBatchEnabled: true,
       planColorizeStyleIds: nextIds,
       planColorizeStyleNames: nextStyles.map(item => item.name),
@@ -133,8 +157,8 @@ export function PlanColorizePanel({
                 <Map className="h-5 w-5" />
               </div>
               <div>
-                <h2 className="text-lg font-bold text-slate-950">图纸智能表达</h2>
-                <p className="text-xs text-slate-500">上传 CAD 导出的黑白平面图，生成彩色分区、标注和表达图</p>
+                <h2 className="text-lg font-bold text-slate-950">图纸表达中心</h2>
+                <p className="text-xs text-slate-500">区域材质、三维彩平、分析图与多方案表达</p>
               </div>
             </div>
 
@@ -160,6 +184,11 @@ export function PlanColorizePanel({
             )}
             {uploadError ? <p className="mt-2 text-xs font-semibold text-red-600">{uploadError}</p> : null}
           </div>
+
+          <OptionGroup title="表达模式与文字语言">
+            <FloorPlanExpressionModeSelector config={state.config} onUpdateConfig={updateExpressionConfig} compact />
+            <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">结构一致性：保持墙体、门窗、家具、文字、尺寸、轴线、画布比例和空间布局，不重新设计原图。</p>
+          </OptionGroup>
 
           <OptionGroup title="图纸类型">
             <select
@@ -254,8 +283,9 @@ export function PlanColorizePanel({
                   <input
                     type="checkbox"
                     checked={Boolean(state.config[option.key])}
+                    disabled={option.key === 'enableRoomLabels' && state.config.floorPlanTextLanguage === 'none'}
                     onChange={event => onUpdateConfig({ [option.key]: event.currentTarget.checked })}
-                    className="h-4 w-4 accent-slate-900"
+                    className="h-4 w-4 accent-slate-900 disabled:opacity-40"
                   />
                 </label>
               ))}
@@ -291,9 +321,17 @@ export function PlanColorizePanel({
           </button>
         </aside>
 
-        <main className="grid min-w-0 content-start gap-4 2xl:grid-cols-2">
-          <PreviewCard title="原始图纸" image={sourceImage} empty="请先上传或选择一张平面图" />
-          <PreviewCard title="表达结果" image={previewImage || undefined} empty="生成后在这里查看彩色表达图" />
+        <main className="min-w-0 xl:sticky xl:top-0 xl:h-[calc(100vh-7rem)] xl:max-h-[920px]">
+          <ResultViewer
+            data={viewerData}
+            viewMode={state.viewMode}
+            onViewModeChange={onSetViewMode || (() => undefined)}
+            isGenerating={state.isGenerating}
+            generationProgress={state.generationProgress}
+            projectName={projectName}
+            featureLabel="图纸智能表达"
+            className="min-h-[520px] h-full"
+          />
         </main>
       </div>
     </section>
@@ -316,18 +354,4 @@ function readPlanColorizeStyleIds(config: GenerationConfig): string[] {
   return typeof config.selectedStyleId === 'string' && config.selectedStyleId.trim().length > 0
     ? [config.selectedStyleId]
     : [];
-}
-
-function PreviewCard({ title, image, empty }: { title: string; image?: string | null; empty: string }) {
-  return (
-    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-        <p className="text-sm font-bold text-slate-900">{title}</p>
-        <ArrowRight className="h-4 w-4 text-slate-300" />
-      </div>
-      <div className="p-3">
-        <AspectRatioImage src={image} alt={title} placeholder={empty} />
-      </div>
-    </div>
-  );
 }

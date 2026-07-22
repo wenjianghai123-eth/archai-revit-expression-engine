@@ -1,17 +1,20 @@
-import { BookOpen, Download, ExternalLink, FileJson, Heart, RefreshCw, Settings2, Zap } from 'lucide-react';
+import { BookOpen, FileJson, Heart, RefreshCw, Settings2, Zap } from 'lucide-react';
 import { type ReactNode, useState } from 'react';
 import { GenerationBatchItem, GenerationResultOption, GenerationStep, ResultSendTargetStep, SecondaryEditAction, StepState } from '../../types';
 import { buildResultImageFilename, downloadAsset, downloadJson, downloadFallbackMessage } from '../../utils/downloadAsset';
 import { continuationActionLabels } from '../../utils/secondaryEdit';
 import { formatResultDimensions, getOriginalResultAssetId, getOriginalResultImageUrl } from '../../utils/resultImage';
 import { ViewModeOption } from './workspaceTypes';
-import { formatElapsed } from './workspaceUtils';
 import { PreviewContent } from './ResultPreviewPanel';
 import { MaterialRepairActions, ResultSendActions, SecondaryEditActions } from './SecondaryEditActions';
 import { SavePromptTemplateModal } from '../SavePromptTemplateModal';
 import { canSavePromptTemplate } from '../../utils/savedPromptTemplates';
 import { AspectRatioImage } from '../common/AspectRatioImage';
 import { GenerationImageViewer } from '../common/GenerationImageViewer';
+import { ResultQualityReport } from '../common/ResultQualityReport';
+import { GenerationResultActions } from '../common/GenerationResultActions';
+import { NormalizedGenerationProgress } from '../common/GenerationProgress';
+import { normalizeStepGenerationResult } from '../../utils/normalizeGenerationResult';
 
 interface GenerationStatusPanelProps {
   step: GenerationStep;
@@ -21,6 +24,7 @@ interface GenerationStatusPanelProps {
   elapsedSeconds: number;
   canGenerate: boolean;
   disabledReason?: string | null;
+  validationErrors?: string[];
   previewImage: string | null | undefined;
   originalImageUrl: string | null;
   resultOptions: GenerationResultOption[];
@@ -40,6 +44,9 @@ interface GenerationStatusPanelProps {
   onNextStep: () => void;
   onReset: () => void;
   resetLabel?: string;
+  showResultViewer?: boolean;
+  className?: string;
+  layout?: 'default' | 'floor-plan';
 }
 
 export function GenerationStatusPanel({
@@ -47,9 +54,9 @@ export function GenerationStatusPanel({
   state,
   title,
   statusLabel,
-  elapsedSeconds,
   canGenerate,
   disabledReason = null,
+  validationErrors = [],
   previewImage,
   originalImageUrl,
   resultOptions,
@@ -69,21 +76,39 @@ export function GenerationStatusPanel({
   onNextStep,
   onReset,
   resetLabel = '重置',
+  showResultViewer = false,
+  className = '',
+  layout = 'default',
 }: GenerationStatusPanelProps) {
+  const layoutClassName = layout === 'floor-plan'
+    ? 'w-full rounded-2xl lg:rounded-l-none'
+    : 'w-full rounded-3xl lg:w-96 lg:rounded-l-none';
+  const normalizedResult = normalizeStepGenerationResult(state, {
+    originalImageUrl,
+    resultImageUrl: previewImage,
+  });
+  const featureName = getGenerationStepDownloadLabel(step);
   return (
-    <aside className="workspace-side-panel glass-panel flex w-96 shrink-0 flex-col overflow-y-auto rounded-r-3xl border border-white/60 p-4 custom-scrollbar">
-      <div className="mb-4 flex items-center justify-between">
-        <div>
+    <aside
+      data-testid={layout === 'floor-plan' ? 'drawing-action-panel' : undefined}
+      className={`drawing-right-panel workspace-side-panel glass-panel flex min-h-0 min-w-0 shrink-0 flex-col overflow-hidden border border-white/60 ${layoutClassName} ${className}`}
+    >
+      <div className="drawing-right-panel-header flex shrink-0 items-center justify-between gap-3 border-b border-slate-100 p-4">
+        <div className="min-w-0">
           <span className="workspace-section-title">{title}</span>
-          <p className="mt-1 text-xs text-slate-500">{statusLabel}</p>
+          <p className="mt-1 truncate text-xs text-slate-500">{statusLabel}</p>
         </div>
-        <Settings2 className="h-4 w-4 text-slate-300" />
+        <Settings2 className="h-4 w-4 shrink-0 text-slate-300" />
       </div>
 
-      <div className="space-y-4">
+      <div className="drawing-right-panel-content min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden p-4 custom-scrollbar">
         {topPanels}
         <ContinuationSourceBanner state={state} />
-        <GenerationProgress state={state} statusLabel={statusLabel} elapsedSeconds={elapsedSeconds} onCancelGeneration={onCancelGeneration} />
+        <NormalizedGenerationProgress result={normalizedResult} compact />
+        {state.isGenerating && state.generationJobId ? (
+          <button type="button" onClick={onCancelGeneration} className="w-full rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-600">取消任务</button>
+        ) : null}
+        <GenerationResultActions result={normalizedResult} featureName={featureName} projectName={projectName} compact />
         <ResultActions
           step={step}
           state={state}
@@ -99,30 +124,40 @@ export function GenerationStatusPanel({
           onSecondaryEditResult={onSecondaryEditResult}
           onSendResultToStep={onSendResultToStep}
           onRetryBatchItem={onRetryBatchItem}
+          showResultViewer={showResultViewer}
         />
         <GenerationMessages state={state} onGenerate={onGenerate} />
       </div>
 
-      <div className="mt-auto border-t border-slate-100 pt-4">
-        <div className="grid grid-cols-3 gap-2">
-        <button type="button" onClick={onReset} disabled={state.isGenerating} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-500 disabled:opacity-40">
+      <div className="preview-actions drawing-right-panel-footer relative z-[1] shrink-0 border-t border-slate-100 bg-white/95 p-4 pointer-events-auto backdrop-blur-sm">
+        {validationErrors.length > 0 ? (
+          <div role="alert" aria-live="polite" className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <p className="font-bold">暂时无法生成，请补充以下内容：</p>
+            <ul className="mt-1 list-disc space-y-1 pl-4 font-semibold">
+              {validationErrors.map(item => <li key={item}>{item}</li>)}
+            </ul>
+          </div>
+        ) : null}
+        <div className="drawing-action-buttons grid min-w-0 grid-cols-2 gap-2">
+        <button type="button" onClick={onReset} disabled={state.isGenerating} className="min-w-0 rounded-lg border border-slate-200 px-2 py-2 text-xs font-bold leading-tight text-slate-500 disabled:opacity-40">
           {resetLabel}
         </button>
         <button
           type="button"
           onClick={onRegenerate}
           disabled={!canGenerate}
-          className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 disabled:opacity-50"
+          className="min-w-0 rounded-lg border border-blue-100 bg-blue-50 px-2 py-2 text-xs font-bold leading-tight text-blue-700 disabled:opacity-50"
         >
           重新生成
         </button>
         <button
           type="button"
+          data-testid="generate-preview-button"
           onClick={previewImage ? onNextStep : onGenerate}
           disabled={!canGenerate && !previewImage}
-          className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
+          className="drawing-action-primary col-span-2 min-w-0 rounded-lg bg-slate-900 px-3 py-2.5 text-xs font-bold leading-tight text-white disabled:opacity-50"
         >
-          {state.isGenerating ? <RefreshCw className="mx-auto h-4 w-4 animate-spin" /> : previewImage ? '完成并导出' : <><Zap className="mr-1 inline h-4 w-4 text-blue-300" />生成预览</>}
+          {state.isGenerating ? <><RefreshCw className="mr-1 inline h-4 w-4 animate-spin" />AI 生成中</> : previewImage ? '完成并导出' : <><Zap className="mr-1 inline h-4 w-4 text-blue-300" />生成预览</>}
         </button>
         </div>
         {!canGenerate && !previewImage && disabledReason ? (
@@ -130,42 +165,6 @@ export function GenerationStatusPanel({
         ) : null}
       </div>
     </aside>
-  );
-}
-
-interface GenerationProgressProps {
-  state: StepState;
-  statusLabel: string;
-  elapsedSeconds: number;
-  onCancelGeneration: () => void;
-}
-
-function GenerationProgress({ state, statusLabel, elapsedSeconds, onCancelGeneration }: GenerationProgressProps) {
-  return (
-    <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-      <div className="mb-2 flex items-center justify-between text-[10px] font-bold text-slate-500">
-        <span>{state.generationJobId || 'legacy fallback'}</span>
-        <span>{state.isGenerating ? formatElapsed(elapsedSeconds) : state.generationStatus === 'error' ? '失败' : `${state.generationProgress}%`}</span>
-      </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
-        <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${state.generationStatus === 'error' ? Math.min(99, Math.max(0, state.generationProgress)) : Math.min(100, Math.max(0, state.generationProgress))}%` }} />
-      </div>
-      {state.isGenerating ? (
-        <div className="mt-3 rounded-lg bg-white px-3 py-2 text-xs leading-5 text-slate-600">
-          <p className="font-bold text-slate-800">{statusLabel}</p>
-          {readBatchProgressText(state) ? <p className="font-semibold text-blue-700">{readBatchProgressText(state)}</p> : null}
-          <p>AI 生成中，复杂图片可能需要 1-3 分钟。</p>
-          {elapsedSeconds > 60 ? (
-            <p className="mt-1 font-semibold text-amber-700">生成时间较长，可能是第三方模型排队或图片较复杂，请不要重复点击。</p>
-          ) : null}
-        </div>
-      ) : null}
-      {state.isGenerating && state.generationJobId && (
-        <button type="button" onClick={onCancelGeneration} className="mt-3 w-full rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-600">
-          取消任务
-        </button>
-      )}
-    </div>
   );
 }
 
@@ -184,6 +183,7 @@ interface ResultActionsProps {
   onSecondaryEditResult: (resultId: string, action: SecondaryEditAction) => void;
   onSendResultToStep: (resultId: string, targetStep: ResultSendTargetStep) => void;
   onRetryBatchItem?: (variantIndex: number) => void;
+  showResultViewer: boolean;
 }
 
 function ResultActions({
@@ -201,6 +201,7 @@ function ResultActions({
   onSecondaryEditResult,
   onSendResultToStep,
   onRetryBatchItem,
+  showResultViewer,
 }: ResultActionsProps) {
   const activeResult = resultOptions.find(result => result.id === selectedResultId)
     || resultOptions.find(result => result.isSelected)
@@ -212,6 +213,7 @@ function ResultActions({
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
+  const [shareMessage, setShareMessage] = useState<string | null>(null);
   const [isSaveTemplateOpen, setIsSaveTemplateOpen] = useState(false);
   const canSaveTemplate = canSavePromptTemplate(step, state, activeResult, originalPreviewImage);
 
@@ -237,34 +239,56 @@ function ResultActions({
     }
   };
 
+  const handleShare = async () => {
+    if (!originalPreviewImage) return;
+    setDownloadError(null);
+    setShareMessage(null);
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: `${projectName || '烛照AI'} · ${getGenerationStepDownloadLabel(step)}`,
+          text: '烛照AI 设计表达结果',
+          ...(originalPreviewImage.startsWith('http') ? { url: originalPreviewImage } : {}),
+        });
+        setShareMessage('已打开系统分享');
+        return;
+      }
+      if (navigator.clipboard && originalPreviewImage.startsWith('http')) {
+        await navigator.clipboard.writeText(originalPreviewImage);
+        setShareMessage('结果链接已复制');
+        return;
+      }
+      throw new Error('SHARE_NOT_SUPPORTED');
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      setDownloadError('当前浏览器无法直接分享，请先下载结果图。');
+    }
+  };
+
+  const handleUtilityAction = (action: 'download' | 'share' | 'pdf') => {
+    if (action === 'download') void handleDownload();
+    if (action === 'share') void handleShare();
+    if (action === 'pdf') window.print();
+  };
+
   return (
     <div className="space-y-3">
-      <div className="flex overflow-hidden rounded-lg bg-slate-200 p-0.5">
-        {viewModeOptions.map(({ value, label, disabled }) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => onSetViewMode(value)}
-            disabled={disabled}
-            className={`flex-1 rounded-md px-2 py-1.5 text-[10px] font-bold disabled:opacity-40 ${
-              state.viewMode === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <div className="h-56 overflow-hidden rounded-2xl border border-white/70 bg-white shadow-sm">
-        <PreviewContent
-          state={state}
-          originalImageUrl={originalImageUrl}
-          previewImage={originalPreviewImage}
-          featureName={getGenerationStepDownloadLabel(step)}
-          step={step}
-          aspectRatio={step === GenerationStep.PanoramaQuickRender ? '2:1' : '16:9'}
-        />
-      </div>
+      {showResultViewer && viewModeOptions.length > 0 ? (
+        <div className="h-64 overflow-hidden rounded-2xl border border-white/70 bg-white shadow-sm">
+          <PreviewContent
+            state={state}
+            originalImageUrl={originalImageUrl}
+            previewImage={originalPreviewImage}
+            onViewModeChange={onSetViewMode}
+            featureName={getGenerationStepDownloadLabel(step)}
+            step={step}
+            aspectRatio={step === GenerationStep.PanoramaQuickRender ? '2:1' : '16:9'}
+          />
+        </div>
+      ) : null}
       {originalPreviewImage && activeResult ? (
+        <>
+        <ResultQualityReport resultId={activeResult.id} metadata={activeResult.metadata} />
         <div className="rounded-xl border border-slate-100 bg-slate-50 p-2">
           <div className="mb-2 flex items-center justify-between gap-2">
             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">二次编辑</p>
@@ -279,10 +303,19 @@ function ResultActions({
             </div>
           ) : null}
           <div className="mt-2">
-            <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">发送到其他功能</p>
-            <ResultSendActions resultId={activeResult.id} currentStep={step} onSend={onSendResultToStep} compact disabled={state.isGenerating} />
+            <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">推荐下一步</p>
+            <ResultSendActions
+              resultId={activeResult.id}
+              currentStep={step}
+              onSend={onSendResultToStep}
+              onSecondaryAction={onSecondaryEditResult}
+              onUtilityAction={handleUtilityAction}
+              compact
+              disabled={state.isGenerating}
+            />
           </div>
         </div>
+        </>
       ) : null}
 
       {originalPreviewImage ? (
@@ -298,6 +331,13 @@ function ResultActions({
               {resultOptions.map(result => (
                 <div
                   key={result.id}
+                  role="radio"
+                  aria-checked={result.id === selectedResultId}
+                  tabIndex={0}
+                  onClick={() => onSelectGenerationResult(result.id)}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' || event.key === ' ') onSelectGenerationResult(result.id);
+                  }}
                   className={`relative overflow-hidden rounded-lg border bg-white ${result.id === selectedResultId ? 'border-blue-600 ring-2 ring-blue-100' : 'border-slate-200'}`}
                 >
                   <div className="relative block w-full overflow-hidden">
@@ -308,6 +348,7 @@ function ResultActions({
                       aspectRatio={step === GenerationStep.PanoramaQuickRender ? '2:1' : '16:9'}
                       featureName={readResultLabel(result, resultOptions)}
                       step={step}
+                      showTabs={false}
                       frameClassName="rounded-none border-0 shadow-none"
                       tabListClassName="m-1.5 mb-1.5"
                       tabButtonClassName="px-2"
@@ -337,7 +378,15 @@ function ResultActions({
                       </div>
                     ) : null}
                     <div className="mt-1.5">
-                      <ResultSendActions resultId={result.id} currentStep={step} onSend={onSendResultToStep} compact disabled={state.isGenerating} />
+                      <ResultSendActions
+                        resultId={result.id}
+                        currentStep={step}
+                        onSend={onSendResultToStep}
+                        onSecondaryAction={onSecondaryEditResult}
+                        onUtilityAction={handleUtilityAction}
+                        compact
+                        disabled={state.isGenerating}
+                      />
                     </div>
                   </div>
                 </div>
@@ -355,23 +404,6 @@ function ResultActions({
                 保存为提示词模板
               </button>
             ) : null}
-            <button
-              type="button"
-              onClick={() => window.open(originalPreviewImage, '_blank', 'noopener,noreferrer')}
-              className="rounded-lg bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm ring-1 ring-slate-100 hover:text-blue-700"
-            >
-              <ExternalLink className="mr-1 inline h-3.5 w-3.5" />
-              查看原图
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleDownload()}
-              disabled={isDownloading}
-              className="rounded-lg bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm ring-1 ring-slate-100 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <Download className={`mr-1 inline h-3.5 w-3.5 ${isDownloading ? 'animate-pulse' : ''}`} />
-              {isDownloading ? '正在下载...' : '保存到本地'}
-            </button>
             <button
               type="button"
               onClick={() => downloadJson({
@@ -392,7 +424,8 @@ function ResultActions({
               导出 JSON
             </button>
           </div>
-          {downloadMessage ? <p className="text-xs font-semibold text-emerald-700">{downloadMessage}</p> : null}
+      {downloadMessage ? <p className="text-xs font-semibold text-emerald-700">{downloadMessage}</p> : null}
+      {shareMessage ? <p className="text-xs font-semibold text-emerald-700">{shareMessage}</p> : null}
           {downloadError ? <p className="text-xs font-semibold text-amber-700">{downloadError}</p> : null}
           {isSaveTemplateOpen && activeResult ? (
             <SavePromptTemplateModal
@@ -469,6 +502,7 @@ function BatchItemCard({ item, projectName, sourceImageUrl, onRetry }: { item: G
             resultImageAssetId={originalAssetId}
             featureName="平面彩平批量结果"
             step={GenerationStep.FloorplanTo3D}
+            showTabs={false}
             frameClassName="rounded-none border-0 shadow-none"
             tabListClassName="m-2 mb-2"
             sourceMissingMessage="暂无原图，无法对比。"
@@ -524,11 +558,14 @@ function readBatchProgressText(state: StepState): string | null {
     const completed = state.generationBatchItems.filter(item => item.status === 'succeeded' || item.status === 'failed').length;
     return `已完成 ${completed} / ${state.generationBatchItems.length}`;
   }
-  const batchCount = typeof state.config.batchCount === 'number' ? state.config.batchCount : 1;
+  const batchCount = typeof state.config.materialCandidateCount === 'number'
+    ? state.config.materialCandidateCount
+    : typeof state.config.batchCount === 'number' ? state.config.batchCount : 1;
   const isBatch = batchCount > 1 && (
     state.config.floorplanOutputMode === 'multi'
     || state.config.planColorizeBatchEnabled === true
     || state.config.variantStrategy !== undefined
+    || state.config.materialCandidateCount !== undefined
   );
   if (!isBatch) return null;
   return `已完成 ${Math.min(state.generationResults.length, batchCount)} / ${batchCount}`;
@@ -598,11 +635,14 @@ function readBatchSummaryText(state: StepState): string | null {
     const completed = successCount + failedCount;
     return `批量进度：已完成 ${completed} / ${state.generationBatchItems.length}，成功 ${successCount}，失败 ${failedCount}`;
   }
-  const batchCount = typeof state.config.batchCount === 'number' ? state.config.batchCount : 1;
+  const batchCount = typeof state.config.materialCandidateCount === 'number'
+    ? state.config.materialCandidateCount
+    : typeof state.config.batchCount === 'number' ? state.config.batchCount : 1;
   const isBatch = batchCount > 1 && (
     state.config.floorplanOutputMode === 'multi'
     || state.config.planColorizeBatchEnabled === true
     || state.config.variantStrategy !== undefined
+    || state.config.materialCandidateCount !== undefined
   );
   if (!isBatch || state.isGenerating || state.generationStatus === 'ready') return null;
   const successCount = Math.min(state.generationResults.length, batchCount);

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, Clipboard, Eye, Heart, History, Layers, Search, Sparkles, Star, Wand2, X } from 'lucide-react';
 import { GenerationConfig, PromptTemplate } from '../types';
+import { useEnterpriseAssetPreferences } from '../hooks/useEnterpriseAssetPreferences';
 import { AspectRatioImage } from './common/AspectRatioImage';
 import { GenerationImageViewer } from './common/GenerationImageViewer';
 
@@ -22,34 +23,6 @@ const FEATURE_FILTERS: Array<{ label: string; value: FeatureFilter }> = [
 ];
 
 const CATEGORY_FILTERS = ['全部', '平面彩平', '自由参考生图', '材质软装替换', '元素植入', '方案变体'];
-const FAVORITES_STORAGE_KEY = 'archai-template-favorites-v1';
-const RECENT_STORAGE_KEY = 'archai-template-recent-v1';
-
-function readStringList(key: string): string[] {
-  if (typeof window === 'undefined') return [];
-
-  try {
-    const value = JSON.parse(window.localStorage.getItem(key) || '[]') as unknown;
-    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-
-function readRecentUsage(): Record<string, string> {
-  if (typeof window === 'undefined') return {};
-
-  try {
-    const value = JSON.parse(window.localStorage.getItem(RECENT_STORAGE_KEY) || '{}') as unknown;
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-    return Object.fromEntries(
-      Object.entries(value).filter((entry): entry is [string, string] => typeof entry[0] === 'string' && typeof entry[1] === 'string'),
-    );
-  } catch {
-    return {};
-  }
-}
-
 function featureLabel(feature: PromptTemplate['feature']): string {
   if (feature === 'image-polish') return '质感提升';
   if (feature === 'floorplan') return '平面彩平';
@@ -109,27 +82,30 @@ function configSummary(config: GenerationConfig): string {
 }
 
 export function TemplatesLibrary({ templates, currentConfig, onApply }: TemplatesLibraryProps) {
+  const { preferences, toggleFavorite: toggleKnowledgeFavorite, markUsed } = useEnterpriseAssetPreferences();
   const [searchQuery, setSearchQuery] = useState('');
   const [featureFilter, setFeatureFilter] = useState<FeatureFilter>('all');
   const [categoryFilter, setCategoryFilter] = useState('全部');
   const [favoritesOnly, setFavoritesOnly] = useState(false);
-  const [favoriteIds, setFavoriteIds] = useState<string[]>(() => readStringList(FAVORITES_STORAGE_KEY));
-  const [recentUsage, setRecentUsage] = useState<Record<string, string>>(readRecentUsage);
   const [selectedTemplate, setSelectedTemplate] = useState<PromptTemplate | null>(null);
   const [copiedTemplateId, setCopiedTemplateId] = useState<string | null>(null);
   const [isPromptExpanded, setIsPromptExpanded] = useState(false);
 
   useEffect(() => {
-    window.localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(favoriteIds));
-  }, [favoriteIds]);
-
-  useEffect(() => {
-    window.localStorage.setItem(RECENT_STORAGE_KEY, JSON.stringify(recentUsage));
-  }, [recentUsage]);
-
-  useEffect(() => {
     setIsPromptExpanded(false);
   }, [selectedTemplate?.id]);
+
+  const favoriteIds = useMemo(
+    () => templates.filter(template => preferences.favoriteIds.includes(`prompt-template:${template.id}`)).map(template => template.id),
+    [preferences.favoriteIds, templates],
+  );
+  const recentUsage = useMemo(
+    () => Object.fromEntries(templates.flatMap(template => {
+      const usedAt = preferences.recentUsage[`prompt-template:${template.id}`];
+      return usedAt ? [[template.id, usedAt]] : [];
+    })),
+    [preferences.recentUsage, templates],
+  );
 
   const filteredTemplates = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -172,17 +148,12 @@ export function TemplatesLibrary({ templates, currentConfig, onApply }: Template
   );
 
   const handleApply = (template: PromptTemplate) => {
-    setRecentUsage((previous) => ({
-      ...previous,
-      [template.id]: new Date().toISOString(),
-    }));
+    markUsed(`prompt-template:${template.id}`);
     onApply(template);
   };
 
   const toggleFavorite = (templateId: string) => {
-    setFavoriteIds((previous) =>
-      previous.includes(templateId) ? previous.filter((currentId) => currentId !== templateId) : [...previous, templateId],
-    );
+    toggleKnowledgeFavorite(`prompt-template:${templateId}`);
   };
 
   const handleCopyPrompt = async (template: PromptTemplate) => {

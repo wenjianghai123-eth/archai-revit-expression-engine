@@ -35,11 +35,11 @@ function createState(overrides: Partial<StepState> = {}): StepState {
 }
 
 describe('PlanColorizePanel', () => {
-  it('renders the 图纸智能表达 workflow with expression options', () => {
+  it('renders the 图纸表达中心 workflow with four compatible expression modes', () => {
     const html = renderToStaticMarkup(
       <PlanColorizePanel
         state={createState()}
-        previewImage={null}
+        viewerData={{}}
         uploadError={null}
         onUploadInput={() => undefined}
         onUpdateInputImage={() => undefined}
@@ -48,8 +48,14 @@ describe('PlanColorizePanel', () => {
       />,
     );
 
-    expect(html).toContain('图纸智能表达');
-    expect(html).toContain('上传 CAD 导出的黑白平面图，生成彩色分区、标注和表达图');
+    expect(html).toContain('图纸表达中心');
+    expect(html).toContain('区域材质、三维彩平、分析图与多方案表达');
+    expect(html).toContain('精准材质彩平');
+    expect(html).toContain('三维彩平');
+    expect(html).toContain('分析表达图');
+    expect(html).toContain('多方案彩平');
+    expect(html).toContain('不生成文字');
+    expect(html).toContain('结构一致性');
     expect(html).toContain('图纸类型');
     expect(html).toContain('表达模板');
     expect(html).toContain('功能分区上色');
@@ -59,11 +65,11 @@ describe('PlanColorizePanel', () => {
     expect(html).toContain('生成彩平');
   });
 
-  it('uses compact 16:9 before and after preview cards', () => {
+  it('uses one large result viewer instead of compact duplicate preview cards', () => {
     const html = renderToStaticMarkup(
       <PlanColorizePanel
         state={createState()}
-        previewImage={null}
+        viewerData={{}}
         uploadError={null}
         onUploadInput={() => undefined}
         onUpdateInputImage={() => undefined}
@@ -72,9 +78,10 @@ describe('PlanColorizePanel', () => {
       />,
     );
 
-    expect(html).toContain('2xl:grid-cols-2');
-    expect(html).toContain('aspect-video');
-    expect(html).not.toContain('min-h-[520px]');
+    expect(html).toContain('图纸表达结果查看器');
+    expect(html).toContain('min-h-[520px]');
+    expect(html).not.toContain('2xl:grid-cols-2');
+    expect(html).not.toContain('表达结果</p>');
   });
 
   it('allows generation without custom prompt after a source plan is selected', () => {
@@ -90,7 +97,7 @@ describe('PlanColorizePanel', () => {
             dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
           },
         })}
-        previewImage={null}
+        viewerData={{ originalImage: 'data:image/png;base64,iVBORw0KGgo=' }}
         uploadError={null}
         onUploadInput={() => undefined}
         onUpdateInputImage={() => undefined}
@@ -100,7 +107,33 @@ describe('PlanColorizePanel', () => {
     );
 
     expect(html).toContain('plan.png');
-    expect(html).not.toContain('disabled=""');
+    const view = document.createElement('div');
+    view.innerHTML = html;
+    const generateButton = Array.from(view.querySelectorAll('button')).find(button => button.textContent?.includes('生成彩平'));
+    expect(generateButton?.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('keeps the central viewer visible with a completed generation result', () => {
+    const html = renderToStaticMarkup(
+      <PlanColorizePanel
+        state={createState({ generationStatus: 'success', viewMode: 'after' })}
+        viewerData={{
+          originalImage: '/uploads/source-plan.png',
+          originalAssetId: 'source-asset',
+          resultImage: '/uploads/generated-plan.png',
+          resultAssetId: 'result-asset',
+        }}
+        uploadError={null}
+        onUploadInput={() => undefined}
+        onUpdateInputImage={() => undefined}
+        onUpdateConfig={() => undefined}
+        onGenerate={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('result-image-canvas');
+    expect(html).toContain('/uploads/generated-plan.png');
+    expect(html).toContain('object-contain');
   });
 
   it('shows the 平面彩平 entry in the workspace stepper', () => {

@@ -191,6 +191,10 @@ Supported model extensions are `glb`, `gltf`, and `obj`. The backend validates s
 
 ### `POST /api/generation-jobs`
 
+Clients should send an `Idempotency-Key` header (maximum 128 characters). Repeating
+the same authenticated request with the same key returns the existing job without
+creating another debit transaction.
+
 ```json
 {
   "projectId": "project_123",
@@ -248,7 +252,15 @@ Response:
       "createdAt": "2026-05-02T12:00:00.000Z",
       "updatedAt": "2026-05-02T12:00:00.000Z",
       "startedAt": null,
-      "finishedAt": null
+      "finishedAt": null,
+      "attemptCount": 0,
+      "maxAttempts": 3,
+      "nextAttemptAt": null,
+      "leaseExpiresAt": null,
+      "providerDurationMs": null,
+      "lastErrorCode": null,
+      "lastErrorCategory": null,
+      "lastErrorRetryable": null
     }
   }
 }
@@ -340,6 +352,50 @@ Current generation record shape:
 
 Generation jobs debit credits on creation. Failed jobs and cancelled queued/running jobs refund the debit once using the job id as the refund reference.
 
+In Supabase mode the final refund is performed by `refund_generation_job_once`,
+which locks the job and credit balance in one database transaction. Retryable
+provider failures remain queued and are not refunded until the job reaches a final
+failed, timeout, or cancelled status.
+
+## Project Design Workflow
+
+The design workflow orchestrator is independent from `GenerationStep`; existing numeric step values are unchanged. Workflow nodes only reference formal assets and persisted generation jobs/results.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/projects/:projectId/design-workflow` | Read the latest non-archived workflow and its nodes. |
+| `POST` | `/api/projects/:projectId/design-workflow` | Create a workflow from an owned formal `inputAssetId`. |
+| `POST` | `/api/projects/:projectId/design-workflow/:workflowId/advance` | Create the next immutable workflow node. |
+| `POST` | `/api/projects/:projectId/design-workflow/:workflowId/skip` | Mark the current node skipped and create the next active node. |
+| `POST` | `/api/projects/:projectId/design-workflow/:workflowId/back` | Move the workflow current pointer to an earlier node without deleting later nodes. |
+
+Workflow stage keys:
+
+```text
+input
+base-render
+design-variants
+material-replace
+object-insert
+continuous-edit
+image-polish
+delivery
+```
+
+An advance request may contain:
+
+```json
+{
+  "stageKey": "material-replace",
+  "sourceFeature": "design-variants",
+  "inputAssetId": "image_output_123",
+  "parentJobId": "job_123",
+  "parentResultId": "result_123"
+}
+```
+
+When `parentResultId` is supplied, the backend verifies that it belongs to `parentJobId` and that its `assetId` matches `inputAssetId`. Generation jobs created for a workflow node carry `designWorkflowId`, `designWorkflowNodeId`, and `designWorkflowStageKey` in `config`. Successful generation writes the output job, result, and asset back to that node.
+
 ```json
 {
   "ok": true,
@@ -365,6 +421,10 @@ Admin APIs require an authenticated user with `role: "admin"`.
 | --- | --- | --- |
 | `GET` | `/api/admin/dashboard` | Return aggregate counts, recent jobs, and recent error jobs. |
 | `POST` | `/api/admin/credits/grant` | Grant credits to a user. |
+
+The dashboard also reports queued, running, and retrying jobs; active and expired
+leases; average provider duration; attempt counts; and normalized provider error
+categories.
 
 Credit grant request:
 
@@ -468,3 +528,26 @@ The legacy `AI_PROVIDER=grsai-banana2` and `AI_PROVIDER=grsai-nano-banana` alias
 - Payment checkout, billing webhooks, subscriptions, and packs.
 - Audit logs and provider-status admin endpoints.
 - Real Revit plugin APIs.
+
+## Project Report Export
+
+The first project-report-package implementation does not add a backend endpoint. `ProjectDetail` composes the report from existing owned project, generation, continuous-edit, asset-download, and share-link APIs.
+
+Exports:
+
+- browser print / Save as PDF;
+- `project-report.json` using schema `archai.project-report.v1`;
+- a TAR package containing the JSON manifest and formal image files under `images/`.
+
+Image bytes are read through the authenticated `/api/assets/:assetId/download` route when an `assetId` is available. Provider keys and service-role credentials are never included in report metadata.
+
+## Enterprise Asset Knowledge Library
+
+The first unified enterprise asset library does not add an API endpoint or vector-search service. It composes existing material manifests/constants, prompt-template APIs, showcase case configuration, and owned model-asset APIs into the client-side `EnterpriseAsset` model.
+
+Existing ownership rules remain unchanged:
+
+- uploaded model assets are loaded through authenticated owned-asset APIs and appear as personal assets;
+- public/curated templates, materials, styles, and showcase cases appear as administrator/enterprise shared resources;
+- project associations, favorites, and recent use are browser preferences in this iteration;
+- no frontend code receives service-role credentials or model-provider keys.
