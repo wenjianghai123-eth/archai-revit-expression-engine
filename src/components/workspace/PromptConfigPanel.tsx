@@ -164,7 +164,7 @@ function FloorplanMultiPlanControls({ config, activeDrawingTool, onUpdateConfig 
 
       <div className="grid grid-cols-2 gap-2">
         <MiniOption active={outputMode !== 'multi'} label="单张输出" onClick={() => updateMultiPlan({ floorplanOutputMode: 'single', batchCount: 1 })} />
-        <MiniOption active={outputMode === 'multi'} label="多方案输出" onClick={() => updateMultiPlan({ floorplanOutputMode: 'multi', batchCount: config.batchCount === 2 || config.batchCount === 6 ? config.batchCount : 4 })} />
+        <MiniOption active={outputMode === 'multi'} label="多方案输出" onClick={() => updateMultiPlan({ floorplanOutputMode: 'multi', batchCount: resolveFloorplanBatchCount(config.batchCount) })} />
       </div>
 
       <div className="space-y-2">
@@ -257,7 +257,7 @@ function FloorplanMultiPlanControls({ config, activeDrawingTool, onUpdateConfig 
           </div>
 
           <div className="grid grid-cols-3 gap-2">
-            {([2, 4, 6] as FloorplanMultiPlanBatchCount[]).map(value => (
+            {([1, 2, 4, 6] as FloorplanMultiPlanBatchCount[]).map(value => (
               <MiniOption key={value} active={batchCount === value} label={`${value} 张`} onClick={() => updateMultiPlan({ batchCount: value })} />
             ))}
           </div>

@@ -98,7 +98,8 @@ export async function refineImageMask(input: RefineMaskServiceInput): Promise<Re
     localThreshold,
     edgeThreshold,
   });
-  const refined = closeSmallGaps(grown, width, height, seed);
+  const closed = closeSmallGaps(grown, width, height, seed);
+  const refined = constrainOvergrownMask(closed, seed, width, height, input.targetObject);
   const refinedCount = countSelected(refined);
   const detectedObject = normalizeObjectName(input.targetObject)
     || inferObjectName(seedStats.centroidX, seedStats.centroidY, refinedCount / refined.length);
@@ -237,6 +238,36 @@ function closeSmallGaps(input: Uint8Array, width: number, height: number, seed: 
   return closed;
 }
 
+function constrainOvergrownMask(mask: Uint8Array, seed: Uint8Array, width: number, height: number, targetObject?: string): Uint8Array {
+  if (!isFurnitureLikeTarget(targetObject)) return mask;
+  const selectedCount = countSelected(mask);
+  const seedCount = Math.max(1, countSelected(seed));
+  const areaRatio = selectedCount / Math.max(1, mask.length);
+  const expansionRatio = selectedCount / seedCount;
+  if (areaRatio <= 0.35 && expansionRatio <= 80) return mask;
+  const radius = Math.max(2, Math.min(18, Math.round(Math.sqrt(seedCount) * 0.08)));
+  return dilateBinaryMask(seed, width, height, radius);
+}
+
+function dilateBinaryMask(mask: Uint8Array, width: number, height: number, radius: number): Uint8Array {
+  const output = new Uint8Array(mask);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = y * width + x;
+      if (!mask[index]) continue;
+      for (let dy = -radius; dy <= radius; dy += 1) {
+        for (let dx = -radius; dx <= radius; dx += 1) {
+          if (dx * dx + dy * dy > radius * radius) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx >= 0 && nx < width && ny >= 0 && ny < height) output[ny * width + nx] = 1;
+        }
+      }
+    }
+  }
+  return output;
+}
+
 async function encodeMask(mask: Uint8Array, width: number, height: number, targetWidth: number, targetHeight: number): Promise<Buffer> {
   const pixels = Buffer.alloc(mask.length);
   for (let index = 0; index < mask.length; index += 1) pixels[index] = mask[index] ? 255 : 0;
@@ -283,6 +314,16 @@ function countSelected(mask: Uint8Array): number {
 function normalizeObjectName(value: string | undefined): string | null {
   const normalized = value?.trim().toLowerCase();
   return normalized && normalized.length <= 64 ? normalized : null;
+}
+
+function isFurnitureLikeTarget(value: string | undefined): boolean {
+  const normalized = normalizeObjectName(value);
+  return normalized === 'furniture'
+    || normalized === 'table-chair'
+    || normalized === 'chair'
+    || normalized === 'table'
+    || normalized === 'sofa'
+    || normalized === 'cabinet';
 }
 
 function inferObjectName(_centroidX: number, centroidY: number, areaRatio: number): string {

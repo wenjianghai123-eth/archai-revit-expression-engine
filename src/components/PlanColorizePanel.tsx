@@ -228,7 +228,7 @@ export function PlanColorizePanel({
                 onClick={() => switchBatchMode(false)}
                 className={`rounded-md px-3 py-2 ${!batchEnabled ? 'bg-white text-slate-950 shadow-sm' : 'hover:text-slate-900'}`}
               >
-                单选模式
+                1 张（单选）
               </button>
               <button
                 type="button"

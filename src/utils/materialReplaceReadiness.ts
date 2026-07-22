@@ -1,4 +1,4 @@
-import type { GenerationConfig } from '../types';
+import type { GenerationConfig, MaskWorkflowMode, ReplacementTarget, SmartMaskStage } from '../types';
 
 export type MaterialReplaceSelectionMode = 'smart' | 'precise' | 'semantic';
 export type MaterialReplacementMode = 'auto-enhance' | 'local-material' | 'local-furnishing';
@@ -28,11 +28,18 @@ export interface MaterialReplacePreviewValidationInput {
   hasMask: boolean;
   hasValidMaskPixels: boolean;
   hasTargetObject: boolean;
+  replacementTarget?: ReplacementTarget | null;
   selectionMode: MaterialReplaceSelectionMode;
+  maskWorkflowMode?: MaskWorkflowMode;
+  maskWorkflowActive?: boolean;
+  smartMaskStage?: SmartMaskStage;
   maskConfirmed: boolean;
   replacementPrompt: string;
   useDefaultPreset: boolean;
   isSegmenting: boolean;
+  enablePhysicalMaterialLayout?: boolean;
+  materialRealSizeMm?: number;
+  materialJointWidthMm?: number;
 }
 
 export interface PreviewValidationResult {
@@ -72,10 +79,15 @@ export function validateMaterialReplacePreviewInput(
   if (input.mode === 'auto-enhance') return result(missingItems);
 
   const targetLabel = input.mode === 'local-furnishing' ? '软装' : '材质';
-  const autoSelectEnabled = input.selectionMode === 'semantic' && input.hasTargetObject;
+  const hasTargetObject = input.hasTargetObject || Boolean(input.replacementTarget);
+  const maskWorkflowMode = input.maskWorkflowMode
+    || (input.maskWorkflowActive === true
+      ? input.selectionMode === 'smart' ? 'smart' : 'manual'
+      : input.hasMask ? input.selectionMode === 'smart' ? 'smart' : 'manual' : 'none');
+  const smartMaskConfirmed = input.maskConfirmed || input.smartMaskStage === 'confirmed';
 
-  if (!input.hasMask && !autoSelectEnabled) {
-    missingItems.push(`请选择需要替换的${targetLabel}区域`);
+  if (!hasTargetObject) {
+    missingItems.push('请选择替换对象类型');
   } else if (input.hasMask && !input.hasValidMaskPixels) {
     missingItems.push('蒙版为空，请重新涂抹');
   }
@@ -84,13 +96,34 @@ export function validateMaterialReplacePreviewInput(
     missingItems.push(`请上传${targetLabel}参考图或填写${targetLabel}替换描述，至少完成一项`);
   }
 
-  if (input.isSegmenting) {
+  if (input.isSegmenting || input.smartMaskStage === 'segmenting') {
     missingItems.push('正在识别替换区域，请稍候');
-  } else if (input.selectionMode === 'smart' && input.hasMask && !input.maskConfirmed) {
-    missingItems.push('请先确认智能识别的替换区域');
+  } else if (maskWorkflowMode === 'smart' && (!input.hasMask || !smartMaskConfirmed)) {
+    missingItems.push('请先完成智能识别并确认替换区域');
+  } else if (maskWorkflowMode === 'manual' && !input.hasMask) {
+    missingItems.push('请先确认替换区域');
+  }
+
+  if (input.enablePhysicalMaterialLayout) {
+    if (!isFiniteNumberInRange(input.materialRealSizeMm, 20, 5000)) {
+      missingItems.push('请填写 20～5000 mm 的有效材质真实尺寸');
+    }
+    if (!isFiniteNumberInRange(input.materialJointWidthMm, 0, 50)) {
+      missingItems.push('请填写 0～50 mm 的有效拼缝宽度');
+    } else if (
+      typeof input.materialRealSizeMm === 'number'
+      && typeof input.materialJointWidthMm === 'number'
+      && input.materialJointWidthMm >= input.materialRealSizeMm
+    ) {
+      missingItems.push('拼缝宽度必须小于材质真实尺寸');
+    }
   }
 
   return result(missingItems);
+}
+
+function isFiniteNumberInRange(value: unknown, min: number, max: number): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
 }
 
 function result(missingItems: string[]): PreviewValidationResult {

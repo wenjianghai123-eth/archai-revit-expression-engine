@@ -21,10 +21,23 @@ interface InpaintMaskPanelProps {
   resultAssetId?: string | null;
   materialTextureUrl?: string | null;
   onUpdateConfig?: (config: Partial<GenerationConfig>) => void;
+  editorOpenRequest?: number;
 }
 
 const objectLabels: Record<MaterialReplaceTargetObject, string> = {
-  floor: '地面', wall: '墙面', ceiling: '天花', cabinet: '柜体', sofa: '沙发', 'table-chair': '桌椅', lighting: '灯具', plant: '绿植', 'door-window': '门窗', 'feature-wall': '背景墙', other: '其他',
+  floor: '地面',
+  wall: '墙面',
+  ceiling: '天花',
+  cabinet: '柜体',
+  sofa: '沙发',
+  'table-chair': '桌椅',
+  lighting: '灯具',
+  plant: '绿植',
+  artwork: '装饰画',
+  decor: '摆件',
+  'door-window': '门窗',
+  'feature-wall': '背景墙',
+  other: '其他',
 };
 
 export function InpaintMaskPanel({
@@ -42,16 +55,113 @@ export function InpaintMaskPanel({
   resultAssetId,
   materialTextureUrl,
   onUpdateConfig,
+  editorOpenRequest = 0,
 }: InpaintMaskPanelProps) {
+  const panelRef = useRef<HTMLElement>(null);
   const isMaterialReplace = mode === 'material-replace';
   const isSemantic = isMaterialReplace && config?.editMode !== 'mask';
   const isSmartMask = isMaterialReplace && config?.editMode === 'mask' && config.maskSelectionMode === 'smart';
   const [view, setView] = useState<'selection' | 'original' | 'control' | 'result'>('selection');
+  const [panelSize, setPanelSize] = useState({ width: 0, height: 0 });
+  const [draftMask, setDraftMask] = useState(maskImageDataUrl);
+  const [draftProtectionMask, setDraftProtectionMask] = useState(protectionMaskDataUrl);
+  const [draftUseFullImage, setDraftUseFullImage] = useState(useFullImageMask);
+  const [draftFeather, setDraftFeather] = useState(config?.feather || 0);
+  const [draftExpansion, setDraftExpansion] = useState(config?.maskExpansion || 0);
+  const [draftHasValidPixels, setDraftHasValidPixels] = useState(Boolean(maskImageDataUrl || useFullImageMask));
   const sourceUrl = inputImage?.previewUrl || inputImage?.publicUrl || inputImage?.url || inputImage?.dataUrl || null;
+
+  const resetDraftFromConfirmed = () => {
+    setDraftMask(maskImageDataUrl);
+    setDraftProtectionMask(protectionMaskDataUrl);
+    setDraftUseFullImage(useFullImageMask);
+    setDraftFeather(config?.feather || 0);
+    setDraftExpansion(config?.maskExpansion || 0);
+    setDraftHasValidPixels(Boolean(maskImageDataUrl || useFullImageMask));
+  };
+
+  const handleDraftMaskChange: InpaintMaskPanelProps['onUpdateMaskImage'] = (
+    nextMask,
+    nextUseFullImage,
+    feather = 0,
+    nextProtectionMask = null,
+    expansion = 0,
+    hasValidMaskPixels,
+  ) => {
+    if (!isMaterialReplace) {
+      onUpdateMaskImage(nextMask, nextUseFullImage, feather, nextProtectionMask, expansion, hasValidMaskPixels);
+      return;
+    }
+    setDraftMask(nextMask);
+    setDraftProtectionMask(nextProtectionMask);
+    setDraftUseFullImage(nextUseFullImage);
+    setDraftFeather(feather);
+    setDraftExpansion(expansion);
+    setDraftHasValidPixels(nextMask ? hasValidMaskPixels ?? true : nextUseFullImage);
+  };
+
+  const confirmDraftMask = () => {
+    onUpdateMaskImage(draftMask, draftUseFullImage, draftFeather, draftProtectionMask, draftExpansion, draftHasValidPixels);
+    onUpdateConfig?.({
+      maskWorkflowMode: draftMask || draftUseFullImage
+        ? config?.maskSelectionMode === 'smart' ? 'smart' : 'manual'
+        : 'none',
+      maskWorkflowActive: Boolean(draftMask || draftUseFullImage),
+      smartMaskConfirmed: undefined,
+      smartMaskIsRefining: false,
+      smartMaskStage: config?.maskSelectionMode === 'smart' ? 'ready-to-segment' : undefined,
+    });
+    setView(isMaterialReplace ? 'control' : 'original');
+  };
+
+  const cancelMaskEditing = () => {
+    resetDraftFromConfirmed();
+    onUpdateConfig?.({
+      maskWorkflowMode: maskImageDataUrl || useFullImageMask
+        ? config?.maskSelectionMode === 'smart' ? 'smart' : 'manual'
+        : 'none',
+      maskWorkflowActive: Boolean(maskImageDataUrl || useFullImageMask),
+      smartMaskIsRefining: false,
+      smartMaskStage: config?.maskSelectionMode === 'smart' ? 'ready-to-segment' : undefined,
+    });
+    setView('original');
+  };
 
   useEffect(() => {
     if (resultImageUrl) setView('result');
   }, [resultImageUrl]);
+
+  useEffect(() => {
+    if (!isMaterialReplace || editorOpenRequest === 0) return;
+    resetDraftFromConfirmed();
+    setView('selection');
+  }, [editorOpenRequest]);
+
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel || typeof ResizeObserver === 'undefined') return;
+    const updateSize = () => {
+      const rect = panel.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      setPanelSize({ width: Math.round(rect.width), height: Math.round(rect.height) });
+    };
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || import.meta.env.MODE === 'test' || !isMaterialReplace) return;
+    console.debug('[MaskEditor render]', {
+      isMaskEditorOpen: view === 'selection',
+      maskMode: isSmartMask ? 'smart' : isSemantic ? 'semantic' : 'precise',
+      sourceImageUrl: Boolean(sourceUrl),
+      containerWidth: panelSize.width,
+      containerHeight: panelSize.height,
+      imageLoaded: Boolean(sourceUrl),
+    });
+  }, [isMaterialReplace, isSemantic, isSmartMask, panelSize.height, panelSize.width, sourceUrl, view]);
 
   const views = [
     ['selection', isSemantic ? '对象选择' : isSmartMask ? '智能 Mask' : '精致 Mask'] as const,
@@ -61,7 +171,7 @@ export function InpaintMaskPanel({
   ];
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+    <main ref={panelRef} className="replacement-center-panel flex min-w-0 flex-1 flex-col overflow-hidden">
       <div className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white/70 px-4 py-2">
         <div>
           <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{isMaterialReplace ? '材质替换工作区' : '统一局部重绘工作区'}</span>
@@ -74,22 +184,39 @@ export function InpaintMaskPanel({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 custom-scrollbar">
-        <div className="flex min-h-72 flex-1 lg:min-h-[420px] lg:h-[52vh]">
+        <div className="flex min-h-72 min-w-0 flex-1 lg:min-h-[420px] lg:h-[52vh]">
           <Suspense fallback={<div className="flex flex-1 items-center justify-center rounded-xl bg-slate-50 text-sm font-bold text-slate-400">正在加载 Mask 编辑器…</div>}>
           {!inputImage || !sourceUrl ? <UploadPlaceholder onUpload={onUploadInput} /> : view === 'selection' ? (
             isSemantic ? <SemanticObjectSelector imageUrl={sourceUrl} config={config} onUpdateConfig={onUpdateConfig} /> : isSmartMask ? (
               <SmartMaskEditor
                 inputImage={inputImage}
                 imageUrl={sourceUrl}
-                maskImageDataUrl={maskImageDataUrl}
-                protectionMaskDataUrl={protectionMaskDataUrl}
-                useFullImageMask={useFullImageMask}
+                maskImageDataUrl={draftMask}
+                protectionMaskDataUrl={draftProtectionMask}
+                useFullImageMask={draftUseFullImage}
                 config={config}
-                onUpdateMaskImage={onUpdateMaskImage}
+                onUpdateMaskImage={handleDraftMaskChange}
                 onUpdateConfig={onUpdateConfig}
+                onConfirmRefinedMask={refinement => {
+                  onUpdateMaskImage(refinement.refinedMask, false, draftFeather, draftProtectionMask, draftExpansion, true);
+                  onUpdateConfig?.({
+                    maskWorkflowMode: 'smart',
+                    maskWorkflowActive: true,
+                    smartMaskStage: 'confirmed',
+                    smartMaskConfirmed: true,
+                    smartMaskIsRefining: false,
+                    smartMaskDetectedObject: refinement.detectedObject,
+                    smartMaskConfidence: refinement.confidence,
+                    smartMaskRefinementMethod: refinement.method,
+                  });
+                  setDraftMask(refinement.refinedMask);
+                  setDraftHasValidPixels(true);
+                  setView('control');
+                }}
+                onCancelEditing={cancelMaskEditing}
               />
             ) : (
-              <MaskEditor imageDataUrl={sourceUrl} imageName={inputImage.name} maskImageDataUrl={maskImageDataUrl} protectionMaskDataUrl={protectionMaskDataUrl} useFullImage={useFullImageMask} onMaskChange={onUpdateMaskImage} />
+              <MaskEditor imageDataUrl={sourceUrl} imageName={inputImage.name} maskImageDataUrl={isMaterialReplace ? draftMask : maskImageDataUrl} protectionMaskDataUrl={isMaterialReplace ? draftProtectionMask : protectionMaskDataUrl} useFullImage={isMaterialReplace ? draftUseFullImage : useFullImageMask} onMaskChange={handleDraftMaskChange} onConfirm={isMaterialReplace ? confirmDraftMask : undefined} onCancel={isMaterialReplace ? cancelMaskEditing : undefined} confirmDisabled={isMaterialReplace && !draftHasValidPixels} />
             )
           ) : view === 'original' ? (
             <ImageFrame src={sourceUrl} alt="原图" />
@@ -108,7 +235,7 @@ export function InpaintMaskPanel({
 
 function SemanticObjectSelector({ imageUrl, config, onUpdateConfig }: { imageUrl: string; config?: GenerationConfig; onUpdateConfig?: (config: Partial<GenerationConfig>) => void }) {
   const selections = config?.semanticObjectSelections || [];
-  const activeType = config?.targetObjectType || 'floor';
+  const activeType = config?.targetObjectType || 'other';
   const [imageSize, setImageSize] = useState({ width: 16, height: 9 });
   useEffect(() => { void loadImage(imageUrl).then(image => setImageSize({ width: image.naturalWidth || 16, height: image.naturalHeight || 9 })); }, [imageUrl]);
   const addSelection = (event: MouseEvent<HTMLButtonElement>) => {
@@ -178,10 +305,14 @@ async function renderMaterialControl(input: { sourceUrl: string; maskUrl: string
 }
 
 function createMaterialPreviewTile(material: HTMLImageElement, previewWidth: number, config?: GenerationConfig): HTMLCanvasElement {
+  const usePhysicalLayout = config?.enablePhysicalMaterialLayout === true;
   const realSizeMm = Math.max(20, Math.min(5000, config?.materialRealSizeMm || 600));
   const jointWidthMm = Math.max(0, Math.min(50, config?.materialJointWidthMm ?? 2));
-  const tileSize = Math.max(24, Math.min(Math.round(previewWidth * 0.4), Math.round(previewWidth * realSizeMm / 8000)));
-  const jointSize = Math.max(0, Math.min(8, Math.round(tileSize * jointWidthMm / realSizeMm)));
+  const visualScale = config?.materialPatternScale === 'small' ? 0.08 : config?.materialPatternScale === 'large' ? 0.24 : 0.15;
+  const tileSize = usePhysicalLayout
+    ? Math.max(24, Math.min(Math.round(previewWidth * 0.4), Math.round(previewWidth * realSizeMm / 8000)))
+    : Math.max(24, Math.round(previewWidth * visualScale));
+  const jointSize = usePhysicalLayout ? Math.max(0, Math.min(8, Math.round(tileSize * jointWidthMm / realSizeMm))) : 0;
   const tile = document.createElement('canvas');
   tile.width = tileSize + jointSize;
   tile.height = Math.max(16, Math.round(tileSize * (material.naturalHeight || 1) / Math.max(1, material.naturalWidth || 1))) + jointSize;

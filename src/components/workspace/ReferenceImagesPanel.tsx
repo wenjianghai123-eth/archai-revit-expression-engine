@@ -24,7 +24,7 @@ export function MaterialTexturesPanel({
   const isFull = textures.length >= maxMaterialTextures;
 
   return (
-    <section className="shrink-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+    <section data-testid="material-textures-panel" className="shrink-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="text-xs font-bold text-slate-800">材质贴图</h3>
@@ -52,13 +52,19 @@ export function MaterialTexturesPanel({
         </div>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-1.5 custom-scrollbar">
+      {textures.length === 0 ? (
+        <p data-testid="material-textures-empty-state" className="mb-2 rounded-lg bg-slate-50 px-3 py-2 text-[11px] font-semibold leading-5 text-slate-500">
+          暂无材质贴图，可上传本地图片或从项目素材中选择。
+        </p>
+      ) : null}
+
+      <div data-testid="material-texture-grid" className="material-texture-grid grid grid-cols-2 gap-2 pb-1.5 sm:grid-cols-3">
         {textures.map((texture, index) => {
           const textureName = texture.name || (texture.source === 'upload' ? '本地贴图' : '材质库');
           return (
             <article
               key={texture.id}
-              className="group w-24 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white/80 p-1.5 shadow-sm transition hover:border-blue-200 hover:shadow-md sm:w-28"
+              className="group min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white/80 p-1.5 shadow-sm transition hover:border-blue-200 hover:shadow-md"
             >
               <AspectRatioImage
                 src={texture.previewUrl || texture.thumbnailUrl || texture.publicUrl || texture.url || texture.dataUrl}
@@ -94,7 +100,7 @@ export function MaterialTexturesPanel({
             key={`empty-texture-${index}`}
             type="button"
             onClick={onUploadTexture}
-            className="flex min-h-24 w-24 shrink-0 flex-col items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 px-2 py-2.5 text-center text-slate-400 transition hover:border-blue-200 hover:bg-blue-50/50 hover:text-blue-600 sm:w-28"
+            className="flex min-h-24 min-w-0 flex-col items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 px-2 py-2.5 text-center text-slate-400 transition hover:border-blue-200 hover:bg-blue-50/50 hover:text-blue-600"
             title="上传材质贴图"
           >
             <Upload className="h-4 w-4" />

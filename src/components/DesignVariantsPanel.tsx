@@ -71,6 +71,7 @@ const styleDescriptionByKey: Record<string, string> = {
 };
 
 const defaultStylesByCount: Record<DesignVariantBatchCount, VariantStyleKey[]> = {
+  1: ['modern-minimal'],
   2: ['modern-minimal', 'natural-wood'],
   4: ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'],
   8: ['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby'],
@@ -300,6 +301,7 @@ export function DesignVariantsPanel({
             </div>
 
             <ControlGroup title="生成数量">
+              <SegmentedButton active={batchCount === 1} onClick={() => handleBatchCountChange(1)} label="1 张" />
               <SegmentedButton active={batchCount === 2} onClick={() => handleBatchCountChange(2)} label="2 张" />
               <SegmentedButton active={batchCount === 4} onClick={() => handleBatchCountChange(4)} label="4 张" />
               <SegmentedButton active={batchCount === 8} onClick={() => handleBatchCountChange(8)} label="8 张" />
@@ -444,7 +446,7 @@ export function DesignVariantsPanel({
 
             {resultOptions.length > 0 ? <DesignVariantComparison results={resultOptions} selectedIds={compareResultIds} onToggle={handleCompareToggle} /> : null}
 
-            <div className={`grid gap-3 ${batchCount === 2 ? 'lg:grid-cols-2' : batchCount === 8 ? 'md:grid-cols-2 2xl:grid-cols-4' : 'lg:grid-cols-2'}`}>
+            <div className={`grid gap-3 ${batchCount === 1 ? 'grid-cols-1' : batchCount === 2 ? 'lg:grid-cols-2' : batchCount === 8 ? 'md:grid-cols-2 2xl:grid-cols-4' : 'lg:grid-cols-2'}`}>
               {resultOptions.length > 0 ? resultOptions.map((result, index) => {
                 const variantIndex = typeof result.variantIndex === 'number' ? result.variantIndex : index;
                 return (
@@ -811,7 +813,7 @@ function SegmentedButton({ active, label, onClick }: { active: boolean; label: s
 }
 
 function readBatchCount(value: GenerationConfig['batchCount']): DesignVariantBatchCount {
-  return value === 2 || value === 8 ? value : 4;
+  return value === 2 || value === 4 || value === 8 ? value : 1;
 }
 
 function resolveSelectedStyles(config: GenerationConfig, batchCount: DesignVariantBatchCount): VariantStyleKey[] {

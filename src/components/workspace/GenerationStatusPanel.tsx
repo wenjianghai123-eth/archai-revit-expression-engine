@@ -15,6 +15,14 @@ import { ResultQualityReport } from '../common/ResultQualityReport';
 import { GenerationResultActions } from '../common/GenerationResultActions';
 import { NormalizedGenerationProgress } from '../common/GenerationProgress';
 import { normalizeStepGenerationResult } from '../../utils/normalizeGenerationResult';
+import {
+  readEditingScopeLabel,
+  readReplacementStrategyLabel,
+  readReplacementTargetLabel,
+  resolveEditingScope,
+  resolveReplacementStrategyFromConfig,
+  resolveReplacementTargetFromConfig,
+} from '../../utils/materialReplacementTarget';
 
 interface GenerationStatusPanelProps {
   step: GenerationStep;
@@ -105,6 +113,7 @@ export function GenerationStatusPanel({
         {topPanels}
         <ContinuationSourceBanner state={state} />
         <NormalizedGenerationProgress result={normalizedResult} compact />
+        {step === GenerationStep.MaterialReplace ? <MaterialReplacementTaskSummary state={state} /> : null}
         {state.isGenerating && state.generationJobId ? (
           <button type="button" onClick={onCancelGeneration} className="w-full rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-600">取消任务</button>
         ) : null}
@@ -165,6 +174,47 @@ export function GenerationStatusPanel({
         ) : null}
       </div>
     </aside>
+  );
+}
+
+function MaterialReplacementTaskSummary({ state }: { state: StepState }) {
+  const replacementTarget = resolveReplacementTargetFromConfig(state.config);
+  const hasMask = Boolean(state.maskImage?.dataUrl || state.useFullImageMask);
+  const editingScope = state.config.editingScope === 'masked' || state.config.editingScope === 'semantic-auto'
+    ? state.config.editingScope
+    : resolveEditingScope(hasMask);
+  const replacementStrategy = resolveReplacementStrategyFromConfig(state.config, hasMask);
+  const materialReady = Boolean(
+    state.materialTextures.length > 0
+    || state.materialImage
+    || state.config.targetMaterial
+    || state.config.customMaterialPrompt?.trim()
+    || state.config.prompt?.trim(),
+  );
+  const targetLabel = readReplacementTargetLabel(replacementTarget);
+  const scopeLabel = readEditingScopeLabel(editingScope, state.config.maskSelectionMode);
+  const strategyLabel = readReplacementStrategyLabel(replacementStrategy);
+  const referenceLabel = state.materialTextures.length > 0 || state.materialImage || state.config.targetMaterial
+    ? '已上传 / 已选择'
+    : state.config.customMaterialPrompt?.trim() || state.config.prompt?.trim()
+      ? '描述已填写'
+      : '待补充';
+
+  return (
+    <div data-testid="material-replacement-task-summary" className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-3 text-xs leading-5 text-emerald-900">
+      <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-emerald-600">材质替换摘要</p>
+      <p>替换对象：<span className="font-black">{targetLabel}</span></p>
+      <p>区域来源：<span className="font-black">{scopeLabel}</span></p>
+      <p>操作模式：<span className="font-black">{strategyLabel}</span></p>
+      <p>参考图 / 描述：<span className="font-black">{materialReady ? referenceLabel : '待补充'}</span></p>
+      <p>额外新增：<span className="font-black">禁止</span></p>
+      <p>非目标区域：<span className="font-black">保持不变</span></p>
+      <p className="mt-1 text-[11px] font-semibold text-emerald-700">
+        {hasMask
+          ? `仅对 ${scopeLabel} 范围内的 ${targetLabel} 执行原位替换，不新增、不叠加。`
+          : `自动识别已有 ${targetLabel} 并原位替换，不新增、不叠加。`}
+      </p>
+    </div>
   );
 }
 

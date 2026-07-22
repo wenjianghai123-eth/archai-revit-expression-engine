@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { GenerationConfig, GenerationHistoryItem, GenerationProvider, GenerationRunStateOverride, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, ResultSendTargetStep, SecondaryEditAction, StepState, UploadedImage } from '../types';
+import { GenerationConfig, GenerationHistoryItem, GenerationProvider, GenerationRunStateOverride, GenerationStep, MaterialAsset, MaterialTexture, ReferenceImage, ResultSendTargetStep, SecondaryEditAction, StepState, UploadedImage, type MaskWorkflowMode } from '../types';
 import { createLocalPreviewImage, createUploadedImage, hydrateUploadedImageDataUrl, revokeUploadedImagePreview, validateImageFile } from '../utils/file';
 import { getImageAsset, getProject, uploadImageAsset } from '../lib/api';
 import { GenerationStatusPanel } from './workspace/GenerationStatusPanel';
@@ -31,6 +31,11 @@ import {
   resolveMaterialReplacementMode,
   validateMaterialReplacePreviewInput,
 } from '../utils/materialReplaceReadiness';
+import {
+  resolveReplacementStrategy,
+  resolveReplacementTargetFromConfig,
+  type MaterialReplacementEditingScope,
+} from '../utils/materialReplacementTarget';
 import { createResultViewerData, ResultViewer } from './workspace/ResultViewer';
 import { DrawingToolNavigation } from './drawing-expression/DrawingToolNavigation';
 import { DrawingViewerToolbar } from './drawing-expression/DrawingViewerToolbar';
@@ -206,14 +211,30 @@ export function MainWorkspace({
       || activeReplacementReference.dataUrl
     : null;
   const hasMaskSelection = Boolean(state.maskImage?.dataUrl || state.useFullImageMask);
-  const materialReplaceSelectionMode = materialReplaceEditMode === 'smart-type'
+  const materialReplacementTarget = resolveReplacementTargetFromConfig(state.config);
+  const configuredMaskWorkflowMode = state.config.maskWorkflowMode === 'smart' || state.config.maskWorkflowMode === 'manual'
+    ? state.config.maskWorkflowMode
+    : state.config.maskWorkflowActive === true
+      ? materialMaskSelectionMode === 'smart' ? 'smart' : 'manual'
+    : 'none';
+  const materialMaskWorkflowMode: MaskWorkflowMode = hasMaskSelection
+    ? materialMaskSelectionMode === 'smart' ? 'smart' : 'manual'
+    : configuredMaskWorkflowMode;
+  const materialReplaceMaskWorkflowActive = materialMaskWorkflowMode !== 'none';
+  const materialReplaceSelectionMode = materialMaskWorkflowMode === 'none'
     ? 'semantic'
-    : materialMaskSelectionMode;
+    : materialMaskWorkflowMode === 'smart' ? 'smart' : 'precise';
   const hasValidMaskPixels = hasMaskSelection && (state.maskHasVisiblePixels ?? true);
+  const materialReplacementEditingScope: MaterialReplacementEditingScope = materialMaskWorkflowMode === 'none' ? 'semantic-auto' : hasMaskSelection ? 'masked' : 'semantic-auto';
+  const materialReplacementStrategy = resolveReplacementStrategy(materialReplacementEditingScope);
   const isReplacementUploadInProgress = state.inputImage?.uploadStatus === 'uploading'
     || state.inputImage?.uploadStatus === 'local-preview'
     || state.materialTextures.some(texture => texture.uploadStatus === 'uploading' || texture.uploadStatus === 'local-preview');
-  const materialReplacementMode = resolveMaterialReplacementMode(state.config.editTarget);
+  const replacementType = state.config.editTarget || 'general';
+  const effectiveReplacementType = replacementType === 'general' && materialReplacementTarget ? 'material' : replacementType;
+  const isFurnishingMode = replacementType === 'furniture';
+  const isMaterialMode = !isFurnishingMode;
+  const materialReplacementMode = resolveMaterialReplacementMode(effectiveReplacementType);
   const materialReplaceButtonState = getMaterialReplacePreviewButtonState({
     hasSourceImage: Boolean(sourceImageUrl),
     isUploading: isReplacementUploadInProgress,
@@ -225,14 +246,22 @@ export function MainWorkspace({
     hasReference: Boolean(activeReplacementReferenceUrl),
     hasMask: hasMaskSelection,
     hasValidMaskPixels,
-    hasTargetObject: Boolean(state.config.targetObjectType),
+    hasTargetObject: Boolean(materialReplacementTarget),
+    replacementTarget: materialReplacementTarget,
     selectionMode: materialReplaceSelectionMode,
+    maskWorkflowMode: materialMaskWorkflowMode,
+    maskWorkflowActive: materialReplaceMaskWorkflowActive,
+    smartMaskStage: state.config.smartMaskStage,
     maskConfirmed: materialMaskSelectionMode !== 'smart' || state.config.smartMaskConfirmed === true,
     replacementPrompt: state.config.customMaterialPrompt || state.config.prompt || '',
     useDefaultPreset: Boolean(state.config.targetMaterial),
     isSegmenting: state.config.smartMaskIsRefining === true,
+    enablePhysicalMaterialLayout: materialReplacementMode === 'local-material' && state.config.enablePhysicalMaterialLayout === true,
+    materialRealSizeMm: state.config.materialRealSizeMm,
+    materialJointWidthMm: state.config.materialJointWidthMm,
   });
   const [previewValidationErrors, setPreviewValidationErrors] = useState<string[]>([]);
+  const [maskEditorOpenRequest, setMaskEditorOpenRequest] = useState(0);
   const previewValidationKey = previewValidation.missingItems.join('|');
   const canClickPreview = materialReplaceButtonState.canClickPreview;
   const previewButtonHint = materialReplaceButtonState.previewButtonHint;
@@ -268,6 +297,15 @@ export function MainWorkspace({
     }
 
     setPreviewValidationErrors([]);
+    if (import.meta.env.DEV && import.meta.env.MODE !== 'test') {
+      console.debug('[MaterialReplacement payload]', {
+        replacementTarget: materialReplacementTarget,
+        editingScope: materialReplacementEditingScope,
+        hasConfirmedMask: hasMaskSelection && (materialMaskSelectionMode !== 'smart' || state.config.smartMaskConfirmed === true),
+        materialReference: Boolean(activeReplacementReferenceUrl),
+        preserveUnmaskedArea: true,
+      });
+    }
     if (materialReplacementMode === 'auto-enhance') {
       const existingPrompt = (state.config.customMaterialPrompt || state.config.prompt || '').trim();
       onGenerate({
@@ -277,25 +315,68 @@ export function MainWorkspace({
           editTarget: 'general',
           editMode: 'smart-type',
           targetObjectType: 'other',
+          replacementTarget: 'decor',
+          editingScope: 'semantic-auto',
+          replacementStrategy: 'replace-existing',
+          preserveUnmaskedArea: true,
           semanticObjectSelections: [],
           customMaterialPrompt: existingPrompt || AUTO_MATERIAL_REPLACEMENT_PROMPT,
         },
       });
       return;
     }
-    onGenerate(stateOverride);
-  }, [isMaterialReplaceStep, materialReplacementMode, onGenerate, previewValidation.missingItems, previewValidation.valid, state.config.customMaterialPrompt, state.config.prompt]);
+    onGenerate({
+      ...stateOverride,
+      config: {
+        ...stateOverride?.config,
+        replacementTarget: materialReplacementTarget || undefined,
+        editingScope: materialReplacementEditingScope,
+        replacementStrategy: materialReplacementStrategy,
+        editMode: materialMaskWorkflowMode === 'none' ? 'smart-type' : 'mask',
+        maskSelectionMode: materialMaskWorkflowMode === 'smart' ? 'smart' : materialMaskWorkflowMode === 'manual' ? 'precise' : undefined,
+        maskWorkflowMode: materialMaskWorkflowMode,
+        maskWorkflowActive: materialReplaceMaskWorkflowActive,
+        smartMaskStage: state.config.smartMaskStage,
+        preserveUnmaskedArea: true,
+      },
+    });
+  }, [activeReplacementReferenceUrl, hasMaskSelection, isMaterialReplaceStep, materialMaskSelectionMode, materialMaskWorkflowMode, materialReplaceMaskWorkflowActive, materialReplacementEditingScope, materialReplacementMode, materialReplacementStrategy, materialReplacementTarget, onGenerate, previewValidation.missingItems, previewValidation.valid, state.config.customMaterialPrompt, state.config.prompt, state.config.smartMaskConfirmed, state.config.smartMaskStage]);
+
+  const handleRequestMaskEditor = useCallback((mode: 'smart' | 'precise') => {
+    const nextWorkflowMode: MaskWorkflowMode = mode === 'smart' ? 'smart' : 'manual';
+    if (materialMaskWorkflowMode !== 'none' && materialMaskWorkflowMode !== nextWorkflowMode) {
+      onUpdateMaskImage(null, false, state.config.feather ?? 0, null, state.config.maskExpansion ?? 0, false);
+    }
+    onUpdateConfig({
+      editTarget: 'material',
+      editMode: 'mask',
+      maskSelectionMode: mode,
+      maskWorkflowMode: nextWorkflowMode,
+      maskWorkflowActive: true,
+      preserveUnmaskedArea: true,
+      smartMaskStage: mode === 'smart' ? 'rough-marking' : undefined,
+      smartMaskConfirmed: mode === 'smart' ? false : undefined,
+      smartMaskIsRefining: false,
+      smartMaskDetectedObject: undefined,
+      smartMaskConfidence: undefined,
+      smartMaskRefinementMethod: undefined,
+    });
+    setMaskEditorOpenRequest(value => value + 1);
+  }, [materialMaskWorkflowMode, onUpdateConfig, onUpdateMaskImage, state.config.feather, state.config.maskExpansion]);
 
   useEffect(() => {
     if (!import.meta.env.DEV || import.meta.env.MODE === 'test' || !isMaterialReplaceStep) return;
     console.debug('[MaterialReplacement] preview readiness', {
       hasSourceImage: Boolean(sourceImageUrl),
-      replacementType: state.config.editTarget || 'material',
+      replacementType,
       hasReference: Boolean(activeReplacementReferenceUrl),
       maskMode: materialReplaceSelectionMode,
+      maskWorkflowMode: materialMaskWorkflowMode,
+      maskWorkflowActive: materialReplaceMaskWorkflowActive,
       hasMask: hasMaskSelection,
       hasValidMaskPixels,
       maskConfirmed: materialMaskSelectionMode !== 'smart' || state.config.smartMaskConfirmed === true,
+      smartMaskStage: state.config.smartMaskStage,
       isUploading: isReplacementUploadInProgress,
       isSegmenting: state.config.smartMaskIsRefining === true,
       isGeneratingPreview: state.isGenerating,
@@ -303,7 +384,7 @@ export function MainWorkspace({
       previewButtonHint,
       validationMissingItems: previewValidation.missingItems,
     });
-  }, [activeReplacementReferenceUrl, canClickPreview, hasMaskSelection, hasValidMaskPixels, isMaterialReplaceStep, isReplacementUploadInProgress, materialMaskSelectionMode, materialReplaceSelectionMode, previewButtonHint, previewValidationKey, sourceImageUrl, state.config.editTarget, state.config.smartMaskConfirmed, state.config.smartMaskIsRefining, state.isGenerating]);
+  }, [activeReplacementReferenceUrl, canClickPreview, hasMaskSelection, hasValidMaskPixels, isMaterialReplaceStep, isReplacementUploadInProgress, materialMaskSelectionMode, materialMaskWorkflowMode, materialReplaceMaskWorkflowActive, materialReplaceSelectionMode, previewButtonHint, previewValidationKey, replacementType, sourceImageUrl, state.config.smartMaskConfirmed, state.config.smartMaskIsRefining, state.config.smartMaskStage, state.isGenerating]);
   const providerForStatus = backendProvider || state.generationProvider;
   const resultOptions = state.generationResults.length > 0
     ? state.generationResults
@@ -953,7 +1034,7 @@ export function MainWorkspace({
   }
 
   return (
-    <div className={`workspace-layout workspace-surface flex min-h-0 flex-1 ${isFloorplanStep ? 'flex-col overflow-hidden' : 'overflow-hidden p-3'}`}>
+    <div className={`workspace-layout workspace-surface flex min-h-0 flex-1 ${isMaterialReplaceStep ? 'material-replacement-workspace' : ''} ${isFloorplanStep ? 'flex-col overflow-hidden' : 'overflow-hidden p-3'}`}>
       <input ref={inputFileRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} className="hidden" onChange={event => { void handleFileSelected('input', event.currentTarget.files); event.currentTarget.value = ''; }} />
       <input ref={materialFileRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} className="hidden" onChange={event => { void handleFileSelected('material', event.currentTarget.files); event.currentTarget.value = ''; }} />
       <input ref={materialTextureFileRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} multiple className="hidden" onChange={event => { void handleTextureFiles(event.currentTarget.files); event.currentTarget.value = ''; }} />
@@ -970,7 +1051,7 @@ export function MainWorkspace({
       <div className={isFloorplanStep
         ? 'drawing-workspace grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-4 overflow-hidden p-3'
         : 'contents'}>
-      <aside data-testid={isFloorplanStep ? 'drawing-settings-panel' : undefined} className={`drawing-left-panel workspace-side-panel glass-panel flex shrink-0 flex-col overflow-y-auto overflow-x-hidden border border-white/60 p-4 custom-scrollbar ${isFloorplanStep ? 'w-full rounded-2xl lg:rounded-l-3xl' : 'w-80 rounded-l-3xl'}`}>
+      <aside data-testid={isFloorplanStep ? 'drawing-settings-panel' : undefined} className={`drawing-left-panel workspace-side-panel glass-panel flex shrink-0 flex-col overflow-y-auto overflow-x-hidden border border-white/60 p-4 custom-scrollbar ${isMaterialReplaceStep ? 'material-replacement-left-panel' : ''} ${isFloorplanStep ? 'w-full rounded-2xl lg:rounded-l-3xl' : 'w-80 rounded-l-3xl'}`}>
         <InputImagePanel
           step={step}
           inputImage={state.inputImage}
@@ -1007,7 +1088,10 @@ export function MainWorkspace({
             />
           ) : null}
           {isMaterialReplaceStep ? (
-            <MaterialReplaceConfigPanel config={state.config} materialReferenceCount={state.materialTextures.length} onUpdateConfig={onUpdateConfig} />
+            <>
+              <MaterialReplaceConfigPanel config={state.config} materialReferenceCount={state.materialTextures.length} onUpdateConfig={onUpdateConfig} onRequestMaskEditor={handleRequestMaskEditor} />
+              {isMaterialMode ? materialTexturesPanel : null}
+            </>
           ) : null}
         </div>
       </aside>
@@ -1061,13 +1145,14 @@ export function MainWorkspace({
           providerForStatus={providerForStatus}
           onUploadInput={() => handleUploadClick('input')}
           onUpdateMaskImage={onUpdateMaskImage}
-          materialTexturesPanel={materialTexturesPanel}
+          materialTexturesPanel={isMaterialReplaceStep ? null : materialTexturesPanel}
           mode={isMaterialReplaceStep ? 'material-replace' : 'local-inpaint'}
           config={state.config}
           resultImageUrl={previewImage}
           resultAssetId={getOriginalResultAssetId(selectedResult)}
           materialTextureUrl={state.materialTextures[0]?.previewUrl || state.materialTextures[0]?.publicUrl || state.materialTextures[0]?.url || null}
           onUpdateConfig={onUpdateConfig}
+          editorOpenRequest={maskEditorOpenRequest}
         />
       ) : (
         <ResultPreviewPanel
@@ -1100,7 +1185,7 @@ export function MainWorkspace({
         topPanels={(
           <>
             {isStyleRenderStep ? <StyleSelectorPanel config={state.config} onUpdateConfig={onUpdateConfig} /> : null}
-            {isFloorplanStep || isMaterialReplaceStep ? materialTexturesPanel : null}
+            {isFloorplanStep ? materialTexturesPanel : null}
           </>
         )}
         validationErrors={isMaterialReplaceStep ? previewValidationErrors : undefined}

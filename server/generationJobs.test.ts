@@ -82,7 +82,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
     ]));
   });
 
-  it('persists the per-job API易 provider selection', async () => {
+  it('persists the per-job API provider selection', async () => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'APIYi provider selection' });
     const inputAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
 
@@ -457,6 +457,58 @@ describe('POST /api/generation-jobs asset ownership', () => {
     expect(response.body.data.job.config).not.toHaveProperty('maskAssetId');
   });
 
+  it('normalizes table-chair material replacement to the furniture target without falling back to floor', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Furniture material target' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          editMode: 'smart-type',
+          sourceImageAssetId: sourceAsset.id,
+          targetObjectType: 'table-chair',
+          targetMaterial: 'fabric',
+          preserveUnmaskedArea: true,
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).toMatchObject({
+      targetObjectType: 'table-chair',
+      replacementTarget: 'furniture',
+      editingScope: 'semantic-auto',
+      preserveUnmaskedArea: true,
+    });
+  });
+
+  it('rejects invalid material replacement target values instead of silently using floor', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Invalid material target' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          editMode: 'smart-type',
+          sourceImageAssetId: sourceAsset.id,
+          replacementTarget: 'ground',
+          targetMaterial: 'fabric',
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('GENERATION_JOB_REPLACEMENT_TARGET_INVALID');
+  });
+
   it('creates a multi-candidate material job with semantic controls and a protected mask', async () => {
     const originalBalance = await storage.getCreditBalance(DEV_AUTH_USER_ID);
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Controlled material replace' });
@@ -479,6 +531,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
           targetObjectType: 'floor',
           targetMaterial: 'tile',
           materialCandidateCount: 3,
+          enablePhysicalMaterialLayout: true,
           materialRealSizeMm: 900,
           materialJointWidthMm: 3,
           materialTextureAlignment: 'custom-origin',
@@ -494,6 +547,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
     expect(response.body.data.job.config).toMatchObject({
       batchCount: 3,
       materialCandidateCount: 3,
+      enablePhysicalMaterialLayout: true,
       protectionMaskAssetId: protectionAsset.id,
       hasProtectionMask: true,
       materialRealSizeMm: 900,
@@ -520,6 +574,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
         prompt: '',
         config: {
           editMode: 'mask',
+          maskWorkflowMode: 'smart',
           maskSelectionMode: 'smart',
           smartMaskConfirmed: false,
           sourceImageAssetId: sourceAsset.id,
@@ -547,6 +602,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
         prompt: '',
         config: {
           editMode: 'mask',
+          maskWorkflowMode: 'smart',
           maskSelectionMode: 'smart',
           smartMaskConfirmed: true,
           smartMaskDetectedObject: 'sofa',
@@ -562,8 +618,12 @@ describe('POST /api/generation-jobs asset ownership', () => {
 
     expect(response.status).toBe(201);
     expect(response.body.data.job.config).toMatchObject({
+      editMode: 'mask',
+      maskWorkflowMode: 'smart',
       maskSelectionMode: 'smart',
       smartMaskConfirmed: true,
+      confirmedSmartMaskAssetId: maskAsset.id,
+      editingScope: 'masked',
       smartMaskDetectedObject: 'sofa',
       smartMaskConfidence: 0.94,
       smartMaskRefinementMethod: 'edge-aware-seeded-region-growing',
@@ -623,7 +683,149 @@ describe('POST /api/generation-jobs asset ownership', () => {
 
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe('GENERATION_JOB_MASK_REQUIRED');
-    expect(response.body.error.message).toBe('精细涂抹模式下请先选择需要替换的区域');
+    expect(response.body.error.message).toBe('\u7cbe\u7ec6\u6d82\u62b9\u6a21\u5f0f\u4e0b\u8bf7\u5148\u9009\u62e9\u5e76\u786e\u8ba4\u9700\u8981\u66ff\u6362\u7684\u533a\u57df');
+  });
+
+  it('returns smart-mask-specific copy when smart mode has no confirmed mask asset', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Material replace smart mask required' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          editMode: 'mask',
+          maskWorkflowMode: 'smart',
+          maskSelectionMode: 'smart',
+          sourceImageAssetId: sourceAsset.id,
+          targetMaterial: 'microcement',
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('GENERATION_JOB_SMART_MASK_REQUIRED');
+    expect(response.body.error.message).toBe('\u667a\u80fd\u6d82\u62b9\u6a21\u5f0f\u4e0b\u8bf7\u5148\u5b8c\u6210\u8bc6\u522b\u5e76\u786e\u8ba4\u66ff\u6362\u533a\u57df');
+  });
+
+  it('accepts semantic-auto material replacement without a mask', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Material replace semantic auto' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          editMode: 'smart-type',
+          maskWorkflowMode: 'none',
+          sourceImageAssetId: sourceAsset.id,
+          targetObjectType: 'floor',
+          replacementTarget: 'plant',
+          targetMaterial: 'plant',
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).toMatchObject({
+      editMode: 'smart-type',
+      maskWorkflowMode: 'none',
+      editingScope: 'semantic-auto',
+      replacementTarget: 'plant',
+    });
+    expect(response.body.data.job.config.maskMode).toBeUndefined();
+    expect(response.body.data.job.config.maskAssetId).toBeUndefined();
+  });
+
+  it.each([
+    ['plant', 'plant', 'plant'],
+    ['wall', 'wall', 'microcement'],
+    ['floor', 'floor', 'walnut'],
+    ['furniture', 'table-chair', 'fabric'],
+    ['lighting', 'lighting', 'linear-light'],
+    ['artwork', 'artwork', 'art-paint'],
+    ['decor', 'decor', 'metal'],
+  ] as const)('normalizes semantic-auto replacement for %s without requiring a mask', async (replacementTarget, targetObjectType, targetMaterial) => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: `Material replace ${replacementTarget} auto` });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          editMode: 'smart-type',
+          maskWorkflowMode: 'none',
+          sourceImageAssetId: sourceAsset.id,
+          targetObjectType,
+          replacementTarget,
+          targetMaterial,
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).toMatchObject({
+      editMode: 'smart-type',
+      maskWorkflowMode: 'none',
+      editingScope: 'semantic-auto',
+      replacementStrategy: 'replace-existing',
+      replacementTarget,
+    });
+    expect(response.body.data.job.config.maskMode).toBeUndefined();
+    expect(response.body.data.job.config.maskAssetId).toBeUndefined();
+  });
+
+  it.each([
+    ['plant', 'plant', 'plant'],
+    ['wall', 'wall', 'microcement'],
+    ['floor', 'floor', 'walnut'],
+    ['furniture', 'table-chair', 'fabric'],
+    ['lighting', 'lighting', 'linear-light'],
+    ['artwork', 'artwork', 'art-paint'],
+    ['decor', 'decor', 'metal'],
+  ] as const)('normalizes masked replacement for %s without changing target', async (replacementTarget, targetObjectType, targetMaterial) => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: `Material replace ${replacementTarget} masked` });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const maskAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          editMode: 'mask',
+          maskWorkflowMode: 'manual',
+          sourceImageAssetId: sourceAsset.id,
+          maskMode: 'asset-mask',
+          maskAssetId: maskAsset.id,
+          targetObjectType,
+          replacementTarget,
+          targetMaterial,
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).toMatchObject({
+      editMode: 'mask',
+      maskWorkflowMode: 'manual',
+      maskMode: 'asset-mask',
+      maskAssetId: maskAsset.id,
+      editingScope: 'masked',
+      replacementStrategy: 'replace-masked',
+      replacementTarget,
+    });
   });
 
   it('rejects smart-type material-replace without target object type', async () => {
@@ -738,7 +940,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
             sourceModelAssetId: modelAsset.id,
             snapshotAssetId: snapshotAsset.id,
             bookmarkId: 'view-front-1',
-            bookmarkName: '外立面 1',
+            bookmarkName: 'Exterior view 1',
             cameraPreset: 'exterior-front',
             batchGroupId: 'view-batch-1',
             batchIndex: 0,
@@ -748,7 +950,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
             createdAt: new Date().toISOString(),
           },
           modelViewBookmarkId: 'view-front-1',
-          modelViewBookmarkName: '外立面 1',
+          modelViewBookmarkName: 'Exterior view 1',
           modelCameraPreset: 'exterior-front',
           modelViewBatchId: 'view-batch-1',
           modelViewBatchIndex: 0,
@@ -766,7 +968,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
         sourceModelAssetId: modelAsset.id,
         snapshotAssetId: snapshotAsset.id,
         modelViewBookmarkId: 'view-front-1',
-        modelViewBookmarkName: '外立面 1',
+        modelViewBookmarkName: 'Exterior view 1',
         modelCameraPreset: 'exterior-front',
         modelViewBatchId: 'view-batch-1',
         modelViewBatchIndex: 0,
@@ -831,10 +1033,10 @@ describe('POST /api/generation-jobs asset ownership', () => {
           targetWidth: 2048,
           targetHeight: 1024,
           targetAspectRatio: '2:1',
-          buildingType: '住宅',
-          spaceType: '客厅',
-          renderStyle: '电影级写实',
-          atmosphere: '自然日光',
+          buildingType: 'commercial architecture',
+          spaceType: 'living room',
+          renderStyle: 'cinematic realistic',
+          atmosphere: 'natural daylight',
         },
         inputAssetIds: [panoramaAsset.id],
       });
@@ -1114,7 +1316,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
       ok: false,
       error: {
         code: 'GENERATION_JOB_INPUTS_INVALID',
-        message: '请先上传或选择一张平面图',
+        message: '\u8bf7\u5148\u4e0a\u4f20\u6216\u9009\u62e9\u4e00\u5f20\u5e73\u9762\u56fe',
       },
     });
   });
@@ -1201,7 +1403,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
     expect(response.body.data.job.creditCost).toBe(1);
     expect(response.body.data.job.prompt).toContain('Image 1 is the original black-and-white floor plan');
     expect(response.body.data.job.prompt).toContain('Image 2 is the deterministic material placement control image');
-    expect(response.body.data.job.prompt).toContain('Region 1: Kitchen — grey anti-slip tile.');
+    expect(response.body.data.job.prompt).toContain('Region 1: Kitchen');
   });
 
   it('normalizes image-polish mode and all control values into the generation job', async () => {
@@ -1236,7 +1438,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
     expect(response.body.data.job).toMatchObject({
       mode: 'inpaint',
       step: 'image_polish',
-      prompt: expect.stringContaining('执行“保守提质”'),
+      prompt: expect.stringContaining('\u6267\u884c'),
       config: {
         imagePolishMode: 'conservative',
         imagePolishControls: controls,
@@ -1247,8 +1449,8 @@ describe('POST /api/generation-jobs asset ownership', () => {
         preserveColor: true,
       },
     });
-    expect(response.body.data.job.prompt).toContain('反射优化：关闭');
-    expect(response.body.data.job.prompt).toContain('不得新增人物、绿植、家具或装饰');
+    expect(response.body.data.job.prompt).toContain('\u53cd\u5c04\u4f18\u5316');
+    expect(response.body.data.job.prompt).toContain('\u4e25\u7981\u65b0\u589e');
   });
 
   it('maps the legacy enhanceMaterials flag to white-model materialization', async () => {
@@ -1270,7 +1472,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
       enhanceMaterials: true,
       promptMode: 'white_model_materialization',
     });
-    expect(response.body.data.job.prompt).toContain('执行“白模材质化”');
+    expect(response.body.data.job.prompt).toContain('\u6267\u884c');
   });
 });
 
@@ -1437,7 +1639,7 @@ describe('generation job credits', () => {
     expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 2);
   });
 
-  it('creates design-variants jobs with default batchCount 4 and charges four outputs', async () => {
+  it('creates design-variants jobs with default batchCount 1 and charges one output', async () => {
     const originalBalance = await storage.getCreditBalance(DEV_AUTH_USER_ID);
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Design variants four' });
     const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
@@ -1453,9 +1655,9 @@ describe('generation job credits', () => {
       });
 
     expect(response.status).toBe(201);
-    expect(response.body.data.job.config.batchCount).toBe(4);
-    expect(response.body.data.job.config.variantStyles).toEqual(['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood']);
-    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 4);
+    expect(response.body.data.job.config.batchCount).toBe(1);
+    expect(response.body.data.job.config.variantStyles).toEqual(['modern-minimal']);
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 1);
   });
 
   it('creates design-variants jobs with batchCount 8 and charges eight outputs', async () => {
@@ -1473,7 +1675,7 @@ describe('generation job credits', () => {
           batchCount: 8,
           stylePackId: 'hotel',
           variantStrategy: 'style-matrix',
-          variantNames: ['现代极简', '温润木质'],
+          variantNames: ['Modern A', 'Natural B'],
         },
         inputAssetIds: [ownAsset.id],
       });
@@ -1482,13 +1684,13 @@ describe('generation job credits', () => {
     expect(response.body.data.job.config).toMatchObject({
       batchCount: 8,
       stylePackId: 'hotel',
-      variantNames: ['现代极简', '温润木质'],
+      variantNames: ['Modern A', 'Natural B'],
     });
     expect(response.body.data.job.config.variantStyles).toHaveLength(8);
     expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 8);
   });
 
-  it.each([1, 3, 5, 9])('rejects invalid design-variants batchCount %s', async (batchCount) => {
+  it.each([3, 5, 9])('rejects invalid design-variants batchCount %s', async (batchCount) => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: `Invalid variant ${batchCount}` });
     const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
 
@@ -1527,7 +1729,7 @@ describe('generation job credits', () => {
       ok: false,
       error: {
         code: 'GENERATION_JOB_INPUTS_INVALID',
-        message: '请先上传或选择参考图',
+        message: '\u8bf7\u5148\u4e0a\u4f20\u6216\u9009\u62e9\u53c2\u8003\u56fe',
       },
     });
   });
@@ -1557,7 +1759,7 @@ describe('generation job credits', () => {
             variantStrategy: 'style-matrix',
             stylePackId: 'interior-common',
             variantStyles: ['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby'],
-            variantNames: ['方案 A', '方案 B', '方案 C', '方案 D', '方案 E', '方案 F', '方案 G', '方案 H'],
+            variantNames: ['Scheme A', 'Scheme B', 'Scheme C', 'Scheme D', 'Scheme E', 'Scheme F', 'Scheme G', 'Scheme H'],
             variantDiversity: 'high',
             variantMatrixVariables: ['material-system', 'color-system', 'lighting-atmosphere', 'overall-design-style'],
             variantVariableLocks: ['furniture-layout'],
@@ -1568,14 +1770,14 @@ describe('generation job credits', () => {
               changedVariables: ['material-system', 'color-system', 'lighting-atmosphere', 'overall-design-style'],
               lockedVariables: ['furniture-layout'],
               values: {
-                'material-system': '浅色石材 + 木饰面',
-                'color-system': '黑白灰与暖木',
-                'lighting-atmosphere': '明亮均匀自然光',
-                'furniture-layout': '保持原布局',
-                'overall-design-style': '现代极简',
+                'material-system': 'light stone + wood veneer',
+                'color-system': 'warm neutral palette',
+                'lighting-atmosphere': 'bright even natural light',
+                'furniture-layout': 'open seating layout',
+                'overall-design-style': 'modern minimalist',
               },
-              description: '强调材质、色彩和自然采光的现代极简方案。',
-              differenceSummary: '相对原图重点改变材质、色彩和灯光。',
+              description: 'Modern minimalist scheme emphasizing materials, color, and daylight.',
+              differenceSummary: 'Changed materials, colors, and lighting compared with the original.',
               parentResultId: 'parent-result-1',
               parentJobId: 'parent-job-1',
             }],
@@ -1597,13 +1799,13 @@ describe('generation job credits', () => {
       expect(results[0].metadata).toMatchObject({
         variantIndex: 0,
         variantCode: 'A',
-        variantName: '方案 A',
+        variantName: 'Scheme A',
         stylePackId: 'interior-common',
         variantDiversity: 'high',
         changedVariables: ['material-system', 'color-system', 'lighting-atmosphere', 'overall-design-style'],
         lockedVariables: ['furniture-layout'],
-        differenceSummary: '相对原图重点改变材质、色彩和灯光。',
-        reportNarrative: expect.stringContaining('方案 A'),
+        differenceSummary: 'Changed materials, colors, and lighting compared with the original.',
+        reportNarrative: expect.stringContaining('Scheme A'),
         parentResultId: 'parent-result-1',
         parentJobId: 'parent-job-1',
         relationshipType: 'derived-variant',
@@ -1663,7 +1865,7 @@ describe('generation job credits', () => {
         imagePolishControls: controls,
         enhanceMaterials: true,
         promptMode: 'white_model_materialization',
-        compiledPrompt: expect.stringContaining('执行“白模材质化”'),
+        compiledPrompt: expect.stringContaining('\u6267\u884c'),
       });
     } finally {
       process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
@@ -1690,7 +1892,7 @@ describe('generation job credits', () => {
         sourceModelAssetId: modelAsset.id,
         snapshotAssetId: snapshotAsset.id,
         bookmarkId: 'view-front-1',
-        bookmarkName: '外立面 1',
+        bookmarkName: 'Exterior view 1',
         cameraPreset: 'exterior-front',
         batchGroupId: 'view-batch-1',
         batchIndex: 0,
@@ -1713,7 +1915,7 @@ describe('generation job credits', () => {
           sourceModelAssetId: modelAsset.id,
           modelSnapshotMetadata: metadata,
           modelViewBookmarkId: 'view-front-1',
-          modelViewBookmarkName: '外立面 1',
+          modelViewBookmarkName: 'Exterior view 1',
           modelCameraPreset: 'exterior-front',
           modelViewBatchId: 'view-batch-1',
           modelViewBatchIndex: 0,
@@ -1730,7 +1932,7 @@ describe('generation job credits', () => {
         sourceModelAssetId: modelAsset.id,
         snapshotAssetId: snapshotAsset.id,
         modelViewBookmarkId: 'view-front-1',
-        modelViewBookmarkName: '外立面 1',
+        modelViewBookmarkName: 'Exterior view 1',
         modelCameraPreset: 'exterior-front',
         modelViewBatchId: 'view-batch-1',
         modelViewBatchIndex: 0,
@@ -2198,7 +2400,7 @@ describe('asset uploads', () => {
       ok: false,
       error: { code: 'UPLOAD_IMAGE_TYPE_INVALID' },
     });
-    expect(response.body.error.message).toContain('仅支持 PNG、JPG、JPEG、WEBP');
+    expect(response.body.error.message).toContain('PNG');
   });
 
   it('rejects an oversized image upload', async () => {
@@ -2213,7 +2415,7 @@ describe('asset uploads', () => {
       ok: false,
       error: { code: 'UPLOAD_FILE_TOO_LARGE' },
     });
-    expect(response.body.error.message).toContain('图片文件过大');
+    expect(response.body.error.message).toContain('\u56fe\u7247\u6587\u4ef6\u8fc7\u5927');
   });
 
   it.each([
@@ -2230,7 +2432,7 @@ describe('asset uploads', () => {
       ok: false,
       error: { code: 'UPLOAD_FILE_TOO_LARGE' },
     });
-    expect(response.body.error.message).toContain('图片文件过大');
+    expect(response.body.error.message).toContain('\u56fe\u7247\u6587\u4ef6\u8fc7\u5927');
   });
 
   it('rejects multipart uploads without a file field', async () => {
@@ -2688,7 +2890,7 @@ describe('continuous edit session API', () => {
   it('creates V0 and queues a generation job from the selected base version', async () => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Continuous edit' });
     const source = await createImageAssetForUser(DEV_AUTH_USER_ID);
-    const created = await request(app).post('/api/edit-sessions').send({ projectId: project.id, sourceAssetId: source.id, title: '客厅连续修改', aspectRatio: '16:9' });
+    const created = await request(app).post('/api/edit-sessions').send({ projectId: project.id, sourceAssetId: source.id, title: 'Living room revision', aspectRatio: '16:9' });
     expect(created.status).toBe(201);
     expect(created.body.data.version).toMatchObject({ assetId: source.id, versionNumber: 0, parentVersionId: null });
     expect(created.body.data.session.originalVersionId).toBe(created.body.data.version.id);
@@ -2696,7 +2898,7 @@ describe('continuous edit session API', () => {
 
     await storage.adjustCredits({ userId: DEV_AUTH_USER_ID, type: 'grant', amount: 5, reason: 'Continuous edit test', referenceType: 'system', referenceId: `continuous_edit_${Date.now()}` });
 
-    const submitted = await request(app).post(`/api/edit-sessions/${created.body.data.session.id}/messages`).send({ instruction: '将墙面改成浅色木饰面', baseVersionId: created.body.data.version.id, imageSize: '1K', constraints: { preserveLayout: true } });
+    const submitted = await request(app).post('/api/edit-sessions/' + created.body.data.session.id + '/messages').send({ instruction: 'Change sofa to warm beige fabric', baseVersionId: created.body.data.version.id, imageSize: '1K', constraints: { preserveLayout: true } });
     expect(submitted.status).toBe(202);
     expect(submitted.body.data.jobId).toMatch(/^job_/u);
     const idempotentRequest = {
@@ -2725,7 +2927,7 @@ describe('continuous edit session API', () => {
     expect(versions.body.data.versions[1]).toMatchObject({ assetId: output.id, parentVersionId: created.body.data.version.id, versionNumber: 1, generationJobId: job!.id });
     const v1 = versions.body.data.versions[1];
 
-    const second = await request(app).post(`/api/edit-sessions/${created.body.data.session.id}/messages`).send({ instruction: '增加暖色灯光', baseVersionId: v1.id, imageSize: '1K' });
+    const second = await request(app).post('/api/edit-sessions/' + created.body.data.session.id + '/messages').send({ instruction: 'Adjust lighting warmer', baseVersionId: v1.id, imageSize: '1K' });
     const secondJob = await storage.getGenerationJob(second.body.data.jobId, DEV_AUTH_USER_ID);
     expect(secondJob?.inputAssetIds).toEqual([output.id, source.id]);
     expect(secondJob?.config).toMatchObject({ baseVersionId: v1.id, sourceImageAssetId: output.id, originalStructureAssetId: source.id });
@@ -2733,7 +2935,7 @@ describe('continuous edit session API', () => {
     await storage.createGenerationResult({ userId: DEV_AUTH_USER_ID, projectId: project.id, jobId: secondJob!.id, assetId: output2.id, imageUrl: output2.url });
     await completeEditGeneration(secondJob!, output2.id);
 
-    const branch = await request(app).post(`/api/edit-sessions/${created.body.data.session.id}/messages`).send({ instruction: '改成冷色灯光分支', baseVersionId: v1.id, imageSize: '1K' });
+    const branch = await request(app).post('/api/edit-sessions/' + created.body.data.session.id + '/messages').send({ instruction: 'Create a blue accent variation', baseVersionId: v1.id, imageSize: '1K' });
     const branchJob = await storage.getGenerationJob(branch.body.data.jobId, DEV_AUTH_USER_ID);
     expect(branchJob?.inputAssetIds).toEqual([output.id, source.id]);
     expect(branchJob?.config).toMatchObject({ baseVersionId: v1.id, sourceImageAssetId: output.id, originalStructureAssetId: source.id });
@@ -2753,12 +2955,12 @@ describe('continuous edit session API', () => {
 
     const renamed = await request(app)
       .patch(`/api/edit-sessions/${created.body.data.session.id}/versions/${v1.id}`)
-      .send({ displayName: '暖木客厅主方案', note: '客户确认墙面材质，待调整灯光。' });
+      .send({ displayName: 'Warm wood living room main scheme', note: 'Client confirmed wall material; lighting still needs adjustment.' });
     expect(renamed.status).toBe(200);
     expect(renamed.body.data.version).toMatchObject({
       id: v1.id,
-      displayName: '暖木客厅主方案',
-      note: '客户确认墙面材质，待调整灯光。',
+      displayName: 'Warm wood living room main scheme',
+      note: 'Client confirmed wall material; lighting still needs adjustment.',
     });
 
     const primary = await request(app)

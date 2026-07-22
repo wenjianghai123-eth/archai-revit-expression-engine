@@ -15,13 +15,18 @@ import {
   uploadImageAsset,
   type CreditBalance,
 } from '../lib/api';
-import { DesignVariantBatchCount, DesignVariantVariableKey, DesignVariantVariableValues, FreeReferenceReference, GenerationBatchItem, GenerationConfig, GenerationHistoryItem, GenerationJobStep, GenerationMode, GenerationProvider, GenerationResultOption, GenerationRunStateOverride, GenerationStep, ObjectFidelity, ObjectInsertCandidateStrategy, ObjectInsertDebugMode, ObjectInsertHarmonyPriority, ObjectInsertItemConfig, ObjectInsertPlacementMode, ObjectInsertPositionConstraintStrength, ObjectInsertSurface, StepState, UploadedImage, VariantStyleKey } from '../types';
+import { DesignVariantBatchCount, DesignVariantVariableKey, DesignVariantVariableValues, FreeReferenceReference, GenerationBatchItem, GenerationConfig, GenerationHistoryItem, GenerationJobStep, GenerationMode, GenerationProvider, GenerationResultOption, GenerationRunStateOverride, GenerationStep, ObjectFidelity, ObjectInsertCandidateStrategy, ObjectInsertDebugMode, ObjectInsertHarmonyPriority, ObjectInsertItemConfig, ObjectInsertPlacementMode, ObjectInsertPositionConstraintStrength, ObjectInsertSurface, StepState, UploadedImage, VariantStyleKey, type MaskWorkflowMode } from '../types';
 import { getGenerationCreditCost } from '../utils/generationCredits';
 import { isGenerationJobRunningStatus, normalizeGenerationJobResult } from '../utils/generationJobResult';
 import { buildFreeReferenceControlPrompt as compileFreeReferenceControlPrompt, buildFreeReferenceTargetSize } from '../utils/freeReferenceWorkflow';
 import { designVariantVariableKeys, readDesignVariantDiversity, resolveDesignVariantMatrix } from '../utils/designVariantMatrix';
 import { resolveImagePolishControls, resolveImagePolishMode } from '../constants/imagePolishPrompt';
 import { resolveMaterialReplacementMode, validateMaterialReplacePreviewInput } from '../utils/materialReplaceReadiness';
+import {
+  resolveReplacementStrategy,
+  resolveReplacementTargetFromConfig,
+  type MaterialReplacementEditingScope,
+} from '../utils/materialReplacementTarget';
 
 interface UseGenerationRunnerOptions {
   currentStep: GenerationStep;
@@ -175,10 +180,17 @@ export function useGenerationRunner({
       }
     }
 
-    const materialReplaceEditMode = stateAtStart.config.editMode === 'mask' ? 'mask' : 'smart-type';
     const materialMaskSelectionMode = stateAtStart.config.maskSelectionMode === 'smart'
       ? 'smart'
       : 'precise';
+    const materialReplacementTargetAtStart = currentStep === GenerationStep.MaterialReplace
+      ? resolveReplacementTargetFromConfig(stateAtStart.config)
+      : null;
+    const materialReplacementEffectiveEditTarget = currentStep === GenerationStep.MaterialReplace
+      && (stateAtStart.config.editTarget || 'general') === 'general'
+      && materialReplacementTargetAtStart
+        ? 'material'
+        : stateAtStart.config.editTarget;
     const materialReplaceReference = stateAtStart.materialTextures[0] || stateAtStart.materialImage;
     const materialReplaceReferenceUrl = materialReplaceReference
       ? materialReplaceReference.previewUrl
@@ -187,8 +199,23 @@ export function useGenerationRunner({
         || materialReplaceReference.thumbnailUrl
         || materialReplaceReference.dataUrl
       : null;
+    const materialReplaceHasMaskSelection = Boolean(stateAtStart.maskImage?.dataUrl || stateAtStart.useFullImageMask);
+    const configuredMaterialMaskWorkflowMode: MaskWorkflowMode = stateAtStart.config.maskWorkflowMode === 'smart' || stateAtStart.config.maskWorkflowMode === 'manual'
+      ? stateAtStart.config.maskWorkflowMode
+      : stateAtStart.config.maskWorkflowActive === true
+        ? materialMaskSelectionMode === 'smart' ? 'smart' : 'manual'
+        : 'none';
+    const materialMaskWorkflowModeAtStart: MaskWorkflowMode = currentStep === GenerationStep.MaterialReplace
+      ? materialReplaceHasMaskSelection
+        ? materialMaskSelectionMode === 'smart' ? 'smart' : 'manual'
+        : configuredMaterialMaskWorkflowMode
+      : 'none';
+    const materialReplaceEditMode = currentStep === GenerationStep.MaterialReplace
+      ? materialMaskWorkflowModeAtStart === 'none' ? 'smart-type' : 'mask'
+      : stateAtStart.config.editMode === 'mask' ? 'mask' : 'smart-type';
+    const materialReplaceMaskWorkflowActive = materialMaskWorkflowModeAtStart !== 'none';
     const materialReplaceValidation = validateMaterialReplacePreviewInput({
-      mode: resolveMaterialReplacementMode(stateAtStart.config.editTarget),
+      mode: resolveMaterialReplacementMode(materialReplacementEffectiveEditTarget),
       hasSourceImage: Boolean(
         stateAtStart.inputImage.previewUrl
         || stateAtStart.inputImage.publicUrl
@@ -197,11 +224,17 @@ export function useGenerationRunner({
         || stateAtStart.inputImage.dataUrl,
       ),
       hasReference: Boolean(materialReplaceReferenceUrl),
-      hasMask: Boolean(stateAtStart.maskImage?.dataUrl || stateAtStart.useFullImageMask),
-      hasValidMaskPixels: Boolean(stateAtStart.maskImage?.dataUrl || stateAtStart.useFullImageMask)
+      hasMask: materialReplaceHasMaskSelection,
+      hasValidMaskPixels: materialReplaceHasMaskSelection
         && (stateAtStart.maskHasVisiblePixels ?? true),
-      hasTargetObject: Boolean(stateAtStart.config.targetObjectType),
-      selectionMode: materialReplaceEditMode === 'smart-type' ? 'semantic' : materialMaskSelectionMode,
+      hasTargetObject: Boolean(materialReplacementTargetAtStart),
+      replacementTarget: materialReplacementTargetAtStart,
+      selectionMode: materialMaskWorkflowModeAtStart === 'none'
+        ? 'semantic'
+        : materialMaskWorkflowModeAtStart === 'smart' ? 'smart' : 'precise',
+      maskWorkflowMode: materialMaskWorkflowModeAtStart,
+      maskWorkflowActive: materialReplaceMaskWorkflowActive,
+      smartMaskStage: stateAtStart.config.smartMaskStage,
       maskConfirmed: materialMaskSelectionMode !== 'smart' || stateAtStart.config.smartMaskConfirmed === true,
       replacementPrompt: stateAtStart.config.customMaterialPrompt || stateAtStart.config.prompt || '',
       useDefaultPreset: Boolean(stateAtStart.config.targetMaterial),
@@ -493,7 +526,7 @@ export function useGenerationRunner({
         let protectionMaskAssetId: string | undefined;
         const hasPaintedMask = Boolean(stateAtStart.maskImage?.dataUrl);
         const isMaskedEditStep = currentStep === GenerationStep.LocalInpainting
-          || (currentStep === GenerationStep.MaterialReplace && materialReplaceEditMode === 'mask');
+          || (currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart !== 'none');
         const maskMode = isObjectInsert
           ? objectInsertNeedsMask ? 'asset-mask' : undefined
           : isMaskedEditStep
@@ -502,6 +535,13 @@ export function useGenerationRunner({
             : hasPaintedMask
               ? 'asset-mask'
               : undefined
+          : undefined;
+        const materialReplacementTarget = materialReplacementTargetAtStart;
+        const materialReplacementEditingScope: MaterialReplacementEditingScope | undefined = currentStep === GenerationStep.MaterialReplace
+          ? maskMode ? 'masked' : 'semantic-auto'
+          : undefined;
+        const materialReplacementStrategy = materialReplacementEditingScope
+          ? resolveReplacementStrategy(materialReplacementEditingScope)
           : undefined;
         if (isObjectInsert) {
           maskAssetId = objectInsertNeedsMask ? placementMaskAssetId : undefined;
@@ -661,6 +701,15 @@ export function useGenerationRunner({
             aspectRatio: targetSizeConfig.targetAspectRatio || configForRequest.targetAspectRatio,
             imageSize: selectedProvider === 'apiyi-nano-banana2-edit' ? stateAtStart.config.apiyiImageSize || '2K' : undefined,
             inputAssetCount: inputAssetIds.length,
+            materialReplacement: currentStep === GenerationStep.MaterialReplace ? {
+              replacementTarget: materialReplacementTarget,
+              editingScope: materialReplacementEditingScope,
+              replacementStrategy: materialReplacementStrategy,
+              maskWorkflowMode: materialMaskWorkflowModeAtStart,
+              hasConfirmedMask: Boolean(maskMode),
+              materialReference: Boolean(stateAtStart.materialTextures.length || stateAtStart.materialImage),
+              preserveUnmaskedArea: true,
+            } : undefined,
           });
         }
         const job = await createGenerationJob({
@@ -687,7 +736,7 @@ export function useGenerationRunner({
             qualityMode: stateAtStart.config.qualityMode || 'balanced',
             batchCount: isDesignVariantSingleRetry
               ? 1
-              : currentStep === GenerationStep.DesignVariants && (stateAtStart.config.batchCount === 2 || stateAtStart.config.batchCount === 4 || stateAtStart.config.batchCount === 8)
+              : currentStep === GenerationStep.DesignVariants && (stateAtStart.config.batchCount === 1 || stateAtStart.config.batchCount === 2 || stateAtStart.config.batchCount === 4 || stateAtStart.config.batchCount === 8)
               ? stateAtStart.config.batchCount
               : isPlanColorize
                 ? Math.min(Math.max(planColorizeStyles.length || 1, 1), 6) as GenerationConfig['batchCount']
@@ -743,7 +792,7 @@ export function useGenerationRunner({
             userPrompt: userSupplementPrompt,
             objectInsertMode: isObjectInsert ? 'object_insert_preview_fusion' : undefined,
             editTarget: currentStep === GenerationStep.MaterialReplace
-              ? stateAtStart.config.editTarget || 'general'
+              ? materialReplacementEffectiveEditTarget || 'general'
               : currentStep === GenerationStep.ObjectInsert
                 ? 'furniture'
               : currentStep === GenerationStep.LocalInpainting ? stateAtStart.config.editTarget || 'general' : stateAtStart.config.editTarget,
@@ -756,23 +805,29 @@ export function useGenerationRunner({
             preserveCamera: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.preserveCamera ?? true : undefined,
             feather: stateAtStart.config.feather ?? 0,
             editMode: currentStep === GenerationStep.MaterialReplace ? materialReplaceEditMode : undefined,
-            maskSelectionMode: currentStep === GenerationStep.MaterialReplace && materialReplaceEditMode === 'mask'
-              ? materialMaskSelectionMode
+            maskSelectionMode: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart !== 'none'
+              ? materialMaskWorkflowModeAtStart === 'smart' ? 'smart' : 'precise'
               : undefined,
-            smartMaskConfirmed: currentStep === GenerationStep.MaterialReplace && materialMaskSelectionMode === 'smart'
+            maskWorkflowMode: currentStep === GenerationStep.MaterialReplace ? materialMaskWorkflowModeAtStart : undefined,
+            smartMaskConfirmed: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart === 'smart'
               ? stateAtStart.config.smartMaskConfirmed === true
               : undefined,
-            smartMaskDetectedObject: currentStep === GenerationStep.MaterialReplace && materialMaskSelectionMode === 'smart'
+            smartMaskStage: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart === 'smart'
+              ? stateAtStart.config.smartMaskStage
+              : undefined,
+            smartMaskDetectedObject: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart === 'smart'
               ? stateAtStart.config.smartMaskDetectedObject
               : undefined,
-            smartMaskConfidence: currentStep === GenerationStep.MaterialReplace && materialMaskSelectionMode === 'smart'
+            smartMaskConfidence: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart === 'smart'
               ? stateAtStart.config.smartMaskConfidence
               : undefined,
-            smartMaskRefinementMethod: currentStep === GenerationStep.MaterialReplace && materialMaskSelectionMode === 'smart'
+            smartMaskRefinementMethod: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart === 'smart'
               ? stateAtStart.config.smartMaskRefinementMethod
               : undefined,
             maskMode,
             maskAssetId,
+            confirmedSmartMaskAssetId: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart === 'smart' && maskAssetId ? maskAssetId : undefined,
+            confirmedManualMaskAssetId: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart === 'manual' && maskAssetId ? maskAssetId : undefined,
             protectionMaskAssetId,
             sourceModelAssetId: stateAtStart.config.sourceModelAssetId,
             sourceImageAssetId: stateAtStart.inputImage.assetId,
@@ -842,14 +897,30 @@ export function useGenerationRunner({
             panoramaQuality: stateAtStart.config.panoramaQuality,
             customPrompt: isImagePolish ? '' : stateAtStart.config.customPrompt,
             targetObjectType: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.targetObjectType : undefined,
+            replacementTarget: currentStep === GenerationStep.MaterialReplace ? materialReplacementTarget || undefined : undefined,
+            editingScope: currentStep === GenerationStep.MaterialReplace ? materialReplacementEditingScope : undefined,
+            replacementStrategy: currentStep === GenerationStep.MaterialReplace ? materialReplacementStrategy : undefined,
+            maskWorkflowActive: currentStep === GenerationStep.MaterialReplace ? materialReplaceMaskWorkflowActive : undefined,
+            preserveUnmaskedArea: currentStep === GenerationStep.MaterialReplace ? true : undefined,
             targetMaterial: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.targetMaterial : undefined,
             materialPatternScale: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.materialPatternScale || 'medium' : undefined,
             materialDirection: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.materialDirection || 'auto' : undefined,
             materialFinish: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.materialFinish || 'matte' : undefined,
             materialReplaceScope: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.materialReplaceScope || 'material-only' : undefined,
             semanticObjectSelections: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.semanticObjectSelections || [] : undefined,
-            materialRealSizeMm: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.materialRealSizeMm || 600 : undefined,
-            materialJointWidthMm: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.materialJointWidthMm ?? 2 : undefined,
+            enablePhysicalMaterialLayout: currentStep === GenerationStep.MaterialReplace
+              ? materialReplacementEffectiveEditTarget === 'material' && stateAtStart.config.enablePhysicalMaterialLayout === true
+              : undefined,
+            materialRealSizeMm: currentStep === GenerationStep.MaterialReplace
+              && materialReplacementEffectiveEditTarget === 'material'
+              && stateAtStart.config.enablePhysicalMaterialLayout === true
+              ? stateAtStart.config.materialRealSizeMm
+              : undefined,
+            materialJointWidthMm: currentStep === GenerationStep.MaterialReplace
+              && materialReplacementEffectiveEditTarget === 'material'
+              && stateAtStart.config.enablePhysicalMaterialLayout === true
+              ? stateAtStart.config.materialJointWidthMm
+              : undefined,
             materialTextureAlignment: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.materialTextureAlignment || 'auto' : undefined,
             materialTextureOrigin: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.materialTextureOrigin || { x: 0.5, y: 0.5 } : undefined,
             materialCandidateCount: currentStep === GenerationStep.MaterialReplace ? readMaterialCandidateCount(stateAtStart.config) : undefined,
@@ -869,6 +940,7 @@ export function useGenerationRunner({
               url: texture.url,
               source: texture.source,
               targetObjectType: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.targetObjectType : undefined,
+              replacementTarget: currentStep === GenerationStep.MaterialReplace ? materialReplacementTarget || undefined : undefined,
             })),
             furnitureReferenceAssetIds: isImagePolish ? [] : furnitureReferenceAssetIds,
             furnitureReferenceSources: isImagePolish ? [] : stateAtStart.furnitureReferences.map(reference => ({
@@ -2251,8 +2323,10 @@ function forceSingleOutputConfig(config: GenerationConfig): GenerationConfig {
 }
 
 function resolveVariantStyles(config: GenerationConfig) {
-  const batchCount = config.batchCount === 2 || config.batchCount === 8 ? config.batchCount : 4;
-  const defaults = batchCount === 2
+  const batchCount = config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8 ? config.batchCount : 1;
+  const defaults = batchCount === 1
+    ? ['modern-minimal']
+    : batchCount === 2
     ? ['modern-minimal', 'natural-wood']
     : batchCount === 8
       ? ['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby']
@@ -2266,7 +2340,7 @@ function resolveVariantStyles(config: GenerationConfig) {
 }
 
 function resolveVariantNames(config: GenerationConfig) {
-  const batchCount = config.batchCount === 2 || config.batchCount === 8 ? config.batchCount : 4;
+  const batchCount = config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8 ? config.batchCount : 1;
   const names = Array.isArray(config.variantNames) ? [...config.variantNames] : [];
   return Array.from({ length: batchCount }, (_, index) => names[index] || readVariantLabel(index));
 }
@@ -2278,7 +2352,7 @@ function resolveVariantLocks(config: GenerationConfig) {
 }
 
 function resolveVariantStrategyNotes(config: GenerationConfig) {
-  const batchCount = config.batchCount === 2 || config.batchCount === 8 ? config.batchCount : 4;
+  const batchCount = config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8 ? config.batchCount : 1;
   const notes = Array.isArray(config.variantStrategyNotes) ? config.variantStrategyNotes : [];
   return Array.from({ length: batchCount }, (_, index) => notes[index] || '');
 }
@@ -2346,9 +2420,9 @@ function readFreeReferenceCandidateCount(config: GenerationConfig): 1 | 2 | 4 {
   return value === 2 || value === 4 ? value : 1;
 }
 
-function readMaterialCandidateCount(config: GenerationConfig): 2 | 3 | 4 {
+function readMaterialCandidateCount(config: GenerationConfig): 1 | 2 | 3 | 4 {
   const value = config.materialCandidateCount ?? config.batchCount;
-  return value === 3 || value === 4 ? value : 2;
+  return value === 2 || value === 3 || value === 4 ? value : 1;
 }
 
 function readNormalizedFreeReferenceCrop(value: unknown): FreeReferenceReference['crop'] {
@@ -2405,9 +2479,9 @@ function readMetadataVariableValues(metadata: Record<string, unknown> | undefine
 }
 
 function readDesignVariantMatrixBatchCount(config: GenerationConfig): DesignVariantBatchCount {
-  if (config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8) return config.batchCount;
+  if (config.batchCount === 1 || config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8) return config.batchCount;
   const matrixLength = Array.isArray(config.variantMatrix) ? config.variantMatrix.length : 0;
-  return matrixLength >= 8 ? 8 : matrixLength >= 4 ? 4 : 2;
+  return matrixLength >= 8 ? 8 : matrixLength >= 4 ? 4 : matrixLength >= 2 ? 2 : 1;
 }
 
 function readMetadataNumber(metadata: Record<string, unknown> | undefined, key: string): number | undefined {

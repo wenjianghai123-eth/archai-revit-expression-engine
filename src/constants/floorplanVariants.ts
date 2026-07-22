@@ -1,7 +1,7 @@
 export type FloorplanMultiPlanMode = 'single' | 'multi';
 export type FloorplanVariantType = 'material_style' | 'furniture_layout' | 'mixed';
 export type FloorplanVariantFocus = 'material_style' | 'furniture_layout' | 'both';
-export type FloorplanMultiPlanBatchCount = 2 | 4 | 6;
+export type FloorplanMultiPlanBatchCount = 1 | 2 | 4 | 6;
 
 export interface FloorplanStyleTemplate {
   id: string;
@@ -127,7 +127,7 @@ export const floorplanColorTemplates: FloorplanColorTemplate[] = [
 ];
 
 export function resolveFloorplanBatchCount(value: unknown): FloorplanMultiPlanBatchCount {
-  return value === 2 || value === 6 ? value : 4;
+  return value === 2 || value === 4 || value === 6 ? value : 1;
 }
 
 export function resolveFloorplanVariantPlans(config: Record<string, unknown>, batchCount: number): FloorplanVariantPlan[] {

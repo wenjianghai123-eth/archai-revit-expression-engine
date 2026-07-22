@@ -69,7 +69,9 @@ export function buildFloorPlanExpressionModePatch(mode: FloorPlanExpressionMode,
     floorplanOutputMode: 'multi',
     floorplanRenderMode: config.floorplanRenderMode || 'semi-3d',
     planColorizeBatchEnabled: true,
-    batchCount: config.batchCount === 2 || config.batchCount === 6 ? config.batchCount : 4,
+    batchCount: config.batchCount === 1 || config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 6
+      ? config.batchCount
+      : 1,
     preserveLinework: true,
   };
 }

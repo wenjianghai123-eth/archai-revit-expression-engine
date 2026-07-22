@@ -46,7 +46,7 @@ export interface ImagePolishControls {
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
 export type VariantChangeScope = 'material-only' | 'soft-decoration' | 'lighting' | 'furniture-layout' | 'color-palette' | 'full-design';
 export type VariantLock = 'structure' | 'camera' | 'walls-openings' | 'fixed-furniture' | 'floor-material' | 'ceiling' | 'main-color';
-export type DesignVariantBatchCount = 2 | 4 | 8;
+export type DesignVariantBatchCount = 1 | 2 | 4 | 8;
 export type DesignVariantDiversity = 'low' | 'balanced' | 'high';
 export type DesignVariantVariableKey =
   | 'material-system'
@@ -69,7 +69,7 @@ export interface DesignVariantMatrixItem {
   parentJobId?: string | null;
 }
 export type PlanColorizeBatchCount = 1 | 2 | 3 | 4 | 5 | 6;
-export type FloorplanMultiPlanBatchCount = 2 | 4 | 6;
+export type FloorplanMultiPlanBatchCount = 1 | 2 | 4 | 6;
 export type FloorplanMultiPlanMode = 'single' | 'multi';
 export type FloorplanVariantType = 'material_style' | 'furniture_layout' | 'mixed';
 export type FloorplanVariantFocus = 'material_style' | 'furniture_layout' | 'both';
@@ -95,7 +95,7 @@ export type MaterialPatternScale = 'small' | 'medium' | 'large';
 export type MaterialDirection = 'auto' | 'horizontal' | 'vertical' | 'diagonal' | 'herringbone';
 export type MaterialFinish = 'matte' | 'satin' | 'glossy' | 'rough';
 export type MaterialReplaceScope = 'material-only' | 'material-and-soft-decor' | 'creative';
-export type MaterialCandidateCount = 2 | 3 | 4;
+export type MaterialCandidateCount = 1 | 2 | 3 | 4;
 export type MaterialTextureAlignment = 'auto' | 'surface' | 'center' | 'edge' | 'custom-origin';
 export interface MaterialTextureOrigin { x: number; y: number }
 export type SecondaryEditAction =
@@ -144,6 +144,15 @@ export type PlanDrawingType = 'residential' | 'commercial' | 'office' | 'hotel' 
 export type PlanExpressionTemplate = 'zoning-color' | 'colored-plan' | 'landscape-plan' | 'furniture-enhance' | 'annotation-plan' | 'circulation-analysis';
 export type MaterialReplaceEditMode = 'smart-type' | 'mask';
 export type MaterialMaskSelectionMode = 'smart' | 'precise';
+export type MaskWorkflowMode = 'none' | 'smart' | 'manual';
+export type SmartMaskStage =
+  | 'idle'
+  | 'rough-marking'
+  | 'ready-to-segment'
+  | 'segmenting'
+  | 'reviewing'
+  | 'confirmed'
+  | 'error';
 export type MaterialReplaceTargetObject =
   | 'floor'
   | 'wall'
@@ -153,9 +162,14 @@ export type MaterialReplaceTargetObject =
   | 'table-chair'
   | 'lighting'
   | 'plant'
+  | 'artwork'
+  | 'decor'
   | 'door-window'
   | 'feature-wall'
   | 'other';
+export type ReplacementTarget = 'plant' | 'wall' | 'floor' | 'furniture' | 'lighting' | 'artwork' | 'decor';
+export type MaterialReplacementEditingScope = 'masked' | 'semantic-auto';
+export type ReplacementStrategy = 'replace-existing' | 'replace-masked';
 export interface SemanticObjectSelection {
   id: string;
   objectType: MaterialReplaceTargetObject;
@@ -557,8 +571,13 @@ export interface GenerationConfig {
    * differs from maskMode, which describes the existing asset-mask transport.
    */
   maskSelectionMode?: MaterialMaskSelectionMode;
+  maskWorkflowMode?: MaskWorkflowMode;
   smartMaskConfirmed?: boolean;
   smartMaskIsRefining?: boolean;
+  smartMaskStage?: SmartMaskStage;
+  maskWorkflowActive?: boolean;
+  confirmedSmartMaskAssetId?: string;
+  confirmedManualMaskAssetId?: string;
   smartMaskDetectedObject?: string;
   smartMaskConfidence?: number;
   smartMaskRefinementMethod?: string;
@@ -571,6 +590,10 @@ export interface GenerationConfig {
   panoramaChangeStrength?: 'weak' | 'medium' | 'strong';
   panoramaQuality?: 'standard' | 'high';
   customPrompt?: string;
+  replacementTarget?: ReplacementTarget;
+  editingScope?: MaterialReplacementEditingScope;
+  replacementStrategy?: ReplacementStrategy;
+  preserveUnmaskedArea?: boolean;
   targetObjectType?: MaterialReplaceTargetObject;
   targetMaterial?: MaterialReplaceTargetMaterial;
   materialPatternScale?: MaterialPatternScale;
@@ -583,6 +606,7 @@ export interface GenerationConfig {
   semanticObjectSelections?: SemanticObjectSelection[];
   materialRealSizeMm?: number;
   materialJointWidthMm?: number;
+  enablePhysicalMaterialLayout?: boolean;
   materialTextureAlignment?: MaterialTextureAlignment;
   materialTextureOrigin?: MaterialTextureOrigin;
   materialCandidateCount?: MaterialCandidateCount;

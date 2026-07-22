@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { buildSmartPrompt, readSmartPromptUserSupplement } from './intelligentPromptTemplates';
+import { replacementTargets, type ReplacementTarget } from '../utils/materialReplacementTarget';
+
+const materialByReplacementTarget: Record<ReplacementTarget, string> = {
+  plant: 'plant',
+  wall: 'microcement',
+  floor: 'walnut',
+  furniture: 'fabric',
+  lighting: 'linear-light',
+  artwork: 'art-paint',
+  decor: 'metal',
+};
 
 describe('intelligent prompt templates', () => {
   it('builds a stable floorplan prompt without user text', () => {
@@ -101,6 +112,7 @@ describe('intelligent prompt templates', () => {
         materialDirection: 'herringbone',
         materialFinish: 'satin',
         materialReplaceScope: 'material-only',
+        enablePhysicalMaterialLayout: true,
         materialRealSizeMm: 900,
         materialJointWidthMm: 3,
         materialTextureAlignment: 'custom-origin',
@@ -128,6 +140,23 @@ describe('intelligent prompt templates', () => {
     expect(prompt).toContain('Protected pixels are explicitly excluded');
   });
 
+  it('omits physical size and seam instructions unless advanced layout is enabled', () => {
+    const prompt = buildSmartPrompt({
+      mode: 'material-replace',
+      config: {
+        targetObjectType: 'floor',
+        targetMaterial: 'walnut',
+        enablePhysicalMaterialLayout: false,
+        materialRealSizeMm: 900,
+        materialJointWidthMm: 3,
+      },
+    });
+
+    expect(prompt).not.toContain('real-world material scale');
+    expect(prompt).not.toContain('Joint width');
+    expect(prompt).not.toContain('Keep seams continuous');
+  });
+
   it('keeps a smart refined mask limited to the detected object', () => {
     const prompt = buildSmartPrompt({
       mode: 'material-replace',
@@ -143,6 +172,135 @@ describe('intelligent prompt templates', () => {
     expect(prompt).toContain('automatically detected by AI');
     expect(prompt).toContain('Modify only the detected object region');
     expect(prompt).toContain('Preserve the original geometry, lighting, perspective and surrounding objects');
+  });
+
+  it('builds furniture material replacement prompts without floor or ground replacement bias', () => {
+    const prompt = buildSmartPrompt({
+      mode: 'material-replace',
+      hasMask: true,
+      hasMaterialReferences: true,
+      config: {
+        replacementTarget: 'furniture',
+        targetObjectType: 'table-chair',
+        targetMaterial: 'fabric',
+        editMode: 'mask',
+        maskSelectionMode: 'smart',
+        smartMaskConfirmed: true,
+        materialDirection: 'auto',
+        materialTextureAlignment: 'auto',
+      },
+    });
+
+    expect(prompt).toContain('Replacement target: table, chair, or furniture surfaces only');
+    expect(prompt).toContain('Mask has the highest spatial priority');
+    expect(prompt).not.toContain('Replacement target: floor surfaces only');
+    expect(prompt).not.toContain('Paving origin');
+    expect(prompt).not.toContain('floor material candidate');
+  });
+
+  it('builds no-mask plant replacement prompts as semantic auto object replacement', () => {
+    const prompt = buildSmartPrompt({
+      mode: 'material-replace',
+      hasMaterialReferences: true,
+      hasMask: false,
+      config: {
+        replacementTarget: 'plant',
+        targetObjectType: 'plant',
+        targetMaterial: 'plant',
+        editMode: 'mask',
+        editingScope: 'semantic-auto',
+      },
+    });
+
+    expect(prompt).toContain('Replacement target: plant and greenery objects only');
+    expect(prompt).toContain('No mask is provided. Automatically identify only existing plant and greenery objects');
+    expect(prompt).toContain('replace their plant appearance in place');
+    expect(prompt).toContain('Do not add new plants');
+    expect(prompt).toContain('Preserve all non-plant areas unchanged');
+    expect(prompt).not.toContain('Mask has the highest spatial priority');
+  });
+
+  it('keeps paving and seam language limited to floor material replacement', () => {
+    const wallPrompt = buildSmartPrompt({
+      mode: 'material-replace',
+      hasMaterialReferences: true,
+      config: {
+        replacementTarget: 'wall',
+        targetObjectType: 'wall',
+        targetMaterial: 'microcement',
+        editMode: 'smart-type',
+        materialDirection: 'auto',
+        materialTextureAlignment: 'auto',
+      },
+    });
+    const floorPrompt = buildSmartPrompt({
+      mode: 'material-replace',
+      hasMaterialReferences: true,
+      config: {
+        replacementTarget: 'floor',
+        targetObjectType: 'floor',
+        targetMaterial: 'walnut',
+        editMode: 'smart-type',
+        materialDirection: 'herringbone',
+        materialTextureAlignment: 'custom-origin',
+        materialTextureOrigin: { x: 0.25, y: 0.75 },
+      },
+    });
+
+    expect(wallPrompt).toContain('Replacement target: wall surfaces only');
+    expect(wallPrompt).not.toContain('Paving origin');
+    expect(floorPrompt).toContain('Paving origin: (0.250, 0.750)');
+    expect(floorPrompt).toContain('Tile, wood, or grain direction: herringbone');
+  });
+
+  it.each(replacementTargets)('builds semantic-auto in-place replacement prompt for %s', (replacementTarget) => {
+    const prompt = buildSmartPrompt({
+      mode: 'material-replace',
+      hasMaterialReferences: true,
+      hasMask: false,
+      config: {
+        replacementTarget,
+        targetObjectType: replacementTarget === 'furniture' ? 'table-chair' : replacementTarget,
+        targetMaterial: materialByReplacementTarget[replacementTarget],
+        editMode: 'smart-type',
+        editingScope: 'semantic-auto',
+        replacementStrategy: 'replace-existing',
+      },
+    });
+
+    expect(prompt).toContain('统一替换原则：识别已有目标并原位替换。');
+    expect(prompt).toContain('Automatic semantic mode: identify all existing');
+    expect(prompt).toContain('replace them in place');
+    expect(prompt).toContain('Do not add extra objects or surfaces of the same type');
+    expect(prompt).toContain('Do not place the target in a new position');
+    expect(prompt).toContain('Strictly preserve every non-target area');
+    expect(prompt).not.toMatch(/\binsert new\b|\bplace new\b|\badd some\b|\badd a few\b/iu);
+  });
+
+  it.each(replacementTargets)('builds masked in-place replacement prompt for %s', (replacementTarget) => {
+    const prompt = buildSmartPrompt({
+      mode: 'material-replace',
+      hasMaterialReferences: true,
+      hasMask: true,
+      config: {
+        replacementTarget,
+        targetObjectType: replacementTarget === 'furniture' ? 'table-chair' : replacementTarget,
+        targetMaterial: materialByReplacementTarget[replacementTarget],
+        editMode: 'mask',
+        editingScope: 'masked',
+        replacementStrategy: 'replace-masked',
+        maskSelectionMode: 'smart',
+        smartMaskConfirmed: true,
+      },
+    });
+
+    expect(prompt).toContain('统一替换原则：识别已有目标并原位替换。');
+    expect(prompt).toContain('Mask mode: identify only existing');
+    expect(prompt).toContain('inside the confirmed white mask and replace them in place');
+    expect(prompt).toContain('Mask has the highest spatial priority');
+    expect(prompt).toContain('Only pixels inside the white mask may be edited');
+    expect(prompt).toContain('Do not add extra objects or surfaces of the same type');
+    expect(prompt).not.toMatch(/\binsert new\b|\bplace new\b|\badd some\b|\badd a few\b/iu);
   });
 
   it('adds professional object insert constraints to the prompt', () => {

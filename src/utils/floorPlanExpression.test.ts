@@ -8,6 +8,7 @@ describe('floor plan expression compatibility', () => {
     expect(resolveFloorPlanExpressionMode({ planColorizeBatchEnabled: true } as GenerationConfig)).toBe('multi-option');
     expect(buildFloorPlanExpressionModePatch('three-dimensional', {} as GenerationConfig)).toMatchObject({ floorplanRenderMode: 'semi-3d', batchCount: 1 });
     expect(buildFloorPlanExpressionModePatch('analysis', {} as GenerationConfig)).toMatchObject({ template: 'zoning-color', preserveLinework: true });
+    expect(buildFloorPlanExpressionModePatch('multi-option', {} as GenerationConfig)).toMatchObject({ floorplanOutputMode: 'multi', batchCount: 1 });
   });
 
   it('reports material completion explicitly', () => {

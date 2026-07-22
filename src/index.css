@@ -209,25 +209,25 @@
   overflow-y: auto;
 }
 
-.drawing-left-panel,
-.drawing-right-panel,
-.drawing-viewer {
+.drawing-workspace .drawing-left-panel,
+.drawing-workspace .drawing-right-panel,
+.drawing-workspace .drawing-viewer {
   min-width: 0;
   min-height: 0;
   max-width: 100%;
 }
 
-.drawing-left-panel,
-.drawing-right-panel-content {
+.drawing-workspace .drawing-left-panel,
+.drawing-workspace .drawing-right-panel-content {
   overflow-wrap: anywhere;
   overscroll-behavior: contain;
 }
 
-.drawing-left-panel {
+.drawing-workspace .drawing-left-panel {
   order: 2;
 }
 
-.drawing-viewer {
+.drawing-workspace .drawing-viewer {
   order: 1;
   min-height: clamp(360px, 55dvh, 640px);
   isolation: isolate;
@@ -235,7 +235,7 @@
   container-type: inline-size;
 }
 
-.drawing-right-panel {
+.drawing-workspace .drawing-right-panel {
   order: 3;
   overscroll-behavior: contain;
 }
@@ -292,20 +292,20 @@
     overflow-y: auto;
   }
 
-  .drawing-left-panel {
+  .drawing-workspace .drawing-left-panel {
     grid-column: 1 / -1;
     grid-row: 1;
     order: initial;
   }
 
-  .drawing-viewer {
+  .drawing-workspace .drawing-viewer {
     grid-column: 1;
     grid-row: 2;
     order: initial;
     min-height: 0;
   }
 
-  .drawing-right-panel {
+  .drawing-workspace .drawing-right-panel {
     grid-column: 2;
     grid-row: 2;
     order: initial;
@@ -320,17 +320,17 @@
     overflow: hidden;
   }
 
-  .drawing-left-panel,
-  .drawing-viewer,
-  .drawing-right-panel {
+  .drawing-workspace .drawing-left-panel,
+  .drawing-workspace .drawing-viewer,
+  .drawing-workspace .drawing-right-panel {
     grid-row: 1;
     order: initial;
     min-height: 0;
   }
 
-  .drawing-left-panel { grid-column: 1; }
-  .drawing-viewer { grid-column: 2; }
-  .drawing-right-panel { grid-column: 3; }
+  .drawing-workspace .drawing-left-panel { grid-column: 1; }
+  .drawing-workspace .drawing-viewer { grid-column: 2; }
+  .drawing-workspace .drawing-right-panel { grid-column: 3; }
 }
 
 /* ≥1440px: balanced presentation widths while the canvas owns all surplus. */
@@ -341,17 +341,17 @@
     overflow: hidden;
   }
 
-  .drawing-left-panel,
-  .drawing-viewer,
-  .drawing-right-panel {
+  .drawing-workspace .drawing-left-panel,
+  .drawing-workspace .drawing-viewer,
+  .drawing-workspace .drawing-right-panel {
     grid-row: 1;
     order: initial;
     min-height: 0;
   }
 
-  .drawing-left-panel { grid-column: 1; }
-  .drawing-viewer { grid-column: 2; }
-  .drawing-right-panel { grid-column: 3; }
+  .drawing-workspace .drawing-left-panel { grid-column: 1; }
+  .drawing-workspace .drawing-viewer { grid-column: 2; }
+  .drawing-workspace .drawing-right-panel { grid-column: 3; }
 }
 
 /* The region editor becomes a side panel only when its actual viewer is wide. */

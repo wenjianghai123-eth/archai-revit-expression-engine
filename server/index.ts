@@ -85,6 +85,7 @@ import {
 import { defaultPlanColorizeStyleId, maxPlanColorizeBatchCount, resolvePlanColorizeStyles } from '../src/constants/planColorizeStyles';
 import { findFloorplanColorTemplate, resolveFloorplanBatchCount, resolveFloorplanVariantPlans, readFloorplanVariantFocus, readFloorplanVariantType } from '../src/constants/floorplanVariants';
 import { designVariantVariableKeys, isDesignVariantVariableKey, readDesignVariantDiversity } from '../src/utils/designVariantMatrix';
+import { normalizeReplacementTarget, resolveReplacementTargetFromConfig } from '../src/utils/materialReplacementTarget';
 import { createAssetsRouter } from './routes/assets';
 import { createEditSessionsRouter } from './routes/editSessions';
 import { createProjectWorkflowsRouter } from './routes/projectWorkflows';
@@ -1705,14 +1706,15 @@ const variantStyleKeys = new Set([
 const variantChangeScopes = new Set(['material-only', 'soft-decoration', 'lighting', 'furniture-layout', 'color-palette', 'full-design']);
 const variantLocks = new Set(['structure', 'camera', 'walls-openings', 'fixed-furniture', 'floor-material', 'ceiling', 'main-color']);
 const MAX_DESIGN_VARIANT_BATCH = Number(process.env.MAX_DESIGN_VARIANT_BATCH || 8);
-const defaultVariantStylesByCount: Record<2 | 4 | 8, string[]> = {
+const defaultVariantStylesByCount: Record<1 | 2 | 4 | 8, string[]> = {
+  1: ['modern-minimal'],
   2: ['modern-minimal', 'natural-wood'],
   4: ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'],
   8: ['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby'],
 };
 const designVariantPackIds = new Set(['interior-common', 'commercial', 'office', 'hotel', 'facade']);
 
-const materialReplaceObjectTypes = new Set(['floor', 'wall', 'ceiling', 'cabinet', 'sofa', 'table-chair', 'lighting', 'plant', 'door-window', 'feature-wall', 'other']);
+const materialReplaceObjectTypes = new Set(['floor', 'wall', 'ceiling', 'cabinet', 'sofa', 'table-chair', 'lighting', 'plant', 'artwork', 'decor', 'door-window', 'feature-wall', 'other']);
 const materialReplaceMaterials = new Set(['light-wood', 'dark-wood', 'walnut', 'microcement', 'rock-slab', 'marble', 'terrazzo', 'tile', 'leather', 'fabric', 'metal', 'glass', 'art-paint', 'linear-light', 'warm-light-strip', 'plant', 'custom']);
 const materialPatternScales = new Set(['small', 'medium', 'large']);
 const materialDirections = new Set(['auto', 'horizontal', 'vertical', 'diagonal', 'herringbone']);
@@ -1755,12 +1757,12 @@ function normalizeDesignVariantConfig(
   const requestedBatchCount = typeof config.batchCount === 'number' ? config.batchCount : undefined;
   const retryVariantIndex = readDesignRetryVariantIndex(config);
   const isSingleVariantRetry = typeof retryVariantIndex === 'number' && requestedBatchCount === 1;
-  const batchCount = isSingleVariantRetry ? 1 : requestedBatchCount ?? 4;
-  if ((!isSingleVariantRetry && batchCount !== 2 && batchCount !== 4 && batchCount !== 8) || batchCount > MAX_DESIGN_VARIANT_BATCH) {
+  const batchCount = isSingleVariantRetry ? 1 : requestedBatchCount ?? 1;
+  if ((batchCount !== 1 && batchCount !== 2 && batchCount !== 4 && batchCount !== 8) || batchCount > MAX_DESIGN_VARIANT_BATCH) {
     return {
       ok: false,
       error: {
-        message: '方案数量只能为 2、4 或 8',
+        message: '方案数量只能为 1、2、4 或 8',
         code: 'GENERATION_JOB_BATCH_COUNT_INVALID',
       },
     };
@@ -1780,7 +1782,7 @@ function normalizeDesignVariantConfig(
   const requestedStyles = Array.isArray(config.variantStyles)
     ? config.variantStyles.filter((item): item is string => typeof item === 'string' && variantStyleKeys.has(item))
     : [];
-  const defaults = isSingleVariantRetry ? ['modern-minimal'] : defaultVariantStylesByCount[batchCount as 2 | 4 | 8];
+  const defaults = defaultVariantStylesByCount[batchCount as 1 | 2 | 4 | 8];
   const styles = [...requestedStyles];
   for (const style of defaults) {
     if (styles.length >= batchCount) break;
@@ -1842,6 +1844,10 @@ function normalizeMaterialReplaceConfig(
 ): { ok: true } | { ok: false; error: ApiError } {
   if (mode !== 'material-replace') {
     delete config.targetObjectType;
+    delete config.replacementTarget;
+    delete config.editingScope;
+    delete config.replacementStrategy;
+    delete config.preserveUnmaskedArea;
     delete config.targetMaterial;
     delete config.customMaterialPrompt;
     delete config.materialReferenceAssetIds;
@@ -1853,14 +1859,19 @@ function normalizeMaterialReplaceConfig(
     delete config.semanticObjectSelections;
     delete config.materialRealSizeMm;
     delete config.materialJointWidthMm;
+    delete config.enablePhysicalMaterialLayout;
     delete config.materialTextureAlignment;
     delete config.materialTextureOrigin;
     delete config.materialCandidateCount;
     delete config.maskSelectionMode;
+    delete config.maskWorkflowMode;
+    delete config.maskWorkflowActive;
     delete config.smartMaskConfirmed;
     delete config.smartMaskDetectedObject;
     delete config.smartMaskConfidence;
     delete config.smartMaskRefinementMethod;
+    delete config.confirmedSmartMaskAssetId;
+    delete config.confirmedManualMaskAssetId;
     return { ok: true };
   }
 
@@ -1869,19 +1880,37 @@ function normalizeMaterialReplaceConfig(
     || (config.materialCandidateCount === undefined && requestedCandidateCount === 1);
   const candidateCount = isLegacySingleResult ? 1 : requestedCandidateCount;
   if (candidateCount !== 1 && candidateCount !== 2 && candidateCount !== 3 && candidateCount !== 4) {
-    return { ok: false, error: { message: '材质铺贴候选数只支持 2、3 或 4。', code: 'GENERATION_JOB_MATERIAL_CANDIDATE_COUNT_INVALID' } };
+    return { ok: false, error: { message: '材质铺贴候选数只支持 1、2、3 或 4。', code: 'GENERATION_JOB_MATERIAL_CANDIDATE_COUNT_INVALID' } };
   }
   if (candidateCount === 1) delete config.materialCandidateCount;
   else config.materialCandidateCount = candidateCount;
   config.batchCount = candidateCount;
   config.editTarget = 'material';
-  config.editMode = config.editMode === 'mask' ? 'mask' : 'smart-type';
-  if (config.editMode === 'mask') {
+  const requestedMaskWorkflowMode = typeof config.maskWorkflowMode === 'string' ? config.maskWorkflowMode : undefined;
+  if (
+    requestedMaskWorkflowMode !== undefined
+    && requestedMaskWorkflowMode !== 'none'
+    && requestedMaskWorkflowMode !== 'smart'
+    && requestedMaskWorkflowMode !== 'manual'
+  ) {
+    return { ok: false, error: { message: 'maskWorkflowMode must be none, smart, or manual.', code: 'GENERATION_JOB_MASK_WORKFLOW_MODE_INVALID' } };
+  }
+  const maskWorkflowMode = requestedMaskWorkflowMode
+    || (isMaskMode(config.maskMode) || isNonEmptyString(config.maskAssetId)
+      ? config.maskSelectionMode === 'smart' ? 'smart' : 'manual'
+      : config.maskWorkflowActive === true || config.editMode === 'mask'
+        ? config.maskSelectionMode === 'smart' ? 'smart' : 'manual'
+        : 'none');
+  config.maskWorkflowMode = maskWorkflowMode;
+  config.maskWorkflowActive = maskWorkflowMode !== 'none';
+  config.editMode = maskWorkflowMode === 'none' ? 'smart-type' : 'mask';
+  if (maskWorkflowMode !== 'none') {
     if (config.maskSelectionMode === undefined || config.maskSelectionMode === null || config.maskSelectionMode === '') {
-      config.maskSelectionMode = 'precise';
+      config.maskSelectionMode = maskWorkflowMode === 'smart' ? 'smart' : 'precise';
     } else if (config.maskSelectionMode !== 'smart' && config.maskSelectionMode !== 'precise') {
       return { ok: false, error: { message: 'maskSelectionMode must be smart or precise.', code: 'GENERATION_JOB_MASK_SELECTION_MODE_INVALID' } };
     }
+    config.maskSelectionMode = maskWorkflowMode === 'smart' ? 'smart' : 'precise';
     if (config.maskSelectionMode === 'smart') {
       config.smartMaskConfirmed = config.smartMaskConfirmed === true;
       if (typeof config.smartMaskDetectedObject === 'string' && config.smartMaskDetectedObject.trim()) {
@@ -1907,6 +1936,8 @@ function normalizeMaterialReplaceConfig(
     delete config.smartMaskDetectedObject;
     delete config.smartMaskConfidence;
     delete config.smartMaskRefinementMethod;
+    delete config.confirmedSmartMaskAssetId;
+    delete config.confirmedManualMaskAssetId;
   }
   config.preserveLighting = config.preserveLighting !== false;
   config.preserveGeometry = config.preserveGeometry !== false;
@@ -1916,8 +1947,14 @@ function normalizeMaterialReplaceConfig(
   config.materialDirection = typeof config.materialDirection === 'string' && materialDirections.has(config.materialDirection) ? config.materialDirection : 'auto';
   config.materialFinish = typeof config.materialFinish === 'string' && materialFinishes.has(config.materialFinish) ? config.materialFinish : 'matte';
   config.materialReplaceScope = typeof config.materialReplaceScope === 'string' && materialReplaceScopes.has(config.materialReplaceScope) ? config.materialReplaceScope : 'material-only';
-  config.materialRealSizeMm = normalizeBoundedNumber(config.materialRealSizeMm, 600, 20, 5000);
-  config.materialJointWidthMm = normalizeBoundedNumber(config.materialJointWidthMm, 2, 0, 50);
+  config.enablePhysicalMaterialLayout = config.enablePhysicalMaterialLayout === true;
+  if (config.enablePhysicalMaterialLayout) {
+    config.materialRealSizeMm = normalizeBoundedNumber(config.materialRealSizeMm, 600, 20, 5000);
+    config.materialJointWidthMm = normalizeBoundedNumber(config.materialJointWidthMm, 2, 0, 50);
+  } else {
+    delete config.materialRealSizeMm;
+    delete config.materialJointWidthMm;
+  }
   config.materialTextureAlignment = typeof config.materialTextureAlignment === 'string' && materialTextureAlignments.has(config.materialTextureAlignment) ? config.materialTextureAlignment : 'auto';
   config.materialTextureOrigin = normalizeMaterialTextureOrigin(config.materialTextureOrigin);
   config.semanticObjectSelections = normalizeSemanticObjectSelections(config.semanticObjectSelections);
@@ -1929,6 +1966,16 @@ function normalizeMaterialReplaceConfig(
   } else if (typeof config.targetObjectType !== 'string' || !materialReplaceObjectTypes.has(config.targetObjectType)) {
     return { ok: false, error: { message: 'targetObjectType is invalid.', code: 'GENERATION_JOB_MATERIAL_TARGET_OBJECT_INVALID' } };
   }
+
+  if (config.replacementTarget !== undefined && config.replacementTarget !== null && config.replacementTarget !== '') {
+    if (!normalizeReplacementTarget(config.replacementTarget)) {
+      return { ok: false, error: { message: '替换目标类型无效，请重新选择。', code: 'GENERATION_JOB_REPLACEMENT_TARGET_INVALID' } };
+    }
+  }
+  const replacementTarget = resolveReplacementTargetFromConfig(config);
+  if (replacementTarget) config.replacementTarget = replacementTarget;
+  else delete config.replacementTarget;
+  config.preserveUnmaskedArea = true;
 
   if (config.targetMaterial !== undefined && config.targetMaterial !== null && config.targetMaterial !== '') {
     if (typeof config.targetMaterial !== 'string' || !materialReplaceMaterials.has(config.targetMaterial)) {
@@ -1945,7 +1992,7 @@ function normalizeMaterialReplaceConfig(
   }
 
   const materialReferenceAssetIds = readStringArray(config.materialReferenceAssetIds);
-  if (config.editMode === 'smart-type' && !config.targetObjectType) {
+  if (config.editMode === 'smart-type' && !config.replacementTarget) {
     return {
       ok: false,
       error: {
@@ -2788,11 +2835,28 @@ function validateGenerationJobCreateBody(
       config.hasProtectionMask = false;
     }
     if (config.maskMode === undefined || config.maskMode === null || config.maskMode === '') {
-      if (generationMode === 'material-replace' && config.editMode === 'mask') {
-        return { ok: false, error: { message: '精细涂抹模式下请先选择需要替换的区域', code: 'GENERATION_JOB_MASK_REQUIRED' } };
+      if (generationMode === 'material-replace' && config.maskWorkflowMode === 'smart') {
+        return {
+          ok: false,
+          error: {
+            message: '智能涂抹模式下请先完成识别并确认替换区域',
+            code: 'GENERATION_JOB_SMART_MASK_REQUIRED',
+          },
+        };
+      }
+      if (generationMode === 'material-replace' && config.maskWorkflowMode === 'manual') {
+        return {
+          ok: false,
+          error: {
+            message: '精细涂抹模式下请先选择并确认需要替换的区域',
+            code: 'GENERATION_JOB_MASK_REQUIRED',
+          },
+        };
       }
       delete config.maskMode;
       delete config.maskAssetId;
+      delete config.confirmedSmartMaskAssetId;
+      delete config.confirmedManualMaskAssetId;
     } else {
       if (!isMaskMode(config.maskMode)) {
         return {
@@ -2821,8 +2885,7 @@ function validateGenerationJobCreateBody(
       }
       if (
         generationMode === 'material-replace'
-        && config.editMode === 'mask'
-        && config.maskSelectionMode === 'smart'
+        && config.maskWorkflowMode === 'smart'
         && config.smartMaskConfirmed !== true
       ) {
         return {
@@ -2833,6 +2896,26 @@ function validateGenerationJobCreateBody(
           },
         };
       }
+      if (generationMode === 'material-replace' && config.maskMode === 'asset-mask') {
+        if (config.maskWorkflowMode === 'smart') {
+          config.confirmedSmartMaskAssetId = config.maskAssetId;
+          delete config.confirmedManualMaskAssetId;
+        } else if (config.maskWorkflowMode === 'manual') {
+          config.confirmedManualMaskAssetId = config.maskAssetId;
+          delete config.confirmedSmartMaskAssetId;
+        } else {
+          delete config.confirmedSmartMaskAssetId;
+          delete config.confirmedManualMaskAssetId;
+        }
+      } else {
+        delete config.confirmedSmartMaskAssetId;
+        delete config.confirmedManualMaskAssetId;
+      }
+    }
+    if (generationMode === 'material-replace') {
+      config.editingScope = config.maskWorkflowMode === 'none' ? 'semantic-auto' : 'masked';
+      config.replacementStrategy = config.editingScope === 'masked' ? 'replace-masked' : 'replace-existing';
+      config.preserveUnmaskedArea = true;
     }
   } else {
     delete config.maskMode;

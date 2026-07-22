@@ -1,5 +1,5 @@
 import React, { PointerEvent, useEffect, useRef, useState } from 'react';
-import { Brush, Eraser, Eye, EyeOff, FlipHorizontal, Lasso, Maximize2, Minus, Plus, RotateCcw, Shield, Square, Trash2, X } from 'lucide-react';
+import { Brush, Check, Eraser, Eye, EyeOff, FlipHorizontal, Hand, Lasso, Maximize2, Minus, Plus, Redo2, RotateCcw, Scan, Shield, Square, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
 
 interface MaskEditorProps {
   imageDataUrl: string;
@@ -9,10 +9,20 @@ interface MaskEditorProps {
   useFullImage: boolean;
   onMaskChange: (maskDataUrl: string | null, useFullImage: boolean, feather?: number, protectionMaskDataUrl?: string | null, expansion?: number, hasValidMaskPixels?: boolean) => void;
   allowFullImage?: boolean;
+  onConfirm?: () => void;
+  onCancel?: () => void;
+  confirmDisabled?: boolean;
+  externalCommand?: MaskEditorExternalCommand | null;
 }
 
-type MaskTool = 'brush' | 'eraser' | 'rectangle' | 'lasso';
+export type MaskEditorExternalCommand = {
+  id: number;
+  type: 'undo' | 'redo' | 'clear';
+};
+
+type MaskTool = 'brush' | 'eraser' | 'rectangle' | 'lasso' | 'pan';
 type MaskLayer = 'edit' | 'protect';
+type MaskSnapshot = { edit: string; protect: string };
 
 interface Point {
   x: number;
@@ -28,16 +38,19 @@ interface Rect {
 
 const maxHistoryLength = 20;
 
-export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protectionMaskDataUrl = null, useFullImage, onMaskChange, allowFullImage = true }: MaskEditorProps) {
+export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protectionMaskDataUrl = null, useFullImage, onMaskChange, allowFullImage = true, onConfirm, onCancel, confirmDisabled = false, externalCommand = null }: MaskEditorProps) {
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
   const protectionCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
-  const historyRef = useRef<Array<{ edit: string; protect: string }>>([]);
+  const historyRef = useRef<MaskSnapshot[]>([]);
+  const futureRef = useRef<MaskSnapshot[]>([]);
   const isDrawingRef = useRef(false);
   const lastPointRef = useRef<Point | null>(null);
   const startPointRef = useRef<Point | null>(null);
   const lassoPointsRef = useRef<Point[]>([]);
   const maskFromPropsRef = useRef<string | null>(null);
+  const panStartRef = useRef<{ clientX: number; clientY: number; x: number; y: number } | null>(null);
+  const lastExternalCommandIdRef = useRef<number | null>(null);
 
   const [tool, setTool] = useState<MaskTool>('brush');
   const [layer, setLayer] = useState<MaskLayer>('edit');
@@ -48,7 +61,11 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
   const [hasMask, setHasMask] = useState(Boolean(maskImageDataUrl));
   const [selectionPercent, setSelectionPercent] = useState(0);
   const [historyCount, setHistoryCount] = useState(0);
+  const [futureCount, setFutureCount] = useState(0);
   const [showMask, setShowMask] = useState(true);
+  const [maskOpacity, setMaskOpacity] = useState(48);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   const [feather, setFeather] = useState(0);
   const [protectedPercent, setProtectedPercent] = useState(0);
   const [cursorPoint, setCursorPoint] = useState<Point | null>(null);
@@ -89,7 +106,9 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
     if (!maskImageDataUrl) {
       maskFromPropsRef.current = null;
       historyRef.current = [];
+      futureRef.current = [];
       setHistoryCount(0);
+      setFutureCount(0);
       setHasMask(false);
       setSelectionPercent(0);
       setProtectedPercent(0);
@@ -116,7 +135,29 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
     if (!maskCanvas || !protectionCanvas) return;
 
     historyRef.current = [...historyRef.current.slice(-(maxHistoryLength - 1)), { edit: maskCanvas.toDataURL('image/png'), protect: protectionCanvas.toDataURL('image/png') }];
+    futureRef.current = [];
     setHistoryCount(historyRef.current.length);
+    setFutureCount(0);
+  };
+
+  const captureSnapshot = (): MaskSnapshot | null => {
+    const maskCanvas = maskCanvasRef.current;
+    const protectionCanvas = protectionCanvasRef.current;
+    if (!maskCanvas || !protectionCanvas) return null;
+    return { edit: maskCanvas.toDataURL('image/png'), protect: protectionCanvas.toDataURL('image/png') };
+  };
+
+  const restoreSnapshot = (snapshot: MaskSnapshot) => {
+    const maskCanvas = maskCanvasRef.current;
+    const protectionCanvas = protectionCanvasRef.current;
+    if (!maskCanvas || !protectionCanvas || !imageSize) return;
+    let restored = 0;
+    const done = () => {
+      restored += 1;
+      if (restored === 2) finishMaskEdit();
+    };
+    loadMaskIntoCanvas(snapshot.edit, maskCanvas, imageSize, done);
+    loadMaskIntoCanvas(snapshot.protect, protectionCanvas, imageSize, done);
   };
 
   const exportMaskDataUrl = (sourceCanvas = maskCanvasRef.current): string => {
@@ -173,12 +214,12 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
         previewData.data[index] = 244;
         previewData.data[index + 1] = 63;
         previewData.data[index + 2] = 94;
-        previewData.data[index + 3] = 125;
+        previewData.data[index + 3] = Math.round(maskOpacity * 2.55);
       } else if (selected) {
         previewData.data[index] = 37;
         previewData.data[index + 1] = 99;
         previewData.data[index + 2] = 235;
-        previewData.data[index + 3] = 115;
+        previewData.data[index + 3] = Math.round(maskOpacity * 2.3);
       }
     }
 
@@ -249,6 +290,12 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
   };
 
   const handlePointerDown = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (tool === 'pan') {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      isDrawingRef.current = true;
+      panStartRef.current = { clientX: event.clientX, clientY: event.clientY, x: pan.x, y: pan.y };
+      return;
+    }
     const point = getCanvasPoint(event);
     if (!point) return;
 
@@ -274,6 +321,13 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
   };
 
   const handlePointerMove = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (tool === 'pan' && isDrawingRef.current && panStartRef.current) {
+      setPan({
+        x: panStartRef.current.x + event.clientX - panStartRef.current.clientX,
+        y: panStartRef.current.y + event.clientY - panStartRef.current.clientY,
+      });
+      return;
+    }
     const point = getCanvasPoint(event);
     if (!point) return;
     setCursorPoint(point);
@@ -303,6 +357,10 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
 
     event.currentTarget.releasePointerCapture(event.pointerId);
     isDrawingRef.current = false;
+    if (tool === 'pan') {
+      panStartRef.current = null;
+      return;
+    }
 
     if (tool === 'rectangle' && draftRect && draftRect.width > 2 && draftRect.height > 2) {
       fillRect(draftRect);
@@ -327,18 +385,29 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
   const handleUndo = () => {
     const previous = historyRef.current.pop();
     setHistoryCount(historyRef.current.length);
-    const maskCanvas = maskCanvasRef.current;
-    const protectionCanvas = protectionCanvasRef.current;
-    if (!previous || !maskCanvas || !protectionCanvas || !imageSize) return;
-    let restored = 0;
-    const done = () => {
-      restored += 1;
-      if (restored < 2) return;
-      finishMaskEdit();
-    };
-    loadMaskIntoCanvas(previous.edit, maskCanvas, imageSize, done);
-    loadMaskIntoCanvas(previous.protect, protectionCanvas, imageSize, done);
+    const current = captureSnapshot();
+    if (!previous || !current) return;
+    futureRef.current = [...futureRef.current.slice(-(maxHistoryLength - 1)), current];
+    setFutureCount(futureRef.current.length);
+    restoreSnapshot(previous);
   };
+
+  const handleRedo = () => {
+    const next = futureRef.current.pop();
+    const current = captureSnapshot();
+    if (!next || !current) return;
+    historyRef.current = [...historyRef.current.slice(-(maxHistoryLength - 1)), current];
+    setHistoryCount(historyRef.current.length);
+    setFutureCount(futureRef.current.length);
+    restoreSnapshot(next);
+  };
+
+  const resetViewport = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  };
+
+  const updateZoom = (value: number) => setZoom(Math.max(0.5, Math.min(4, Number(value.toFixed(2)))));
 
   const handleClear = () => {
     const activeCanvas = getActiveCanvas();
@@ -406,6 +475,14 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
     finishMaskEdit();
   };
 
+  useEffect(() => {
+    if (!externalCommand || lastExternalCommandIdRef.current === externalCommand.id) return;
+    lastExternalCommandIdRef.current = externalCommand.id;
+    if (externalCommand.type === 'undo') handleUndo();
+    if (externalCommand.type === 'redo') handleRedo();
+    if (externalCommand.type === 'clear') handleClear();
+  });
+
   const handleMorph = (amount: number) => {
     const canvas = getActiveCanvas();
     if (!canvas || amount === 0) return;
@@ -462,7 +539,7 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
 
   useEffect(() => {
     renderPreview();
-  }, [showMask]);
+  }, [showMask, maskOpacity]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -471,7 +548,14 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
       const key = event.key.toLowerCase();
       if ((event.ctrlKey || event.metaKey) && key === 'z') {
         event.preventDefault();
-        handleUndo();
+        if (event.shiftKey) handleRedo();
+        else handleUndo();
+        return;
+      }
+
+      if ((event.ctrlKey || event.metaKey) && key === 'y') {
+        event.preventDefault();
+        handleRedo();
         return;
       }
 
@@ -479,6 +563,7 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
       if (key === 'e') setTool('eraser');
       if (key === 'r') setTool('rectangle');
       if (key === 'l') setTool('lasso');
+      if (key === 'h') setTool('pan');
       if (event.key === 'Delete' || event.key === 'Backspace') {
         event.preventDefault();
         handleClear();
@@ -490,7 +575,7 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
   });
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2 rounded-xl border border-slate-100 bg-slate-50 p-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden rounded-xl border border-slate-100 bg-slate-50 p-3 custom-scrollbar">
       <div className="flex shrink-0 items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">4. 选择局部 mask</p>
@@ -508,6 +593,9 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
           </ToolButton>
           <ToolButton active={tool === 'lasso'} label="套索" onClick={() => setTool('lasso')}>
             <Lasso className="h-3.5 w-3.5" />
+          </ToolButton>
+          <ToolButton active={tool === 'pan'} label="拖动画布" onClick={() => setTool('pan')}>
+            <Hand className="h-3.5 w-3.5" />
           </ToolButton>
         </div>
       </div>
@@ -533,6 +621,9 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
         <ToolButton active={false} label="撤销" onClick={handleUndo} disabled={historyCount === 0}>
           <RotateCcw className="h-3.5 w-3.5" />
         </ToolButton>
+        <ToolButton active={false} label="重做" onClick={handleRedo} disabled={futureCount === 0}>
+          <Redo2 className="h-3.5 w-3.5" />
+        </ToolButton>
         <ToolButton active={!showMask} label={showMask ? '隐藏选区' : '显示选区'} onClick={() => setShowMask((value) => !value)}>
           {showMask ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
         </ToolButton>
@@ -556,6 +647,24 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
         </ToolButton></> : null}
       </div>
 
+      <div className="flex shrink-0 flex-wrap items-center gap-2" data-testid="mask-viewport-toolbar">
+        <ToolButton active={false} label="缩小" onClick={() => updateZoom(zoom - 0.2)} disabled={zoom <= 0.5}>
+          <ZoomOut className="h-3.5 w-3.5" />
+        </ToolButton>
+        <span className="min-w-12 text-center text-[10px] font-black text-slate-600">{Math.round(zoom * 100)}%</span>
+        <ToolButton active={false} label="放大" onClick={() => updateZoom(zoom + 0.2)} disabled={zoom >= 4}>
+          <ZoomIn className="h-3.5 w-3.5" />
+        </ToolButton>
+        <ToolButton active={zoom === 1 && pan.x === 0 && pan.y === 0} label="适应窗口" onClick={resetViewport}>
+          <Scan className="h-3.5 w-3.5" />
+        </ToolButton>
+        <label className="flex min-w-44 flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-bold text-slate-500">
+          蒙版透明度
+          <input type="range" min="10" max="80" step="1" value={maskOpacity} onChange={event => setMaskOpacity(Number(event.target.value))} className="min-w-20 flex-1 accent-blue-600" />
+          <span className="w-8 text-right font-mono">{maskOpacity}%</span>
+        </label>
+      </div>
+
       <label className="flex shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-bold text-slate-500">
         羽化
         <input
@@ -574,13 +683,23 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
         <span className="w-10 text-right font-mono">{feather}px</span>
       </label>
 
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white p-2 lg:h-[clamp(360px,52vh,620px)]">
+      <div
+        className="flex min-h-[300px] shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white p-2 lg:min-h-[360px]"
+        onWheel={event => {
+          event.preventDefault();
+          updateZoom(zoom + (event.deltaY < 0 ? 0.15 : -0.15));
+        }}
+        onDoubleClick={resetViewport}
+      >
         <div
           className="mask-editor-stage relative isolate max-h-full max-w-full overflow-hidden rounded bg-slate-50 shadow-inner"
           style={{
             aspectRatio: imageSize ? `${imageSize.width} / ${imageSize.height}` : '16 / 9',
             width: imageSize && imageSize.width >= imageSize.height ? '100%' : 'auto',
             height: imageSize && imageSize.width < imageSize.height ? '100%' : 'auto',
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+            transformOrigin: 'center center',
+            transition: tool === 'pan' && isDrawingRef.current ? 'none' : 'transform 120ms ease-out',
           }}
         >
           <img src={imageDataUrl} alt={imageName} className="absolute inset-0 h-full w-full select-none object-contain" draggable={false} />
@@ -641,6 +760,12 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
         </span>
         <span>{showMask ? `${layer === 'edit' ? '蓝色编辑区' : '红色保护区'} · 边界调整会写入 Mask` : '选区已隐藏'}</span>
       </div>
+      {onConfirm || onCancel ? (
+        <div className="flex shrink-0 justify-end gap-2 border-t border-slate-200 pt-2" data-testid="mask-editor-actions">
+          {onCancel ? <button type="button" onClick={onCancel} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600">取消编辑</button> : null}
+          {onConfirm ? <button type="button" onClick={onConfirm} disabled={confirmDisabled} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950 px-4 py-2 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-40"><Check className="h-4 w-4" />确认区域</button> : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -660,6 +785,7 @@ function ToolButton({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
       className={`flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[10px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${

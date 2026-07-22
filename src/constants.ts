@@ -1,5 +1,6 @@
 import { GenerationStep, GenerationConfig, MaterialAsset, FurnitureStyle, PromptTemplate } from './types';
 import { DEFAULT_IMAGE_POLISH_CONTROLS } from './constants/imagePolishPrompt';
+import { DEFAULT_GENERATION_OUTPUT_COUNT } from './constants/generationOutputCounts';
 
 export const MOCK_MATERIALS: MaterialAsset[] = [
   {
@@ -372,7 +373,7 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
     style: "方案变体",
     lighting: "匹配原图",
     materialStrength: 0.8,
-    batchCount: 4,
+    batchCount: DEFAULT_GENERATION_OUTPUT_COUNT,
     stylePackId: 'interior-common',
     variantStrategy: 'style-matrix',
     variantStyles: ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'],
@@ -425,10 +426,12 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
     style: "材质软装替换",
     lighting: "匹配原图",
     materialStrength: 0.8,
-    batchCount: 2,
+    batchCount: DEFAULT_GENERATION_OUTPUT_COUNT,
     editTarget: 'general',
     editMode: 'mask',
     maskSelectionMode: 'smart',
+    maskWorkflowMode: 'none',
+    smartMaskStage: 'idle',
     smartMaskConfirmed: false,
     smartMaskIsRefining: false,
     customMaterialPrompt: "",
@@ -439,9 +442,10 @@ export const DEFAULT_CONFIGS: Record<GenerationStep, GenerationConfig> = {
     materialReplaceScope: 'material-only',
     materialRealSizeMm: 600,
     materialJointWidthMm: 2,
+    enablePhysicalMaterialLayout: false,
     materialTextureAlignment: 'auto',
     materialTextureOrigin: { x: 0.5, y: 0.5 },
-    materialCandidateCount: 2,
+    materialCandidateCount: DEFAULT_GENERATION_OUTPUT_COUNT,
     semanticObjectSelections: [],
     maskExpansion: 0,
     preserveLighting: true,

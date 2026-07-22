@@ -18,3 +18,13 @@ describe('material replacement generation credits', () => {
     expect(getGenerationCreditCost('material-replace', {})).toBe(1);
   });
 });
+
+describe('single-output defaults', () => {
+  it('falls back to one for floor plans, design variants, and invalid historical values', () => {
+    expect(getGenerationCreditCost('floorplan', { floorplanOutputMode: 'multi', batchCount: 1 })).toBe(1);
+    expect(getGenerationCreditCost('floorplan', { floorplanOutputMode: 'multi', batchCount: 4 })).toBe(4);
+    expect(getGenerationCreditCost('design-variants', {})).toBe(1);
+    expect(getGenerationCreditCost('design-variants', { batchCount: 1 })).toBe(1);
+    expect(getGenerationCreditCost('design-variants', { batchCount: 3 })).toBe(1);
+  });
+});

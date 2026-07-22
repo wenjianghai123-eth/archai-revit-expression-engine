@@ -1,4 +1,10 @@
 import type { FloorPlanTextLanguage } from '../types';
+import {
+  normalizeReplacementTarget,
+  resolveReplacementStrategy,
+  type ReplacementStrategy,
+  type ReplacementTarget,
+} from '../utils/materialReplacementTarget';
 
 export type SmartPromptMode =
   | 'floorplan'
@@ -196,6 +202,8 @@ const targetObjectLabels: Record<string, string> = {
   'table-chair': '桌椅',
   lighting: '灯具',
   plant: '绿植',
+  artwork: '装饰画',
+  decor: '摆件',
   'door-window': '门窗',
   'feature-wall': '背景墙',
   other: '目标区域',
@@ -247,6 +255,113 @@ const materialReplaceScopePrompts: Record<string, string> = {
   'material-and-soft-decor': 'Replacement scope: material and soft decor refinement. Material changes are primary; allow minor local soft furnishing detail adjustments only when they help the target material feel integrated.',
   creative: 'Replacement scope: creative optimization. Allow more visible design refinement, color coordination, and local styling improvements while preserving the original geometry, layout, camera, and structural relationships.',
 };
+
+const replacementTargetPrompts: Record<ReplacementTarget | 'ceiling' | 'custom', string> = {
+  wall: 'Replacement target: wall surfaces only. Apply the reference material only to the specified wall area. Preserve wall outlines, doors, windows, wall corners, skirting lines, floor, ceiling, furniture, sofa, cushions, pillows, lamps, artwork, colors, geometry, camera, perspective, and all other areas unchanged.',
+  floor: 'Replacement target: floor surfaces only. Apply the reference material only to the specified floor area. Preserve floor boundaries, perspective, furniture contact relationships, walls, ceiling, furniture, sofa, cushions, pillows, decorations, lighting, geometry, camera, and all other areas unchanged.',
+  furniture: 'Replacement target: table, chair, or furniture surfaces only. Apply the reference material only to the selected table/chair/furniture surface. Preserve furniture shape, structure, size, position, legs, edges, orientation, surrounding room surfaces, sofa, cushions, pillows, lights, decorations, camera, perspective, and all other areas unchanged.',
+  plant: 'Replacement target: plant and greenery objects only. Use the reference image to guide the plant type, shape, foliage density, color, pot material, and visual style. Preserve floors, walls, sofas, cushions, pillows, furniture, lamps, artwork, room surfaces, geometry, camera, and all non-plant areas unchanged.',
+  lighting: 'Replacement target: lighting fixtures only. Use the reference image to guide fixture form, material, color temperature, and visual style. Preserve floors, walls, furniture, sofas, cushions, plants, artwork, geometry, camera, and all non-lighting areas unchanged.',
+  artwork: 'Replacement target: existing artwork only. Use the reference image to guide the framed art, canvas, poster, or wall-art visual style. Preserve the wall surface, furniture, lighting, plants, decorative objects, geometry, camera, and all non-artwork areas unchanged.',
+  decor: 'Replacement target: decorative objects only. Use the reference image to guide the decoration material, color, shape, and visual style. Preserve floors, walls, furniture, sofas, cushions, pillows, plants, lamps, geometry, camera, and all non-decor areas unchanged.',
+  ceiling: 'Replacement target: ceiling surfaces only. Apply the reference material only to the specified ceiling area. Preserve walls, floor, furniture, lamps, openings, camera, perspective, and all other areas unchanged.',
+  custom: 'Replacement target: the explicitly selected object or surface only. Do not infer or modify unrelated floors, walls, furniture, cushions, pillows, decorations, lighting, camera, perspective, or spatial relationships.',
+};
+
+const strictUnmaskedProtectionPrompt = 'Strictly preserve all unmasked areas. Do not modify any unselected furniture, sofa, cushions, pillows, curtains, walls, floor, ceiling, lamps, artwork, decorations, lighting, geometry, camera angle, perspective, composition, color palette, materials, details, or spatial relationships. Keep sofa and all pillows exactly unchanged unless they are inside the confirmed mask.';
+const strictFurnitureUnmaskedProtectionPrompt = 'Strictly preserve all unmasked areas. Do not modify any unselected furniture, sofa, cushions, pillows, curtains, room surfaces, ceiling, lamps, artwork, decorations, lighting, geometry, camera angle, perspective, composition, color palette, materials, details, or spatial relationships. Keep sofa and all pillows exactly unchanged unless they are inside the confirmed mask.';
+
+function readReplacementTarget(config: object | undefined, targetObjectKey: string): ReplacementTarget {
+  return normalizeReplacementTarget(readConfigString(config, 'replacementTarget')) || normalizeReplacementTarget(targetObjectKey) || 'decor';
+}
+
+function readTargetDirectionPrompt(target: ReplacementTarget, materialDirection: string): string {
+  if (target === 'floor') {
+    return materialDirectionPrompts[materialDirection] || materialDirectionPrompts.auto;
+  }
+  const direction = materialDirection === 'horizontal' || materialDirection === 'vertical' || materialDirection === 'diagonal' || materialDirection === 'herringbone'
+    ? materialDirection
+    : 'auto';
+  return `Texture or grain direction: ${direction}. Align the texture naturally on the ${readReplacementTargetSurfaceName(target)} without implying changes to unrelated room surfaces.`;
+}
+
+function readTextureOriginPrompt(target: ReplacementTarget, textureAlignment: string, textureOrigin: { x: number; y: number }, enablePhysicalMaterialLayout: boolean): string {
+  const origin = `(${textureOrigin.x.toFixed(3)}, ${textureOrigin.y.toFixed(3)})`;
+  if (target === 'floor') {
+    return `Texture alignment mode: ${textureAlignment}. Paving origin: ${origin} in normalized source-image coordinates.${enablePhysicalMaterialLayout ? ' Keep seams continuous across the same selected floor surface.' : ''}`;
+  }
+  if (target === 'furniture' || target === 'plant' || target === 'lighting' || target === 'decor') {
+    return `Texture alignment mode: ${textureAlignment}. Texture origin: ${origin} in normalized source-image coordinates. Do not create unrelated room-surface material changes for this target.`;
+  }
+  return `Texture alignment mode: ${textureAlignment}. Texture origin: ${origin} in normalized source-image coordinates. Do not create floor paving, flooring seams, or ground material changes for this target.`;
+}
+
+function readPhysicalLayoutPrompt(target: ReplacementTarget, realSizeMm: number, jointWidthMm: number): string {
+  if (target === 'floor') {
+    return `Respect real-world material scale: approximately ${realSizeMm} mm per primary tile, board, slab, or repeat unit. ${jointWidthMm > 0 ? `Joint width: approximately ${jointWidthMm} mm.` : 'Use a continuous installation with no visible joints.'} Keep scale and joints consistent with scene perspective.`;
+  }
+  return `Respect real-world material scale: approximately ${realSizeMm} mm per primary repeat unit on the selected ${target} surface. ${jointWidthMm > 0 ? `Subtle joint or seam width: approximately ${jointWidthMm} mm where the material naturally has joints.` : 'Use a continuous material with no visible joints.'} Do not apply unrelated surface layout logic to this target.`;
+}
+
+function readReplacementTargetSurfaceName(target: ReplacementTarget): string {
+  if (target === 'wall') return 'existing wall surface';
+  if (target === 'floor') return 'existing floor surface';
+  if (target === 'furniture') return 'existing table/chair/furniture surface';
+  if (target === 'plant') return 'existing plant or planter surface';
+  if (target === 'lighting') return 'existing lighting fixture surface';
+  if (target === 'artwork') return 'existing artwork or framed-art surface';
+  return 'existing decorative object surface';
+}
+
+function readReplacementTargetPluralName(target: ReplacementTarget): string {
+  if (target === 'wall') return 'wall surfaces';
+  if (target === 'floor') return 'floor surfaces';
+  if (target === 'furniture') return 'table/chair/furniture objects or surfaces';
+  if (target === 'plant') return 'plant and greenery objects';
+  if (target === 'lighting') return 'lighting fixtures';
+  if (target === 'artwork') return 'artwork, framed pictures, posters, or wall art';
+  return 'decorative objects and摆件';
+}
+
+function buildExistingReplacementTargetPrompt(target: ReplacementTarget, strategy: ReplacementStrategy): string {
+  const targetName = readReplacementTargetPluralName(target);
+  const scopeLine = strategy === 'replace-masked'
+    ? `Mask mode: identify only existing ${targetName} inside the confirmed white mask and replace them in place. Black and unmasked areas must remain unchanged.`
+    : `Automatic semantic mode: identify all existing ${targetName} in the source image and replace them in place.`;
+  return [
+    '统一替换原则：识别已有目标并原位替换。',
+    scopeLine,
+    `Replacement target: existing ${targetName} only.`,
+    'Remove the old visual appearance of the matched target before applying the new reference material or style; do not keep the old target and stack a new target on top of it.',
+    'Do not add extra objects or surfaces of the same type. Do not place the target in a new position. Do not redesign, move, enlarge, merge, split, or duplicate the target.',
+    'Strictly preserve every non-target area: unrelated furniture, people, plants, walls, floors, ceilings, artwork, decorations, building structure, camera angle, perspective, composition, lighting relationship, and spatial relationship.',
+  ].join('\n');
+}
+
+function readNoMaskAutoTargetPrompt(target: ReplacementTarget): string {
+  if (target === 'plant') {
+    return 'No mask is provided. Automatically identify only existing plant and greenery objects in the original image, then replace their plant appearance in place according to the reference image. Do not add new plants. Preserve all non-plant areas unchanged, including floors, walls, sofas, cushions, pillows, furniture, lamps, artwork, materials, lighting, geometry, camera, and perspective.';
+  }
+  if (target === 'lighting') {
+    return 'No mask is provided. Automatically identify only existing lighting fixtures in the original image, then replace their lighting appearance in place according to the reference image. Do not add new lighting fixtures. Preserve floors, walls, furniture, plants, artwork, materials, geometry, camera, and all non-lighting areas unchanged.';
+  }
+  if (target === 'artwork') {
+    return 'No mask is provided. Automatically identify only existing artwork, framed pictures, posters, or wall art in the original image, then replace their visual appearance in place according to the reference image. Do not add new artwork. Preserve walls, floors, furniture, lighting, plants, decor, geometry, camera, and all non-artwork areas unchanged.';
+  }
+  if (target === 'decor') {
+    return 'No mask is provided. Automatically identify only existing decorative objects in the original image and replace them in place. Do not add new decorative objects. Preserve floors, walls, furniture, sofas, cushions, pillows, plants, lamps, artwork, materials, geometry, camera, and all non-decor areas unchanged.';
+  }
+  if (target === 'wall') {
+    return 'No mask is provided. Automatically identify existing wall surfaces only and replace their material in place. Do not add wall structures, panels, shelves, or new architectural elements. Preserve floor, ceiling, furniture, plants, lighting, artwork, decor, camera, perspective, and all non-wall areas unchanged.';
+  }
+  if (target === 'floor') {
+    return 'No mask is provided. Automatically identify existing floor surfaces only and replace their material in place. Do not add floor levels, rugs, platforms, borders, or extra layers unless explicitly part of the chosen floor material. Preserve walls, ceiling, furniture, plants, lighting, artwork, decor, camera, perspective, and all non-floor areas unchanged.';
+  }
+  if (target === 'furniture') {
+    return 'No mask is provided. Automatically identify existing table/chair/furniture objects or surfaces only and replace their material in place. Do not add new furniture or duplicate existing furniture. Preserve walls, floors, plants, lighting, artwork, decor, camera, perspective, and all non-furniture areas unchanged.';
+  }
+  return `No mask is provided. Automatically identify only the existing ${target} target requested by the user and replace it in place; do not replace any other floor, wall, furniture, sofa, cushion, pillow, plant, lighting fixture, artwork, or decoration.`;
+}
 
 const drawingTypePrompts: Record<string, string> = {
   residential: 'Plan type: residential interior plan.',
@@ -633,15 +748,25 @@ function readDesignVariantStrategyNote(config: object | undefined, index: number
 
 function buildMaterialReplacePrompt(input: BuildSmartPromptInput, userPrompt: string): string {
   const targetObjectKey = readConfigString(input.config, 'targetObjectType') || 'other';
+  const replacementTarget = readReplacementTarget(input.config, targetObjectKey);
   const targetMaterialKey = readConfigString(input.config, 'targetMaterial') || 'custom';
   const targetObjectTypeLabel = targetObjectLabels[targetObjectKey] || targetObjectLabels.other;
   const targetMaterialLabel = targetMaterialLabels[targetMaterialKey] || readSmartMaterial(input.config) || targetMaterialLabels.custom;
-  const editMode = readConfigString(input.config, 'editMode') === 'mask' ? 'mask' : 'smart-type';
+  const configuredEditMode = readConfigString(input.config, 'editMode') === 'mask' ? 'mask' : 'smart-type';
+  const editingScope = readConfigString(input.config, 'editingScope');
+  const hasConfirmedMask = editingScope === 'masked' || input.hasMask === true || input.useFullImageMask === true;
+  const replacementStrategy = readConfigString(input.config, 'replacementStrategy') === 'replace-masked'
+    ? 'replace-masked'
+    : readConfigString(input.config, 'replacementStrategy') === 'replace-existing'
+      ? 'replace-existing'
+      : resolveReplacementStrategy(hasConfirmedMask ? 'masked' : 'semantic-auto');
+  const editMode = hasConfirmedMask ? 'mask' : configuredEditMode === 'mask' ? 'smart-type' : configuredEditMode;
   const basePrompt = editMode === 'mask' ? materialReplaceMaskPrompt : materialReplaceSmartPrompt;
   const patternScale = readConfigString(input.config, 'materialPatternScale') || 'medium';
   const materialDirection = readConfigString(input.config, 'materialDirection') || 'auto';
   const materialFinish = readConfigString(input.config, 'materialFinish') || 'matte';
   const replaceScope = readConfigString(input.config, 'materialReplaceScope') || 'material-only';
+  const enablePhysicalMaterialLayout = readBooleanConfig(input.config, 'enablePhysicalMaterialLayout');
   const realSizeMm = readConfigNumber(input.config, 'materialRealSizeMm', 600);
   const jointWidthMm = readConfigNumber(input.config, 'materialJointWidthMm', 2);
   const textureAlignment = readConfigString(input.config, 'materialTextureAlignment') || 'auto';
@@ -653,16 +778,26 @@ function buildMaterialReplacePrompt(input: BuildSmartPromptInput, userPrompt: st
     basePrompt
       .replace('{targetObjectTypeLabel}', targetObjectTypeLabel)
       .replace('{targetMaterialLabel}', targetMaterialLabel),
-    editMode === 'mask' && readConfigString(input.config, 'maskSelectionMode') === 'smart'
+    hasConfirmedMask && readConfigString(input.config, 'maskSelectionMode') === 'smart'
       ? 'The selected area is automatically detected by AI. Modify only the detected object region. Preserve the original geometry, lighting, perspective and surrounding objects.'
       : undefined,
+    replacementTargetPrompts[replacementTarget],
+    buildExistingReplacementTargetPrompt(replacementTarget, replacementStrategy),
+    hasConfirmedMask
+      ? replacementTarget === 'furniture'
+        ? 'Mask has the highest spatial priority. Only pixels inside the white mask may be edited. The replacement target only describes the existing furniture semantics inside the mask. Never ignore the mask to replace room surfaces or other furniture elsewhere in the image.'
+        : 'Mask has the highest spatial priority. Only pixels inside the white mask may be edited. The replacement target only describes the existing target semantics inside the mask. Never ignore the mask to replace floors, walls, furniture, plants, lighting, artwork, or decor elsewhere in the image.'
+      : readNoMaskAutoTargetPrompt(replacementTarget),
+    replacementTarget === 'furniture' ? strictFurnitureUnmaskedProtectionPrompt : strictUnmaskedProtectionPrompt,
     input.hasMaterialReferences ? 'Use the material reference only for texture, color, finish, and material feeling. Do not copy its composition or objects.' : undefined,
     materialPatternScalePrompts[patternScale] || materialPatternScalePrompts.medium,
-    materialDirectionPrompts[materialDirection] || materialDirectionPrompts.auto,
+    readTargetDirectionPrompt(replacementTarget, materialDirection),
     materialFinishPrompts[materialFinish] || materialFinishPrompts.matte,
     materialReplaceScopePrompts[replaceScope] || materialReplaceScopePrompts['material-only'],
-    `Respect real-world material scale: approximately ${realSizeMm} mm per primary tile, board, slab, or repeat unit. Joint width: approximately ${jointWidthMm} mm. Keep scale and joints consistent with scene perspective.`,
-    `Texture alignment mode: ${textureAlignment}. Paving origin: (${textureOrigin.x.toFixed(3)}, ${textureOrigin.y.toFixed(3)}) in normalized source-image coordinates. Keep seams continuous across the same selected surface.`,
+    enablePhysicalMaterialLayout
+      ? readPhysicalLayoutPrompt(replacementTarget, realSizeMm, jointWidthMm)
+      : undefined,
+    readTextureOriginPrompt(replacementTarget, textureAlignment, textureOrigin, enablePhysicalMaterialLayout),
     semanticSelections.length > 0 ? `Semantic object anchors (normalized image coordinates): ${semanticSelections.map((item, index) => `${index + 1}. ${item.objectType} at (${item.x.toFixed(3)}, ${item.y.toFixed(3)})`).join('; ')}. Treat every anchor as a selected target and do not merge unrelated objects.` : undefined,
     hasProtectionMask ? 'A protection mask is supplied. Protected pixels are explicitly excluded from editing and must remain identical to the source image.' : undefined,
     buildStructuredContext(input.config, input.mode, { includeMaterial: false }),

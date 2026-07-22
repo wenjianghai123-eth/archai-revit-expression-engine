@@ -2,7 +2,7 @@ import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIGS } from '../constants';
-import { GenerationStep, type GenerationConfig, type StepState } from '../types';
+import { GenerationStep, type GenerationConfig, type ReplacementTarget, type StepState } from '../types';
 import { MainWorkspace } from './MainWorkspace';
 
 vi.mock('./MaskEditor', () => ({ MaskEditor: () => <div data-testid="mask-editor" /> }));
@@ -13,6 +13,15 @@ vi.mock('./workspace/SmartMaskEditor', () => ({ SmartMaskEditor: () => <div data
 let container: HTMLDivElement | null = null;
 let root: Root | null = null;
 const onGenerate = vi.fn();
+const targetLabels: Record<ReplacementTarget, string> = {
+  plant: '绿植',
+  wall: '墙面',
+  floor: '地面',
+  furniture: '桌椅 / 家具',
+  lighting: '灯具',
+  artwork: '装饰画',
+  decor: '摆件',
+};
 
 interface Scenario {
   source?: boolean;
@@ -21,10 +30,15 @@ interface Scenario {
   maskHasVisiblePixels?: boolean;
   maskMode?: 'smart' | 'precise';
   maskConfirmed?: boolean;
+  maskWorkflowActive?: boolean;
+  maskWorkflowMode?: GenerationConfig['maskWorkflowMode'];
   isGenerating?: boolean;
   editTarget?: 'general' | 'material' | 'furniture';
+  targetObjectType?: GenerationConfig['targetObjectType'];
+  replacementTarget?: GenerationConfig['replacementTarget'];
   replacementPrompt?: string;
   targetMaterial?: GenerationConfig['targetMaterial'];
+  result?: boolean;
 }
 
 function createState({
@@ -34,20 +48,29 @@ function createState({
   maskHasVisiblePixels = mask,
   maskMode = 'precise',
   maskConfirmed = maskMode === 'precise',
+  maskWorkflowActive,
+  maskWorkflowMode,
   isGenerating = false,
   editTarget = 'general',
+  targetObjectType,
+  replacementTarget,
   replacementPrompt = '',
   targetMaterial,
+  result = false,
 }: Scenario = {}): StepState {
   return {
     config: {
       ...DEFAULT_CONFIGS[GenerationStep.MaterialReplace],
       editTarget,
-      editMode: 'mask',
+      editMode: maskWorkflowMode === 'none' ? 'smart-type' : 'mask',
       maskSelectionMode: maskMode,
+      maskWorkflowMode,
       smartMaskConfirmed: maskConfirmed,
       smartMaskIsRefining: false,
+      maskWorkflowActive,
       customMaterialPrompt: replacementPrompt,
+      targetObjectType,
+      replacementTarget,
       targetMaterial,
     },
     inputImage: source ? {
@@ -78,8 +101,8 @@ function createState({
     } : null,
     maskHasVisiblePixels,
     useFullImageMask: false,
-    outputImage: null,
-    generationResults: [],
+    outputImage: result ? '/generated-result.png' : null,
+    generationResults: result ? [{ id: 'result-1', imageUrl: '/generated-result.png', isSelected: true, isFavorite: false }] : [],
     selectedGenerationResultId: null,
     isGenerating,
     generationStatus: isGenerating ? 'generating' : 'ready',
@@ -138,22 +161,15 @@ function renderScenario(scenario: Scenario = {}) {
   return container;
 }
 
-function previewButton(): HTMLButtonElement {
-  const button = container?.querySelector('[data-testid="generate-preview-button"]');
+function previewButton() {
+  const button = Array.from(container?.querySelectorAll('button') ?? [])
+    .find(candidate => candidate.textContent?.includes('生成预览') || candidate.textContent?.includes('AI 生成中'));
   if (!(button instanceof HTMLButtonElement)) throw new Error('Missing generate preview button');
   return button;
 }
 
 function clickPreview() {
   act(() => previewButton().click());
-}
-
-function remount(scenario: Scenario) {
-  act(() => root?.unmount());
-  container?.remove();
-  container = null;
-  root = null;
-  return renderScenario(scenario);
 }
 
 afterEach(() => {
@@ -165,89 +181,155 @@ afterEach(() => {
 });
 
 describe('MainWorkspace material replacement preview', () => {
-  it('disables preview only before a source image exists', () => {
+  it('shows source upload validation before generation', () => {
     const view = renderScenario({ source: false });
     expect(previewButton().disabled).toBe(true);
+    clickPreview();
     expect(view.textContent).toContain('请先上传原始图片');
+    expect(onGenerate).not.toHaveBeenCalled();
   });
 
-  it('enables immediately after a URL-only source image is restored', () => {
-    renderScenario({ source: true, reference: false, mask: false });
+  it('allows plant replacement without a mask and submits semantic-auto scope', () => {
+    const view = renderScenario({
+      editTarget: 'material',
+      targetObjectType: 'plant',
+      reference: true,
+      mask: false,
+      maskWorkflowMode: 'none',
+    });
     expect(previewButton().disabled).toBe(false);
+    expect(view.textContent).toContain('区域来源');
+    expect(view.textContent).toContain('自动识别');
+    clickPreview();
+    expect(view.textContent).not.toContain('请选择需要替换的材质区域');
+    expect(onGenerate).toHaveBeenCalledTimes(1);
+    expect(onGenerate.mock.calls[0][0]).toMatchObject({
+      config: {
+        replacementTarget: 'plant',
+        editingScope: 'semantic-auto',
+        maskWorkflowMode: 'none',
+        replacementStrategy: 'replace-existing',
+        preserveUnmaskedArea: true,
+      },
+    });
   });
 
-  it('submits auto enhancement with only the source image and a safe default prompt', () => {
-    renderScenario({ editTarget: 'general', reference: false, mask: false });
+  it('uses smart-mask validation copy when smart workflow is active but unconfirmed', () => {
+    const view = renderScenario({
+      editTarget: 'material',
+      targetObjectType: 'plant',
+      reference: true,
+      mask: false,
+      maskMode: 'smart',
+      maskConfirmed: false,
+      maskWorkflowMode: 'smart',
+      maskWorkflowActive: true,
+    });
+    clickPreview();
+    expect(view.textContent).toContain('请先完成智能识别并确认替换区域');
+    expect(view.textContent).not.toContain('精细涂抹模式');
+    expect(onGenerate).not.toHaveBeenCalled();
+  });
+
+  it('uses manual-mask validation copy only for manual workflow', () => {
+    const view = renderScenario({
+      editTarget: 'material',
+      targetObjectType: 'plant',
+      reference: true,
+      mask: false,
+      maskMode: 'precise',
+      maskConfirmed: false,
+      maskWorkflowMode: 'manual',
+      maskWorkflowActive: true,
+    });
+    clickPreview();
+    expect(view.textContent).toContain('请先确认替换区域');
+    expect(view.textContent).not.toContain('请先完成智能识别并确认替换区域');
+    expect(onGenerate).not.toHaveBeenCalled();
+  });
+
+  it('submits smart workflow and masked scope after smart mask confirmation', () => {
+    renderScenario({
+      editTarget: 'general',
+      targetObjectType: 'table-chair',
+      reference: true,
+      mask: true,
+      maskMode: 'smart',
+      maskConfirmed: true,
+      maskWorkflowMode: 'smart',
+    });
     clickPreview();
     expect(onGenerate).toHaveBeenCalledTimes(1);
     expect(onGenerate.mock.calls[0][0]).toMatchObject({
       config: {
-        editTarget: 'general',
-        editMode: 'smart-type',
-        targetObjectType: 'other',
+        replacementTarget: 'furniture',
+        editingScope: 'masked',
+        maskWorkflowMode: 'smart',
+        replacementStrategy: 'replace-masked',
+        preserveUnmaskedArea: true,
       },
     });
-    expect(onGenerate.mock.calls[0][0].config.customMaterialPrompt).toContain('自动分析画面');
   });
 
-  it('lists a missing local material region only after click', () => {
-    const view = renderScenario({ editTarget: 'material', reference: true, mask: false });
-    expect(previewButton().disabled).toBe(false);
-    expect(view.textContent).not.toContain('暂时无法生成');
-    clickPreview();
-    expect(view.textContent).toContain('请选择需要替换的材质区域');
-    expect(onGenerate).not.toHaveBeenCalled();
-  });
-
-  it('lists the reference-or-description rule and accepts either option', () => {
-    const view = renderScenario({ editTarget: 'material', reference: false, mask: true });
-    clickPreview();
-    expect(view.textContent).toContain('请上传材质参考图或填写材质替换描述，至少完成一项');
-
-    remount({ editTarget: 'material', reference: false, mask: true, replacementPrompt: '换成浅色石材' });
+  it('submits manual workflow and masked scope after precise mask confirmation', () => {
+    renderScenario({
+      editTarget: 'material',
+      targetObjectType: 'wall',
+      reference: true,
+      mask: true,
+      maskMode: 'precise',
+      maskConfirmed: true,
+      maskWorkflowMode: 'manual',
+    });
     clickPreview();
     expect(onGenerate).toHaveBeenCalledTimes(1);
-
-    onGenerate.mockReset();
-    remount({ editTarget: 'material', reference: true, mask: true, replacementPrompt: '' });
-    clickPreview();
-    expect(onGenerate).toHaveBeenCalledTimes(1);
+    expect(onGenerate.mock.calls[0][0]).toMatchObject({
+      config: {
+        replacementTarget: 'wall',
+        editingScope: 'masked',
+        maskWorkflowMode: 'manual',
+        replacementStrategy: 'replace-masked',
+      },
+    });
   });
 
-  it('removes resolved validation items as the user completes a preset', () => {
-    const view = renderScenario({ editTarget: 'material', reference: false, mask: true });
-    clickPreview();
-    expect(view.querySelector('[role="alert"]')?.textContent).toContain('请上传材质参考图或填写材质替换描述');
-    const preset = Array.from(view.querySelectorAll('button')).find(button => button.textContent === '浅木色');
-    if (!(preset instanceof HTMLButtonElement)) throw new Error('Missing material preset button');
-    act(() => preset.click());
-    expect(view.querySelector('[role="alert"]')).toBeNull();
+  it.each(Object.entries(targetLabels) as Array<[ReplacementTarget, string]>)(
+    'shows unified task summary for %s',
+    (replacementTarget, label) => {
+      const view = renderScenario({
+        editTarget: 'material',
+        targetObjectType: replacementTarget === 'furniture' ? 'table-chair' : replacementTarget,
+        replacementTarget,
+        reference: true,
+        mask: false,
+        maskWorkflowMode: 'none',
+      });
+
+      const summary = view.querySelector('[data-testid="material-replacement-task-summary"]');
+      expect(summary?.textContent).toContain(`替换对象：${label}`);
+      expect(summary?.textContent).toContain('区域来源：自动识别');
+      expect(summary?.textContent).toContain('操作模式：原位替换');
+      expect(summary?.textContent).toContain('额外新增：禁止');
+      expect(summary?.textContent).toContain('非目标区域：保持不变');
+    },
+  );
+
+  it('renders one material texture library in the default material replacement workspace', () => {
+    const view = renderScenario();
+    expect(view.querySelectorAll('[data-testid="material-textures-panel"]')).toHaveLength(1);
+    expect(view.querySelectorAll('[data-testid="material-textures-empty-state"]')).toHaveLength(1);
+    expect(view.textContent).toContain('暂无材质贴图，可上传本地图片或从项目素材中选择。');
+    expect(view.querySelector('[title="上传材质贴图"]')).not.toBeNull();
   });
 
-  it('shows smart-mask confirmation and submits after confirmation', () => {
-    const view = renderScenario({ editTarget: 'material', reference: true, mask: true, maskMode: 'smart', maskConfirmed: false });
-    clickPreview();
-    expect(view.textContent).toContain('请先确认智能识别的替换区域');
-    expect(onGenerate).not.toHaveBeenCalled();
-
-    remount({ editTarget: 'material', reference: true, mask: true, maskMode: 'smart', maskConfirmed: true });
-    clickPreview();
-    expect(onGenerate).toHaveBeenCalledTimes(1);
+  it('hides the material texture library in furnishing mode', () => {
+    const view = renderScenario({ editTarget: 'furniture', reference: true });
+    expect(view.querySelectorAll('[data-testid="material-textures-panel"]')).toHaveLength(0);
   });
 
-  it('disables during generation and restores the existing handler afterwards', () => {
+  it('disables during generation', () => {
     const view = renderScenario({ isGenerating: true });
     expect(previewButton().disabled).toBe(true);
     expect(view.textContent).toContain('正在生成预览');
-    remount({ isGenerating: false, editTarget: 'general' });
-    clickPreview();
-    expect(onGenerate).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps the action footer above local editor overlays', () => {
-    renderScenario();
-    const footer = container?.querySelector('.preview-actions');
-    expect(footer?.className).toContain('pointer-events-auto');
-    expect(footer?.className).toContain('z-[1]');
   });
 });

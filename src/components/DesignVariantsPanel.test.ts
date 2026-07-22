@@ -19,6 +19,19 @@ const defaultProps = {
 };
 
 describe('DesignVariantsPanel', () => {
+  it('defaults a new or legacy-invalid workspace to one result', () => {
+    const html = renderToStaticMarkup(React.createElement(DesignVariantsPanel, {
+      ...defaultProps,
+      state: createState({}),
+    }));
+
+    expect(html).toContain('1 张');
+    expect(html).toContain('方案数量');
+    expect(html).toContain('预计算力点');
+    expect(html).toContain('方案 A');
+    expect(html).not.toContain('方案 B');
+  });
+
   it('renders the design variants controls and 4-slot matrix by default', () => {
     const html = renderToStaticMarkup(React.createElement(DesignVariantsPanel, {
       ...defaultProps,

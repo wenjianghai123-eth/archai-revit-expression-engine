@@ -14,6 +14,7 @@ import { prepareImageForProvider, prepareMaskForProvider, PreparedProviderImage 
 import { composeLocalInpaintResult, createLocalInpaintContext, cropImageDataUrlToBox, LocalInpaintContext, prepareEditableMask } from './image/localInpaint';
 import { analyzeGenerationQuality, createUnavailableQualityReport } from './image/generationQuality';
 import { buildFloorplanTextLanguageRequirement, buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode } from '../src/promptTemplates/intelligentPromptTemplates';
+import { normalizeReplacementTarget, type ReplacementTarget } from '../src/utils/materialReplacementTarget';
 import { findPlanColorizeStyle, maxPlanColorizeBatchCount, planColorizeStyleOptions, resolvePlanColorizeStyles, type PlanColorizeStyleOption } from '../src/constants/planColorizeStyles';
 import { resolveFloorplanBatchCount, resolveFloorplanVariantPlans, type FloorplanVariantPlan } from '../src/constants/floorplanVariants';
 import { getGenerationOutputCount } from '../src/utils/generationCredits';
@@ -695,6 +696,9 @@ async function processGenerationJob(job: GenerationJob, workerId: string): Promi
                 ...originalOutputMetadata,
                 mode: 'material-replace',
                 targetObjectType: typeof job.config.targetObjectType === 'string' ? job.config.targetObjectType : undefined,
+                replacementTarget: readMaterialReplacementTarget(job.config),
+                editingScope: typeof job.config.editingScope === 'string' ? job.config.editingScope : undefined,
+                replacementStrategy: typeof job.config.replacementStrategy === 'string' ? job.config.replacementStrategy : undefined,
                 targetMaterial: typeof job.config.targetMaterial === 'string' ? job.config.targetMaterial : undefined,
                 materialPatternScale: typeof job.config.materialPatternScale === 'string' ? job.config.materialPatternScale : undefined,
                 materialDirection: typeof job.config.materialDirection === 'string' ? job.config.materialDirection : undefined,
@@ -2283,7 +2287,8 @@ function removeInternalConfig(config: Record<string, unknown>): Record<string, u
   return publicConfig;
 }
 
-const defaultVariantStylesByCount: Record<2 | 4 | 8, string[]> = {
+const defaultVariantStylesByCount: Record<1 | 2 | 4 | 8, string[]> = {
+  1: ['modern-minimal'],
   2: ['modern-minimal', 'natural-wood'],
   4: ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'],
   8: ['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby'],
@@ -2334,7 +2339,7 @@ function resolveVariantStyles(config: Record<string, unknown>, batchCount: numbe
   const styles = Array.isArray(config.variantStyles)
     ? config.variantStyles.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
     : [];
-  const defaults = batchCount === 2 || batchCount === 4 || batchCount === 8 ? defaultVariantStylesByCount[batchCount] : defaultVariantStylesByCount[4];
+  const defaults = batchCount === 1 || batchCount === 2 || batchCount === 4 || batchCount === 8 ? defaultVariantStylesByCount[batchCount] : defaultVariantStylesByCount[1];
   const resolved = [...styles];
   for (const style of defaults) {
     if (resolved.length >= batchCount) break;
@@ -2363,6 +2368,40 @@ function isProviderBatchSuccess(result: ProviderBatchResult): result is Provider
 
 function isProviderBatchFailure(result: ProviderBatchResult): result is ProviderBatchFailure {
   return 'error' in result;
+}
+
+function readMaterialReplacementTarget(config: Record<string, unknown>): ReplacementTarget {
+  return normalizeReplacementTarget(config.replacementTarget)
+    || normalizeReplacementTarget(config.targetObjectType)
+    || 'decor';
+}
+
+function buildMaterialReplacementCandidateHints(target: ReplacementTarget): string[] {
+  const targetName = readMaterialReplacementTargetName(target);
+  if (target === 'floor') {
+    return [
+      'Candidate A: identify existing floor surfaces and replace them in place only. Keep exact floor boundaries and use the most conservative seam layout.',
+      'Candidate B: replace the same existing floor surfaces in place, but optimize seam distribution and starting origin for fewer awkward edge cuts.',
+      'Candidate C: replace only existing floor surfaces in place, with a subtle alternative alignment consistent with the selected direction and perspective.',
+      'Candidate D: replace only existing floor surfaces in place while refining roughness, reflections, joints, and lighting integration. Do not add floor layers or alter non-floor areas.',
+    ];
+  }
+  return [
+    `Candidate A: identify existing ${targetName} only and replace them in place with the most conservative geometry preservation.`,
+    `Candidate B: replace the same existing ${targetName} in place, but refine material scale, color, and integration.`,
+    `Candidate C: replace the same existing ${targetName} in place, with a subtle alternative texture or style alignment on that target only.`,
+    `Candidate D: replace only existing ${targetName} in place while refining roughness, reflections, and lighting integration. Do not add extra ${targetName}, do not stack new objects over old objects, and do not alter unrelated areas.`,
+  ];
+}
+
+function readMaterialReplacementTargetName(target: ReplacementTarget): string {
+  if (target === 'wall') return 'wall surfaces';
+  if (target === 'floor') return 'floor surfaces';
+  if (target === 'furniture') return 'table/chair/furniture objects or surfaces';
+  if (target === 'plant') return 'plant/greenery objects';
+  if (target === 'lighting') return 'lighting fixtures';
+  if (target === 'artwork') return 'artwork or framed wall art';
+  return 'decorative objects';
 }
 
 function buildProviderInputForVariant(
@@ -2447,15 +2486,11 @@ function buildProviderInputForVariant(
   }
 
   if (job.mode === 'material-replace') {
-    const hints = [
-      'Paving candidate A: prioritize the configured real-world module size, exact target boundary, and the most conservative seam layout.',
-      'Paving candidate B: keep the same material and scale, but optimize the seam distribution and starting origin for fewer awkward edge cuts.',
-      'Paving candidate C: keep the same material identity, but provide an alternative alignment consistent with the selected direction and surface perspective.',
-      'Paving candidate D: keep the same layout controls while refining roughness, reflections, joints, and lighting integration for the most presentation-ready result.',
-    ];
+    const replacementTarget = readMaterialReplacementTarget(job.config);
+    const hints = buildMaterialReplacementCandidateHints(replacementTarget);
     return {
       ...input,
-      prompt: [input.prompt, hints[index] || hints[0], `This is material paving candidate ${index + 1} of ${batchCount}. Do not change the selected material or exchange target objects.`].join('\n'),
+      prompt: [input.prompt, hints[index] || hints[0], `This is material replacement candidate ${index + 1} of ${batchCount}. Do not change the selected material, replacement target, mask scope, or protected unmasked areas.`].join('\n'),
       config: { ...input.config, materialCandidateIndex: index, candidateIndex: index, batchCount },
     };
   }

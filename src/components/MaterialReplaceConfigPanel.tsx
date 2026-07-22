@@ -1,4 +1,10 @@
-import { GenerationConfig, GenerationStep } from '../types';
+import { GenerationConfig, GenerationStep, type ReplacementTarget } from '../types';
+import {
+  readReplacementTargetLabel,
+  replacementTargets,
+  resolveReplacementTargetFromConfig,
+  toMaterialReplaceTargetObject,
+} from '../utils/materialReplacementTarget';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 
@@ -6,21 +12,13 @@ interface MaterialReplaceConfigPanelProps {
   config: GenerationConfig;
   materialReferenceCount?: number;
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
+  onRequestMaskEditor?: (mode: 'smart' | 'precise') => void;
 }
 
-const targetObjectOptions = [
-  ['floor', '地面'],
-  ['wall', '墙面'],
-  ['ceiling', '天花'],
-  ['cabinet', '柜体'],
-  ['sofa', '沙发'],
-  ['table-chair', '桌椅'],
-  ['lighting', '灯具'],
-  ['plant', '绿植'],
-  ['door-window', '门窗'],
-  ['feature-wall', '背景墙'],
-  ['other', '其他'],
-] as const;
+const targetObjectOptions: Array<[ReplacementTarget, string]> = replacementTargets.map(target => [
+  target,
+  readReplacementTargetLabel(target),
+]);
 
 const materialOptions = [
   ['light-wood', '浅木色'],
@@ -42,14 +40,14 @@ const materialOptions = [
   ['custom', '自定义'],
 ] as const;
 
-const recommendedMaterials: Record<string, string[]> = {
+const recommendedMaterials: Record<ReplacementTarget, string[]> = {
   floor: ['light-wood', 'dark-wood', 'walnut', 'microcement', 'marble', 'tile', 'terrazzo'],
   wall: ['microcement', 'art-paint', 'walnut', 'marble', 'rock-slab'],
-  ceiling: ['art-paint', 'linear-light', 'warm-light-strip', 'microcement'],
-  cabinet: ['walnut', 'light-wood', 'dark-wood', 'glass', 'metal'],
-  sofa: ['leather', 'fabric'],
+  furniture: ['walnut', 'light-wood', 'dark-wood', 'leather', 'fabric', 'metal'],
   lighting: ['linear-light', 'warm-light-strip'],
-  'feature-wall': ['rock-slab', 'marble', 'art-paint', 'walnut'],
+  plant: ['plant'],
+  artwork: ['art-paint', 'fabric', 'metal', 'custom'],
+  decor: ['ceramic', 'metal', 'glass', 'custom'].filter(value => materialOptions.some(([key]) => key === value)),
 };
 
 const strengthOptions = [
@@ -97,6 +95,7 @@ export function MaterialReplaceConfigPanel({
   config,
   materialReferenceCount = 0,
   onUpdateConfig,
+  onRequestMaskEditor,
 }: MaterialReplaceConfigPanelProps) {
   const editMode = config.editMode === 'mask' ? 'mask' : 'smart-type';
   const maskSelectionMode = config.maskSelectionMode === 'smart'
@@ -104,16 +103,18 @@ export function MaterialReplaceConfigPanel({
     : config.maskSelectionMode === 'precise'
       ? 'precise'
       : 'precise';
-  const activeObject = config.targetObjectType;
+  const activeReplacementTarget = resolveReplacementTargetFromConfig(config);
+  const activeObject = activeReplacementTarget;
   const activeStrength = config.strength === 'subtle' || config.strength === 'strong' ? config.strength : 'balanced';
   const activePatternScale = config.materialPatternScale || 'medium';
   const activeDirection = config.materialDirection || 'auto';
   const activeFinish = config.materialFinish || 'matte';
   const activeReplaceScope = config.materialReplaceScope || 'material-only';
-  const recommendations = activeObject ? recommendedMaterials[activeObject] || [] : [];
-  const selectedObjectLabel = targetObjectOptions.find(([value]) => value === activeObject)?.[1] || '未选择';
+  const recommendations = activeReplacementTarget ? recommendedMaterials[activeReplacementTarget] || [] : [];
+  const selectedObjectLabel = readReplacementTargetLabel(activeReplacementTarget);
+  const selectedReplacementTargetLabel = readReplacementTargetLabel(activeReplacementTarget);
   const semanticSelectionCount = config.semanticObjectSelections?.length || 0;
-  const candidateCount = config.materialCandidateCount || 2;
+  const candidateCount = config.materialCandidateCount || 1;
 
   return (
     <div className="space-y-5 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-3">
@@ -127,9 +128,14 @@ export function MaterialReplaceConfigPanel({
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <button
             type="button"
-            onClick={() => onUpdateConfig({
+            data-testid="open-smart-mask-editor"
+            onClick={() => onRequestMaskEditor ? onRequestMaskEditor('smart') : onUpdateConfig({
+              editTarget: 'material',
               editMode: 'mask',
               maskSelectionMode: 'smart',
+              maskWorkflowMode: 'smart',
+              maskWorkflowActive: true,
+              smartMaskStage: 'rough-marking',
               smartMaskConfirmed: false,
               smartMaskIsRefining: false,
               smartMaskDetectedObject: undefined,
@@ -143,9 +149,14 @@ export function MaterialReplaceConfigPanel({
           </button>
           <button
             type="button"
-            onClick={() => onUpdateConfig({
+            data-testid="open-precise-mask-editor"
+            onClick={() => onRequestMaskEditor ? onRequestMaskEditor('precise') : onUpdateConfig({
+              editTarget: 'material',
               editMode: 'mask',
               maskSelectionMode: 'precise',
+              maskWorkflowMode: 'manual',
+              maskWorkflowActive: true,
+              smartMaskStage: undefined,
               smartMaskConfirmed: undefined,
               smartMaskIsRefining: false,
               smartMaskDetectedObject: undefined,
@@ -168,7 +179,7 @@ export function MaterialReplaceConfigPanel({
           </div>
           <button
             type="button"
-            onClick={() => onUpdateConfig({ editMode: 'smart-type', smartMaskIsRefining: false })}
+            onClick={() => onUpdateConfig({ editMode: 'smart-type', maskWorkflowMode: 'none', maskWorkflowActive: false, smartMaskStage: 'idle', smartMaskIsRefining: false })}
             className={`rounded-lg border px-3 py-2 text-xs font-bold ${editMode === 'smart-type' ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-600'}`}
           >
             {editMode === 'smart-type' ? '正在使用' : '切换使用'}
@@ -187,16 +198,23 @@ export function MaterialReplaceConfigPanel({
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
           <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">目标区域</label>
-          <span className="rounded-full bg-white px-2 py-1 text-[10px] font-bold text-emerald-700">当前：{selectedObjectLabel}</span>
+          <span className="rounded-full bg-white px-2 py-1 text-[10px] font-bold text-emerald-700">当前：{selectedObjectLabel} · {selectedReplacementTargetLabel}</span>
         </div>
         <div className="grid grid-cols-2 gap-2">
           {targetObjectOptions.map(([value, label]) => (
             <button
               key={value}
               type="button"
-              onClick={() => onUpdateConfig({ targetObjectType: value })}
+              onClick={() => {
+                onUpdateConfig({
+                  editTarget: 'material',
+                  targetObjectType: toMaterialReplaceTargetObject(value),
+                  replacementTarget: value,
+                  preserveUnmaskedArea: true,
+                });
+              }}
               className={`rounded-lg border px-2.5 py-2 text-xs font-bold ${
-                activeObject === value
+                activeReplacementTarget === value
                   ? 'border-emerald-600 bg-white text-emerald-700 shadow-sm'
                   : 'border-slate-200 bg-white/80 text-slate-600 hover:border-emerald-200'
               }`}
@@ -265,14 +283,32 @@ export function MaterialReplaceConfigPanel({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <label className="rounded-xl border border-slate-200 bg-white p-2 text-[10px] font-bold text-slate-500">材质真实尺寸（mm）
-          <input type="number" min="20" max="5000" step="10" value={config.materialRealSizeMm || 600} onChange={event => onUpdateConfig({ materialRealSizeMm: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-800" />
-        </label>
-        <label className="rounded-xl border border-slate-200 bg-white p-2 text-[10px] font-bold text-slate-500">拼缝宽度（mm）
-          <input type="number" min="0" max="50" step="0.5" value={config.materialJointWidthMm ?? 2} onChange={event => onUpdateConfig({ materialJointWidthMm: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-800" />
-        </label>
-      </div>
+      {config.editTarget === 'material' ? (
+        <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3">
+          <label className="flex cursor-pointer items-start gap-2">
+            <input
+              type="checkbox"
+              checked={config.enablePhysicalMaterialLayout === true}
+              onChange={event => onUpdateConfig({ enablePhysicalMaterialLayout: event.target.checked })}
+              className="mt-0.5 accent-emerald-600"
+            />
+            <span>
+              <span className="block text-xs font-black text-slate-800">启用真实尺寸与拼缝控制</span>
+              <span className="mt-1 block text-[10px] leading-4 text-slate-500">适用于瓷砖、石材和木地板。关闭时由系统按画面自动匹配纹理尺度，不主动指定拼缝。</span>
+            </span>
+          </label>
+          {config.enablePhysicalMaterialLayout ? (
+            <div className="grid grid-cols-2 gap-2" data-testid="physical-material-layout-fields">
+              <label className="rounded-xl border border-slate-200 bg-slate-50 p-2 text-[10px] font-bold text-slate-500">材质真实尺寸（mm）
+                <input type="number" min="20" max="5000" step="10" value={config.materialRealSizeMm ?? ''} onChange={event => onUpdateConfig({ materialRealSizeMm: readOptionalNumber(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-800" />
+              </label>
+              <label className="rounded-xl border border-slate-200 bg-slate-50 p-2 text-[10px] font-bold text-slate-500">拼缝宽度（mm）
+                <input type="number" min="0" max="50" step="0.5" value={config.materialJointWidthMm ?? ''} onChange={event => onUpdateConfig({ materialJointWidthMm: readOptionalNumber(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-800" />
+              </label>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="space-y-2">
         <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">纹理对齐与起点</label>
@@ -286,8 +322,8 @@ export function MaterialReplaceConfigPanel({
 
       <div className="space-y-2">
         <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">铺贴候选</label>
-        <div className="grid grid-cols-3 gap-2">
-          {([2, 3, 4] as const).map(count => <button key={count} type="button" onClick={() => onUpdateConfig({ materialCandidateCount: count, batchCount: count })} className={`rounded-lg border px-3 py-2 text-xs font-black ${candidateCount === count ? 'border-emerald-600 bg-white text-emerald-700' : 'border-slate-200 bg-white/80 text-slate-500'}`}>{count} 种</button>)}
+        <div className="grid grid-cols-4 gap-2">
+          {([1, 2, 3, 4] as const).map(count => <button key={count} type="button" onClick={() => onUpdateConfig({ materialCandidateCount: count, batchCount: count })} className={`rounded-lg border px-3 py-2 text-xs font-black ${candidateCount === count ? 'border-emerald-600 bg-white text-emerald-700' : 'border-slate-200 bg-white/80 text-slate-500'}`}>{count} 张</button>)}
         </div>
         <p className="text-[10px] font-semibold text-slate-500">按候选结果数扣除算力点，失败候选沿用任务退款机制。</p>
       </div>
@@ -423,4 +459,10 @@ export function MaterialReplaceConfigPanel({
       </div>
     </div>
   );
+}
+
+function readOptionalNumber(value: string): number | undefined {
+  if (!value.trim()) return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
 }

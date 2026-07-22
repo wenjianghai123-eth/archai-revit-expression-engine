@@ -40,6 +40,17 @@ describe('refineImageMask', () => {
     expect(mask[38 * 160 + 58]).toBe(255);
     expect(mask[20 * 160 + 30]).toBe(0);
   });
+
+  it('keeps furniture smart masks conservative when colour growing would consume the scene', async () => {
+    const sourceImage = await sharp({ create: { width: 160, height: 100, channels: 3, background: { r: 180, g: 180, b: 176 } } }).png().toBuffer();
+    const roughMask = await createMask({ left: 72, top: 48, width: 8, height: 8 });
+    const result = await refineImageMask({ sourceImage, roughMask, mode: 'smart', targetObject: 'table-chair' });
+    const mask = await readMask(result.mask);
+    const selected = mask.reduce((count, value) => count + (value > 200 ? 1 : 0), 0);
+
+    expect(result.detectedObject).toBe('table-chair');
+    expect(selected / mask.length).toBeLessThan(0.35);
+  });
 });
 
 async function createScene(region: { left: number; top: number; width: number; height: number }): Promise<Buffer> {

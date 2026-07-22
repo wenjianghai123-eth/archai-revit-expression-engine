@@ -11,6 +11,9 @@ describe('MaterialReplaceConfigPanel', () => {
       editMode: 'mask',
       maskSelectionMode: 'smart',
       smartMaskConfirmed: false,
+      batchCount: 1,
+      materialCandidateCount: 1,
+      enablePhysicalMaterialLayout: false,
     });
   });
 
@@ -52,5 +55,32 @@ describe('MaterialReplaceConfigPanel', () => {
     expect(html).toContain('人字拼');
     expect(html).toContain('材质 + 软装微调');
     expect(html).toContain('上传对应贴图');
+  });
+
+  it('keeps physical size and seams optional and material-only', () => {
+    const baseConfig: GenerationConfig = {
+      ...DEFAULT_CONFIGS[GenerationStep.MaterialReplace],
+      editTarget: 'material',
+    };
+    const disabledHtml = renderToStaticMarkup(React.createElement(MaterialReplaceConfigPanel, {
+      config: baseConfig,
+      onUpdateConfig: () => undefined,
+    }));
+    expect(disabledHtml).toContain('启用真实尺寸与拼缝控制');
+    expect(disabledHtml).not.toContain('材质真实尺寸（mm）');
+    expect(disabledHtml).toContain('1 张');
+
+    const enabledHtml = renderToStaticMarkup(React.createElement(MaterialReplaceConfigPanel, {
+      config: { ...baseConfig, enablePhysicalMaterialLayout: true, materialRealSizeMm: 600, materialJointWidthMm: 0 },
+      onUpdateConfig: () => undefined,
+    }));
+    expect(enabledHtml).toContain('材质真实尺寸（mm）');
+    expect(enabledHtml).toContain('拼缝宽度（mm）');
+
+    const furnishingHtml = renderToStaticMarkup(React.createElement(MaterialReplaceConfigPanel, {
+      config: { ...baseConfig, editTarget: 'furniture', enablePhysicalMaterialLayout: true },
+      onUpdateConfig: () => undefined,
+    }));
+    expect(furnishingHtml).not.toContain('启用真实尺寸与拼缝控制');
   });
 });
