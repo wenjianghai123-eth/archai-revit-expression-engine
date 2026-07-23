@@ -88,7 +88,6 @@ import { designVariantVariableKeys, isDesignVariantVariableKey, readDesignVarian
 import { normalizeReplacementTarget, resolveReplacementTargetFromConfig } from '../src/utils/materialReplacementTarget';
 import { createAssetsRouter } from './routes/assets';
 import { createEditSessionsRouter } from './routes/editSessions';
-import { createProjectWorkflowsRouter } from './routes/projectWorkflows';
 import { createFloorPlanRouter } from './routes/floorPlan';
 import { createImageRouter } from './routes/image';
 import { createGenerationJobsRouter } from './routes/generationJobs';
@@ -96,7 +95,7 @@ import { authenticateSupabasePassword, createSupabaseAuthUser, getSupabaseAdminC
 import { getModelConversionConfig } from './modelConversionService';
 import { getModelOptimizationConfig } from './modelOptimizationService';
 import { polishPromptText, PromptPolishRequest, PromptPolishResult } from './promptPolishService';
-import { resolveImagePolishPrompts } from './prompts/imagePolishPrompt';
+import { isImagePolishMaterializationMode, resolveImagePolishPrompts } from './prompts/imagePolishPrompt';
 import { compileFloorPlanMaterialPrompt, readFloorPlanMaterialPromptInput } from './prompts/floorPlanMaterialPrompt';
 
 export const app = express();
@@ -527,7 +526,6 @@ app.delete('/api/prompt-templates/:id', requireAuth, requireAdmin, async (
 
 app.use('/api/assets', createAssetsRouter({ maxImageMb, maxModelMb }));
 app.use('/api/edit-sessions', createEditSessionsRouter());
-app.use('/api/projects/:projectId/design-workflow', createProjectWorkflowsRouter());
 app.use('/api/floor-plan', createFloorPlanRouter());
 app.use('/api/image', createImageRouter());
 app.post('/api/upload', requireAuth, legacyImageUploadHandler);
@@ -1722,7 +1720,27 @@ const materialFinishes = new Set(['matte', 'satin', 'glossy', 'rough']);
 const materialReplaceScopes = new Set(['material-only', 'material-and-soft-decor', 'creative']);
 const materialTextureAlignments = new Set(['auto', 'surface', 'center', 'edge', 'custom-origin']);
 const objectInsertSurfaces = new Set(['floor', 'wall', 'ceiling', 'tabletop', 'outdoor-ground', 'auto']);
-const objectInsertTypes = new Set(['sofa', 'chair', 'table', 'lamp', 'plant', 'artwork', 'sculpture', 'car', 'person', 'tree', 'signage', 'custom']);
+const objectInsertTypes = new Set([
+  'sofa',
+  'chair',
+  'table',
+  'lamp',
+  'plant',
+  'artwork',
+  'sculpture',
+  'car',
+  'person',
+  'tree',
+  'signage',
+  'logo',
+  'wall-text',
+  'hospital-signage',
+  'brand-signage',
+  'poster',
+  'wayfinding',
+  'screen-content',
+  'custom',
+]);
 const objectFidelities = new Set(['strict', 'balanced', 'loose']);
 const objectInsertCandidateStrategies = new Set(['strict-placement', 'natural-fit', 'object-fidelity', 'scene-harmony']);
 
@@ -1838,6 +1856,21 @@ function readDesignRetryVariantIndex(config: Record<string, unknown>): number | 
   return index >= 0 && index <= 7 ? index : undefined;
 }
 
+type MaterialSelectionModeLike = 'semantic-auto' | 'smart-select';
+type MaskWorkflowModeLike = 'none' | 'smart';
+
+function readSelectionMode(value: unknown): MaterialSelectionModeLike | null {
+  return value === 'semantic-auto' || value === 'smart-select'
+    ? value
+    : null;
+}
+
+function requestedMaskWorkflowModeToSelectionMode(value: string | undefined): MaterialSelectionModeLike | null {
+  if (value === 'none') return 'semantic-auto';
+  if (value === 'smart') return 'smart-select';
+  return null;
+}
+
 function normalizeMaterialReplaceConfig(
   mode: GenerationRecord['mode'],
   config: Record<string, unknown>,
@@ -1863,13 +1896,19 @@ function normalizeMaterialReplaceConfig(
     delete config.materialTextureAlignment;
     delete config.materialTextureOrigin;
     delete config.materialCandidateCount;
+    delete config.selectionMode;
     delete config.maskSelectionMode;
     delete config.maskWorkflowMode;
     delete config.maskWorkflowActive;
+    delete config.smartSelectionStatus;
+    delete config.smartSelectionConfirmed;
     delete config.smartMaskConfirmed;
+    delete config.smartMaskIsRefining;
+    delete config.smartMaskStage;
     delete config.smartMaskDetectedObject;
     delete config.smartMaskConfidence;
     delete config.smartMaskRefinementMethod;
+    delete config.semanticAssistFromSelection;
     delete config.confirmedSmartMaskAssetId;
     delete config.confirmedManualMaskAssetId;
     return { ok: true };
@@ -1891,51 +1930,65 @@ function normalizeMaterialReplaceConfig(
     requestedMaskWorkflowMode !== undefined
     && requestedMaskWorkflowMode !== 'none'
     && requestedMaskWorkflowMode !== 'smart'
-    && requestedMaskWorkflowMode !== 'manual'
   ) {
-    return { ok: false, error: { message: 'maskWorkflowMode must be none, smart, or manual.', code: 'GENERATION_JOB_MASK_WORKFLOW_MODE_INVALID' } };
+    return { ok: false, error: { message: 'maskWorkflowMode must be none or smart.', code: 'GENERATION_JOB_MASK_WORKFLOW_MODE_INVALID' } };
   }
-  const maskWorkflowMode = requestedMaskWorkflowMode
+  const requestedSelectionMode = readSelectionMode(config.selectionMode);
+  if (typeof config.selectionMode === 'string' && !requestedSelectionMode) {
+    return { ok: false, error: { message: 'selectionMode must be semantic-auto or smart-select.', code: 'GENERATION_JOB_SELECTION_MODE_INVALID' } };
+  }
+  const selectionMode = requestedSelectionMode
+    || requestedMaskWorkflowModeToSelectionMode(requestedMaskWorkflowMode)
     || (isMaskMode(config.maskMode) || isNonEmptyString(config.maskAssetId)
-      ? config.maskSelectionMode === 'smart' ? 'smart' : 'manual'
+      ? 'smart-select'
       : config.maskWorkflowActive === true || config.editMode === 'mask'
-        ? config.maskSelectionMode === 'smart' ? 'smart' : 'manual'
-        : 'none');
+        ? 'smart-select'
+        : 'semantic-auto');
+  config.selectionMode = selectionMode;
+  const maskWorkflowMode: MaskWorkflowModeLike = selectionMode === 'semantic-auto'
+    ? 'none'
+    : 'smart';
   config.maskWorkflowMode = maskWorkflowMode;
   config.maskWorkflowActive = maskWorkflowMode !== 'none';
   config.editMode = maskWorkflowMode === 'none' ? 'smart-type' : 'mask';
   if (maskWorkflowMode !== 'none') {
     if (config.maskSelectionMode === undefined || config.maskSelectionMode === null || config.maskSelectionMode === '') {
-      config.maskSelectionMode = maskWorkflowMode === 'smart' ? 'smart' : 'precise';
-    } else if (config.maskSelectionMode !== 'smart' && config.maskSelectionMode !== 'precise') {
-      return { ok: false, error: { message: 'maskSelectionMode must be smart or precise.', code: 'GENERATION_JOB_MASK_SELECTION_MODE_INVALID' } };
+      config.maskSelectionMode = 'smart';
+    } else if (config.maskSelectionMode !== 'smart') {
+      return { ok: false, error: { message: 'maskSelectionMode must be smart for material replacement.', code: 'GENERATION_JOB_MASK_SELECTION_MODE_INVALID' } };
     }
-    config.maskSelectionMode = maskWorkflowMode === 'smart' ? 'smart' : 'precise';
-    if (config.maskSelectionMode === 'smart') {
-      config.smartMaskConfirmed = config.smartMaskConfirmed === true;
-      if (typeof config.smartMaskDetectedObject === 'string' && config.smartMaskDetectedObject.trim()) {
-        config.smartMaskDetectedObject = config.smartMaskDetectedObject.trim().slice(0, 64);
-      } else {
-        delete config.smartMaskDetectedObject;
-      }
-      config.smartMaskConfidence = normalizeBoundedNumber(config.smartMaskConfidence, 0, 0, 1);
-      if (typeof config.smartMaskRefinementMethod === 'string' && config.smartMaskRefinementMethod.trim()) {
-        config.smartMaskRefinementMethod = config.smartMaskRefinementMethod.trim().slice(0, 80);
-      } else {
-        delete config.smartMaskRefinementMethod;
-      }
+    config.maskSelectionMode = 'smart';
+    const explicitSmartSelectionConfirmed = config.smartSelectionConfirmed === true || config.smartMaskConfirmed === true;
+    const explicitSmartSelectionUnconfirmed = config.smartSelectionConfirmed === false || config.smartMaskConfirmed === false;
+    config.smartSelectionConfirmed = explicitSmartSelectionConfirmed
+      || (!explicitSmartSelectionUnconfirmed && (isMaskMode(config.maskMode) || isNonEmptyString(config.maskAssetId)));
+    config.smartMaskConfirmed = config.smartSelectionConfirmed;
+    config.semanticAssistFromSelection = config.semanticAssistFromSelection !== false;
+    delete config.smartSelectionStatus;
+    delete config.smartMaskStage;
+    delete config.smartMaskIsRefining;
+    if (typeof config.smartMaskDetectedObject === 'string' && config.smartMaskDetectedObject.trim()) {
+      config.smartMaskDetectedObject = config.smartMaskDetectedObject.trim().slice(0, 64);
     } else {
-      delete config.smartMaskConfirmed;
       delete config.smartMaskDetectedObject;
-      delete config.smartMaskConfidence;
+    }
+    config.smartMaskConfidence = normalizeBoundedNumber(config.smartMaskConfidence, 0, 0, 1);
+    if (typeof config.smartMaskRefinementMethod === 'string' && config.smartMaskRefinementMethod.trim()) {
+      config.smartMaskRefinementMethod = config.smartMaskRefinementMethod.trim().slice(0, 80);
+    } else {
       delete config.smartMaskRefinementMethod;
     }
   } else {
     delete config.maskSelectionMode;
+    delete config.smartSelectionStatus;
+    delete config.smartSelectionConfirmed;
     delete config.smartMaskConfirmed;
+    delete config.smartMaskStage;
+    delete config.smartMaskIsRefining;
     delete config.smartMaskDetectedObject;
     delete config.smartMaskConfidence;
     delete config.smartMaskRefinementMethod;
+    delete config.semanticAssistFromSelection;
     delete config.confirmedSmartMaskAssetId;
     delete config.confirmedManualMaskAssetId;
   }
@@ -1960,6 +2013,11 @@ function normalizeMaterialReplaceConfig(
   config.semanticObjectSelections = normalizeSemanticObjectSelections(config.semanticObjectSelections);
   config.feather = normalizeBoundedNumber(config.feather, 0, 0, 30);
   config.maskExpansion = normalizeBoundedNumber(config.maskExpansion, 0, -30, 30);
+
+  if (config.selectionMode === 'smart-select') {
+    delete config.targetObjectType;
+    delete config.replacementTarget;
+  }
 
   if (config.targetObjectType === undefined || config.targetObjectType === null || config.targetObjectType === '') {
     delete config.targetObjectType;
@@ -1992,11 +2050,11 @@ function normalizeMaterialReplaceConfig(
   }
 
   const materialReferenceAssetIds = readStringArray(config.materialReferenceAssetIds);
-  if (config.editMode === 'smart-type' && !config.replacementTarget) {
+  if (config.selectionMode === 'semantic-auto' && !config.replacementTarget) {
     return {
       ok: false,
       error: {
-        message: '请选择要替换的区域类型',
+        message: '请选择目标区域',
         code: 'GENERATION_JOB_MATERIAL_TARGET_OBJECT_REQUIRED',
       },
     };
@@ -2204,7 +2262,7 @@ function normalizeFloorplanRoomLabels(value: unknown): Array<{
     });
 }
 
-function normalizeObjectPlacement(value: unknown): { x: number; y: number; width: number; height: number; rotation: number } | null {
+function normalizeObjectPlacement(value: unknown): ObjectPlacementForRequest | null {
   if (!isRecord(value)) return null;
   const x = readFiniteNumber(value.x);
   const y = readFiniteNumber(value.y);
@@ -2213,7 +2271,48 @@ function normalizeObjectPlacement(value: unknown): { x: number; y: number; width
   const rotation = readFiniteNumber(value.rotation);
   if (x === null || y === null || width === null || height === null || rotation === null) return null;
   if (width <= 0 || height <= 0) return null;
-  return { x, y, width, height, rotation };
+  const normalizedBox = normalizeObjectPlacementBox(value.normalizedBox);
+  const cornerPoints = normalizeObjectPlacementCornerPoints(value.cornerPoints);
+  const surfacePlane = typeof value.surfacePlane === 'string' && objectInsertSurfaces.has(value.surfacePlane)
+    ? value.surfacePlane as ObjectInsertSurface
+    : undefined;
+  return {
+    x,
+    y,
+    width,
+    height,
+    rotation,
+    anchor: value.anchor === 'center' ? 'center' : value.anchor === 'top-left' ? 'top-left' : undefined,
+    cornerPoints: cornerPoints || undefined,
+    normalizedBox: normalizedBox || undefined,
+    surfacePlane,
+    sizeLocked: value.sizeLocked === true,
+  };
+}
+
+function normalizeObjectPlacementCornerPoints(value: unknown): ObjectPlacementForRequest['cornerPoints'] | null {
+  if (!Array.isArray(value)) return null;
+  const points = value
+    .filter(isRecord)
+    .map(point => {
+      const x = readFiniteNumber(point.x);
+      const y = readFiniteNumber(point.y);
+      return x === null || y === null ? null : { x, y };
+    })
+    .filter((point): point is { x: number; y: number } => Boolean(point))
+    .slice(0, 4);
+  return points.length === 4 ? points : null;
+}
+
+function normalizeObjectPlacementBox(value: unknown): ObjectPlacementForRequest['normalizedBox'] | null {
+  if (!isRecord(value)) return null;
+  const x = readFiniteNumber(value.x);
+  const y = readFiniteNumber(value.y);
+  const width = readFiniteNumber(value.width);
+  const height = readFiniteNumber(value.height);
+  if (x === null || y === null || width === null || height === null) return null;
+  if (width <= 0 || height <= 0) return null;
+  return { x, y, width, height };
 }
 
 function readFiniteNumber(value: unknown): number | null {
@@ -2264,6 +2363,9 @@ function validateGenerationJobCreateBody(
   }
 
   const config: Record<string, unknown> = { ...body.config };
+  delete config.designWorkflowId;
+  delete config.designWorkflowNodeId;
+  delete config.designWorkflowStageKey;
   const requestedProviderValue = body.provider ?? body.selectedProvider ?? config.aiProvider ?? config.selectedProvider;
   const requestedProvider = typeof requestedProviderValue === 'string' ? requestedProviderValue.trim() : null;
   const normalizedProvider = requestedProvider
@@ -2411,22 +2513,31 @@ function validateGenerationJobCreateBody(
       return { ok: false, error: { message: '请先上传原图。', code: 'GENERATION_JOB_IMAGE_POLISH_SOURCE_REQUIRED' } };
     }
     const imagePolishPrompts = resolveImagePolishPrompts({
-      mode: config.imagePolishMode === 'conservative' || config.imagePolishMode === 'white-model-materialization'
-        ? config.imagePolishMode
-        : undefined,
+      mode: readImagePolishModeInput(config.imagePolishMode),
       controls: isRecord(config.imagePolishControls) ? config.imagePolishControls : undefined,
       enhanceMaterials: config.enhanceMaterials === true,
+      addPeople: config.addPeople,
+      peopleLevel: config.peopleLevel,
+      addPlants: config.addPlants,
+      plantLevel: config.plantLevel,
+      preserveStrictness: config.preserveStrictness,
     });
     const imagePolishMode = imagePolishPrompts.mode;
     const imagePolishControls = imagePolishPrompts.controls;
-    const enhanceMaterials = imagePolishMode === 'white-model-materialization';
-    const promptMode = enhanceMaterials ? 'white_model_materialization' : 'conservative_polish';
+    const imagePolishOptions = imagePolishPrompts.options;
+    const enhanceMaterials = isImagePolishMaterializationMode(imagePolishMode);
+    const promptMode = enhanceMaterials ? 'materialization' : imagePolishMode === 'standard' ? 'standard_polish' : 'conservative_polish';
     config.sourceImageAssetId = sourceImageAssetId;
     config.generationStep = 'image_polish';
     config.featureKey = 'image_polish';
     config.featureName = '质感提升';
     config.imagePolishMode = imagePolishMode;
     config.imagePolishControls = imagePolishControls;
+    config.addPeople = imagePolishOptions.addPeople;
+    config.peopleLevel = imagePolishOptions.peopleLevel;
+    config.addPlants = imagePolishOptions.addPlants;
+    config.plantLevel = imagePolishOptions.plantLevel;
+    config.preserveStrictness = imagePolishOptions.preserveStrictness;
     config.enhanceMaterials = enhanceMaterials;
     config.promptMode = promptMode;
     config.batchCount = 1;
@@ -2557,6 +2668,7 @@ function validateGenerationJobCreateBody(
     const allowAutoAdjustScale = readObjectInsertAutoAdjust(config, 'allowAutoAdjustScale');
     const objectType = readObjectInsertType(config);
     const objectInsertSurface = readObjectInsertSurface(config);
+    const insertElementKind = readObjectInsertElementKind(config, objectType, objectInsertSurface);
     const objectFidelity = readObjectFidelity(config);
     const enforceContactShadow = readObjectInsertBooleanConstraint(config, 'enforceContactShadow');
     const enforceOcclusion = readObjectInsertBooleanConstraint(config, 'enforceOcclusion');
@@ -2565,11 +2677,12 @@ function validateGenerationJobCreateBody(
     const objectInsertSceneEnrichment = readObjectInsertSceneEnrichment(config);
     const needsObject = previewFusionMode ? false : objectInsertIncludesObject(debugMode);
     const needsPreview = previewFusionMode ? true : objectInsertIncludesPreview(debugMode);
-    const needsMask = previewFusionMode ? false : objectInsertIncludesMask(debugMode);
-    const needsPlacement = previewFusionMode ? false : needsPreview || needsMask;
+    let needsMask = previewFusionMode ? false : objectInsertIncludesMask(debugMode);
+    let needsPlacement = previewFusionMode ? false : needsPreview || needsMask;
     const objectItems = normalizeObjectInsertItemsForRequest(objectInsertConfig.objectItems, {
       defaultPlacementMode: placementMode,
       defaultObjectType: objectType,
+      defaultInsertElementKind: insertElementKind,
       defaultSurface: objectInsertSurface,
       defaultFidelity: objectFidelity,
       defaultEnforceContactShadow: enforceContactShadow,
@@ -2613,6 +2726,11 @@ function validateGenerationJobCreateBody(
       : isNonEmptyString(config.maskAssetId)
         ? config.maskAssetId.trim()
         : inputAssetIds[3] || '';
+    const previewFusionHasPlanarEdgeMask = previewFusionMode
+      && objectItems.some(item => item.insertElementKind === 'planar-graphic' && item.aiEditableRegion === 'edge-band-only')
+      && Boolean(placementMaskAssetId);
+    needsMask = previewFusionHasPlanarEdgeMask ? true : needsMask;
+    needsPlacement = previewFusionMode ? previewFusionHasPlanarEdgeMask : needsPreview || needsMask;
 
     const objectItemsMissingReferences = !previewFusionMode && objectItems.some(item => item.referenceAssetIds.length === 0 || item.referenceAssetIds.some(assetId => !inputAssetIds.includes(assetId)));
     const objectItemsMissingGuides = !previewFusionMode && objectItems.some(item => !item.placementPreviewAssetId || !inputAssetIds.includes(item.placementPreviewAssetId));
@@ -2690,6 +2808,7 @@ function validateGenerationJobCreateBody(
     config.harmonyPriority = harmonyPriority;
     config.objectInsertFusionPreference = fusionPreference;
     config.objectType = objectType;
+    config.insertElementKind = insertElementKind;
     config.objectInsertSurface = objectInsertSurface;
     config.objectFidelity = objectFidelity;
     config.enforceContactShadow = enforceContactShadow;
@@ -2734,6 +2853,7 @@ function validateGenerationJobCreateBody(
       harmonyPriority,
       fusionPreference,
       objectType,
+      insertElementKind,
       objectInsertSurface,
       objectFidelity,
       enforceContactShadow,
@@ -2742,6 +2862,17 @@ function validateGenerationJobCreateBody(
       allowAutoAdjustPosition,
       allowAutoAdjustRotation,
       allowAutoAdjustScale,
+      attachmentMode: firstObjectItem?.attachmentMode,
+      fusionStrategy: firstObjectItem?.fusionStrategy,
+      lockPosition: firstObjectItem?.lockPosition,
+      lockSize: firstObjectItem?.lockSize,
+      lockAspectRatio: firstObjectItem?.lockAspectRatio,
+      preserveGraphicContent: firstObjectItem?.preserveGraphicContent,
+      preserveBackground: firstObjectItem?.preserveBackground,
+      aiEditableRegion: firstObjectItem?.aiEditableRegion,
+      coreMaskMode: firstObjectItem?.coreMaskMode,
+      edgeBandPx: firstObjectItem?.edgeBandPx,
+      maxMaskExpansionPx: firstObjectItem?.maxMaskExpansionPx,
       objectInsertCandidateStrategy: candidateStrategy,
       objectInsertCandidateStrategies: candidateStrategies,
       objectInsertCandidatePromptHints: candidatePromptHints,
@@ -2839,17 +2970,8 @@ function validateGenerationJobCreateBody(
         return {
           ok: false,
           error: {
-            message: '智能涂抹模式下请先完成识别并确认替换区域',
-            code: 'GENERATION_JOB_SMART_MASK_REQUIRED',
-          },
-        };
-      }
-      if (generationMode === 'material-replace' && config.maskWorkflowMode === 'manual') {
-        return {
-          ok: false,
-          error: {
-            message: '精细涂抹模式下请先选择并确认需要替换的区域',
-            code: 'GENERATION_JOB_MASK_REQUIRED',
+            message: '请在需要替换的对象或区域上轻微涂抹一下。',
+            code: 'GENERATION_JOB_SMART_SELECTION_REQUIRED',
           },
         };
       }
@@ -2891,8 +3013,8 @@ function validateGenerationJobCreateBody(
         return {
           ok: false,
           error: {
-            message: '请先确认智能 Mask 识别范围。',
-            code: 'GENERATION_JOB_SMART_MASK_NOT_CONFIRMED',
+            message: '请确认当前识别区域。',
+            code: 'GENERATION_JOB_SMART_SELECTION_NOT_CONFIRMED',
           },
         };
       }
@@ -2900,9 +3022,6 @@ function validateGenerationJobCreateBody(
         if (config.maskWorkflowMode === 'smart') {
           config.confirmedSmartMaskAssetId = config.maskAssetId;
           delete config.confirmedManualMaskAssetId;
-        } else if (config.maskWorkflowMode === 'manual') {
-          config.confirmedManualMaskAssetId = config.maskAssetId;
-          delete config.confirmedSmartMaskAssetId;
         } else {
           delete config.confirmedSmartMaskAssetId;
           delete config.confirmedManualMaskAssetId;
@@ -2928,11 +3047,14 @@ function validateGenerationJobCreateBody(
     : body.inputAssetIds.map(item => item.trim());
   const normalizedPrompt = generationStep === 'image_polish'
     ? resolveImagePolishPrompts({
-        mode: config.imagePolishMode === 'conservative' || config.imagePolishMode === 'white-model-materialization'
-          ? config.imagePolishMode
-          : undefined,
+        mode: readImagePolishModeInput(config.imagePolishMode),
         controls: isRecord(config.imagePolishControls) ? config.imagePolishControls : undefined,
         enhanceMaterials: config.enhanceMaterials === true,
+        addPeople: config.addPeople,
+        peopleLevel: config.peopleLevel,
+        addPlants: config.addPlants,
+        plantLevel: config.plantLevel,
+        preserveStrictness: config.preserveStrictness,
       }).prompt
     : floorPlanMaterialPromptInput
       ? compileFloorPlanMaterialPrompt(floorPlanMaterialPromptInput)
@@ -3143,13 +3265,35 @@ type ObjectInsertHarmonyPriority = 'layout' | 'style' | 'balance';
 type ObjectInsertFusionPreference = 'conservative' | 'balanced' | 'design';
 type ObjectInsertSurface = 'floor' | 'wall' | 'ceiling' | 'tabletop' | 'outdoor-ground' | 'auto';
 type ObjectFidelity = 'strict' | 'balanced' | 'loose';
+type InsertElementKind = 'volumetric-object' | 'planar-graphic';
+type PlanarAttachmentMode = 'flat-decal' | 'flat-sign' | 'raised-lettering' | 'screen-content';
+
+interface ObjectPlacementForRequest {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  anchor?: 'top-left' | 'center';
+  cornerPoints?: Array<{ x: number; y: number }>;
+  normalizedBox?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  surfacePlane?: ObjectInsertSurface;
+  sizeLocked?: boolean;
+}
 
 interface ObjectInsertRequestItem {
   id: string;
   objectType: string;
   objectLabel?: string;
+  insertElementKind: InsertElementKind;
+  elementType: InsertElementKind;
   referenceAssetIds: string[];
-  placement?: { x: number; y: number; width: number; height: number; rotation: number };
+  placement?: ObjectPlacementForRequest;
   placementPreviewAssetId?: string;
   placementMaskAssetId?: string;
   objectInsertSurface: ObjectInsertSurface;
@@ -3164,6 +3308,18 @@ interface ObjectInsertRequestItem {
   maxCenterOffsetRatio?: number;
   maxScaleAdjustmentRatio?: number;
   maxRotationAdjustmentDeg?: number;
+  planarSizeLocked?: boolean;
+  attachmentMode?: PlanarAttachmentMode;
+  fusionStrategy?: 'deterministic-planar-composite' | 'model-assisted-object-insert';
+  lockPosition?: boolean;
+  lockSize?: boolean;
+  lockAspectRatio?: boolean;
+  preserveGraphicContent?: boolean;
+  preserveBackground?: boolean;
+  aiEditableRegion?: 'edge-band-only' | 'full-object';
+  coreMaskMode?: 'locked';
+  edgeBandPx?: number;
+  maxMaskExpansionPx?: number;
   extraPrompt?: string;
 }
 
@@ -3373,6 +3529,73 @@ function readObjectInsertType(config: Record<string, unknown>): string {
   return objectInsertTypes.has(value) ? value : 'custom';
 }
 
+function readObjectInsertElementKind(
+  config: Record<string, unknown>,
+  objectType = readObjectInsertType(config),
+  surface: ObjectInsertSurface = readObjectInsertSurface(config),
+  fallback: InsertElementKind = 'volumetric-object',
+): InsertElementKind {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const explicit = readInsertElementKindValue(nested.insertElementKind)
+    || readInsertElementKindValue(nested.elementType)
+    || readInsertElementKindValue(config.insertElementKind)
+    || readInsertElementKindValue(config.elementType);
+  if (explicit) return explicit;
+  if (isPlanarGraphicObjectType(objectType)) return 'planar-graphic';
+  const text = [
+    objectType,
+    typeof nested.objectLabel === 'string' ? nested.objectLabel : '',
+    typeof config.objectLabel === 'string' ? config.objectLabel : '',
+    typeof nested.extraPrompt === 'string' ? nested.extraPrompt : '',
+    typeof config.objectInsertExtraPrompt === 'string' ? config.objectInsertExtraPrompt : '',
+    typeof config.customPrompt === 'string' ? config.customPrompt : '',
+    typeof nested.placementIntent === 'string' ? nested.placementIntent : '',
+    typeof config.placementIntent === 'string' ? config.placementIntent : '',
+  ].join('\n');
+  if (surface === 'wall' && /logo|标识|导视|海报|医院|名称|文字|屏幕|screen|poster|signage|wayfinding|brand/iu.test(text)) {
+    return 'planar-graphic';
+  }
+  return fallback;
+}
+
+function readInsertElementKindValue(value: unknown): InsertElementKind | undefined {
+  return value === 'planar-graphic' || value === 'volumetric-object' ? value : undefined;
+}
+
+function isPlanarGraphicObjectType(value: string | undefined): boolean {
+  return value === 'signage'
+    || value === 'logo'
+    || value === 'wall-text'
+    || value === 'hospital-signage'
+    || value === 'brand-signage'
+    || value === 'poster'
+    || value === 'wayfinding'
+    || value === 'screen-content';
+}
+
+function readPlanarAttachmentMode(
+  value: unknown,
+  objectType?: string,
+  objectLabel?: unknown,
+  extraPrompt?: unknown,
+): PlanarAttachmentMode {
+  if (value === 'flat-decal' || value === 'flat-sign' || value === 'raised-lettering' || value === 'screen-content') return value;
+  const text = [
+    objectType || '',
+    typeof objectLabel === 'string' ? objectLabel : '',
+    typeof extraPrompt === 'string' ? extraPrompt : '',
+  ].join('\n');
+  if (objectType === 'screen-content' || /screen|屏幕|显示屏|电视|monitor/iu.test(text)) return 'screen-content';
+  if (/立体字|发光字|立体logo|raised|channel letter|3d letter/iu.test(text)) return 'raised-lettering';
+  if (objectType === 'poster' || objectType === 'artwork' || /海报|墙贴|贴膜|喷绘|poster|decal|vinyl/iu.test(text)) return 'flat-decal';
+  return 'flat-sign';
+}
+
+function readPlanarEdgeBandPx(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return Math.max(1, Math.min(2, Math.round(value)));
+  return 2;
+}
+
 function readObjectInsertSurface(config: Record<string, unknown>): ObjectInsertSurface {
   const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
   const value = typeof nested.objectInsertSurface === 'string'
@@ -3421,6 +3644,7 @@ function normalizeObjectInsertItemsForRequest(
   input: {
     defaultPlacementMode: ObjectInsertPlacementMode;
     defaultObjectType: string;
+    defaultInsertElementKind: InsertElementKind;
     defaultSurface: ObjectInsertSurface;
     defaultFidelity: ObjectFidelity;
     defaultEnforceContactShadow: boolean;
@@ -3451,13 +3675,18 @@ function normalizeObjectInsertItemsForRequest(
       const objectInsertSurface = typeof item.objectInsertSurface === 'string' && objectInsertSurfaces.has(item.objectInsertSurface)
         ? item.objectInsertSurface as ObjectInsertSurface
         : input.defaultSurface;
+      const insertElementKind = readObjectInsertElementKind(item, objectType, objectInsertSurface, input.defaultInsertElementKind);
       const objectFidelity = typeof item.objectFidelity === 'string' && objectFidelities.has(item.objectFidelity)
         ? item.objectFidelity as ObjectFidelity
         : input.defaultFidelity;
+      const attachmentMode = readPlanarAttachmentMode(item.attachmentMode, objectType, item.objectLabel, item.extraPrompt);
+      const edgeBandPx = readPlanarEdgeBandPx(item.edgeBandPx);
       return {
         id: isNonEmptyString(item.id) ? item.id.trim() : `object-item-${index + 1}`,
         objectType,
         objectLabel: isNonEmptyString(item.objectLabel) ? item.objectLabel.trim() : undefined,
+        insertElementKind,
+        elementType: insertElementKind,
         referenceAssetIds,
         placement: placement || undefined,
         placementPreviewAssetId: isNonEmptyString(item.placementPreviewAssetId) ? item.placementPreviewAssetId.trim() : undefined,
@@ -3467,12 +3696,24 @@ function normalizeObjectInsertItemsForRequest(
         enforceContactShadow: typeof item.enforceContactShadow === 'boolean' ? item.enforceContactShadow : input.defaultEnforceContactShadow,
         enforceOcclusion: typeof item.enforceOcclusion === 'boolean' ? item.enforceOcclusion : input.defaultEnforceOcclusion,
         enforcePerspectiveScale: typeof item.enforcePerspectiveScale === 'boolean' ? item.enforcePerspectiveScale : input.defaultEnforcePerspectiveScale,
-        placementMode,
-        placementConstraintMode,
-        placementAnchorStrength: typeof item.placementAnchorStrength === 'number' && Number.isFinite(item.placementAnchorStrength) ? item.placementAnchorStrength : 0.72,
-        maxCenterOffsetRatio: typeof item.maxCenterOffsetRatio === 'number' && Number.isFinite(item.maxCenterOffsetRatio) ? item.maxCenterOffsetRatio : 0.12,
-        maxScaleAdjustmentRatio: typeof item.maxScaleAdjustmentRatio === 'number' && Number.isFinite(item.maxScaleAdjustmentRatio) ? item.maxScaleAdjustmentRatio : 0.18,
-        maxRotationAdjustmentDeg: typeof item.maxRotationAdjustmentDeg === 'number' && Number.isFinite(item.maxRotationAdjustmentDeg) ? item.maxRotationAdjustmentDeg : 20,
+        placementMode: insertElementKind === 'planar-graphic' ? 'strict' : placementMode,
+        placementConstraintMode: insertElementKind === 'planar-graphic' ? 'strict' : placementConstraintMode,
+        placementAnchorStrength: insertElementKind === 'planar-graphic' ? 1 : typeof item.placementAnchorStrength === 'number' && Number.isFinite(item.placementAnchorStrength) ? item.placementAnchorStrength : 0.72,
+        maxCenterOffsetRatio: insertElementKind === 'planar-graphic' ? 0 : typeof item.maxCenterOffsetRatio === 'number' && Number.isFinite(item.maxCenterOffsetRatio) ? item.maxCenterOffsetRatio : 0.12,
+        maxScaleAdjustmentRatio: insertElementKind === 'planar-graphic' ? 0 : typeof item.maxScaleAdjustmentRatio === 'number' && Number.isFinite(item.maxScaleAdjustmentRatio) ? item.maxScaleAdjustmentRatio : 0.18,
+        maxRotationAdjustmentDeg: insertElementKind === 'planar-graphic' ? 0 : typeof item.maxRotationAdjustmentDeg === 'number' && Number.isFinite(item.maxRotationAdjustmentDeg) ? item.maxRotationAdjustmentDeg : 20,
+        planarSizeLocked: insertElementKind === 'planar-graphic' ? true : item.planarSizeLocked === true,
+        attachmentMode: insertElementKind === 'planar-graphic' ? attachmentMode : undefined,
+        fusionStrategy: insertElementKind === 'planar-graphic' ? 'deterministic-planar-composite' : 'model-assisted-object-insert',
+        lockPosition: insertElementKind === 'planar-graphic' ? true : item.lockPosition === true,
+        lockSize: insertElementKind === 'planar-graphic' ? true : item.lockSize === true,
+        lockAspectRatio: insertElementKind === 'planar-graphic' ? true : item.lockAspectRatio === true,
+        preserveGraphicContent: insertElementKind === 'planar-graphic' ? true : item.preserveGraphicContent === true,
+        preserveBackground: insertElementKind === 'planar-graphic' ? true : item.preserveBackground === true,
+        aiEditableRegion: insertElementKind === 'planar-graphic' ? 'edge-band-only' : item.aiEditableRegion === 'edge-band-only' ? 'edge-band-only' : item.aiEditableRegion === 'full-object' ? 'full-object' : undefined,
+        coreMaskMode: insertElementKind === 'planar-graphic' ? 'locked' : item.coreMaskMode === 'locked' ? 'locked' : undefined,
+        edgeBandPx: insertElementKind === 'planar-graphic' ? edgeBandPx : undefined,
+        maxMaskExpansionPx: insertElementKind === 'planar-graphic' ? edgeBandPx : typeof item.maxMaskExpansionPx === 'number' && Number.isFinite(item.maxMaskExpansionPx) ? Math.max(0, Math.round(item.maxMaskExpansionPx)) : undefined,
         placementIntent: isNonEmptyString(item.placementIntent) ? item.placementIntent.trim() : undefined,
         extraPrompt: isNonEmptyString(item.extraPrompt) ? item.extraPrompt.trim() : undefined,
       };
@@ -3493,6 +3734,8 @@ function buildObjectInsertInputOrderForRequest(
     id: item.id,
     objectType: item.objectType,
     objectLabel: item.objectLabel,
+    insertElementKind: item.insertElementKind,
+    elementType: item.elementType,
     referenceImageIndexes: needsObject ? item.referenceAssetIds.map(() => imageIndex++) : [],
     objectInsertSurface: item.objectInsertSurface,
     objectFidelity: item.objectFidelity,
@@ -3500,6 +3743,19 @@ function buildObjectInsertInputOrderForRequest(
     enforceOcclusion: item.enforceOcclusion,
     enforcePerspectiveScale: item.enforcePerspectiveScale,
     placementMode: item.placementMode,
+    placement: item.placement,
+    planarSizeLocked: item.planarSizeLocked,
+    attachmentMode: item.attachmentMode,
+    fusionStrategy: item.fusionStrategy,
+    lockPosition: item.lockPosition,
+    lockSize: item.lockSize,
+    lockAspectRatio: item.lockAspectRatio,
+    preserveGraphicContent: item.preserveGraphicContent,
+    preserveBackground: item.preserveBackground,
+    aiEditableRegion: item.aiEditableRegion,
+    coreMaskMode: item.coreMaskMode,
+    edgeBandPx: item.edgeBandPx,
+    maxMaskExpansionPx: item.maxMaskExpansionPx,
     placementIntent: item.placementIntent,
     extraPrompt: item.extraPrompt,
   }));
@@ -3789,6 +4045,17 @@ function validateDataUrlSize(fieldName: string, dataUrl: string): string | null 
   }
 
   return null;
+}
+
+type ImagePolishModeInput = 'conservative' | 'standard' | 'materialization' | 'white-model-materialization';
+
+function readImagePolishModeInput(value: unknown): ImagePolishModeInput | undefined {
+  return value === 'conservative'
+    || value === 'standard'
+    || value === 'materialization'
+    || value === 'white-model-materialization'
+    ? value
+    : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -39,8 +39,6 @@ import {
   UpdateUserProfileInput,
   UserProfile,
   EditSession, EditMessage, AssetVersion, CreateEditSessionInput, CreateEditMessageInput, CreateAssetVersionInput,
-  DesignWorkflow, DesignWorkflowNode, DesignWorkflowStageKey, CreateDesignWorkflowInput, CreateDesignWorkflowNodeInput,
-  UpdateDesignWorkflowInput, UpdateDesignWorkflowNodeInput,
 } from './types';
 
 export type {
@@ -82,8 +80,6 @@ export type {
   UpdateUserProfileInput,
   UserProfile,
   EditSession, EditMessage, AssetVersion, CreateEditSessionInput, CreateEditMessageInput, CreateAssetVersionInput,
-  DesignWorkflow, DesignWorkflowNode, DesignWorkflowStageKey, CreateDesignWorkflowInput, CreateDesignWorkflowNodeInput,
-  UpdateDesignWorkflowInput, UpdateDesignWorkflowNodeInput,
 } from './types';
 
 export const storageAdapter: StorageAdapter = createStorageAdapter();
@@ -169,15 +165,6 @@ export function createGenerationResult(input: CreateGenerationResultInput): Prom
 export function updateGenerationResult(id: string, userId: string, input: UpdateGenerationResultInput): Promise<GenerationResult | null> {
   return storageAdapter.updateGenerationResult(id, userId, input);
 }
-
-export function createDesignWorkflow(input: CreateDesignWorkflowInput) { return storageAdapter.createDesignWorkflow(input); }
-export function getActiveDesignWorkflow(projectId: string, userId: string) { return storageAdapter.getActiveDesignWorkflow(projectId, userId); }
-export function getDesignWorkflow(id: string, projectId: string, userId: string) { return storageAdapter.getDesignWorkflow(id, projectId, userId); }
-export function updateDesignWorkflow(id: string, projectId: string, userId: string, input: UpdateDesignWorkflowInput) { return storageAdapter.updateDesignWorkflow(id, projectId, userId, input); }
-export function listDesignWorkflowNodes(workflowId: string, projectId: string, userId: string) { return storageAdapter.listDesignWorkflowNodes(workflowId, projectId, userId); }
-export function getDesignWorkflowNode(id: string, workflowId: string, projectId: string, userId: string) { return storageAdapter.getDesignWorkflowNode(id, workflowId, projectId, userId); }
-export function createDesignWorkflowNode(input: CreateDesignWorkflowNodeInput) { return storageAdapter.createDesignWorkflowNode(input); }
-export function updateDesignWorkflowNode(id: string, input: UpdateDesignWorkflowNodeInput) { return storageAdapter.updateDesignWorkflowNode(id, input); }
 
 export function createGenerationJob(input: CreateGenerationJobInput): Promise<GenerationJob | null> {
   return storageAdapter.createGenerationJob(input);

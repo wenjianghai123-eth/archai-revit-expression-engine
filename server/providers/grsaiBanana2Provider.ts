@@ -676,6 +676,8 @@ function buildObjectInsertPrompt(input: GenerateImageInput): string {
     input.prompt,
     buildObjectInsertProviderInputPrompt(input),
     readObjectInsertLocalEditPrompt(input.config),
+    buildObjectInsertImmutableScenePrompt(),
+    hasPlanarGraphicObjectInsert(input.config) ? buildPlanarGraphicInsertionRulesPrompt() : buildVolumetricObjectInsertionRulesPrompt(),
     buildObjectInsertPlacementControlPrompt(input.config),
     buildObjectInsertFusionQualityPrompt(input.config),
     buildObjectInsertNaturalScenePrompt(input.config),
@@ -704,41 +706,48 @@ function buildObjectInsertPrompt(input: GenerateImageInput): string {
     'Use image 2 mainly for furniture type, material, color, proportion, and design language.',
     'Add one coordinated similar furniture/object near the suggested area from image 3.',
     'Treat the guide and placement metadata as a soft design region: the final position, orientation, and scale may be optimized according to the original scene layout, existing furniture relationships, circulation path, perspective, occlusion, and overall composition.',
-    'Prioritize harmonious interior design, functional reasonableness, visual balance, realistic floor contact, and normal usable scale consistent with existing furniture.',
+    'Prioritize functional reasonableness, visual balance, realistic floor contact, and normal usable scale consistent with existing furniture while preserving all existing scene materials and objects.',
     'Do not mechanically copy the reference image direction. If the reference angle is unsuitable for the original scene, rotate or reposition the object into a more natural orientation.',
     'Avoid placing the object alone in the middle of empty floor unless that is clearly the correct furniture relationship.',
-    'Preserve the overall style and design order of the original image. Avoid damaging the existing room structure, camera framing, or unrelated furniture.',
+    'Preserve the original style and design order without restyling the room. Avoid damaging the existing room structure, camera framing, materials, or unrelated furniture.',
   ];
 
   return [
     ...common,
     ...(placementMode === 'strict' ? strictPrompt : naturalPrompt),
-    'Produce one natural photorealistic architectural rendering. Do not generate brand Logo, trademarks, watermarks, text, people, sensitive content, labels, borders, collage, or split-screen.',
+    buildObjectInsertUnrequestedContentPrompt(input.config),
   ].filter(isNonEmptyString).join('\n');
 }
 
 function buildObjectInsertPreviewFusionPrompt(input: GenerateImageInput): string {
   const userPrompt = readObjectInsertPreviewFusionUserPrompt(input.config, input.prompt);
+  const hasPlanarGraphic = hasPlanarGraphicObjectInsert(input.config);
   if (readObjectInsertWorkflowMode(input.config) === 'scene-enrichment') {
     return [
       'Image 1 is the original architectural or interior scene and is the strict structure, camera, perspective, and composition reference.',
       'Image 2 repeats the source scene as a full-canvas placement guide. Use it only to preserve the original framing and editable scene extent.',
+      buildObjectInsertImmutableScenePrompt(),
       buildObjectInsertSceneEnrichmentPrompt(input.config),
       readObjectInsertCandidatePromptForProvider(input.config),
       buildObjectInsertFusionQualityPrompt(input.config),
-      'This is an object_insert scene-enrichment task. Do not treat it as image polishing and do not globally restyle the image.',
+      'This is an object_insert scene-enrichment task. Do not treat it as image polishing and do not run a whole-image style rewrite.',
       'Keep walls, doors, windows, ceiling, fixed furniture, camera, geometry, layout, and all unrelated content unchanged.',
       userPrompt ? `User extra instruction: ${userPrompt}` : '',
     ].filter(isNonEmptyString).join('\n');
   }
+  if (hasPlanarGraphic) {
+    return buildPlanarGraphicInsertionPrompt(input, userPrompt);
+  }
   return [
     'Image 1 is the original scene.',
     'Image 2 is the clean placement preview. It shows the object type, approximate location, approximate size, and approximate orientation intended by the user.',
+    buildObjectInsertImmutableScenePrompt(),
+    buildVolumetricObjectInsertionRulesPrompt(),
     readObjectInsertCandidatePromptForProvider(input.config),
     '',
     'Insert the object into the original scene near the position indicated in Image 2.',
     'The overlay position is a soft anchor, not a rigid bounding box.',
-    'Small local adjustments are allowed for realism, perspective, floor contact, circulation, and composition, but the object must stay in the same nearby area.',
+    'Small local adjustments are allowed only for the inserted object realism, perspective, floor contact, circulation, and scale; existing scene content and materials must stay unchanged.',
     'Keep the final placement close to the user-indicated overlay position.',
     'Do not move the object to a far-away area of the scene.',
     'Do not relocate it to a different side of the room.',
@@ -753,11 +762,180 @@ function buildObjectInsertPreviewFusionPrompt(input: GenerateImageInput): string
     '',
     'For multiple objects, keep every object near its own overlay position. Do not omit objects and do not swap their positions.',
     'The result should look like the object is naturally placed near the indicated overlay position, not rigidly pasted, and not relocated far away.',
-    'Do not redesign the whole room. Do not move unrelated furniture. Do not add extra copies of the object. Do not create a collage or split-screen.',
+    'Do not redesign the whole room. Do not move unrelated furniture. Do not change wall/floor/ceiling/countertop/furniture/equipment/signage/screen materials or content. Do not add extra copies of the object. Do not create a collage or split-screen.',
+    buildObjectInsertUnrequestedContentPrompt(input.config),
     '',
     '中文补充：用户拖动图层所示的位置是主要参考位置。请将物体自然融合到该位置附近，允许为了真实感做小范围微调，但不要偏离过远，不要移动到画面其他区域。重点保证自然摆放、真实光影、统一透视和合理尺度。',
     'User extra instruction:',
     userPrompt,
+  ].join('\n');
+}
+
+function buildObjectInsertImmutableScenePrompt(): string {
+  return [
+    'Element insertion definition: only add the specified new element(s), do not modify any existing content in the original image.',
+    '仅新增，不改原图。严格保持建筑结构、空间结构、相机机位、透视、构图、墙面、地面、顶面、柜台、家具、设备、屏幕、已有标识、导视、装饰、材质种类、材质边界和色彩体系不变。',
+    'Area outside the target placement / selection must stay strictly frozen. Inside the target area, only insert the new element; do not redo wall, floor, ceiling, countertop, furniture, equipment, signage, screen, or decorative materials.',
+    'Do not change wall material. Do not change floor material. Do not change ceiling material. Do not change countertop material. Do not change furniture material. Do not change equipment, wayfinding, screens, existing signs, camera position, perspective, composition, or any non-target content.',
+    'No whole-image atmosphere changes, no whole-image quality pass, no global style rewrite, no unified style rewrite, and no surrounding-region redesign.',
+  ].join('\n');
+}
+
+function buildVolumetricObjectInsertionRulesPrompt(): string {
+  return [
+    'Volumetric object insertion branch:',
+    '- Insert the requested three-dimensional object as a new believable scene object.',
+    '- Match the original camera perspective, scale, light direction, shadow softness, contact, occlusion, and support surface.',
+    '- Only the inserted object may be adapted for natural contact; existing walls, floors, ceilings, countertops, furniture, equipment, screens, signs, and materials must not be repainted or redesigned.',
+  ].join('\n');
+}
+
+function buildPlanarGraphicInsertionRulesPrompt(): string {
+  return [
+    'Planar graphic insertion branch:',
+    '- Controlled planar attachment: the user placement box is the final locked size and position, not a soft suggestion.',
+    '- Preserve the reference graphic/logo/text/emblem/poster/wayfinding/screen content itself; do not redraw, reinterpret, rewrite, or redesign it.',
+    '- Remove obvious reference-image background when needed, especially white backgrounds.',
+    '- Keep graphic content, text content, proportions, letterforms, emblem pattern, and edges clear and accurate.',
+    '- Attach the graphic to the indicated wall, screen, or surface with the exact user-locked width, height, aspect ratio, rotation, alignment, perspective, lighting, white balance, and very subtle contact shadow / environmental blending.',
+    '- The planar graphic body is a deterministic composite: coreMask is locked, edgeBandMask is only a 1-2 original-pixel transition/contact band, and protectedBackgroundMask is frozen.',
+    '- Only adjust the inserted planar graphic for color, brightness, white balance, contrast, grain, compression texture, and sharpness matching; do not adjust the original wall/screen/background pixels to fit it.',
+    '- Do not enlarge, shrink, crop, stretch, or change the planar graphic proportions for visual harmony.',
+    '- Do not use large mask expansion, large feather, big blur, gray halo, double edge, or full-object AI redraw for planar graphics.',
+    '- The result should look like a real installed wall sign, poster, wayfinding panel, or screen image, not a floating sticker layer.',
+    '- Do not change the wall/screen material itself or surrounding content.',
+  ].join('\n');
+}
+
+function buildPlanarGraphicInsertionPrompt(input: GenerateImageInput, userPrompt: string): string {
+  return [
+    'Image 1 is the original scene.',
+    'Image 2 is the clean placement preview showing the exact planar graphic placement target.',
+    buildObjectInsertImmutableScenePrompt(),
+    buildPlanarGraphicInsertionRulesPrompt(),
+    buildPlanarGraphicPlacementLockPrompt(input.config),
+    buildPlanarGraphicDeterministicFusionPrompt(input.config),
+    'For planar graphics, any candidate strategy is subordinate to the locked placement box; do not optimize scale or choose a new size.',
+    '',
+    'Insert only the requested planar graphic content at the indicated wall/screen/surface position.',
+    'Use deterministic planar compositing as the main method: keep the graphic core exactly from the placement preview/reference, then perform only minimal edge/contact/environment fusion.',
+    'Do not use the ordinary volumetric-object insertion strategy for this item.',
+    'Do not AI-redraw the planar graphic core. If a mask is provided, treat the white mask as edgeBand/contact only; never repaint the graphic body or surrounding wall.',
+    'Do not let the model decide a new size. The placement box width and height are hard constraints.',
+    'Do not generate a similar logo. Do not invent or rewrite text. Do not alter fonts, letterforms, icon geometry, or emblem pattern.',
+    'Keep edges crisp and natural, avoid blur, halo, jagged borders, sticker look, floating layer look, or low-resolution reconstruction.',
+    'For hospital signage, make it look like a real installed hospital wall sign, not a pasted logo image.',
+    buildObjectInsertUnrequestedContentPrompt(input.config),
+    userPrompt ? `User extra instruction: ${userPrompt}` : '',
+  ].filter(isNonEmptyString).join('\n');
+}
+
+function buildPlanarGraphicPlacementLockPrompt(config: Record<string, unknown>): string {
+  const items = readPlanarGraphicPlacementItems(config);
+  if (items.length === 0) {
+    return [
+      'Planar graphic size lock:',
+      'Use Image 2 as the exact hard placement box. The final graphic size must match the placement preview; do not enlarge, shrink, or change aspect ratio.',
+    ].join('\n');
+  }
+  return [
+    'Planar graphic size lock:',
+    'Strictly attach each planar graphic according to the placement box position, width, height, aspect ratio, and rotation below.',
+    'Final size must match the placement preview. Do not automatically enlarge, shrink, crop, stretch, or change proportion. Only perspective attachment and natural fusion are allowed.',
+    '请将该二维平面图形严格按照用户当前放置框的位置、宽度、高度和比例贴附到目标平面上。最终生成中的图形尺寸必须与放置预览一致，不得自动放大、缩小或改变比例。只允许进行透视贴附与自然融合。',
+    ...items.map((item, index) => `Planar graphic ${index + 1} (${item.label}): ${formatPlanarPlacementForPrompt(item.placement)}`),
+  ].join('\n');
+}
+
+function buildPlanarGraphicDeterministicFusionPrompt(config: Record<string, unknown>): string {
+  const items = readPlanarGraphicPlacementItems(config);
+  if (items.length === 0) {
+    return [
+      'Planar deterministic composite + local fusion:',
+      'Use deterministic compositing for the planar graphic body. The graphic core is locked; only edgeBand/contact pixels may be lightly fused. Keep all placement-outside background pixels frozen.',
+    ].join('\n');
+  }
+  return [
+    'Planar deterministic composite + local fusion:',
+    'Do not treat the whole planar graphic as an AI inpainting target. The core graphic/logo/text/poster/screen content must be preserved exactly from the deterministic placement preview/reference.',
+    'Mask model: coreMask=locked and never redrawn; edgeBandMask=only an extremely narrow 1-2 original-pixel transition/contact band; protectedBackgroundMask=all original pixels outside the placement box frozen.',
+    'If a provider mask is present, it represents only the edgeBand/contact band. Do not expand it into the graphic body or surrounding wall.',
+    'Apply color, exposure, white balance, contrast, grain, compression texture, and sharpness matching only to the inserted planar graphic, never to the wall/screen/background.',
+    'Preserve logo brand colors, text, fonts, letterforms, emblem geometry, and screen/poster content. Avoid large Gaussian blur, halo, gray glow, double edge, jagged border, hard PPT sticker look, or low-resolution reconstruction.',
+    'Attachment-mode rules: flat-decal = almost no shadow; flat-sign = very light contact shadow only; raised-lettering = small directional shadow/thickness while outer bounds stay locked; screen-content = change only screen content and keep bezel/frame unchanged.',
+    ...items.map((item, index) => `Planar fusion ${index + 1} (${item.label}): attachmentMode=${item.attachmentMode || 'flat-sign'}, fusionStrategy=${item.fusionStrategy || 'deterministic-planar-composite'}, aiEditableRegion=${item.aiEditableRegion || 'edge-band-only'}, coreMask=${item.coreMaskMode || 'locked'}, edgeBandPx=${item.edgeBandPx ?? 2}, maxMaskExpansionPx=${item.maxMaskExpansionPx ?? item.edgeBandPx ?? 2}.`),
+  ].join('\n');
+}
+
+function readPlanarGraphicPlacementItems(config: Record<string, unknown>): Array<{
+  label: string;
+  placement?: Record<string, unknown>;
+  attachmentMode?: string;
+  fusionStrategy?: string;
+  aiEditableRegion?: string;
+  coreMaskMode?: string;
+  edgeBandPx?: number;
+  maxMaskExpansionPx?: number;
+}> {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const rawItems = Array.isArray(nested.objectItems) ? nested.objectItems.filter(isRecord) : [];
+  const items = rawItems
+    .filter(item => readInsertElementKind(
+      item.insertElementKind || item.elementType,
+      readConfigString(item.objectType) || readConfigString(nested.objectType) || readConfigString(config.objectType),
+      { ...config, objectInsert: { ...nested, ...item } },
+    ) === 'planar-graphic')
+    .map((item, index) => ({
+      label: readConfigString(item.objectLabel) || readConfigString(item.objectType) || `planar graphic ${index + 1}`,
+      placement: isRecord(item.placement) ? item.placement : undefined,
+      attachmentMode: readConfigString(item.attachmentMode),
+      fusionStrategy: readConfigString(item.fusionStrategy),
+      aiEditableRegion: readConfigString(item.aiEditableRegion),
+      coreMaskMode: readConfigString(item.coreMaskMode),
+      edgeBandPx: readConfigNumber(item.edgeBandPx),
+      maxMaskExpansionPx: readConfigNumber(item.maxMaskExpansionPx),
+    }));
+  if (items.length > 0) return items;
+  if (!hasPlanarGraphicObjectInsert(config)) return [];
+  return [{
+    label: readConfigString(nested.objectLabel) || readConfigString(config.objectLabel) || readConfigString(nested.objectType) || readConfigString(config.objectType) || 'planar graphic',
+    placement: isRecord(nested.placement) ? nested.placement : isRecord(config.objectPlacement) ? config.objectPlacement : undefined,
+    attachmentMode: readConfigString(nested.attachmentMode) || readConfigString(config.attachmentMode),
+    fusionStrategy: readConfigString(nested.fusionStrategy) || readConfigString(config.fusionStrategy),
+    aiEditableRegion: readConfigString(nested.aiEditableRegion) || readConfigString(config.aiEditableRegion),
+    coreMaskMode: readConfigString(nested.coreMaskMode) || readConfigString(config.coreMaskMode),
+    edgeBandPx: readConfigNumber(nested.edgeBandPx) ?? readConfigNumber(config.edgeBandPx),
+    maxMaskExpansionPx: readConfigNumber(nested.maxMaskExpansionPx) ?? readConfigNumber(config.maxMaskExpansionPx),
+  }];
+}
+
+function formatPlanarPlacementForPrompt(placement: Record<string, unknown> | undefined): string {
+  if (!placement) return 'placement box missing; use Image 2 placement preview as the exact hard box';
+  const normalizedBox = isRecord(placement.normalizedBox) ? placement.normalizedBox : undefined;
+  const normalized = normalizedBox
+    ? `; normalizedBox x=${readPromptNumber(normalizedBox.x)}, y=${readPromptNumber(normalizedBox.y)}, width=${readPromptNumber(normalizedBox.width)}, height=${readPromptNumber(normalizedBox.height)}`
+    : '';
+  const cornerPoints = Array.isArray(placement.cornerPoints)
+    ? `; cornerPoints=${placement.cornerPoints.filter(isRecord).map(point => `(${readPromptNumber(point.x)},${readPromptNumber(point.y)})`).join(' ')}`
+    : '';
+  const surfacePlane = typeof placement.surfacePlane === 'string' ? `; surfacePlane=${placement.surfacePlane}` : '';
+  return `x=${readPromptNumber(placement.x)}, y=${readPromptNumber(placement.y)}, width=${readPromptNumber(placement.width)}, height=${readPromptNumber(placement.height)}, rotation=${readPromptNumber(placement.rotation)}, anchor=${placement.anchor === 'center' ? 'center' : 'top-left'}, sizeLocked=true${normalized}${cornerPoints}${surfacePlane}`;
+}
+
+function readPromptNumber(value: unknown): number | string {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value * 1000) / 1000 : 'unknown';
+}
+
+function buildObjectInsertUnrequestedContentPrompt(config: Record<string, unknown>): string {
+  const hasPlanarGraphic = hasPlanarGraphicObjectInsert(config);
+  const insertsPeople = objectInsertRequestsType(config, 'person');
+  return [
+    hasPlanarGraphic
+      ? 'Do not add unrelated logos, unrelated text, watermarks, borders, UI, collage, or split-screen; the requested planar graphic/text is allowed and must be preserved.'
+      : 'Do not generate brand logos, trademarks, watermarks, text, labels, borders, UI, collage, or split-screen unless explicitly requested as the inserted element.',
+    insertsPeople
+      ? 'Do not add extra unrequested people beyond the requested inserted person/people.'
+      : 'Do not add people unless the requested inserted element is a person.',
   ].join('\n');
 }
 
@@ -960,14 +1138,14 @@ function buildObjectInsertPlacementControlPrompt(config: Record<string, unknown>
 
 function buildObjectInsertFusionQualityPrompt(config: Record<string, unknown>): string {
   return [
-    'High-fidelity scene fusion requirements:',
-    '- Generate a polished interior design visualization, not a simple object paste.',
+    'High-fidelity element-only fusion requirements:',
+    '- This is element insertion, not image polishing, not whole-scene enhancement, not material replacement, and not room redesign.',
     '- Use normal usable furniture scale; avoid tiny model-like objects.',
     '- Match the original camera perspective, horizon, floor plane, wall plane, lens feel, and existing furniture scale.',
     '- Create believable contact shadows, cast shadows, ambient occlusion, partial occlusion, and support/contact relationships.',
-    '- Match the original light direction, softness, color temperature, material roughness, contrast, grain, and image sharpness.',
-    '- If the reference object conflicts with the scene, preserve its core design language while moderately adapting color, material, finish, and proportion for harmony.',
-    '- Preserve the original space structure and keep unedited regions stable.',
+    '- Match the original light direction, softness, color temperature, contrast, grain, and image sharpness for the inserted element only.',
+    '- If the reference object conflicts with the scene, preserve its core design language while adapting only the inserted object for contact, scale, perspective, and light. Never modify existing scene materials.',
+    '- Preserve the original space structure and keep all non-target regions stable.',
     `- Fusion preference detail: ${buildObjectInsertFusionPreferencePrompt(config)}`,
   ].join('\n');
 }
@@ -975,12 +1153,12 @@ function buildObjectInsertFusionQualityPrompt(config: Record<string, unknown>): 
 function buildObjectInsertFusionPreferencePrompt(config: Record<string, unknown>): string {
   const preference = readObjectInsertFusionPreference(config);
   if (preference === 'conservative') {
-    return 'conservative fusion, keep the original scene very stable while still fixing perspective, scale, contact shadows, and material integration.';
+    return 'conservative inserted-element fusion, keep the original scene very stable while still fixing the inserted element perspective, scale, contact shadows, and surface integration.';
   }
   if (preference === 'design') {
-    return 'strong design fusion, allow larger improvements to placement, scale, orientation, color, material, and grouping when needed for a convincing interior design result.';
+    return 'strong inserted-element fusion, allow larger improvements only to the inserted element placement, scale, orientation, color, material, and grouping when needed; do not alter existing scene materials or objects.';
   }
-  return 'balanced fusion, keep the original scene stable while optimizing scale, functional relationship, style coordination, contact, shadow, and perspective.';
+  return 'balanced inserted-element fusion, keep the original scene stable while optimizing the inserted element scale, functional relationship, contact, shadow, and perspective.';
 }
 
 function buildObjectInsertNaturalScenePrompt(config: Record<string, unknown>): string {
@@ -1000,6 +1178,67 @@ function readObjectInsertWorkflowMode(config: Record<string, unknown>): 'placeme
   const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
   const value = typeof nested.workflowMode === 'string' ? nested.workflowMode : config.objectInsertWorkflowMode;
   return value === 'scene-enrichment' ? 'scene-enrichment' : 'placement';
+}
+
+function hasPlanarGraphicObjectInsert(config: Record<string, unknown>): boolean {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  if (readInsertElementKind(nested.insertElementKind || config.insertElementKind, readConfigString(nested.objectType) || readConfigString(config.objectType), config) === 'planar-graphic') {
+    return true;
+  }
+  const items = Array.isArray(nested.objectItems) ? nested.objectItems.filter(isRecord) : [];
+  return items.some(item => readInsertElementKind(
+    item.insertElementKind,
+    readConfigString(item.objectType) || readConfigString(nested.objectType) || readConfigString(config.objectType),
+    { ...config, objectInsert: { ...nested, ...item } },
+  ) === 'planar-graphic');
+}
+
+function objectInsertRequestsType(config: Record<string, unknown>, type: string): boolean {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const values = [
+    readConfigString(config.objectType),
+    readConfigString(nested.objectType),
+    ...(Array.isArray(nested.objectItems) ? nested.objectItems.filter(isRecord).map(item => readConfigString(item.objectType)) : []),
+  ].filter(isNonEmptyString);
+  return values.some(value => value === type);
+}
+
+function readInsertElementKind(value: unknown, objectType: string | undefined, config: Record<string, unknown>): 'volumetric-object' | 'planar-graphic' {
+  if (value === 'planar-graphic' || value === 'volumetric-object') return value;
+  if (isPlanarGraphicObjectType(objectType)) return 'planar-graphic';
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const surface = readConfigString(nested.objectInsertSurface) || readConfigString(config.objectInsertSurface);
+  const text = [
+    objectType || '',
+    readConfigString(nested.objectLabel),
+    readConfigString(config.objectLabel),
+    readConfigString(nested.extraPrompt),
+    readConfigString(config.objectInsertExtraPrompt),
+    readConfigString(config.customPrompt),
+    readConfigString(nested.placementIntent),
+    readConfigString(config.placementIntent),
+  ].join('\n');
+  if (surface === 'wall' && /logo|标识|导视|海报|医院|名称|文字|屏幕|screen|poster|signage|wayfinding|brand/iu.test(text)) return 'planar-graphic';
+  return 'volumetric-object';
+}
+
+function isPlanarGraphicObjectType(value: string | undefined): boolean {
+  return value === 'signage'
+    || value === 'logo'
+    || value === 'wall-text'
+    || value === 'hospital-signage'
+    || value === 'brand-signage'
+    || value === 'poster'
+    || value === 'wayfinding'
+    || value === 'screen-content';
+}
+
+function readConfigString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function readConfigNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function readObjectInsertCandidatePromptForProvider(config: Record<string, unknown>): string {
@@ -1060,7 +1299,7 @@ function buildObjectInsertSceneEnrichmentPrompt(config: Record<string, unknown>)
     `- People level: ${people}. ${descriptions.people[people]}`,
     `- Decorations level: ${decorations}. ${descriptions.decorations[decorations]}`,
     '- Every new element must be inserted as a separate believable scene object with correct perspective, usable scale, contact, occlusion, light, and shadow.',
-    '- Do not replace existing objects, do not redesign the room, and do not add more elements than the requested ranges.',
+    '- Do not replace existing objects, do not redesign the room, do not change existing wall/floor/ceiling/furniture/countertop materials, and do not add more elements than the requested ranges.',
   ].join('\n');
 }
 
@@ -1218,9 +1457,10 @@ function buildInpaintPrompt(input: GenerateImageInput): string {
     pieces.push(
       '请基于输入参考图进行局部修饰，仅修改用户涂抹或遮罩区域，其他区域保持不变。请将 mask 图中的白色区域作为需要修改的区域，黑色区域保持不变。',
     );
-    if (input.config.maskSelectionMode === 'smart') {
+    if (input.config.selectionMode === 'smart-select' || input.config.maskSelectionMode === 'smart') {
       pieces.push(
         'The selected area is automatically detected by AI. Modify only the detected object region. Preserve the original geometry, lighting, perspective and surrounding objects.',
+        '仅允许修改确认选区覆盖区域，选区外所有建筑结构、家具、设备、软装、人物、绿植、材质、颜色和细节必须保持不变。',
       );
     }
   } else {

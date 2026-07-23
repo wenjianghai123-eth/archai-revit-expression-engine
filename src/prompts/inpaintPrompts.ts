@@ -11,6 +11,7 @@ export interface BuildInpaintPromptInput {
   feather?: number;
   maskExpansion?: number;
   maskSelectionMode?: 'smart' | 'precise';
+  selectionMode?: 'semantic-auto' | 'smart-select';
 }
 
 export function buildInpaintPrompt(input: BuildInpaintPromptInput): string {
@@ -26,11 +27,12 @@ export function buildInpaintPrompt(input: BuildInpaintPromptInput): string {
       'The white area of the mask is the editable region. Keep the black area and all unmasked areas as unchanged as possible.',
       'Do not repaint the whole image. Only edit the masked or clearly selected target region.',
     );
-    if (input.maskSelectionMode === 'smart') {
+    if (input.selectionMode === 'smart-select' || input.maskSelectionMode === 'smart') {
       pieces.push(
         'The selected area is automatically detected by AI.',
         'Modify only the detected object region.',
         'Preserve the original geometry, lighting, perspective and surrounding objects.',
+        '仅允许修改确认选区覆盖区域，选区外所有建筑结构、家具、设备、软装、人物、绿植、材质、颜色和细节必须保持不变。',
       );
     }
   } else if (input.useFullImageMask) {

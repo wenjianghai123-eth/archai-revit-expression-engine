@@ -64,8 +64,8 @@ describe('material replacement target adapter', () => {
     expect(resolveEditingScope(true)).toBe('masked');
     expect(resolveReplacementStrategy('semantic-auto')).toBe('replace-existing');
     expect(resolveReplacementStrategy('masked')).toBe('replace-masked');
-    expect(readEditingScopeLabel('semantic-auto')).toBe('自动识别');
-    expect(readEditingScopeLabel('masked', 'smart')).toBe('智能Mask');
+    expect(readEditingScopeLabel('semantic-auto')).toBe('自动同类替换');
+    expect(readEditingScopeLabel('masked', 'smart-select')).toBe('智能选区');
     expect(readReplacementStrategyLabel('replace-existing')).toBe('原位替换');
     expect(readReplacementStrategyLabel('replace-masked')).toBe('Mask内原位替换');
   });

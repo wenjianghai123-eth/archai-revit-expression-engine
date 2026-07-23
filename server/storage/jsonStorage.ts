@@ -38,8 +38,6 @@ import {
   UpdateUserProfileInput,
   UserProfile,
   EditSession, EditMessage, AssetVersion, CreateEditSessionInput, CreateEditMessageInput, CreateAssetVersionInput,
-  DesignWorkflow, DesignWorkflowNode, CreateDesignWorkflowInput, CreateDesignWorkflowNodeInput,
-  UpdateDesignWorkflowInput, UpdateDesignWorkflowNodeInput,
 } from './types';
 
 const dataDir = path.resolve(process.cwd(), process.env.DATA_DIR || 'data');
@@ -61,8 +59,6 @@ const emptyDatabase: AppDatabase = {
   assetVersions: [],
   floorPlanRegionSets: [],
   floorPlanRegionMaterials: [],
-  designWorkflows: [],
-  designWorkflowNodes: [],
 };
 
 let writeQueue: Promise<void> = Promise.resolve();
@@ -136,15 +132,6 @@ export class JsonStorageAdapter implements StorageAdapter {
   updateGenerationResult(id: string, userId: string, input: UpdateGenerationResultInput): Promise<GenerationResult | null> {
     return updateGenerationResult(id, userId, input);
   }
-
-  createDesignWorkflow(input: CreateDesignWorkflowInput) { return createDesignWorkflow(input); }
-  getActiveDesignWorkflow(projectId: string, userId: string) { return getActiveDesignWorkflow(projectId, userId); }
-  getDesignWorkflow(id: string, projectId: string, userId: string) { return getDesignWorkflow(id, projectId, userId); }
-  updateDesignWorkflow(id: string, projectId: string, userId: string, input: UpdateDesignWorkflowInput) { return updateDesignWorkflow(id, projectId, userId, input); }
-  listDesignWorkflowNodes(workflowId: string, projectId: string, userId: string) { return listDesignWorkflowNodes(workflowId, projectId, userId); }
-  getDesignWorkflowNode(id: string, workflowId: string, projectId: string, userId: string) { return getDesignWorkflowNode(id, workflowId, projectId, userId); }
-  createDesignWorkflowNode(input: CreateDesignWorkflowNodeInput) { return createDesignWorkflowNode(input); }
-  updateDesignWorkflowNode(id: string, input: UpdateDesignWorkflowNodeInput) { return updateDesignWorkflowNode(id, input); }
 
   createGenerationJob(input: CreateGenerationJobInput): Promise<GenerationJob | null> {
     return createGenerationJob(input);
@@ -857,101 +844,6 @@ async function getImageAsset(id: string, userId?: string): Promise<ImageAsset | 
   return db.imageAssets.find(asset => asset.id === id && (!userId || asset.userId === userId)) ?? null;
 }
 
-async function createDesignWorkflow(input: CreateDesignWorkflowInput): Promise<DesignWorkflow> {
-  const db = await readDatabase();
-  const now = new Date().toISOString();
-  const workflow: DesignWorkflow = {
-    id: `design_workflow_${randomUUID()}`,
-    userId: input.userId,
-    projectId: input.projectId,
-    title: input.title,
-    status: 'active',
-    currentNodeId: null,
-    createdAt: now,
-    updatedAt: now,
-  };
-  db.designWorkflows.unshift(workflow);
-  await writeDatabase(db);
-  return workflow;
-}
-
-async function getActiveDesignWorkflow(projectId: string, userId: string) {
-  const db = await readDatabase();
-  return db.designWorkflows
-    .filter(item => item.projectId === projectId && item.userId === userId && item.status !== 'archived')
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] || null;
-}
-
-async function getDesignWorkflow(id: string, projectId: string, userId: string) {
-  const db = await readDatabase();
-  return db.designWorkflows.find(item => (
-    item.id === id && item.projectId === projectId && item.userId === userId
-  )) || null;
-}
-
-async function updateDesignWorkflow(
-  id: string,
-  projectId: string,
-  userId: string,
-  input: UpdateDesignWorkflowInput,
-) {
-  const db = await readDatabase();
-  const workflow = db.designWorkflows.find(item => (
-    item.id === id && item.projectId === projectId && item.userId === userId
-  ));
-  if (!workflow) return null;
-  Object.assign(workflow, input, { updatedAt: new Date().toISOString() });
-  await writeDatabase(db);
-  return workflow;
-}
-
-async function listDesignWorkflowNodes(workflowId: string, projectId: string, userId: string) {
-  const workflow = await getDesignWorkflow(workflowId, projectId, userId);
-  if (!workflow) return [];
-  const db = await readDatabase();
-  return db.designWorkflowNodes
-    .filter(node => node.workflowId === workflowId)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-}
-
-async function getDesignWorkflowNode(
-  id: string,
-  workflowId: string,
-  projectId: string,
-  userId: string,
-) {
-  const nodes = await listDesignWorkflowNodes(workflowId, projectId, userId);
-  return nodes.find(node => node.id === id) || null;
-}
-
-async function createDesignWorkflowNode(
-  input: CreateDesignWorkflowNodeInput,
-): Promise<DesignWorkflowNode> {
-  const db = await readDatabase();
-  const now = new Date().toISOString();
-  const node: DesignWorkflowNode = {
-    ...input,
-    id: `design_workflow_node_${randomUUID()}`,
-    createdAt: now,
-    updatedAt: now,
-  };
-  db.designWorkflowNodes.push(node);
-  await writeDatabase(db);
-  return node;
-}
-
-async function updateDesignWorkflowNode(id: string, input: UpdateDesignWorkflowNodeInput) {
-  const db = await readDatabase();
-  const node = db.designWorkflowNodes.find(item => item.id === id);
-  if (!node) return null;
-  Object.assign(node, input, {
-    metadata: input.metadata ? { ...node.metadata, ...input.metadata } : node.metadata,
-    updatedAt: new Date().toISOString(),
-  });
-  await writeDatabase(db);
-  return node;
-}
-
 async function listImageAssets(userId: string, limit = 40): Promise<ImageAsset[]> {
   const db = await readDatabase();
   return db.imageAssets
@@ -1539,8 +1431,6 @@ async function readDatabase(): Promise<AppDatabase> {
     assetVersions: Array.isArray(parsed.assetVersions) ? parsed.assetVersions : [],
     floorPlanRegionSets: normalizeFloorPlanRegionSets(Array.isArray(parsed.floorPlanRegionSets) ? parsed.floorPlanRegionSets : []),
     floorPlanRegionMaterials: Array.isArray(parsed.floorPlanRegionMaterials) ? parsed.floorPlanRegionMaterials : [],
-    designWorkflows: Array.isArray(parsed.designWorkflows) ? parsed.designWorkflows : [],
-    designWorkflowNodes: Array.isArray(parsed.designWorkflowNodes) ? parsed.designWorkflowNodes : [],
   };
 }
 

@@ -38,7 +38,7 @@ import { AspectRatioImage } from './common/AspectRatioImage';
 import { ResultImageTabs } from './ResultImageTabs';
 import { ProjectDeliveryOverview } from './project/ProjectDeliveryOverview';
 import { ProjectReportPrintView } from './project/ProjectReportPrintView';
-import type { DesignWorkflowDetail, GenerationResultOption } from '../types';
+import type { GenerationResultOption } from '../types';
 import { buildProjectReportKey, buildProjectReportPackage } from '../reporting/projectReport';
 import { downloadProjectReportArchive } from '../reporting/projectReportArchive';
 
@@ -49,8 +49,6 @@ interface ProjectDetailProps {
   onDeleteProject: (projectId: string) => Promise<void>;
   onOpenEditSession: (sessionId: string) => void;
   onStartContinuousEditResult: (result: GenerationResultOption, label: string) => Promise<void>;
-  designWorkflow?: DesignWorkflowDetail | null;
-  onBackDesignWorkflow?: () => void;
 }
 
 interface CreatedShareState {
@@ -72,8 +70,6 @@ export function ProjectDetail({
   onDeleteProject,
   onOpenEditSession,
   onStartContinuousEditResult,
-  designWorkflow,
-  onBackDesignWorkflow,
 }: ProjectDetailProps) {
   const [project, setProject] = useState<Project | null>(null);
   const [generations, setGenerations] = useState<GenerationRecord[]>([]);
@@ -324,8 +320,6 @@ export function ProjectDetail({
           selectedReportCount={selectedReportOptions.length}
           reportOptionCount={reportOptions.length}
           reportExportedAt={reportExportedAt}
-          designWorkflow={designWorkflow}
-          onBackDesignWorkflow={onBackDesignWorkflow}
           onOpenSession={onOpenEditSession}
         />
 

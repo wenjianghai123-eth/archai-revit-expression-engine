@@ -11,16 +11,11 @@ import { SavePromptTemplateModal } from '../SavePromptTemplateModal';
 import { canSavePromptTemplate } from '../../utils/savedPromptTemplates';
 import { AspectRatioImage } from '../common/AspectRatioImage';
 import { GenerationImageViewer } from '../common/GenerationImageViewer';
-import { ResultQualityReport } from '../common/ResultQualityReport';
 import { GenerationResultActions } from '../common/GenerationResultActions';
 import { NormalizedGenerationProgress } from '../common/GenerationProgress';
 import { normalizeStepGenerationResult } from '../../utils/normalizeGenerationResult';
 import {
-  readEditingScopeLabel,
-  readReplacementStrategyLabel,
   readReplacementTargetLabel,
-  resolveEditingScope,
-  resolveReplacementStrategyFromConfig,
   resolveReplacementTargetFromConfig,
 } from '../../utils/materialReplacementTarget';
 
@@ -178,42 +173,28 @@ export function GenerationStatusPanel({
 }
 
 function MaterialReplacementTaskSummary({ state }: { state: StepState }) {
-  const replacementTarget = resolveReplacementTargetFromConfig(state.config);
-  const hasMask = Boolean(state.maskImage?.dataUrl || state.useFullImageMask);
-  const editingScope = state.config.editingScope === 'masked' || state.config.editingScope === 'semantic-auto'
-    ? state.config.editingScope
-    : resolveEditingScope(hasMask);
-  const replacementStrategy = resolveReplacementStrategyFromConfig(state.config, hasMask);
-  const materialReady = Boolean(
-    state.materialTextures.length > 0
-    || state.materialImage
-    || state.config.targetMaterial
-    || state.config.customMaterialPrompt?.trim()
-    || state.config.prompt?.trim(),
-  );
-  const targetLabel = readReplacementTargetLabel(replacementTarget);
-  const scopeLabel = readEditingScopeLabel(editingScope, state.config.maskSelectionMode);
-  const strategyLabel = readReplacementStrategyLabel(replacementStrategy);
-  const referenceLabel = state.materialTextures.length > 0 || state.materialImage || state.config.targetMaterial
-    ? '已上传 / 已选择'
-    : state.config.customMaterialPrompt?.trim() || state.config.prompt?.trim()
-      ? '描述已填写'
-      : '待补充';
+  const configuredSelectionMode = state.config.selectionMode === 'semantic-auto' || state.config.selectionMode === 'smart-select'
+    ? state.config.selectionMode
+    : null;
+  const selectionMode = configuredSelectionMode || (state.config.maskWorkflowMode === 'none' ? 'semantic-auto' : 'smart-select');
+  const isSmartSelection = selectionMode === 'smart-select';
+  const replacementTarget = isSmartSelection ? null : resolveReplacementTargetFromConfig(state.config);
+  const hasReference = Boolean(state.materialTextures.length > 0 || state.materialImage);
+  const hasMaterialPreset = Boolean(state.config.targetMaterial);
+  const hasPrompt = Boolean(state.config.customMaterialPrompt?.trim() || state.config.prompt?.trim());
+  const referenceLabel = hasReference ? '已上传' : hasMaterialPreset || hasPrompt ? '已选择 / 已填写' : '待补充';
+  const targetLabel = isSmartSelection ? '根据选区识别' : readReplacementTargetLabel(replacementTarget);
+  const semanticAssistLabel = state.config.semanticAssistFromSelection === false ? '未开启' : '已开启';
 
   return (
     <div data-testid="material-replacement-task-summary" className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-3 text-xs leading-5 text-emerald-900">
       <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-emerald-600">材质替换摘要</p>
-      <p>替换对象：<span className="font-black">{targetLabel}</span></p>
-      <p>区域来源：<span className="font-black">{scopeLabel}</span></p>
-      <p>操作模式：<span className="font-black">{strategyLabel}</span></p>
-      <p>参考图 / 描述：<span className="font-black">{materialReady ? referenceLabel : '待补充'}</span></p>
-      <p>额外新增：<span className="font-black">禁止</span></p>
-      <p>非目标区域：<span className="font-black">保持不变</span></p>
-      <p className="mt-1 text-[11px] font-semibold text-emerald-700">
-        {hasMask
-          ? `仅对 ${scopeLabel} 范围内的 ${targetLabel} 执行原位替换，不新增、不叠加。`
-          : `自动识别已有 ${targetLabel} 并原位替换，不新增、不叠加。`}
-      </p>
+      <p>模式：<span className="font-black">{isSmartSelection ? '智能选区' : '自动同类替换'}</span></p>
+      <p>目标区域：<span className="font-black">{targetLabel}</span></p>
+      {isSmartSelection ? <p>语义识别：<span className="font-black">{semanticAssistLabel}</span></p> : null}
+      <p>替换范围：<span className="font-black">{isSmartSelection ? '仅确认选区' : '所有同类型元素'}</span></p>
+      <p>参考图：<span className="font-black">{referenceLabel}</span></p>
+      <p>控图约束：<span className="font-black">已内置</span></p>
     </div>
   );
 }
@@ -337,8 +318,6 @@ function ResultActions({
         </div>
       ) : null}
       {originalPreviewImage && activeResult ? (
-        <>
-        <ResultQualityReport resultId={activeResult.id} metadata={activeResult.metadata} />
         <div className="rounded-xl border border-slate-100 bg-slate-50 p-2">
           <div className="mb-2 flex items-center justify-between gap-2">
             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">二次编辑</p>
@@ -365,7 +344,6 @@ function ResultActions({
             />
           </div>
         </div>
-        </>
       ) : null}
 
       {originalPreviewImage ? (

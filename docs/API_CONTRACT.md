@@ -357,45 +357,6 @@ which locks the job and credit balance in one database transaction. Retryable
 provider failures remain queued and are not refunded until the job reaches a final
 failed, timeout, or cancelled status.
 
-## Project Design Workflow
-
-The design workflow orchestrator is independent from `GenerationStep`; existing numeric step values are unchanged. Workflow nodes only reference formal assets and persisted generation jobs/results.
-
-| Method | Path | Description |
-| --- | --- | --- |
-| `GET` | `/api/projects/:projectId/design-workflow` | Read the latest non-archived workflow and its nodes. |
-| `POST` | `/api/projects/:projectId/design-workflow` | Create a workflow from an owned formal `inputAssetId`. |
-| `POST` | `/api/projects/:projectId/design-workflow/:workflowId/advance` | Create the next immutable workflow node. |
-| `POST` | `/api/projects/:projectId/design-workflow/:workflowId/skip` | Mark the current node skipped and create the next active node. |
-| `POST` | `/api/projects/:projectId/design-workflow/:workflowId/back` | Move the workflow current pointer to an earlier node without deleting later nodes. |
-
-Workflow stage keys:
-
-```text
-input
-base-render
-design-variants
-material-replace
-object-insert
-continuous-edit
-image-polish
-delivery
-```
-
-An advance request may contain:
-
-```json
-{
-  "stageKey": "material-replace",
-  "sourceFeature": "design-variants",
-  "inputAssetId": "image_output_123",
-  "parentJobId": "job_123",
-  "parentResultId": "result_123"
-}
-```
-
-When `parentResultId` is supplied, the backend verifies that it belongs to `parentJobId` and that its `assetId` matches `inputAssetId`. Generation jobs created for a workflow node carry `designWorkflowId`, `designWorkflowNodeId`, and `designWorkflowStageKey` in `config`. Successful generation writes the output job, result, and asset back to that node.
-
 ```json
 {
   "ok": true,

@@ -13,8 +13,8 @@ const localMaterialInput: MaterialReplacePreviewValidationInput = {
   hasMask: true,
   hasValidMaskPixels: true,
   hasTargetObject: true,
-  selectionMode: 'precise',
-  maskWorkflowMode: 'manual',
+  selectionMode: 'smart-select',
+  maskWorkflowMode: 'smart',
   maskConfirmed: true,
   replacementPrompt: '',
   useDefaultPreset: false,
@@ -48,14 +48,20 @@ describe('material replacement click validation', () => {
     expect(validate({ mode: 'auto-enhance', hasReference: false, hasMask: false, hasValidMaskPixels: false }).valid).toBe(true);
   });
 
-  it('requires a target object but allows no-mask semantic replacement after one is selected', () => {
-    expect(validate({ hasMask: false, hasValidMaskPixels: false, hasTargetObject: false }).missingItems).toContain('请选择替换对象类型');
+  it('requires a target area only for semantic replacement and allows it without a mask', () => {
+    expect(validate({
+      selectionMode: 'semantic-auto',
+      maskWorkflowMode: 'none',
+      hasMask: false,
+      hasValidMaskPixels: false,
+      hasTargetObject: false,
+    }).missingItems).toContain('请选择目标区域');
     expect(validate({
       hasMask: false,
       hasValidMaskPixels: false,
       hasTargetObject: true,
       replacementTarget: 'plant',
-      selectionMode: 'semantic',
+      selectionMode: 'semantic-auto',
       maskWorkflowMode: 'none',
       maskWorkflowActive: false,
     }).valid).toBe(true);
@@ -70,8 +76,16 @@ describe('material replacement click validation', () => {
   });
 
   it('uses furnishing-specific validation copy', () => {
-    const result = validate({ mode: 'local-furnishing', hasReference: false, hasMask: false, hasValidMaskPixels: false, hasTargetObject: false });
-    expect(result.missingItems).toContain('请选择替换对象类型');
+    const result = validate({
+      mode: 'local-furnishing',
+      selectionMode: 'semantic-auto',
+      maskWorkflowMode: 'none',
+      hasReference: false,
+      hasMask: false,
+      hasValidMaskPixels: false,
+      hasTargetObject: false,
+    });
+    expect(result.missingItems).toContain('请选择目标区域');
     expect(result.missingItems).toContain('请上传软装参考图或填写软装替换描述，至少完成一项');
   });
 
@@ -79,56 +93,59 @@ describe('material replacement click validation', () => {
     expect(validate({ hasValidMaskPixels: false }).missingItems).toContain('蒙版为空，请重新涂抹');
   });
 
-  it('requires smart-mask confirmation until the smart stage is confirmed', () => {
+  it('requires smart-select interaction and confirmation before generation', () => {
     expect(validate({
-      selectionMode: 'smart',
+      selectionMode: 'smart-select',
       maskWorkflowMode: 'smart',
       maskWorkflowActive: true,
-      smartMaskStage: 'ready-to-segment',
+      hasMask: false,
+      hasValidMaskPixels: false,
       maskConfirmed: false,
-    }).missingItems).toContain('请先完成智能识别并确认替换区域');
+    }).missingItems).toContain('请在需要替换的对象或区域上轻微涂抹一下。');
 
     expect(validate({
-      selectionMode: 'smart',
+      selectionMode: 'smart-select',
       maskWorkflowMode: 'smart',
-      smartMaskStage: 'reviewing',
+      hasMask: true,
       maskConfirmed: false,
-    }).missingItems).toContain('请先完成智能识别并确认替换区域');
+      smartSelectionStatus: 'preview',
+    }).missingItems).toContain('请确认当前识别区域。');
 
     expect(validate({
-      selectionMode: 'smart',
+      selectionMode: 'smart-select',
       maskWorkflowMode: 'smart',
-      smartMaskStage: 'confirmed',
+      smartSelectionStatus: 'confirmed',
       maskConfirmed: true,
     }).valid).toBe(true);
   });
 
-  it('uses mode-specific copy after the user enters a mask workflow', () => {
+  it('does not require target area in smart-select mode but still requires a confirmed selection', () => {
     expect(validate({
       hasMask: false,
       hasValidMaskPixels: false,
-      hasTargetObject: true,
-      replacementTarget: 'plant',
-      selectionMode: 'smart',
+      hasTargetObject: false,
+      replacementTarget: null,
+      selectionMode: 'smart-select',
       maskWorkflowMode: 'smart',
       maskWorkflowActive: true,
-      smartMaskStage: 'rough-marking',
-    }).missingItems).toContain('请先完成智能识别并确认替换区域');
-
+      smartSelectionStatus: 'idle',
+    }).missingItems).toContain('请在需要替换的对象或区域上轻微涂抹一下。');
     expect(validate({
-      hasMask: false,
-      hasValidMaskPixels: false,
-      hasTargetObject: true,
-      replacementTarget: 'plant',
-      selectionMode: 'precise',
-      maskWorkflowMode: 'manual',
+      hasMask: true,
+      hasValidMaskPixels: true,
+      hasTargetObject: false,
+      replacementTarget: null,
+      selectionMode: 'smart-select',
+      maskWorkflowMode: 'smart',
       maskWorkflowActive: true,
-    }).missingItems).toContain('请先确认替换区域');
+      smartSelectionStatus: 'confirmed',
+      maskConfirmed: true,
+    }).missingItems).not.toContain('请选择目标区域');
   });
 
   it('allows semantic auto-selection without a painted mask', () => {
     expect(validate({
-      selectionMode: 'semantic',
+      selectionMode: 'semantic-auto',
       maskWorkflowMode: 'none',
       hasTargetObject: true,
       hasMask: false,

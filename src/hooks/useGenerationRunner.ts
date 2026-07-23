@@ -15,12 +15,12 @@ import {
   uploadImageAsset,
   type CreditBalance,
 } from '../lib/api';
-import { DesignVariantBatchCount, DesignVariantVariableKey, DesignVariantVariableValues, FreeReferenceReference, GenerationBatchItem, GenerationConfig, GenerationHistoryItem, GenerationJobStep, GenerationMode, GenerationProvider, GenerationResultOption, GenerationRunStateOverride, GenerationStep, ObjectFidelity, ObjectInsertCandidateStrategy, ObjectInsertDebugMode, ObjectInsertHarmonyPriority, ObjectInsertItemConfig, ObjectInsertPlacementMode, ObjectInsertPositionConstraintStrength, ObjectInsertSurface, StepState, UploadedImage, VariantStyleKey, type MaskWorkflowMode } from '../types';
+import { DesignVariantBatchCount, DesignVariantVariableKey, DesignVariantVariableValues, FreeReferenceReference, GenerationBatchItem, GenerationConfig, GenerationHistoryItem, GenerationJobStep, GenerationMode, GenerationProvider, GenerationResultOption, GenerationRunStateOverride, GenerationStep, ObjectFidelity, ObjectInsertCandidateStrategy, ObjectInsertDebugMode, ObjectInsertHarmonyPriority, ObjectInsertItemConfig, ObjectInsertPlacementMode, ObjectInsertPositionConstraintStrength, ObjectInsertSurface, StepState, UploadedImage, VariantStyleKey, type MaskWorkflowMode, type SelectionMode } from '../types';
 import { getGenerationCreditCost } from '../utils/generationCredits';
 import { isGenerationJobRunningStatus, normalizeGenerationJobResult } from '../utils/generationJobResult';
 import { buildFreeReferenceControlPrompt as compileFreeReferenceControlPrompt, buildFreeReferenceTargetSize } from '../utils/freeReferenceWorkflow';
 import { designVariantVariableKeys, readDesignVariantDiversity, resolveDesignVariantMatrix } from '../utils/designVariantMatrix';
-import { resolveImagePolishControls, resolveImagePolishMode } from '../constants/imagePolishPrompt';
+import { isImagePolishMaterializationMode, resolveImagePolishControls, resolveImagePolishMode, resolveImagePolishOptions } from '../constants/imagePolishPrompt';
 import { resolveMaterialReplacementMode, validateMaterialReplacePreviewInput } from '../utils/materialReplaceReadiness';
 import {
   resolveReplacementStrategy,
@@ -142,15 +142,17 @@ export function useGenerationRunner({
 
     if (currentStep === GenerationStep.ObjectInsert) {
       const debugMode = readObjectInsertDebugMode(stateAtStart.config);
+      const objectItems = readObjectInsertItems(stateAtStart.config);
+      const hasPlanarEdgeBandMask = objectItems.some(item => item.insertElementKind === 'planar-graphic' && item.aiEditableRegion === 'edge-band-only')
+        && Boolean(readObjectInsertMaskAssetId(stateAtStart.config));
       const needsObject = objectInsertIncludesObject(debugMode);
       const needsPreview = objectInsertIncludesPreview(debugMode);
-      const needsMask = objectInsertIncludesMask(debugMode);
+      const needsMask = hasPlanarEdgeBandMask || objectInsertIncludesMask(debugMode);
       const needsPlacement = needsPreview || needsMask;
       const objectReferenceAssetId = readObjectReferenceAssetId(stateAtStart);
       const placementPreviewAssetId = readObjectInsertPreviewAssetId(stateAtStart.config);
       const placementMaskAssetId = readObjectInsertMaskAssetId(stateAtStart.config);
       const objectPlacement = readObjectInsertPlacement(stateAtStart.config);
-      const objectItems = readObjectInsertItems(stateAtStart.config);
       const hasObjectItems = objectItems.length > 0;
       const objectItemsHaveReference = objectItems.some(item => item.referenceAssetIds.length > 0);
       const hasPlacement = Boolean(objectPlacement?.width && objectPlacement.height);
@@ -180,9 +182,13 @@ export function useGenerationRunner({
       }
     }
 
-    const materialMaskSelectionMode = stateAtStart.config.maskSelectionMode === 'smart'
-      ? 'smart'
-      : 'precise';
+    const configuredMaterialSelectionMode = stateAtStart.config.selectionMode === 'semantic-auto' || stateAtStart.config.selectionMode === 'smart-select'
+      ? stateAtStart.config.selectionMode
+      : null;
+    const materialSelectionModeAtStart: SelectionMode = configuredMaterialSelectionMode
+      || (stateAtStart.config.editMode !== 'mask'
+        ? 'semantic-auto'
+        : 'smart-select');
     const materialReplacementTargetAtStart = currentStep === GenerationStep.MaterialReplace
       ? resolveReplacementTargetFromConfig(stateAtStart.config)
       : null;
@@ -200,19 +206,16 @@ export function useGenerationRunner({
         || materialReplaceReference.dataUrl
       : null;
     const materialReplaceHasMaskSelection = Boolean(stateAtStart.maskImage?.dataUrl || stateAtStart.useFullImageMask);
-    const configuredMaterialMaskWorkflowMode: MaskWorkflowMode = stateAtStart.config.maskWorkflowMode === 'smart' || stateAtStart.config.maskWorkflowMode === 'manual'
-      ? stateAtStart.config.maskWorkflowMode
-      : stateAtStart.config.maskWorkflowActive === true
-        ? materialMaskSelectionMode === 'smart' ? 'smart' : 'manual'
-        : 'none';
+    const configuredMaterialMaskWorkflowMode: MaskWorkflowMode = materialSelectionModeAtStart === 'semantic-auto'
+      ? 'none'
+      : 'smart';
     const materialMaskWorkflowModeAtStart: MaskWorkflowMode = currentStep === GenerationStep.MaterialReplace
-      ? materialReplaceHasMaskSelection
-        ? materialMaskSelectionMode === 'smart' ? 'smart' : 'manual'
-        : configuredMaterialMaskWorkflowMode
+      ? materialSelectionModeAtStart === 'semantic-auto'
+        ? 'none'
+        : materialReplaceHasMaskSelection
+          ? 'smart'
+          : configuredMaterialMaskWorkflowMode
       : 'none';
-    const materialReplaceEditMode = currentStep === GenerationStep.MaterialReplace
-      ? materialMaskWorkflowModeAtStart === 'none' ? 'smart-type' : 'mask'
-      : stateAtStart.config.editMode === 'mask' ? 'mask' : 'smart-type';
     const materialReplaceMaskWorkflowActive = materialMaskWorkflowModeAtStart !== 'none';
     const materialReplaceValidation = validateMaterialReplacePreviewInput({
       mode: resolveMaterialReplacementMode(materialReplacementEffectiveEditTarget),
@@ -229,16 +232,16 @@ export function useGenerationRunner({
         && (stateAtStart.maskHasVisiblePixels ?? true),
       hasTargetObject: Boolean(materialReplacementTargetAtStart),
       replacementTarget: materialReplacementTargetAtStart,
-      selectionMode: materialMaskWorkflowModeAtStart === 'none'
-        ? 'semantic'
-        : materialMaskWorkflowModeAtStart === 'smart' ? 'smart' : 'precise',
+      selectionMode: materialSelectionModeAtStart,
       maskWorkflowMode: materialMaskWorkflowModeAtStart,
       maskWorkflowActive: materialReplaceMaskWorkflowActive,
-      smartMaskStage: stateAtStart.config.smartMaskStage,
-      maskConfirmed: materialMaskSelectionMode !== 'smart' || stateAtStart.config.smartMaskConfirmed === true,
+      smartSelectionStatus: stateAtStart.config.smartSelectionStatus,
+      maskConfirmed: materialSelectionModeAtStart !== 'smart-select'
+        || stateAtStart.config.smartSelectionConfirmed === true
+        || stateAtStart.config.smartMaskConfirmed === true,
       replacementPrompt: stateAtStart.config.customMaterialPrompt || stateAtStart.config.prompt || '',
       useDefaultPreset: Boolean(stateAtStart.config.targetMaterial),
-      isSegmenting: stateAtStart.config.smartMaskIsRefining === true,
+      isSegmenting: stateAtStart.config.smartSelectionStatus === 'predicting' || stateAtStart.config.smartMaskIsRefining === true,
     });
 
     if (currentStep === GenerationStep.MaterialReplace && !materialReplaceValidation.valid) {
@@ -395,8 +398,9 @@ export function useGenerationRunner({
         const isImagePolish = currentStep === GenerationStep.ImagePolish;
         const imagePolishMode = resolveImagePolishMode(stateAtStart.config.imagePolishMode, stateAtStart.config.enhanceMaterials === true);
         const imagePolishControls = resolveImagePolishControls(stateAtStart.config.imagePolishControls, imagePolishMode);
-        const imagePolishEnhanceMaterials = isImagePolish && imagePolishMode === 'white-model-materialization';
-        const imagePolishPromptMode = imagePolishMode === 'white-model-materialization' ? 'white_model_materialization' : 'conservative_polish';
+        const imagePolishOptions = resolveImagePolishOptions(stateAtStart.config);
+        const imagePolishEnhanceMaterials = isImagePolish && isImagePolishMaterializationMode(imagePolishMode);
+        const imagePolishPromptMode = imagePolishEnhanceMaterials ? 'materialization' : imagePolishMode === 'standard' ? 'standard_polish' : 'conservative_polish';
         const isPlanColorize = currentStep === GenerationStep.PlanColorize;
         const isFloorplanMultiPlan = currentStep === GenerationStep.FloorplanTo3D
           && stateAtStart.config.floorplanOutputMode === 'multi';
@@ -444,9 +448,13 @@ export function useGenerationRunner({
           ? resolvedDesignVariantMatrix.filter(item => item.variantIndex === designVariantRetryIndex)
           : resolvedDesignVariantMatrix.slice(0, designVariantMatrixBatchCount);
         const objectInsertDebugMode = isObjectInsert ? readObjectInsertDebugMode(stateAtStart.config) : 'full';
+        const objectInsertItems = isObjectInsert ? readObjectInsertItems(stateAtStart.config) : [];
+        const objectInsertHasPlanarEdgeBandMask = isObjectInsertPreviewFusion
+          && objectInsertItems.some(item => item.insertElementKind === 'planar-graphic' && item.aiEditableRegion === 'edge-band-only')
+          && Boolean(readObjectInsertMaskAssetId(stateAtStart.config));
         const objectInsertNeedsObject = isObjectInsertPreviewFusion ? false : objectInsertIncludesObject(objectInsertDebugMode);
         const objectInsertNeedsPreview = isObjectInsertPreviewFusion ? true : objectInsertIncludesPreview(objectInsertDebugMode);
-        const objectInsertNeedsMask = isObjectInsertPreviewFusion ? false : objectInsertIncludesMask(objectInsertDebugMode);
+        const objectInsertNeedsMask = isObjectInsertPreviewFusion ? objectInsertHasPlanarEdgeBandMask : objectInsertIncludesMask(objectInsertDebugMode);
         const objectInsertPositionConstraintStrength = isObjectInsert ? readObjectInsertPositionConstraintStrength(stateAtStart.config) : 'high';
         const objectInsertPlacementMode = isObjectInsert ? readObjectInsertPlacementMode(stateAtStart.config) : 'natural';
         const objectInsertPlacementIntent = isObjectInsert ? readObjectInsertPlacementIntent(stateAtStart.config) : '';
@@ -473,7 +481,6 @@ export function useGenerationRunner({
         const placementPreviewAssetId = isObjectInsert ? readObjectInsertPreviewAssetId(stateAtStart.config) : undefined;
         const placementMaskAssetId = isObjectInsert ? readObjectInsertMaskAssetId(stateAtStart.config) : undefined;
         const objectPlacement = isObjectInsert ? readObjectInsertPlacement(stateAtStart.config) : undefined;
-        const objectInsertItems = isObjectInsert ? readObjectInsertItems(stateAtStart.config) : [];
         const objectInsertInputOrder = isObjectInsert && !isObjectInsertPreviewFusion
           ? buildObjectInsertInputOrder(objectInsertItems, objectInsertNeedsObject, objectInsertNeedsPreview, objectInsertNeedsMask)
           : undefined;
@@ -536,13 +543,23 @@ export function useGenerationRunner({
               ? 'asset-mask'
               : undefined
           : undefined;
-        const materialReplacementTarget = materialReplacementTargetAtStart;
+        const materialReplacementTarget = materialSelectionModeAtStart === 'semantic-auto'
+          ? materialReplacementTargetAtStart
+          : null;
         const materialReplacementEditingScope: MaterialReplacementEditingScope | undefined = currentStep === GenerationStep.MaterialReplace
           ? maskMode ? 'masked' : 'semantic-auto'
           : undefined;
         const materialReplacementStrategy = materialReplacementEditingScope
           ? resolveReplacementStrategy(materialReplacementEditingScope)
           : undefined;
+        const configForSubmit = currentStep === GenerationStep.MaterialReplace
+          ? buildMaterialReplaceRequestConfig(configForRequest, {
+              selectionMode: materialSelectionModeAtStart,
+              editingScope: materialReplacementEditingScope,
+              replacementStrategy: materialReplacementStrategy,
+              replacementTarget: materialReplacementTarget,
+            })
+          : configForRequest;
         if (isObjectInsert) {
           maskAssetId = objectInsertNeedsMask ? placementMaskAssetId : undefined;
         }
@@ -569,6 +586,7 @@ export function useGenerationRunner({
             ? [
                 stateAtStart.inputImage.assetId,
                 placementPreviewAssetId,
+                objectInsertNeedsMask ? placementMaskAssetId : undefined,
               ].filter((assetId): assetId is string => Boolean(assetId))
             : [
                 stateAtStart.inputImage.assetId,
@@ -625,12 +643,20 @@ export function useGenerationRunner({
         }
         if (import.meta.env.DEV) {
           if (isImagePolish) {
+            console.debug('[Quality enhancement submit]', {
+              addPeople: imagePolishOptions.addPeople,
+              peopleLevel: imagePolishOptions.peopleLevel,
+              addPlants: imagePolishOptions.addPlants,
+              plantLevel: imagePolishOptions.plantLevel,
+              preserveStrictness: imagePolishOptions.preserveStrictness,
+            });
             console.debug({
               event: 'image_polish_submit',
               sourceImageAssetId: stateAtStart.inputImage.assetId,
               enhanceMaterials: imagePolishEnhanceMaterials,
               imagePolishMode,
               imagePolishControls,
+              imagePolishOptions,
               promptMode: imagePolishPromptMode,
               mode: generationMode,
               step: generationStep,
@@ -685,6 +711,7 @@ export function useGenerationRunner({
               enhanceMaterials: imagePolishEnhanceMaterials,
               imagePolishMode,
               imagePolishControls,
+              imagePolishOptions,
               promptMode: imagePolishPromptMode,
               inputAssetCount: inputAssetIds.length,
               promptRequired: false,
@@ -708,10 +735,10 @@ export function useGenerationRunner({
               maskWorkflowMode: materialMaskWorkflowModeAtStart,
               hasConfirmedMask: Boolean(maskMode),
               materialReference: Boolean(stateAtStart.materialTextures.length || stateAtStart.materialImage),
-              preserveUnmaskedArea: true,
-            } : undefined,
-          });
-        }
+            preserveUnmaskedArea: true,
+          } : undefined,
+        });
+      }
         const job = await createGenerationJob({
           projectId: activeProjectId,
           mode: generationMode,
@@ -721,7 +748,7 @@ export function useGenerationRunner({
           provider: selectedProvider,
           prompt: promptForRequest,
             config: {
-              ...configForRequest,
+              ...configForSubmit,
               ...targetSizeConfig,
               ...freeReferenceTargetSizeConfig,
               mode: generationMode,
@@ -732,6 +759,11 @@ export function useGenerationRunner({
               enhanceMaterials: isImagePolish ? imagePolishEnhanceMaterials : undefined,
               imagePolishMode: isImagePolish ? imagePolishMode : undefined,
               imagePolishControls: isImagePolish ? imagePolishControls : undefined,
+              addPeople: isImagePolish ? imagePolishOptions.addPeople : undefined,
+              peopleLevel: isImagePolish ? imagePolishOptions.peopleLevel : undefined,
+              addPlants: isImagePolish ? imagePolishOptions.addPlants : undefined,
+              plantLevel: isImagePolish ? imagePolishOptions.plantLevel : undefined,
+              preserveStrictness: isImagePolish ? imagePolishOptions.preserveStrictness : undefined,
               promptMode: isImagePolish ? imagePolishPromptMode : undefined,
             qualityMode: stateAtStart.config.qualityMode || 'balanced',
             batchCount: isDesignVariantSingleRetry
@@ -804,30 +836,9 @@ export function useGenerationRunner({
             preserveStructure: Boolean(stateAtStart.config.preserveStructure ?? stateAtStart.config.keepOriginalMaterial),
             preserveCamera: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.preserveCamera ?? true : undefined,
             feather: stateAtStart.config.feather ?? 0,
-            editMode: currentStep === GenerationStep.MaterialReplace ? materialReplaceEditMode : undefined,
-            maskSelectionMode: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart !== 'none'
-              ? materialMaskWorkflowModeAtStart === 'smart' ? 'smart' : 'precise'
-              : undefined,
-            maskWorkflowMode: currentStep === GenerationStep.MaterialReplace ? materialMaskWorkflowModeAtStart : undefined,
-            smartMaskConfirmed: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart === 'smart'
-              ? stateAtStart.config.smartMaskConfirmed === true
-              : undefined,
-            smartMaskStage: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart === 'smart'
-              ? stateAtStart.config.smartMaskStage
-              : undefined,
-            smartMaskDetectedObject: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart === 'smart'
-              ? stateAtStart.config.smartMaskDetectedObject
-              : undefined,
-            smartMaskConfidence: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart === 'smart'
-              ? stateAtStart.config.smartMaskConfidence
-              : undefined,
-            smartMaskRefinementMethod: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart === 'smart'
-              ? stateAtStart.config.smartMaskRefinementMethod
-              : undefined,
+            selectionMode: currentStep === GenerationStep.MaterialReplace ? materialSelectionModeAtStart : undefined,
             maskMode,
             maskAssetId,
-            confirmedSmartMaskAssetId: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart === 'smart' && maskAssetId ? maskAssetId : undefined,
-            confirmedManualMaskAssetId: currentStep === GenerationStep.MaterialReplace && materialMaskWorkflowModeAtStart === 'manual' && maskAssetId ? maskAssetId : undefined,
             protectionMaskAssetId,
             sourceModelAssetId: stateAtStart.config.sourceModelAssetId,
             sourceImageAssetId: stateAtStart.inputImage.assetId,
@@ -841,7 +852,7 @@ export function useGenerationRunner({
             objectReferenceAssetId: isObjectInsert && objectInsertNeedsObject && !isObjectInsertPreviewFusion ? objectReferenceAssetId : undefined,
             placementGuideAssetId: isObjectInsert && objectInsertNeedsPreview ? placementPreviewAssetId : undefined,
             placementPreviewAssetId: isObjectInsert && objectInsertNeedsPreview ? placementPreviewAssetId : undefined,
-            placementMaskAssetId: isObjectInsert && objectInsertNeedsMask && !isObjectInsertPreviewFusion ? placementMaskAssetId : undefined,
+            placementMaskAssetId: isObjectInsert && objectInsertNeedsMask ? placementMaskAssetId : undefined,
             objectPlacement: isObjectInsert ? objectPlacement : undefined,
             objectInsert: objectInsertConfig,
             objectInsertInputOrder: isObjectInsertPreviewFusion ? undefined : objectInsertInputOrder,
@@ -896,7 +907,9 @@ export function useGenerationRunner({
             panoramaChangeStrength: stateAtStart.config.panoramaChangeStrength,
             panoramaQuality: stateAtStart.config.panoramaQuality,
             customPrompt: isImagePolish ? '' : stateAtStart.config.customPrompt,
-            targetObjectType: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.targetObjectType : undefined,
+            targetObjectType: currentStep === GenerationStep.MaterialReplace && materialSelectionModeAtStart === 'semantic-auto'
+              ? stateAtStart.config.targetObjectType
+              : undefined,
             replacementTarget: currentStep === GenerationStep.MaterialReplace ? materialReplacementTarget || undefined : undefined,
             editingScope: currentStep === GenerationStep.MaterialReplace ? materialReplacementEditingScope : undefined,
             replacementStrategy: currentStep === GenerationStep.MaterialReplace ? materialReplacementStrategy : undefined,
@@ -908,6 +921,9 @@ export function useGenerationRunner({
             materialFinish: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.materialFinish || 'matte' : undefined,
             materialReplaceScope: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.materialReplaceScope || 'material-only' : undefined,
             semanticObjectSelections: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.semanticObjectSelections || [] : undefined,
+            semanticAssistFromSelection: currentStep === GenerationStep.MaterialReplace && materialSelectionModeAtStart === 'smart-select'
+              ? stateAtStart.config.semanticAssistFromSelection !== false
+              : undefined,
             enablePhysicalMaterialLayout: currentStep === GenerationStep.MaterialReplace
               ? materialReplacementEffectiveEditTarget === 'material' && stateAtStart.config.enablePhysicalMaterialLayout === true
               : undefined,
@@ -1943,6 +1959,8 @@ function readObjectInsertItems(config: GenerationConfig): ObjectInsertItemConfig
         id: item.id || `object-item-${index + 1}`,
         objectType: item.objectType || 'custom',
         objectLabel: item.objectLabel,
+        insertElementKind: item.insertElementKind,
+        elementType: item.elementType,
         referenceAssetIds: Array.isArray(item.referenceAssetIds)
           ? item.referenceAssetIds.filter((assetId): assetId is string => typeof assetId === 'string' && assetId.trim().length > 0)
           : [],
@@ -1956,6 +1974,23 @@ function readObjectInsertItems(config: GenerationConfig): ObjectInsertItemConfig
         enforcePerspectiveScale: item.enforcePerspectiveScale ?? readObjectInsertBooleanConstraint(config, 'enforcePerspectiveScale'),
         placementMode: item.placementMode,
         placementIntent: item.placementIntent,
+        placementConstraintMode: item.placementConstraintMode,
+        placementAnchorStrength: item.placementAnchorStrength,
+        maxCenterOffsetRatio: item.maxCenterOffsetRatio,
+        maxScaleAdjustmentRatio: item.maxScaleAdjustmentRatio,
+        maxRotationAdjustmentDeg: item.maxRotationAdjustmentDeg,
+        planarSizeLocked: item.planarSizeLocked,
+        attachmentMode: item.attachmentMode,
+        fusionStrategy: item.fusionStrategy,
+        lockPosition: item.lockPosition,
+        lockSize: item.lockSize,
+        lockAspectRatio: item.lockAspectRatio,
+        preserveGraphicContent: item.preserveGraphicContent,
+        preserveBackground: item.preserveBackground,
+        aiEditableRegion: item.aiEditableRegion,
+        coreMaskMode: item.coreMaskMode,
+        edgeBandPx: item.edgeBandPx,
+        maxMaskExpansionPx: item.maxMaskExpansionPx,
         extraPrompt: item.extraPrompt,
       }))
       .filter(item => item.referenceAssetIds.length > 0 || item.placementPreviewAssetId || item.placementMaskAssetId);
@@ -1971,6 +2006,8 @@ function readObjectInsertItems(config: GenerationConfig): ObjectInsertItemConfig
     id: 'legacy-object-1',
     objectType: readObjectInsertType(config),
     objectLabel: '对象 1',
+    insertElementKind: config.objectInsert?.insertElementKind || config.insertElementKind,
+    elementType: config.objectInsert?.insertElementKind || config.insertElementKind,
     referenceAssetIds,
     placement: config.objectInsert?.placement || config.objectPlacement,
     placementPreviewAssetId: config.objectInsert?.previewAssetId || config.objectInsert?.guideAssetId || config.placementPreviewAssetId || config.placementGuideAssetId,
@@ -1982,6 +2019,22 @@ function readObjectInsertItems(config: GenerationConfig): ObjectInsertItemConfig
     enforcePerspectiveScale: readObjectInsertBooleanConstraint(config, 'enforcePerspectiveScale'),
     placementMode: config.objectInsert?.placementMode || config.placementMode,
     placementIntent: config.objectInsert?.placementIntent || config.placementIntent,
+    placementConstraintMode: config.objectInsert?.placementConstraintMode || config.placementConstraintMode,
+    placementAnchorStrength: config.objectInsert?.placementAnchorStrength || config.placementAnchorStrength,
+    maxCenterOffsetRatio: config.objectInsert?.maxCenterOffsetRatio || config.maxCenterOffsetRatio,
+    maxScaleAdjustmentRatio: config.objectInsert?.maxScaleAdjustmentRatio || config.maxScaleAdjustmentRatio,
+    maxRotationAdjustmentDeg: config.objectInsert?.maxRotationAdjustmentDeg || config.maxRotationAdjustmentDeg,
+    attachmentMode: config.objectInsert?.attachmentMode,
+    fusionStrategy: config.objectInsert?.fusionStrategy,
+    lockPosition: config.objectInsert?.lockPosition,
+    lockSize: config.objectInsert?.lockSize,
+    lockAspectRatio: config.objectInsert?.lockAspectRatio,
+    preserveGraphicContent: config.objectInsert?.preserveGraphicContent,
+    preserveBackground: config.objectInsert?.preserveBackground,
+    aiEditableRegion: config.objectInsert?.aiEditableRegion,
+    coreMaskMode: config.objectInsert?.coreMaskMode,
+    edgeBandPx: config.objectInsert?.edgeBandPx,
+    maxMaskExpansionPx: config.objectInsert?.maxMaskExpansionPx,
     extraPrompt: config.objectInsert?.extraPrompt || config.objectInsertExtraPrompt || config.customPrompt,
   }];
 }
@@ -2157,8 +2210,23 @@ function buildObjectInsertInputOrder(
     id: item.id,
     objectType: item.objectType,
     objectLabel: item.objectLabel,
+    insertElementKind: item.insertElementKind,
+    elementType: item.elementType || item.insertElementKind,
     referenceImageIndexes: needsObject ? item.referenceAssetIds.map(() => imageIndex++) : [],
     placementMode: item.placementMode,
+    placement: item.placement,
+    planarSizeLocked: item.planarSizeLocked,
+    attachmentMode: item.attachmentMode,
+    fusionStrategy: item.fusionStrategy,
+    lockPosition: item.lockPosition,
+    lockSize: item.lockSize,
+    lockAspectRatio: item.lockAspectRatio,
+    preserveGraphicContent: item.preserveGraphicContent,
+    preserveBackground: item.preserveBackground,
+    aiEditableRegion: item.aiEditableRegion,
+    coreMaskMode: item.coreMaskMode,
+    edgeBandPx: item.edgeBandPx,
+    maxMaskExpansionPx: item.maxMaskExpansionPx,
     placementIntent: item.placementIntent,
     extraPrompt: item.extraPrompt,
   }));
@@ -2249,7 +2317,8 @@ function buildConfigForGeneration(step: GenerationStep, config: GenerationConfig
   if (step === GenerationStep.ImagePolish) {
     const imagePolishMode = resolveImagePolishMode(config.imagePolishMode, config.enhanceMaterials === true);
     const imagePolishControls = resolveImagePolishControls(config.imagePolishControls, imagePolishMode);
-    const enhanceMaterials = imagePolishMode === 'white-model-materialization';
+    const imagePolishOptions = resolveImagePolishOptions(config);
+    const enhanceMaterials = isImagePolishMaterializationMode(imagePolishMode);
     return {
       ...config,
       prompt: '',
@@ -2260,7 +2329,12 @@ function buildConfigForGeneration(step: GenerationStep, config: GenerationConfig
       enhanceMaterials,
       imagePolishMode,
       imagePolishControls,
-      promptMode: enhanceMaterials ? 'white_model_materialization' : 'conservative_polish',
+      addPeople: imagePolishOptions.addPeople,
+      peopleLevel: imagePolishOptions.peopleLevel,
+      addPlants: imagePolishOptions.addPlants,
+      plantLevel: imagePolishOptions.plantLevel,
+      preserveStrictness: imagePolishOptions.preserveStrictness,
+      promptMode: enhanceMaterials ? 'materialization' : imagePolishMode === 'standard' ? 'standard_polish' : 'conservative_polish',
       qualityMode: config.qualityMode || 'balanced',
       batchCount: 1,
       targetCount: 1,
@@ -2315,6 +2389,43 @@ function buildConfigForGeneration(step: GenerationStep, config: GenerationConfig
     ...floorplanConfig,
     targetAspectRatio: '16:9',
     apiyiAspectRatio: '16:9',
+  };
+}
+
+function buildMaterialReplaceRequestConfig(
+  config: GenerationConfig,
+  input: {
+    selectionMode: SelectionMode;
+    editingScope: MaterialReplacementEditingScope | undefined;
+    replacementStrategy: GenerationConfig['replacementStrategy'];
+    replacementTarget: GenerationConfig['replacementTarget'] | null;
+  },
+): GenerationConfig {
+  const {
+    editMode: _editMode,
+    maskSelectionMode: _maskSelectionMode,
+    maskWorkflowMode: _maskWorkflowMode,
+    maskWorkflowActive: _maskWorkflowActive,
+    smartSelectionStatus: _smartSelectionStatus,
+    smartSelectionConfirmed: _smartSelectionConfirmed,
+    smartMaskConfirmed: _smartMaskConfirmed,
+    smartMaskIsRefining: _smartMaskIsRefining,
+    smartMaskStage: _smartMaskStage,
+    smartMaskDetectedObject: _smartMaskDetectedObject,
+    smartMaskConfidence: _smartMaskConfidence,
+    smartMaskRefinementMethod: _smartMaskRefinementMethod,
+    confirmedSmartMaskAssetId: _confirmedSmartMaskAssetId,
+    ...cleanConfig
+  } = config;
+
+  return {
+    ...cleanConfig,
+    selectionMode: input.selectionMode,
+    editingScope: input.editingScope,
+    replacementStrategy: input.replacementStrategy,
+    replacementTarget: input.selectionMode === 'semantic-auto' ? input.replacementTarget || config.replacementTarget : undefined,
+    targetObjectType: input.selectionMode === 'semantic-auto' ? config.targetObjectType : undefined,
+    preserveUnmaskedArea: true,
   };
 }
 
@@ -2629,7 +2740,7 @@ function readVariantStyleLabel(style: string | undefined): string | undefined {
 
 function readHistoryStyle(step: GenerationStep, config: GenerationConfig): string {
   if (step === GenerationStep.ImagePolish) {
-    return resolveImagePolishMode(config.imagePolishMode, config.enhanceMaterials === true) === 'white-model-materialization'
+    return isImagePolishMaterializationMode(resolveImagePolishMode(config.imagePolishMode, config.enhanceMaterials === true))
       ? '质感提升（白模材质化）'
       : '质感提升（保守提质）';
   }

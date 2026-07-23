@@ -11,8 +11,6 @@ import { LoginPage } from './components/LoginPage';
 import { CreativeHome } from './components/CreativeHome';
 import { ProjectList } from './components/ProjectList';
 import {
-  DesignWorkflowDetail,
-  DesignWorkflowNode,
   AssetVersion,
   GenerationStep,
   GenerationHistoryItem,
@@ -23,20 +21,14 @@ import {
   SecondaryEditAction,
 } from './types';
 import {
-  advanceProjectDesignWorkflow,
-  backProjectDesignWorkflow,
   cancelGenerationJob,
   createAutoProject,
-  createProjectDesignWorkflow,
   createEditSession,
   getImageAsset,
-  getGenerationJob,
-  getProjectDesignWorkflow,
   getEditSession,
   deleteProject,
   getAiProviders,
   listPromptTemplates,
-  skipProjectDesignWorkflow,
   type AiProviderOption,
   type ImageAsset,
   updateGenerationResult,
@@ -56,12 +48,6 @@ import { resolveAssetUrl } from './utils/assetUrl';
 import { promptTemplateRecordToTemplate } from './utils/savedPromptTemplates';
 import { readSelectedImageProvider, writeSelectedImageProvider } from './utils/aiProviderPreference';
 import { getScenarioWorkflow } from './constants/productWorkflows';
-import {
-  getDesignWorkflowStage,
-  getDesignWorkflowStageForStep,
-  getNextDesignWorkflowStage,
-} from './constants/designWorkflow';
-import { DesignWorkflowBar } from './components/workflow/DesignWorkflowBar';
 import {
   ApiConnectionStatus,
   getReadableApiConnectionError,
@@ -131,9 +117,6 @@ export default function App() {
   const [promptTemplates, setPromptTemplates] = useState(() => [] as ReturnType<typeof promptTemplateRecordToTemplate>[]);
   const [queuedSecondaryGenerationId, setQueuedSecondaryGenerationId] = useState<string | null>(null);
   const [editSessionDetail, setEditSessionDetail] = useState<EditSessionDetail | null>(null);
-  const [designWorkflowDetail, setDesignWorkflowDetail] = useState<DesignWorkflowDetail | null>(null);
-  const [isDesignWorkflowBusy, setIsDesignWorkflowBusy] = useState(false);
-  const [designWorkflowError, setDesignWorkflowError] = useState<string | null>(null);
   const [activeScenarioId, setActiveScenarioId] = useState<string | null>(null);
   const apiProviderRequestIdRef = useRef(0);
   const { backendHealth, refreshBackendHealth } = useBackendHealth(isSettingsOpen);
@@ -253,193 +236,6 @@ export default function App() {
     }
   }, [selectedProjectId, setSelectedProjectId]);
 
-  const refreshDesignWorkflow = useCallback(async (projectId = selectedProjectId) => {
-    if (!projectId || !currentUser) {
-      setDesignWorkflowDetail(null);
-      return null;
-    }
-    const detail = await getProjectDesignWorkflow(projectId);
-    setDesignWorkflowDetail(detail);
-    return detail;
-  }, [currentUser, selectedProjectId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!selectedProjectId || !currentUser) {
-      setDesignWorkflowDetail(null);
-      return;
-    }
-    setDesignWorkflowError(null);
-    void getProjectDesignWorkflow(selectedProjectId)
-      .then(detail => {
-        if (!cancelled) setDesignWorkflowDetail(detail);
-      })
-      .catch(error => {
-        if (!cancelled) {
-          setDesignWorkflowError(
-            error instanceof Error ? error.message : '设计表达流程加载失败。',
-          );
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [currentUser, selectedProjectId]);
-
-  const openDesignWorkflowStage = useCallback(async (detail: DesignWorkflowDetail) => {
-    setDesignWorkflowDetail(detail);
-    const node = detail.nodes.find(item => item.id === detail.workflow.currentNodeId);
-    if (!node) return;
-    if (node.stageKey === 'delivery') {
-      setActiveTab('project-detail');
-      return;
-    }
-    if (node.stageKey === 'continuous-edit') {
-      setActiveTab('generate');
-      if (!editSessionDetail) {
-        setDesignWorkflowError('当前位于连续修改阶段，请在上一阶段结果中点击“连续修改”进入会话。');
-      }
-      return;
-    }
-    if (node.stageKey === 'input') return;
-
-    const stage = getDesignWorkflowStage(node.stageKey);
-    let targetStep = stage?.generationStep || null;
-    if (node.stageKey === 'base-render') {
-      const root = detail.nodes.find(item => item.parentNodeId === null);
-      targetStep = root?.sourceFeature === 'model-snapshot-render'
-        ? GenerationStep.ModelSnapshotRender
-        : GenerationStep.FloorplanTo3D;
-    }
-    if (!targetStep) return;
-
-    const assetId = node.inputAssetId || node.outputAssetId;
-    const asset = assetId ? await getImageAsset(assetId) : null;
-    setCurrentStep(targetStep);
-    setActiveTab('generate');
-    setStepStates(previous => ({
-      ...previous,
-      [targetStep]: {
-        ...previous[targetStep],
-        inputImage: asset ? imageAssetToUploadedImage(asset) : previous[targetStep].inputImage,
-        config: {
-          ...previous[targetStep].config,
-          designWorkflowId: detail.workflow.id,
-          designWorkflowNodeId: node.id,
-          designWorkflowStageKey: node.stageKey,
-          sourceImageAssetId: assetId || previous[targetStep].config.sourceImageAssetId,
-        },
-      },
-    }));
-  }, [
-    editSessionDetail,
-    setActiveTab,
-    setCurrentStep,
-    setStepStates,
-  ]);
-
-  const handleStartDesignWorkflow = useCallback(async () => {
-    const inputImage = stepStates[currentStep].inputImage;
-    if (!selectedProjectId || !inputImage?.assetId) {
-      setDesignWorkflowError('请先完成图片上传并取得正式 assetId。');
-      return;
-    }
-    setIsDesignWorkflowBusy(true);
-    setDesignWorkflowError(null);
-    try {
-      const detail = await createProjectDesignWorkflow({
-        projectId: selectedProjectId,
-        inputAssetId: inputImage.assetId,
-        sourceFeature: readWorkspaceFeatureSlug(currentStep),
-      });
-      setDesignWorkflowDetail(detail);
-    } catch (error) {
-      setDesignWorkflowError(
-        error instanceof Error ? error.message : '设计表达流程创建失败。',
-      );
-    } finally {
-      setIsDesignWorkflowBusy(false);
-    }
-  }, [currentStep, selectedProjectId, stepStates]);
-
-  const handleAdvanceDesignWorkflow = useCallback(async () => {
-    if (!selectedProjectId || !designWorkflowDetail) return;
-    const currentNode = findCurrentWorkflowNode(designWorkflowDetail);
-    const nextStage = currentNode
-      ? getNextDesignWorkflowStage(currentNode.stageKey)
-      : null;
-    if (!currentNode || !nextStage) return;
-    setIsDesignWorkflowBusy(true);
-    setDesignWorkflowError(null);
-    try {
-      const detail = await advanceProjectDesignWorkflow({
-        projectId: selectedProjectId,
-        workflowId: designWorkflowDetail.workflow.id,
-        stageKey: nextStage.key,
-        sourceFeature: currentNode.stageKey,
-        inputAssetId: currentNode.outputAssetId || currentNode.inputAssetId,
-        parentJobId: currentNode.outputJobId || currentNode.parentJobId,
-        parentResultId: currentNode.outputResultId || currentNode.parentResultId,
-      });
-      await openDesignWorkflowStage(detail);
-    } catch (error) {
-      setDesignWorkflowError(
-        error instanceof Error ? error.message : '无法进入下一流程步骤。',
-      );
-    } finally {
-      setIsDesignWorkflowBusy(false);
-    }
-  }, [
-    designWorkflowDetail,
-    openDesignWorkflowStage,
-    selectedProjectId,
-  ]);
-
-  const handleSkipDesignWorkflow = useCallback(async () => {
-    if (!selectedProjectId || !designWorkflowDetail) return;
-    setIsDesignWorkflowBusy(true);
-    setDesignWorkflowError(null);
-    try {
-      const detail = await skipProjectDesignWorkflow(
-        selectedProjectId,
-        designWorkflowDetail.workflow.id,
-      );
-      await openDesignWorkflowStage(detail);
-    } catch (error) {
-      setDesignWorkflowError(
-        error instanceof Error ? error.message : '跳过流程步骤失败。',
-      );
-    } finally {
-      setIsDesignWorkflowBusy(false);
-    }
-  }, [designWorkflowDetail, openDesignWorkflowStage, selectedProjectId]);
-
-  const handleBackDesignWorkflow = useCallback(async () => {
-    if (!selectedProjectId || !designWorkflowDetail) return;
-    setIsDesignWorkflowBusy(true);
-    setDesignWorkflowError(null);
-    try {
-      const detail = await backProjectDesignWorkflow(
-        selectedProjectId,
-        designWorkflowDetail.workflow.id,
-      );
-      await openDesignWorkflowStage(detail);
-    } catch (error) {
-      setDesignWorkflowError(
-        error instanceof Error ? error.message : '回退流程步骤失败。',
-      );
-    } finally {
-      setIsDesignWorkflowBusy(false);
-    }
-  }, [designWorkflowDetail, openDesignWorkflowStage, selectedProjectId]);
-
-  const handleWorkflowGenerationCompleted = useCallback(
-    async () => {
-      await refreshDesignWorkflow();
-    },
-    [refreshDesignWorkflow],
-  );
-
   const { isCreditsInsufficient, handleGenerate } = useGenerationRunner({
     currentStep,
     ensureActiveProject,
@@ -448,7 +244,6 @@ export default function App() {
     creditBalance,
     refreshCreditBalance,
     setHistoryItems,
-    onGenerationCompleted: handleWorkflowGenerationCompleted,
   });
 
   const handleStartContinuousEdit = useCallback(async (image: UploadedImage) => {
@@ -725,28 +520,6 @@ export default function App() {
       assetId = asset.id;
     }
 
-    if (
-      designWorkflowDetail
-      && findCurrentWorkflowNode(designWorkflowDetail)?.stageKey !== 'continuous-edit'
-    ) {
-      const parentJobId = result.jobId;
-      if (!selectedProjectId || !parentJobId) {
-        throw new Error('连续修改流程需要已保存的 generation job。');
-      }
-      const advanced = await advanceProjectDesignWorkflow({
-        projectId: selectedProjectId,
-        workflowId: designWorkflowDetail.workflow.id,
-        stageKey: 'continuous-edit',
-        sourceFeature: typeof result.metadata?.sourceFeature === 'string'
-          ? result.metadata.sourceFeature
-          : readWorkspaceFeatureSlug(currentStep),
-        inputAssetId: assetId,
-        parentJobId,
-        parentResultId: result.id,
-      });
-      setDesignWorkflowDetail(advanced);
-    }
-
     await handleStartContinuousEdit({
       id: `continuous-result-${result.id}-${Date.now()}`,
       name: `${label || '生成结果'}.png`,
@@ -757,35 +530,10 @@ export default function App() {
       assetId,
       uploadStatus: 'uploaded',
     });
-  }, [
-    currentStep,
-    designWorkflowDetail,
-    handleStartContinuousEdit,
-    selectedProjectId,
-  ]);
+  }, [handleStartContinuousEdit]);
 
   const handleSendEditVersionToPolish = useCallback(async (version: AssetVersion) => {
     if (!selectedProjectId) throw new Error('请先选择项目。');
-    let workflowNode: DesignWorkflowNode | null = null;
-    if (designWorkflowDetail) {
-      const parentJobId = version.generationJobId;
-      if (!parentJobId) throw new Error('当前版本没有关联 generation job，无法写入正式流程关系。');
-      const job = await getGenerationJob(parentJobId);
-      const parentResult = job.results?.find(result => result.assetId === version.assetId)
-        || job.results?.[0];
-      if (!parentResult) throw new Error('当前版本没有关联 generation result。');
-      const advanced = await advanceProjectDesignWorkflow({
-        projectId: selectedProjectId,
-        workflowId: designWorkflowDetail.workflow.id,
-        stageKey: 'image-polish',
-        sourceFeature: 'continuous-edit',
-        inputAssetId: version.assetId,
-        parentJobId,
-        parentResultId: parentResult.id,
-      });
-      setDesignWorkflowDetail(advanced);
-      workflowNode = advanced.node;
-    }
     const asset = await getImageAsset(version.assetId);
     const inputImage = imageAssetToUploadedImage(asset);
     setCurrentStep(GenerationStep.ImagePolish);
@@ -800,11 +548,6 @@ export default function App() {
         config: {
           ...previous[GenerationStep.ImagePolish].config,
           sourceImageAssetId: version.assetId,
-          ...(workflowNode && designWorkflowDetail ? {
-            designWorkflowId: designWorkflowDetail.workflow.id,
-            designWorkflowNodeId: workflowNode.id,
-            designWorkflowStageKey: workflowNode.stageKey,
-          } : {}),
         },
         outputImage: null,
         generationResults: [],
@@ -823,13 +566,7 @@ export default function App() {
         },
       },
     }));
-  }, [
-    designWorkflowDetail,
-    selectedProjectId,
-    setActiveTab,
-    setCurrentStep,
-    setStepStates,
-  ]);
+  }, [selectedProjectId, setActiveTab, setCurrentStep, setStepStates]);
 
   const handleSecondaryEditResult = useCallback((resultId: string, action: SecondaryEditAction) => {
     const currentState = stepStates[currentStep];
@@ -949,26 +686,6 @@ export default function App() {
       const assetId = getOriginalResultAssetId(result) || undefined;
       const parentJobId = result.jobId || currentState.generationJobId;
       const parentRecordId = currentState.generationResultId;
-      const targetWorkflowStage = getDesignWorkflowStageForStep(targetStep);
-      let workflowNode: DesignWorkflowNode | null = null;
-
-      if (designWorkflowDetail && targetWorkflowStage) {
-        if (!selectedProjectId || !assetId || !parentJobId) {
-          setDesignWorkflowError('流程传递需要正式 assetId 和 generation job，请等待结果保存完成后重试。');
-          return;
-        }
-        const advanced = await advanceProjectDesignWorkflow({
-          projectId: selectedProjectId,
-          workflowId: designWorkflowDetail.workflow.id,
-          stageKey: targetWorkflowStage,
-          sourceFeature: readWorkspaceFeatureSlug(currentStep),
-          inputAssetId: assetId,
-          parentJobId,
-          parentResultId: result.id,
-        });
-        setDesignWorkflowDetail(advanced);
-        workflowNode = advanced.node;
-      }
 
       const nextInputImage: UploadedImage = {
         id: `send-${targetStep}-${result.id}-${Date.now()}`,
@@ -996,14 +713,6 @@ export default function App() {
             parentRecordId,
           },
         );
-        const nextConfig = workflowNode && designWorkflowDetail
-          ? {
-              ...continuationConfig,
-              designWorkflowId: designWorkflowDetail.workflow.id,
-              designWorkflowNodeId: workflowNode.id,
-              designWorkflowStageKey: workflowNode.stageKey,
-            }
-          : continuationConfig;
         return {
           ...prev,
           [targetStep]: {
@@ -1020,7 +729,7 @@ export default function App() {
             maskHasVisiblePixels: false,
             protectionMaskImage: null,
             useFullImageMask: false,
-            config: nextConfig,
+            config: continuationConfig,
             outputImage: null,
             generationResults: [],
             selectedGenerationResultId: null,
@@ -1051,14 +760,10 @@ export default function App() {
         };
       });
     })().catch(error => {
-      setDesignWorkflowError(
-        error instanceof Error ? error.message : '设计表达流程传递失败。',
-      );
+      setApiConnectionError(error instanceof Error ? error.message : '结果发送失败，请稍后重试。');
     });
   }, [
     currentStep,
-    designWorkflowDetail,
-    selectedProjectId,
     setActiveTab,
     setCurrentStep,
     setStepStates,
@@ -1344,10 +1049,6 @@ export default function App() {
                     void handleOpenEditSession(sessionId);
                   }}
                   onStartContinuousEditResult={handleStartContinuousEditFromResult}
-                  designWorkflow={designWorkflowDetail}
-                  onBackDesignWorkflow={() => {
-                    void handleBackDesignWorkflow();
-                  }}
                 />
               </Suspense>
             </motion.div>
@@ -1371,27 +1072,6 @@ export default function App() {
               {getScenarioWorkflow(activeScenarioId) ? (
                 <ScenarioWorkflowBanner scenarioId={activeScenarioId as string} onClose={() => setActiveScenarioId(null)} />
               ) : null}
-              {selectedProjectId ? (
-                <DesignWorkflowBar
-                  detail={designWorkflowDetail}
-                  hasFormalInputAsset={Boolean(stepStates[currentStep].inputImage?.assetId)}
-                  isBusy={isDesignWorkflowBusy}
-                  error={designWorkflowError}
-                  onStart={() => {
-                    void handleStartDesignWorkflow();
-                  }}
-                  onBack={() => {
-                    void handleBackDesignWorkflow();
-                  }}
-                  onSkip={() => {
-                    void handleSkipDesignWorkflow();
-                  }}
-                  onAdvance={() => {
-                    void handleAdvanceDesignWorkflow();
-                  }}
-                />
-              ) : null}
-              
               <div className="relative min-h-0 flex-1 overflow-hidden">
                 <AnimatePresence mode="wait">
                   <motion.div
@@ -1573,10 +1253,6 @@ function imageAssetToUploadedImage(asset: ImageAsset): UploadedImage {
     assetId: asset.id,
     uploadStatus: 'uploaded',
   };
-}
-
-function findCurrentWorkflowNode(detail: DesignWorkflowDetail): DesignWorkflowNode | null {
-  return detail.nodes.find(node => node.id === detail.workflow.currentNodeId) || null;
 }
 
 function buildContinuationConfigForTarget(

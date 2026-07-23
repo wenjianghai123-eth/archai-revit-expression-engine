@@ -1,6 +1,7 @@
 import type {
   GenerationConfig,
   MaterialMaskSelectionMode,
+  SelectionMode,
   MaterialReplaceTargetObject,
   MaterialReplacementEditingScope,
   ReplacementStrategy,
@@ -73,7 +74,7 @@ const targetLabels: Record<ReplacementTarget, string> = {
   plant: '绿植',
   wall: '墙面',
   floor: '地面',
-  furniture: '桌椅 / 家具',
+  furniture: '桌椅',
   lighting: '灯具',
   artwork: '装饰画',
   decor: '摆件',
@@ -115,10 +116,10 @@ export function resolveReplacementStrategy(scope: MaterialReplacementEditingScop
 
 export function readEditingScopeLabel(
   scope: MaterialReplacementEditingScope | null | undefined,
-  maskSelectionMode?: MaterialMaskSelectionMode,
+  maskSelectionMode?: MaterialMaskSelectionMode | SelectionMode,
 ): string {
-  if (scope === 'masked') return maskSelectionMode === 'smart' ? '智能Mask' : '精致涂抹';
-  if (scope === 'semantic-auto') return '自动识别';
+  if (scope === 'masked') return '智能选区';
+  if (scope === 'semantic-auto') return '自动同类替换';
   return '未确认';
 }
 

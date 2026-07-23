@@ -9,7 +9,6 @@ User -> Project -> ImageAsset / ModelAsset
 User -> Project -> GenerationJob -> GenerationResult
 User -> Project -> GenerationRecord
 Project -> ShareLink
-User -> Project -> DesignWorkflow -> DesignWorkflowNode
 User -> CreditBalance -> CreditTransaction
 ```
 
@@ -125,40 +124,6 @@ Current server user shape:
 
 Generation records power project history and public share payloads.
 
-## DesignWorkflow
-
-A project design workflow tracks the current position in the connected design-expression process without changing existing `GenerationStep` values.
-
-| Field | Type | Notes |
-| --- | --- | --- |
-| `id` | string | Opaque workflow id. |
-| `userId` | string | Project owner. |
-| `projectId` | string | Owned project. |
-| `title` | string | Defaults to `设计表达流程`. |
-| `status` | `active` \| `completed` \| `archived` | Delivery marks the workflow completed; back navigation can reactivate it. |
-| `currentNodeId` | string \| null | Pointer only; moving it does not delete later nodes. |
-| `createdAt` | ISO string | Creation time. |
-| `updatedAt` | ISO string | Last workflow movement. |
-
-## DesignWorkflowNode
-
-Workflow nodes are immutable relationship/history records except for generation completion fields and status. Branching is represented by multiple nodes sharing an earlier parent.
-
-| Field | Type | Notes |
-| --- | --- | --- |
-| `workflowId` | string | Parent workflow. |
-| `parentNodeId` | string \| null | Previous workflow node. |
-| `stageKey` | workflow stage key | Independent from `GenerationStep`. |
-| `status` | `active` \| `completed` \| `skipped` | Skipped steps remain visible in history. |
-| `sourceFeature` | string \| null | Feature that supplied this node. |
-| `inputAssetId` | string \| null | Formal image asset used by the stage. |
-| `parentJobId` | string \| null | Generation job that produced the input. |
-| `parentResultId` | string \| null | Selected generation result that produced the input asset. |
-| `outputJobId` | string \| null | Generation job created in this stage. |
-| `outputResultId` | string \| null | Persisted result selected for downstream use. |
-| `outputAssetId` | string \| null | Formal generated asset. |
-| `metadata` | object | Optional stage context; no image base64 is stored. |
-
 | Field | Type | Notes |
 | --- | --- | --- |
 | `id` | string | Opaque record id. |
@@ -255,7 +220,7 @@ The model contains:
 - project cover and objective;
 - formal source image assets;
 - selected candidate schemes and before/after comparisons;
-- scheme descriptions, material summaries, quality status, and primary-scheme markers;
+- scheme descriptions, material summaries, and primary-scheme markers;
 - continuous-edit modification history;
 - active/revoked/expired share-link state;
 - a deduplicated image-file manifest using formal `assetId` and stored URLs.

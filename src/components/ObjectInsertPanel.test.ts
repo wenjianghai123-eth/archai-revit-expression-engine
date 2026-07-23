@@ -41,6 +41,12 @@ describe('ObjectInsertPanel', () => {
     expect(html).toContain('图层');
     expect(html).toContain('自动去背景');
     expect(html).toContain('对象素材库');
+    expect(html).toContain('模式：元素植入');
+    expect(html).toContain('元素类型：三维对象');
+    expect(html).toContain('二维平面图形');
+    expect(html).toContain('修改策略：仅新增，不改原图');
+    expect(html).toContain('材质保护：已开启');
+    expect(html).toContain('非目标区域：严格保持不变');
     expect(html).not.toContain('元素配置');
     expect(html).not.toContain('候选策略');
   });
@@ -63,6 +69,44 @@ describe('ObjectInsertPanel', () => {
     expect(html).not.toContain('物体参考图');
   });
 
+  it('shows the planar graphic local fusion summary only for planar graphics', () => {
+    const html = renderToStaticMarkup(React.createElement(ObjectInsertPanel, {
+      ...defaultProps,
+      state: createState({
+        objectInsertUIMode: 'simple',
+        insertElementKind: 'planar-graphic',
+        objectType: 'logo',
+        objectInsert: {
+          insertElementKind: 'planar-graphic',
+          objectType: 'logo',
+          objectItems: [{
+            id: 'logo-1',
+            objectType: 'logo',
+            insertElementKind: 'planar-graphic',
+            referenceAssetIds: [],
+            placement: {
+              x: 96,
+              y: 144,
+              width: 240,
+              height: 80,
+              rotation: -4,
+              normalizedBox: { x: 0.08, y: 0.18, width: 0.2, height: 0.1 },
+              sizeLocked: true,
+            },
+          }],
+        },
+      }),
+    }));
+
+    expect(html).toContain('元素类型：二维平面图形');
+    expect(html).toContain('贴附方式：平面标牌');
+    expect(html).toContain('位置：已锁定');
+    expect(html).toContain('尺寸：已锁定');
+    expect(html).toContain('图形内容：严格保留');
+    expect(html).toContain('原图材质：严格保护');
+    expect(html).toContain('融合方式：局部贴附融合');
+  });
+
   it('renders advanced controls when advanced mode is selected', () => {
     const html = renderToStaticMarkup(React.createElement(ObjectInsertPanel, {
       ...defaultProps,
@@ -70,6 +114,8 @@ describe('ObjectInsertPanel', () => {
     }));
 
     expect(html).toContain('元素配置');
+    expect(html).toContain('元素类型');
+    expect(html).toContain('二维平面图形');
     expect(html).toContain('候选策略');
     expect(html).toContain('生成接触阴影');
     expect(html).toContain('严格贴合摆放');

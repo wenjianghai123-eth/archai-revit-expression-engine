@@ -12,7 +12,7 @@ interface MaterialReplaceConfigPanelProps {
   config: GenerationConfig;
   materialReferenceCount?: number;
   onUpdateConfig: (config: Partial<GenerationConfig>) => void;
-  onRequestMaskEditor?: (mode: 'smart' | 'precise') => void;
+  onRequestMaskEditor?: (mode: 'smart') => void;
 }
 
 const targetObjectOptions: Array<[ReplacementTarget, string]> = replacementTargets.map(target => [
@@ -98,11 +98,13 @@ export function MaterialReplaceConfigPanel({
   onRequestMaskEditor,
 }: MaterialReplaceConfigPanelProps) {
   const editMode = config.editMode === 'mask' ? 'mask' : 'smart-type';
-  const maskSelectionMode = config.maskSelectionMode === 'smart'
-    ? 'smart'
-    : config.maskSelectionMode === 'precise'
-      ? 'precise'
-      : 'precise';
+  const configuredSelectionMode = config.selectionMode === 'semantic-auto' || config.selectionMode === 'smart-select'
+    ? config.selectionMode
+    : null;
+  const selectionMode = configuredSelectionMode
+    || (editMode !== 'mask'
+      ? 'semantic-auto'
+      : 'smart-select');
   const activeReplacementTarget = resolveReplacementTargetFromConfig(config);
   const activeObject = activeReplacementTarget;
   const activeStrength = config.strength === 'subtle' || config.strength === 'strong' ? config.strength : 'balanced';
@@ -120,7 +122,7 @@ export function MaterialReplaceConfigPanel({
     <div className="space-y-5 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-3">
       <div>
         <h3 className="text-sm font-bold text-slate-900">智能材质替换</h3>
-        <p className="mt-1 text-[11px] leading-5 text-slate-500">智能涂抹会先识别并补全目标对象边界；精致涂抹保留原有手动精确控制。</p>
+        <p className="mt-1 text-[11px] leading-5 text-slate-500">自动同类替换按目标区域统一替换全部同类元素；智能选区只修改用户轻刷后确认的高亮区域。</p>
       </div>
 
       <div className="space-y-2">
@@ -128,61 +130,110 @@ export function MaterialReplaceConfigPanel({
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <button
             type="button"
-            data-testid="open-smart-mask-editor"
-            onClick={() => onRequestMaskEditor ? onRequestMaskEditor('smart') : onUpdateConfig({
+            onClick={() => onUpdateConfig({
               editTarget: 'material',
-              editMode: 'mask',
-              maskSelectionMode: 'smart',
-              maskWorkflowMode: 'smart',
-              maskWorkflowActive: true,
-              smartMaskStage: 'rough-marking',
-              smartMaskConfirmed: false,
-              smartMaskIsRefining: false,
-              smartMaskDetectedObject: undefined,
-              smartMaskConfidence: undefined,
-              smartMaskRefinementMethod: undefined,
-            })}
-            className={`rounded-xl border p-3 text-left ${editMode === 'mask' && maskSelectionMode === 'smart' ? 'border-emerald-600 bg-white text-emerald-800 shadow-sm' : 'border-slate-200 bg-white/80 text-slate-600'}`}
-          >
-            <span className="block text-xs font-black">智能涂抹（默认）</span>
-            <span className="mt-1 block text-[10px] leading-4">粗略标记目标区域，AI 自动识别完整对象</span>
-          </button>
-          <button
-            type="button"
-            data-testid="open-precise-mask-editor"
-            onClick={() => onRequestMaskEditor ? onRequestMaskEditor('precise') : onUpdateConfig({
-              editTarget: 'material',
-              editMode: 'mask',
-              maskSelectionMode: 'precise',
-              maskWorkflowMode: 'manual',
-              maskWorkflowActive: true,
+              editMode: 'smart-type',
+              selectionMode: 'semantic-auto',
+              maskSelectionMode: undefined,
+              maskWorkflowMode: 'none',
+              maskWorkflowActive: false,
+              smartSelectionStatus: 'idle',
+              smartSelectionConfirmed: false,
               smartMaskStage: undefined,
               smartMaskConfirmed: undefined,
               smartMaskIsRefining: false,
               smartMaskDetectedObject: undefined,
               smartMaskConfidence: undefined,
               smartMaskRefinementMethod: undefined,
+              semanticAssistFromSelection: false,
+              editingScope: 'semantic-auto',
+              replacementStrategy: 'replace-existing',
+              preserveUnmaskedArea: true,
             })}
-            className={`rounded-xl border p-3 text-left ${editMode === 'mask' && maskSelectionMode === 'precise' ? 'border-emerald-600 bg-white text-emerald-800 shadow-sm' : 'border-slate-200 bg-white/80 text-slate-600'}`}
+            className={`rounded-xl border p-3 text-left ${selectionMode === 'semantic-auto' ? 'border-emerald-600 bg-white text-emerald-800 shadow-sm' : 'border-slate-200 bg-white/80 text-slate-600'}`}
+            >
+              <span className="block text-xs font-black">自动同类替换</span>
+              <span className="mt-1 block text-[10px] leading-4">不涂抹蒙版，根据目标区域替换全部已有同类目标</span>
+            </button>
+          <button
+            type="button"
+            data-testid="open-smart-mask-editor"
+            onClick={() => onRequestMaskEditor ? onRequestMaskEditor('smart') : onUpdateConfig({
+              editTarget: 'material',
+              editMode: 'mask',
+              selectionMode: 'smart-select',
+              maskSelectionMode: 'smart',
+              maskWorkflowMode: 'smart',
+              maskWorkflowActive: true,
+              targetObjectType: undefined,
+              replacementTarget: undefined,
+              smartSelectionStatus: 'idle',
+              smartSelectionConfirmed: false,
+              smartMaskStage: undefined,
+              smartMaskConfirmed: false,
+              smartMaskIsRefining: false,
+              smartMaskDetectedObject: undefined,
+              smartMaskConfidence: undefined,
+              smartMaskRefinementMethod: undefined,
+              semanticAssistFromSelection: config.semanticAssistFromSelection !== false,
+              editingScope: 'masked',
+              replacementStrategy: 'replace-masked',
+              preserveUnmaskedArea: true,
+            })}
+            className={`rounded-xl border p-3 text-left ${selectionMode === 'smart-select' ? 'border-emerald-600 bg-white text-emerald-800 shadow-sm' : 'border-slate-200 bg-white/80 text-slate-600'}`}
           >
-            <span className="block text-xs font-black">精致涂抹</span>
-            <span className="mt-1 block text-[10px] leading-4">手动精确控制修改范围</span>
+            <span className="block text-xs font-black">智能选区（默认）</span>
+            <span className="mt-1 block text-[10px] leading-4">在目标对象上点击或轻刷，系统将自动扩展并识别完整区域。</span>
           </button>
         </div>
       </div>
 
+      {selectionMode === 'smart-select' ? (
+        <div className="space-y-3 rounded-xl border border-emerald-100 bg-white/80 p-3" data-testid="semantic-assist-from-selection">
+          <div>
+            <p className="text-xs font-black text-slate-800">智能选区说明</p>
+            <p className="mt-1 text-[11px] leading-5 text-slate-500">在需要替换的对象或局部材质区域上轻微涂抹，系统会根据涂抹点识别所在物体或连续区域，确认后仅替换高亮选区。</p>
+          </div>
+          <label className="flex items-start gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-900">
+            <input
+              type="checkbox"
+              checked={config.semanticAssistFromSelection !== false}
+              onChange={event => onUpdateConfig({ semanticAssistFromSelection: event.target.checked })}
+              className="mt-0.5 h-4 w-4 accent-emerald-600"
+            />
+            <span>
+              <span className="block font-black">根据涂抹点识别所在物体 / 区域</span>
+              <span className="mt-1 block text-[11px] leading-5 text-emerald-700">开启后优先结合涂抹点、提示词和参考图理解局部目标；不需要选择“目标区域”。</span>
+            </span>
+          </label>
+        </div>
+      ) : null}
+
       <div className="rounded-xl border border-dashed border-emerald-200 bg-white/70 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <p className="text-xs font-bold text-slate-800">语义对象点击（高级）</p>
-            <p className="mt-1 text-[10px] leading-4 text-slate-500">保留原有对象类型与多锚点选择方式。</p>
+            <p className="text-xs font-bold text-slate-800">当前区域方式：{selectionMode === 'semantic-auto' ? '自动同类替换' : '智能选区'}</p>
+            <p className="mt-1 text-[10px] leading-4 text-slate-500">{selectionMode === 'semantic-auto' ? '自动识别画面中所有目标区域同类元素，不需要涂抹。' : '轻刷触发识别，确认高亮选区后仅替换选区覆盖区域。'}</p>
           </div>
           <button
             type="button"
-            onClick={() => onUpdateConfig({ editMode: 'smart-type', maskWorkflowMode: 'none', maskWorkflowActive: false, smartMaskStage: 'idle', smartMaskIsRefining: false })}
-            className={`rounded-lg border px-3 py-2 text-xs font-bold ${editMode === 'smart-type' ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-600'}`}
+            onClick={() => onUpdateConfig({
+              editMode: 'smart-type',
+              selectionMode: 'semantic-auto',
+              maskWorkflowMode: 'none',
+              maskWorkflowActive: false,
+              smartSelectionStatus: 'idle',
+              smartSelectionConfirmed: false,
+              smartMaskStage: undefined,
+              smartMaskIsRefining: false,
+              semanticAssistFromSelection: false,
+              editingScope: 'semantic-auto',
+              replacementStrategy: 'replace-existing',
+              preserveUnmaskedArea: true,
+            })}
+            className={`rounded-lg border px-3 py-2 text-xs font-bold ${selectionMode === 'semantic-auto' ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-600'}`}
           >
-            {editMode === 'smart-type' ? '正在使用' : '切换使用'}
+            {selectionMode === 'semantic-auto' ? '正在使用' : '切换自动同类'}
           </button>
         </div>
       </div>
@@ -195,7 +246,8 @@ export function MaterialReplaceConfigPanel({
         onUpdateConfig={onUpdateConfig}
       />
 
-      <div className="space-y-2">
+      {selectionMode === 'semantic-auto' ? (
+      <div className="space-y-2" data-testid="semantic-auto-target-region">
         <div className="flex items-center justify-between gap-2">
           <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">目标区域</label>
           <span className="rounded-full bg-white px-2 py-1 text-[10px] font-bold text-emerald-700">当前：{selectedObjectLabel} · {selectedReplacementTargetLabel}</span>
@@ -225,6 +277,7 @@ export function MaterialReplaceConfigPanel({
         </div>
         {editMode === 'smart-type' ? <p className="rounded-lg bg-white px-2.5 py-2 text-[11px] font-semibold text-slate-500">已在图中标记 {semanticSelectionCount} 个对象，可继续切换类型并点击添加。</p> : null}
       </div>
+      ) : null}
 
       <div className="space-y-2">
         <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">目标材质</label>
@@ -391,7 +444,9 @@ export function MaterialReplaceConfigPanel({
       <div className="rounded-xl border border-dashed border-emerald-200 bg-white/70 p-3">
         <p className="text-xs font-bold text-slate-800">上传对应贴图</p>
         <p className="mt-1 text-[11px] leading-5 text-slate-500">
-          当前贴图会绑定到「{selectedObjectLabel}」。已选择 {materialReferenceCount} 张。
+          {selectionMode === 'semantic-auto'
+            ? `当前贴图会绑定到「${selectedObjectLabel}」。已选择 ${materialReferenceCount} 张。`
+            : `参考图用于说明确认选区要替换成什么。已选择 ${materialReferenceCount} 张。`}
         </p>
       </div>
 
@@ -409,6 +464,9 @@ export function MaterialReplaceConfigPanel({
           className="h-24 w-full resize-none rounded-xl border border-slate-200 bg-white p-3 text-xs leading-5 text-slate-800 outline-none focus:border-emerald-300"
           placeholder="例如“可补充材质颜色、纹理方向、光感要求等；不填写也可以生成。”"
         />
+        <p className="rounded-lg bg-white/80 px-3 py-2 text-[11px] font-semibold leading-5 text-slate-500" data-testid="built-in-control-constraints-note">
+          系统已默认内置建筑结构不变、空间结构不变、构图不变和非目标区域保持不变等约束。此处只需补充说明您希望替换成什么。
+        </p>
       </div>
 
       <div className="space-y-2">

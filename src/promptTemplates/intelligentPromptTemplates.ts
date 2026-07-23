@@ -1,7 +1,6 @@
 import type { FloorPlanTextLanguage } from '../types';
 import {
   normalizeReplacementTarget,
-  resolveReplacementStrategy,
   type ReplacementStrategy,
   type ReplacementTarget,
 } from '../utils/materialReplacementTarget';
@@ -152,17 +151,37 @@ const planColorizeBasePrompt = [
 ].join('\n');
 
 const materialReplaceSmartPrompt = [
-  'Replace or refine the selected architectural material or soft furnishing in the input image.',
-  'Target object: {targetObjectTypeLabel}. Target material: {targetMaterialLabel}.',
-  'Preserve geometry, boundaries, perspective, lighting direction, shadows, camera view, and all unrelated areas.',
-  'Only change material color, texture, finish, reflection, roughness, tactile quality, and local soft decoration behavior where relevant.',
+  'Material / soft furnishing replacement mode: semantic-auto.',
+  'Automatically identify all existing elements matching the selected target area in the source image and replace them uniformly in place.',
+  'Target area: {targetObjectTypeLabel}. Target material/style: {targetMaterialLabel}.',
+  'Reference images and user text define what the target becomes, not where to edit.',
 ].join('\n');
 
 const materialReplaceMaskPrompt = [
-  'The white mask area is the editable region for material replacement.',
-  'Target object: {targetObjectTypeLabel}. Target material: {targetMaterialLabel}.',
-  'Keep black mask areas and all unmasked areas as unchanged as possible.',
-  'Preserve geometry, boundaries, perspective, lighting direction, shadows, and camera view.',
+  'Material / soft furnishing replacement mode: smart-select.',
+  'Only modify the confirmed highlighted selection mask, which represents the local object, material boundary, or continuous region inferred from the user brush point.',
+  'Selection target: {targetObjectTypeLabel}. Target material/style: {targetMaterialLabel}.',
+  'Reference images and user text define what the confirmed selection becomes, not a global target category.',
+].join('\n');
+
+const materialReplaceBuiltInControlConstraints = [
+  'Built-in control constraints:',
+  '1. 严格保持建筑结构不变。',
+  '2. 严格保持空间结构不变。',
+  '3. 严格保持相机机位不变。',
+  '4. 严格保持透视关系不变。',
+  '5. 严格保持构图不变。',
+  '6. 严格保持非目标区域不变。',
+  '7. 不修改无关家具、设备、装饰、导视和远景元素。',
+  '8. 仅替换目标区域或目标对象。',
+  '9. 原位替换，不新增无关同类元素。',
+  '10. 不保留旧目标再叠加新目标。',
+].join('\n');
+
+const smartSelectionOnlyPrompt = [
+  'Smart-select scope: only modify the confirmed selected local object, material boundary, or region covered by the selection mask.',
+  'All non-selected areas must remain unchanged: architecture, spatial structure, camera, perspective, composition, furniture, equipment, decorations, signage, plants, people, lighting relationship, colors, and materials outside the confirmed selection.',
+  'Do not infer a global target category and do not replace similar objects elsewhere in the image.',
 ].join('\n');
 
 const panoramaBasePrompt = [
@@ -658,8 +677,8 @@ function buildInpaintPrompt(input: BuildSmartPromptInput, userPrompt: string): s
       : input.useFullImageMask
         ? 'The user allows full-image editing, but the original composition, spatial structure, camera view, canvas ratio, and main object relationships must remain stable.'
         : 'No mask was provided. Identify the target object or region from the request and keep unrelated areas stable.',
-    readConfigString(input.config, 'maskSelectionMode') === 'smart'
-      ? 'The selected area is automatically detected by AI. Modify only the detected object region. Preserve the original geometry, lighting, perspective and surrounding objects.'
+    isSmartSelectionMode(input.config)
+      ? 'The selected area is automatically detected by AI. Modify only the detected object region. Preserve the original geometry, lighting, perspective and surrounding objects. 仅允许修改确认选区覆盖区域，选区外所有建筑结构、家具、设备、软装、人物、绿植、材质、颜色和细节必须保持不变。'
       : undefined,
     readBooleanConfig(input.config, 'hasProtectionMask') ? 'A protection mask is present. Protected pixels must remain identical to the source and must never be edited.' : undefined,
     readConfigNumber(input.config, 'feather', 0) > 0 ? `Blend the edited boundary using approximately ${Math.round(readConfigNumber(input.config, 'feather', 0))} pixels of feathering.` : undefined,
@@ -747,21 +766,16 @@ function readDesignVariantStrategyNote(config: object | undefined, index: number
 }
 
 function buildMaterialReplacePrompt(input: BuildSmartPromptInput, userPrompt: string): string {
+  const selectionMode = isSmartSelectionMode(input.config) ? 'smart-select' : 'semantic-auto';
   const targetObjectKey = readConfigString(input.config, 'targetObjectType') || 'other';
-  const replacementTarget = readReplacementTarget(input.config, targetObjectKey);
+  const replacementTarget = selectionMode === 'semantic-auto' ? readReplacementTarget(input.config, targetObjectKey) : null;
   const targetMaterialKey = readConfigString(input.config, 'targetMaterial') || 'custom';
-  const targetObjectTypeLabel = targetObjectLabels[targetObjectKey] || targetObjectLabels.other;
+  const targetObjectTypeLabel = replacementTarget
+    ? targetObjectLabels[targetObjectKey] || targetObjectLabels.other
+    : 'confirmed selected local object / material region（确认选区覆盖的局部对象或区域）';
   const targetMaterialLabel = targetMaterialLabels[targetMaterialKey] || readSmartMaterial(input.config) || targetMaterialLabels.custom;
-  const configuredEditMode = readConfigString(input.config, 'editMode') === 'mask' ? 'mask' : 'smart-type';
-  const editingScope = readConfigString(input.config, 'editingScope');
-  const hasConfirmedMask = editingScope === 'masked' || input.hasMask === true || input.useFullImageMask === true;
-  const replacementStrategy = readConfigString(input.config, 'replacementStrategy') === 'replace-masked'
-    ? 'replace-masked'
-    : readConfigString(input.config, 'replacementStrategy') === 'replace-existing'
-      ? 'replace-existing'
-      : resolveReplacementStrategy(hasConfirmedMask ? 'masked' : 'semantic-auto');
-  const editMode = hasConfirmedMask ? 'mask' : configuredEditMode === 'mask' ? 'smart-type' : configuredEditMode;
-  const basePrompt = editMode === 'mask' ? materialReplaceMaskPrompt : materialReplaceSmartPrompt;
+  const replacementStrategy: ReplacementStrategy = selectionMode === 'smart-select' ? 'replace-masked' : 'replace-existing';
+  const basePrompt = selectionMode === 'smart-select' ? materialReplaceMaskPrompt : materialReplaceSmartPrompt;
   const patternScale = readConfigString(input.config, 'materialPatternScale') || 'medium';
   const materialDirection = readConfigString(input.config, 'materialDirection') || 'auto';
   const materialFinish = readConfigString(input.config, 'materialFinish') || 'matte';
@@ -773,36 +787,40 @@ function buildMaterialReplacePrompt(input: BuildSmartPromptInput, userPrompt: st
   const textureOrigin = readMaterialTextureOrigin(input.config);
   const semanticSelections = readSemanticObjectSelections(input.config);
   const hasProtectionMask = Boolean(readConfigString(input.config, 'protectionMaskAssetId')) || readBooleanConfig(input.config, 'hasProtectionMask');
+  const semanticAssistFromSelection = readBooleanConfig(input.config, 'semanticAssistFromSelection');
+  const materialControlTarget: ReplacementTarget = replacementTarget || 'decor';
 
   return joinPrompt([
     basePrompt
       .replace('{targetObjectTypeLabel}', targetObjectTypeLabel)
       .replace('{targetMaterialLabel}', targetMaterialLabel),
-    hasConfirmedMask && readConfigString(input.config, 'maskSelectionMode') === 'smart'
-      ? 'The selected area is automatically detected by AI. Modify only the detected object region. Preserve the original geometry, lighting, perspective and surrounding objects.'
+    materialReplaceBuiltInControlConstraints,
+    selectionMode === 'smart-select'
+      ? smartSelectionOnlyPrompt
       : undefined,
-    replacementTargetPrompts[replacementTarget],
-    buildExistingReplacementTargetPrompt(replacementTarget, replacementStrategy),
-    hasConfirmedMask
-      ? replacementTarget === 'furniture'
-        ? 'Mask has the highest spatial priority. Only pixels inside the white mask may be edited. The replacement target only describes the existing furniture semantics inside the mask. Never ignore the mask to replace room surfaces or other furniture elsewhere in the image.'
-        : 'Mask has the highest spatial priority. Only pixels inside the white mask may be edited. The replacement target only describes the existing target semantics inside the mask. Never ignore the mask to replace floors, walls, furniture, plants, lighting, artwork, or decor elsewhere in the image.'
-      : readNoMaskAutoTargetPrompt(replacementTarget),
+    selectionMode === 'smart-select' && semanticAssistFromSelection
+      ? 'Semantic assist from selection is enabled: infer the object or local material boundary from the user brush point, a few brush strokes, the user extra requirement, and reference images. Do not require or use a separate target-area category.'
+      : undefined,
+    replacementTarget ? replacementTargetPrompts[replacementTarget] : undefined,
+    replacementTarget ? buildExistingReplacementTargetPrompt(replacementTarget, replacementStrategy) : undefined,
+    replacementTarget
+      ? readNoMaskAutoTargetPrompt(replacementTarget)
+      : 'Mask has the highest spatial priority. Only pixels inside the confirmed white smart-selection mask may be edited. Never ignore the confirmed selection to replace floors, walls, furniture, plants, lighting, artwork, decor, or similar objects elsewhere in the image.',
     replacementTarget === 'furniture' ? strictFurnitureUnmaskedProtectionPrompt : strictUnmaskedProtectionPrompt,
     input.hasMaterialReferences ? 'Use the material reference only for texture, color, finish, and material feeling. Do not copy its composition or objects.' : undefined,
     materialPatternScalePrompts[patternScale] || materialPatternScalePrompts.medium,
-    readTargetDirectionPrompt(replacementTarget, materialDirection),
+    readTargetDirectionPrompt(materialControlTarget, materialDirection),
     materialFinishPrompts[materialFinish] || materialFinishPrompts.matte,
     materialReplaceScopePrompts[replaceScope] || materialReplaceScopePrompts['material-only'],
     enablePhysicalMaterialLayout
-      ? readPhysicalLayoutPrompt(replacementTarget, realSizeMm, jointWidthMm)
+      ? readPhysicalLayoutPrompt(materialControlTarget, realSizeMm, jointWidthMm)
       : undefined,
-    readTextureOriginPrompt(replacementTarget, textureAlignment, textureOrigin, enablePhysicalMaterialLayout),
-    semanticSelections.length > 0 ? `Semantic object anchors (normalized image coordinates): ${semanticSelections.map((item, index) => `${index + 1}. ${item.objectType} at (${item.x.toFixed(3)}, ${item.y.toFixed(3)})`).join('; ')}. Treat every anchor as a selected target and do not merge unrelated objects.` : undefined,
+    readTextureOriginPrompt(materialControlTarget, textureAlignment, textureOrigin, enablePhysicalMaterialLayout),
+    selectionMode === 'semantic-auto' && semanticSelections.length > 0 ? `Semantic object anchors (normalized image coordinates): ${semanticSelections.map((item, index) => `${index + 1}. ${item.objectType} at (${item.x.toFixed(3)}, ${item.y.toFixed(3)})`).join('; ')}. Treat every anchor as a selected target and do not merge unrelated objects.` : undefined,
     hasProtectionMask ? 'A protection mask is supplied. Protected pixels are explicitly excluded from editing and must remain identical to the source image.' : undefined,
     buildStructuredContext(input.config, input.mode, { includeMaterial: false }),
     changeStrengthInstruction(readSmartPromptChangeStrength(input.config, input.mode), input.mode),
-    userPrompt ? `User extra requirements: ${userPrompt}` : 'No extra user requirements. Use the selected target area and material to produce a stable material replacement.',
+    userPrompt ? `User extra requirements: ${userPrompt}` : 'No extra user requirements. Use the selected mode, reference, and built-in constraints to produce a stable material replacement.',
   ]);
 }
 
@@ -1276,6 +1294,12 @@ function changeStrengthInstruction(strength: SmartPromptChangeStrength, mode: Sm
 function readConfigString(config: object | undefined, key: string): string {
   const value = readConfigValue(config, key);
   return readMeaningfulText(value);
+}
+
+function isSmartSelectionMode(config: object | undefined): boolean {
+  const selectionMode = readConfigString(config, 'selectionMode');
+  if (selectionMode) return selectionMode === 'smart-select';
+  return readConfigString(config, 'maskSelectionMode') === 'smart';
 }
 
 function readAutoAwareConfigString(config: object | undefined, key: string): string {

@@ -30,8 +30,10 @@ export type SelectableImageProvider = 'grsai-banana2' | 'apiyi-nano-banana2-edit
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
 export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
 export type QualityMode = 'draft' | 'fast' | 'balanced' | 'high';
-export type ImagePolishMode = 'conservative' | 'white-model-materialization';
+export type ImagePolishMode = 'conservative' | 'standard' | 'materialization' | 'white-model-materialization';
 export type ImagePolishControlLevel = 'off' | 'low' | 'medium' | 'high';
+export type ImagePolishElementLevel = 'none' | 'low' | 'medium' | 'high';
+export type ImagePolishPreserveStrictness = 'strict' | 'standard' | 'loose';
 export interface ImagePolishControls {
   clarity: ImagePolishControlLevel;
   lightingOptimization: ImagePolishControlLevel;
@@ -127,7 +129,28 @@ export type ObjectInsertPlacementConstraintMode = 'soft-anchor' | 'strict' | 'na
 export type ObjectInsertHarmonyPriority = 'layout' | 'style' | 'balance';
 export type ObjectInsertFusionPreference = 'conservative' | 'balanced' | 'design';
 export type ObjectInsertSurface = 'floor' | 'wall' | 'ceiling' | 'tabletop' | 'outdoor-ground' | 'auto';
-export type ObjectInsertType = 'sofa' | 'chair' | 'table' | 'lamp' | 'plant' | 'artwork' | 'sculpture' | 'car' | 'person' | 'tree' | 'signage' | 'custom';
+export type InsertElementKind = 'volumetric-object' | 'planar-graphic';
+export type PlanarAttachmentMode = 'flat-decal' | 'flat-sign' | 'raised-lettering' | 'screen-content';
+export type ObjectInsertType =
+  | 'sofa'
+  | 'chair'
+  | 'table'
+  | 'lamp'
+  | 'plant'
+  | 'artwork'
+  | 'sculpture'
+  | 'car'
+  | 'person'
+  | 'tree'
+  | 'signage'
+  | 'logo'
+  | 'wall-text'
+  | 'hospital-signage'
+  | 'brand-signage'
+  | 'poster'
+  | 'wayfinding'
+  | 'screen-content'
+  | 'custom';
 export type ObjectFidelity = 'strict' | 'balanced' | 'loose';
 export type ObjectInsertUIMode = 'simple' | 'advanced';
 export type ObjectInsertCandidateStrategy = 'strict-placement' | 'natural-fit' | 'object-fidelity' | 'scene-harmony';
@@ -143,16 +166,11 @@ export type FloorplanTemplateId = 'residential-warm-wood' | 'premium-light-luxur
 export type PlanDrawingType = 'residential' | 'commercial' | 'office' | 'hotel' | 'landscape' | 'site-plan' | 'custom';
 export type PlanExpressionTemplate = 'zoning-color' | 'colored-plan' | 'landscape-plan' | 'furniture-enhance' | 'annotation-plan' | 'circulation-analysis';
 export type MaterialReplaceEditMode = 'smart-type' | 'mask';
-export type MaterialMaskSelectionMode = 'smart' | 'precise';
-export type MaskWorkflowMode = 'none' | 'smart' | 'manual';
-export type SmartMaskStage =
-  | 'idle'
-  | 'rough-marking'
-  | 'ready-to-segment'
-  | 'segmenting'
-  | 'reviewing'
-  | 'confirmed'
-  | 'error';
+export type MaterialMaskSelectionMode = 'smart';
+export type MaskWorkflowMode = 'none' | 'smart';
+export type SelectionMode = 'semantic-auto' | 'smart-select';
+export type SmartSelectionStatus = 'idle' | 'predicting' | 'preview' | 'confirmed' | 'error';
+export type SmartMaskStage = SmartSelectionStatus;
 export type MaterialReplaceTargetObject =
   | 'floor'
   | 'wall'
@@ -478,9 +496,6 @@ export interface ModelOptimizationMetadata {
 }
 
 export interface GenerationConfig {
-  designWorkflowId?: string;
-  designWorkflowNodeId?: string;
-  designWorkflowStageKey?: DesignWorkflowStageKey;
   prompt: string;
   aiProvider?: SelectableImageProvider;
   apiyiAspectRatio?: '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '5:4' | '4:5' | '3:2' | '2:3' | '2:1' | '21:9';
@@ -515,6 +530,11 @@ export interface GenerationConfig {
   keepOriginalAspectRatio?: boolean;
   imagePolishMode?: ImagePolishMode;
   imagePolishControls?: ImagePolishControls;
+  addPeople?: boolean;
+  peopleLevel?: ImagePolishElementLevel;
+  addPlants?: boolean;
+  plantLevel?: ImagePolishElementLevel;
+  preserveStrictness?: ImagePolishPreserveStrictness;
   /** @deprecated Use imagePolishMode and imagePolishControls. */
   enhanceMaterials?: boolean;
   negativePrompt?: string;
@@ -565,6 +585,7 @@ export interface GenerationConfig {
   maskAssetId?: string;
   protectionMaskAssetId?: string;
   hasProtectionMask?: boolean;
+  selectionMode?: SelectionMode;
   editMode?: MaterialReplaceEditMode;
   /**
    * How a painted material-replacement mask is interpreted. This intentionally
@@ -572,12 +593,14 @@ export interface GenerationConfig {
    */
   maskSelectionMode?: MaterialMaskSelectionMode;
   maskWorkflowMode?: MaskWorkflowMode;
+  smartSelectionStatus?: SmartSelectionStatus;
+  smartSelectionConfirmed?: boolean;
   smartMaskConfirmed?: boolean;
   smartMaskIsRefining?: boolean;
   smartMaskStage?: SmartMaskStage;
   maskWorkflowActive?: boolean;
   confirmedSmartMaskAssetId?: string;
-  confirmedManualMaskAssetId?: string;
+  semanticAssistFromSelection?: boolean;
   smartMaskDetectedObject?: string;
   smartMaskConfidence?: number;
   smartMaskRefinementMethod?: string;
@@ -656,6 +679,7 @@ export interface GenerationConfig {
   objectInsertCandidatePromptHints?: string[];
   objectInsertDebugMode?: ObjectInsertDebugMode;
   objectInsertSurface?: ObjectInsertSurface;
+  insertElementKind?: InsertElementKind;
   objectType?: ObjectInsertType | string;
   objectFidelity?: ObjectFidelity;
   enforceContactShadow?: boolean;
@@ -701,12 +725,24 @@ export interface ObjectPlacement {
   width: number;
   height: number;
   rotation: number;
+  anchor?: 'top-left' | 'center';
+  cornerPoints?: Array<{ x: number; y: number }>;
+  normalizedBox?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  surfacePlane?: ObjectInsertSurface;
+  sizeLocked?: boolean;
 }
 
 export interface ObjectInsertItemConfig {
   id: string;
   objectType: ObjectInsertType | string;
   objectLabel?: string;
+  insertElementKind?: InsertElementKind;
+  elementType?: InsertElementKind;
   referenceAssetIds: string[];
   placement?: ObjectPlacement;
   placementPreviewAssetId?: string;
@@ -723,6 +759,18 @@ export interface ObjectInsertItemConfig {
   maxCenterOffsetRatio?: number;
   maxScaleAdjustmentRatio?: number;
   maxRotationAdjustmentDeg?: number;
+  planarSizeLocked?: boolean;
+  attachmentMode?: PlanarAttachmentMode;
+  fusionStrategy?: 'deterministic-planar-composite' | 'model-assisted-object-insert';
+  lockPosition?: boolean;
+  lockSize?: boolean;
+  lockAspectRatio?: boolean;
+  preserveGraphicContent?: boolean;
+  preserveBackground?: boolean;
+  aiEditableRegion?: 'edge-band-only' | 'full-object';
+  coreMaskMode?: 'locked';
+  edgeBandPx?: number;
+  maxMaskExpansionPx?: number;
   extraPrompt?: string;
   visible?: boolean;
   locked?: boolean;
@@ -735,6 +783,7 @@ export interface ObjectInsertConfig {
   sourceImageAssetId?: string;
   objectItems?: ObjectInsertItemConfig[];
   globalExtraPrompt?: string;
+  insertElementKind?: InsertElementKind;
   objectType?: ObjectInsertType | string;
   objectInsertSurface?: ObjectInsertSurface;
   objectFidelity?: ObjectFidelity;
@@ -764,6 +813,17 @@ export interface ObjectInsertConfig {
   maxCenterOffsetRatio?: number;
   maxScaleAdjustmentRatio?: number;
   maxRotationAdjustmentDeg?: number;
+  attachmentMode?: PlanarAttachmentMode;
+  fusionStrategy?: 'deterministic-planar-composite' | 'model-assisted-object-insert';
+  lockPosition?: boolean;
+  lockSize?: boolean;
+  lockAspectRatio?: boolean;
+  preserveGraphicContent?: boolean;
+  preserveBackground?: boolean;
+  aiEditableRegion?: 'edge-band-only' | 'full-object';
+  coreMaskMode?: 'locked';
+  edgeBandPx?: number;
+  maxMaskExpansionPx?: number;
   objectInsertCandidateStrategy?: ObjectInsertCandidateStrategy;
   objectInsertCandidateStrategies?: ObjectInsertCandidateStrategy[];
   objectInsertCandidatePromptHints?: string[];
@@ -800,54 +860,6 @@ export interface GenerationResultOption {
   reportNarrative?: string;
 }
 
-export type GenerationQualityStatus = 'passed' | 'warning' | 'failed';
-export type GenerationQualityIssueSeverity = 'info' | 'warning' | 'error';
-export type GenerationQualityDecision = 'keep' | 'retry';
-
-export interface GenerationQualityIssue {
-  code: string;
-  severity: GenerationQualityIssueSeverity;
-  title: string;
-  message: string;
-  metric?: number;
-  threshold?: number;
-}
-
-export interface GenerationQualityImageInfo {
-  width: number;
-  height: number;
-  aspectRatio: number;
-}
-
-export interface GenerationQualityMetrics {
-  source: GenerationQualityImageInfo;
-  result: GenerationQualityImageInfo;
-  expectedWidth?: number;
-  expectedHeight?: number;
-  aspectRatioChangeRatio: number;
-  overallDifference: number;
-  structureEdgeDifference: number;
-  outsideMaskDifference?: number;
-  blackBorderRatio: number;
-  whiteBorderRatio: number;
-  seamScore: number;
-  watermarkSuspicionScore: number;
-  sharpnessScore: number;
-  meanLuminance: number;
-  darkPixelRatio: number;
-  brightPixelRatio: number;
-}
-
-export interface GenerationQualityReport {
-  version: 1;
-  status: GenerationQualityStatus;
-  score: number;
-  checkedAt: string;
-  issues: GenerationQualityIssue[];
-  warnings: string[];
-  metrics: GenerationQualityMetrics;
-}
-
 export type GenerationBatchItemStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 
 export interface GenerationBatchItem {
@@ -875,53 +887,6 @@ export interface ContinuationSource {
   label: string;
   action: ContinuationAction;
   createdAt: string;
-}
-
-export type DesignWorkflowStageKey =
-  | 'input'
-  | 'base-render'
-  | 'design-variants'
-  | 'material-replace'
-  | 'object-insert'
-  | 'continuous-edit'
-  | 'image-polish'
-  | 'delivery';
-
-export type DesignWorkflowStatus = 'active' | 'completed' | 'archived';
-export type DesignWorkflowNodeStatus = 'active' | 'completed' | 'skipped';
-
-export interface DesignWorkflow {
-  id: string;
-  userId: string;
-  projectId: string;
-  title: string;
-  status: DesignWorkflowStatus;
-  currentNodeId: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface DesignWorkflowNode {
-  id: string;
-  workflowId: string;
-  parentNodeId: string | null;
-  stageKey: DesignWorkflowStageKey;
-  status: DesignWorkflowNodeStatus;
-  sourceFeature: string | null;
-  inputAssetId: string | null;
-  parentJobId: string | null;
-  parentResultId: string | null;
-  outputJobId: string | null;
-  outputResultId: string | null;
-  outputAssetId: string | null;
-  metadata: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface DesignWorkflowDetail {
-  workflow: DesignWorkflow;
-  nodes: DesignWorkflowNode[];
 }
 
 export interface StepState {

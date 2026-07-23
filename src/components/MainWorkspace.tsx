@@ -198,9 +198,13 @@ export function MainWorkspace({
   const isFreeReferenceImageStep = step === GenerationStep.FreeReferenceImage;
   const isImagePolishStep = step === GenerationStep.ImagePolish;
   const materialReplaceEditMode = state.config.editMode === 'mask' ? 'mask' : 'smart-type';
-  const materialMaskSelectionMode = state.config.maskSelectionMode === 'smart'
-    ? 'smart'
-    : 'precise';
+  const configuredMaterialSelectionMode = state.config.selectionMode === 'semantic-auto' || state.config.selectionMode === 'smart-select'
+    ? state.config.selectionMode
+    : null;
+  const materialReplaceSelectionMode = configuredMaterialSelectionMode
+    || (materialReplaceEditMode !== 'mask'
+      ? 'semantic-auto'
+      : 'smart-select');
   const sourceImageUrl = state.inputImage ? getUploadedImageSrc(state.inputImage) : null;
   const activeReplacementReference = state.materialTextures[0] || state.materialImage;
   const activeReplacementReferenceUrl = activeReplacementReference
@@ -212,18 +216,15 @@ export function MainWorkspace({
     : null;
   const hasMaskSelection = Boolean(state.maskImage?.dataUrl || state.useFullImageMask);
   const materialReplacementTarget = resolveReplacementTargetFromConfig(state.config);
-  const configuredMaskWorkflowMode = state.config.maskWorkflowMode === 'smart' || state.config.maskWorkflowMode === 'manual'
-    ? state.config.maskWorkflowMode
-    : state.config.maskWorkflowActive === true
-      ? materialMaskSelectionMode === 'smart' ? 'smart' : 'manual'
-    : 'none';
-  const materialMaskWorkflowMode: MaskWorkflowMode = hasMaskSelection
-    ? materialMaskSelectionMode === 'smart' ? 'smart' : 'manual'
-    : configuredMaskWorkflowMode;
+  const configuredMaskWorkflowMode = materialReplaceSelectionMode === 'semantic-auto'
+    ? 'none'
+    : 'smart';
+  const materialMaskWorkflowMode: MaskWorkflowMode = materialReplaceSelectionMode === 'semantic-auto'
+    ? 'none'
+    : hasMaskSelection
+      ? 'smart'
+      : configuredMaskWorkflowMode;
   const materialReplaceMaskWorkflowActive = materialMaskWorkflowMode !== 'none';
-  const materialReplaceSelectionMode = materialMaskWorkflowMode === 'none'
-    ? 'semantic'
-    : materialMaskWorkflowMode === 'smart' ? 'smart' : 'precise';
   const hasValidMaskPixels = hasMaskSelection && (state.maskHasVisiblePixels ?? true);
   const materialReplacementEditingScope: MaterialReplacementEditingScope = materialMaskWorkflowMode === 'none' ? 'semantic-auto' : hasMaskSelection ? 'masked' : 'semantic-auto';
   const materialReplacementStrategy = resolveReplacementStrategy(materialReplacementEditingScope);
@@ -251,11 +252,13 @@ export function MainWorkspace({
     selectionMode: materialReplaceSelectionMode,
     maskWorkflowMode: materialMaskWorkflowMode,
     maskWorkflowActive: materialReplaceMaskWorkflowActive,
-    smartMaskStage: state.config.smartMaskStage,
-    maskConfirmed: materialMaskSelectionMode !== 'smart' || state.config.smartMaskConfirmed === true,
+    smartSelectionStatus: state.config.smartSelectionStatus,
+    maskConfirmed: materialReplaceSelectionMode !== 'smart-select'
+      || state.config.smartSelectionConfirmed === true
+      || state.config.smartMaskConfirmed === true,
     replacementPrompt: state.config.customMaterialPrompt || state.config.prompt || '',
     useDefaultPreset: Boolean(state.config.targetMaterial),
-    isSegmenting: state.config.smartMaskIsRefining === true,
+    isSegmenting: state.config.smartSelectionStatus === 'predicting' || state.config.smartMaskIsRefining === true,
     enablePhysicalMaterialLayout: materialReplacementMode === 'local-material' && state.config.enablePhysicalMaterialLayout === true,
     materialRealSizeMm: state.config.materialRealSizeMm,
     materialJointWidthMm: state.config.materialJointWidthMm,
@@ -299,9 +302,16 @@ export function MainWorkspace({
     setPreviewValidationErrors([]);
     if (import.meta.env.DEV && import.meta.env.MODE !== 'test') {
       console.debug('[MaterialReplacement payload]', {
-        replacementTarget: materialReplacementTarget,
+        replacementTarget: materialReplaceSelectionMode === 'semantic-auto' ? materialReplacementTarget : undefined,
+        semanticAssistFromSelection: materialReplaceSelectionMode === 'smart-select'
+          ? state.config.semanticAssistFromSelection !== false
+          : undefined,
         editingScope: materialReplacementEditingScope,
-        hasConfirmedMask: hasMaskSelection && (materialMaskSelectionMode !== 'smart' || state.config.smartMaskConfirmed === true),
+        hasConfirmedMask: hasMaskSelection && (
+          materialReplaceSelectionMode !== 'smart-select'
+          || state.config.smartSelectionConfirmed === true
+          || state.config.smartMaskConfirmed === true
+        ),
         materialReference: Boolean(activeReplacementReferenceUrl),
         preserveUnmaskedArea: true,
       });
@@ -314,6 +324,7 @@ export function MainWorkspace({
           ...stateOverride?.config,
           editTarget: 'general',
           editMode: 'smart-type',
+          selectionMode: 'semantic-auto',
           targetObjectType: 'other',
           replacementTarget: 'decor',
           editingScope: 'semantic-auto',
@@ -329,40 +340,52 @@ export function MainWorkspace({
       ...stateOverride,
       config: {
         ...stateOverride?.config,
-        replacementTarget: materialReplacementTarget || undefined,
+        replacementTarget: materialReplaceSelectionMode === 'semantic-auto' ? materialReplacementTarget || undefined : undefined,
+        targetObjectType: materialReplaceSelectionMode === 'semantic-auto' ? state.config.targetObjectType : undefined,
+        selectionMode: materialReplaceSelectionMode,
         editingScope: materialReplacementEditingScope,
         replacementStrategy: materialReplacementStrategy,
         editMode: materialMaskWorkflowMode === 'none' ? 'smart-type' : 'mask',
-        maskSelectionMode: materialMaskWorkflowMode === 'smart' ? 'smart' : materialMaskWorkflowMode === 'manual' ? 'precise' : undefined,
+        maskSelectionMode: materialMaskWorkflowMode === 'smart' ? 'smart' : undefined,
         maskWorkflowMode: materialMaskWorkflowMode,
         maskWorkflowActive: materialReplaceMaskWorkflowActive,
-        smartMaskStage: state.config.smartMaskStage,
+        semanticAssistFromSelection: materialReplaceSelectionMode === 'smart-select'
+          ? state.config.semanticAssistFromSelection !== false
+          : undefined,
+        smartSelectionStatus: state.config.smartSelectionStatus,
+        smartMaskStage: undefined,
         preserveUnmaskedArea: true,
       },
     });
-  }, [activeReplacementReferenceUrl, hasMaskSelection, isMaterialReplaceStep, materialMaskSelectionMode, materialMaskWorkflowMode, materialReplaceMaskWorkflowActive, materialReplacementEditingScope, materialReplacementMode, materialReplacementStrategy, materialReplacementTarget, onGenerate, previewValidation.missingItems, previewValidation.valid, state.config.customMaterialPrompt, state.config.prompt, state.config.smartMaskConfirmed, state.config.smartMaskStage]);
+  }, [activeReplacementReferenceUrl, hasMaskSelection, isMaterialReplaceStep, materialMaskWorkflowMode, materialReplaceMaskWorkflowActive, materialReplaceSelectionMode, materialReplacementEditingScope, materialReplacementMode, materialReplacementStrategy, materialReplacementTarget, onGenerate, previewValidation.missingItems, previewValidation.valid, state.config.customMaterialPrompt, state.config.prompt, state.config.smartMaskConfirmed, state.config.smartSelectionConfirmed, state.config.smartSelectionStatus, state.config.targetObjectType]);
 
-  const handleRequestMaskEditor = useCallback((mode: 'smart' | 'precise') => {
-    const nextWorkflowMode: MaskWorkflowMode = mode === 'smart' ? 'smart' : 'manual';
+  const handleRequestMaskEditor = useCallback((_mode: 'smart') => {
+    const nextWorkflowMode: MaskWorkflowMode = 'smart';
     if (materialMaskWorkflowMode !== 'none' && materialMaskWorkflowMode !== nextWorkflowMode) {
       onUpdateMaskImage(null, false, state.config.feather ?? 0, null, state.config.maskExpansion ?? 0, false);
     }
     onUpdateConfig({
       editTarget: 'material',
       editMode: 'mask',
-      maskSelectionMode: mode,
+      selectionMode: 'smart-select',
+      maskSelectionMode: 'smart',
       maskWorkflowMode: nextWorkflowMode,
       maskWorkflowActive: true,
+      targetObjectType: undefined,
+      replacementTarget: undefined,
       preserveUnmaskedArea: true,
-      smartMaskStage: mode === 'smart' ? 'rough-marking' : undefined,
-      smartMaskConfirmed: mode === 'smart' ? false : undefined,
+      smartSelectionStatus: 'idle',
+      smartSelectionConfirmed: false,
+      smartMaskStage: undefined,
+      smartMaskConfirmed: false,
       smartMaskIsRefining: false,
       smartMaskDetectedObject: undefined,
       smartMaskConfidence: undefined,
       smartMaskRefinementMethod: undefined,
+      semanticAssistFromSelection: state.config.semanticAssistFromSelection !== false,
     });
     setMaskEditorOpenRequest(value => value + 1);
-  }, [materialMaskWorkflowMode, onUpdateConfig, onUpdateMaskImage, state.config.feather, state.config.maskExpansion]);
+  }, [materialMaskWorkflowMode, onUpdateConfig, onUpdateMaskImage, state.config.feather, state.config.maskExpansion, state.config.semanticAssistFromSelection]);
 
   useEffect(() => {
     if (!import.meta.env.DEV || import.meta.env.MODE === 'test' || !isMaterialReplaceStep) return;
@@ -375,16 +398,18 @@ export function MainWorkspace({
       maskWorkflowActive: materialReplaceMaskWorkflowActive,
       hasMask: hasMaskSelection,
       hasValidMaskPixels,
-      maskConfirmed: materialMaskSelectionMode !== 'smart' || state.config.smartMaskConfirmed === true,
-      smartMaskStage: state.config.smartMaskStage,
+      maskConfirmed: materialReplaceSelectionMode !== 'smart-select'
+        || state.config.smartSelectionConfirmed === true
+        || state.config.smartMaskConfirmed === true,
+      smartSelectionStatus: state.config.smartSelectionStatus,
       isUploading: isReplacementUploadInProgress,
-      isSegmenting: state.config.smartMaskIsRefining === true,
+      isSegmenting: state.config.smartSelectionStatus === 'predicting' || state.config.smartMaskIsRefining === true,
       isGeneratingPreview: state.isGenerating,
       canClickPreview,
       previewButtonHint,
       validationMissingItems: previewValidation.missingItems,
     });
-  }, [activeReplacementReferenceUrl, canClickPreview, hasMaskSelection, hasValidMaskPixels, isMaterialReplaceStep, isReplacementUploadInProgress, materialMaskSelectionMode, materialMaskWorkflowMode, materialReplaceMaskWorkflowActive, materialReplaceSelectionMode, previewButtonHint, previewValidationKey, replacementType, sourceImageUrl, state.config.smartMaskConfirmed, state.config.smartMaskIsRefining, state.config.smartMaskStage, state.isGenerating]);
+  }, [activeReplacementReferenceUrl, canClickPreview, hasMaskSelection, hasValidMaskPixels, isMaterialReplaceStep, isReplacementUploadInProgress, materialMaskWorkflowMode, materialReplaceMaskWorkflowActive, materialReplaceSelectionMode, previewButtonHint, previewValidationKey, replacementType, sourceImageUrl, state.config.smartMaskConfirmed, state.config.smartMaskIsRefining, state.config.smartSelectionConfirmed, state.config.smartSelectionStatus, state.isGenerating]);
   const providerForStatus = backendProvider || state.generationProvider;
   const resultOptions = state.generationResults.length > 0
     ? state.generationResults

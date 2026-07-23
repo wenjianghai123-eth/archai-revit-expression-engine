@@ -28,10 +28,6 @@ import {
   removeQueuedGenerationJob,
 } from '../generationService';
 import { failEditGeneration } from '../editSessionLifecycle';
-import {
-  linkDesignWorkflowGenerationJob,
-  validateDesignWorkflowGenerationContext,
-} from '../projectWorkflowLifecycle';
 import { getGenerationCreditCost, getGenerationOutputCount } from '../../src/utils/generationCredits';
 
 type GenerationJobCreateValidation = {
@@ -130,26 +126,6 @@ export function createGenerationJobsRouter(options: GenerationJobsRouterOptions)
         return;
       }
 
-      try {
-        await validateDesignWorkflowGenerationContext({
-          projectId: body.value.projectId,
-          userId: user.id,
-          config: body.value.config,
-        });
-      } catch (error) {
-        const code = typeof error === 'object'
-          && error !== null
-          && 'code' in error
-          && typeof error.code === 'string'
-          ? error.code
-          : 'DESIGN_WORKFLOW_CONTEXT_INVALID';
-        res.status(code.endsWith('_NOT_FOUND') ? 404 : 400).json(apiError(
-          error instanceof Error ? error.message : 'Design workflow context is invalid.',
-          code,
-        ));
-        return;
-      }
-
       const creditsCost = getGenerationCreditCost(body.value.mode, body.value.config);
       logGenerationJobCreateStage(req, 'create generation job', {
         userId: user.id,
@@ -172,8 +148,6 @@ export function createGenerationJobsRouter(options: GenerationJobsRouterOptions)
         res.status(404).json(apiError('Project not found.', 'PROJECT_NOT_FOUND'));
         return;
       }
-      await linkDesignWorkflowGenerationJob(job);
-
       if (process.env.NODE_ENV !== 'production') {
         console.debug({
           event: 'generation_job_created',
@@ -191,6 +165,11 @@ export function createGenerationJobsRouter(options: GenerationJobsRouterOptions)
             enhanceMaterials: job.config.enhanceMaterials === true,
             imagePolishMode: job.config.imagePolishMode,
             imagePolishControls: job.config.imagePolishControls,
+            addPeople: job.config.addPeople,
+            peopleLevel: job.config.peopleLevel,
+            addPlants: job.config.addPlants,
+            plantLevel: job.config.plantLevel,
+            preserveStrictness: job.config.preserveStrictness,
             promptMode: typeof job.config.promptMode === 'string' ? job.config.promptMode : undefined,
             provider: job.provider,
             inputAssetCount: job.inputAssetIds.length,

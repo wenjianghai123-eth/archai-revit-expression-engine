@@ -10,6 +10,7 @@ import {
   ObjectInsertItemConfig,
   ObjectInsertDebugMode,
   ObjectFidelity,
+  InsertElementKind,
   ObjectInsertHarmonyPriority,
   ObjectInsertCandidateStrategy,
   ObjectInsertUIMode,
@@ -19,6 +20,7 @@ import {
   ObjectInsertType,
   ObjectInsertWorkflowMode,
   ObjectPlacement,
+  PlanarAttachmentMode,
   StepState,
   UploadedImage,
 } from '../types';
@@ -29,7 +31,6 @@ import { resolveAssetUrl } from '../utils/assetUrl';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
 import { AspectRatioImage } from './common/AspectRatioImage';
 import { GenerationImageViewer } from './common/GenerationImageViewer';
-import { ResultQualityReport } from './common/ResultQualityReport';
 import { normalizeStepGenerationResult } from '../utils/normalizeGenerationResult';
 import { GenerationResultActions } from './common/GenerationResultActions';
 import { NormalizedGenerationProgress } from './common/GenerationProgress';
@@ -51,6 +52,7 @@ type InteractionMode = ObjectInsertCanvasInteraction;
 interface ObjectInsertDraftItem {
   id: string;
   objectType: ObjectInsertType | string;
+  insertElementKind: InsertElementKind;
   objectLabel: string;
   referenceImages: UploadedImage[];
   placement: ObjectPlacement;
@@ -61,6 +63,7 @@ interface ObjectInsertDraftItem {
   enforcePerspectiveScale: boolean;
   placementMode: ObjectInsertPlacementMode;
   placementIntent: string;
+  attachmentMode?: PlanarAttachmentMode;
   extraPrompt: string;
   visible: boolean;
   locked: boolean;
@@ -144,6 +147,18 @@ const objectInsertCandidateStrategyOptions: Array<{ value: ObjectInsertCandidate
   { value: 'scene-harmony', label: '优先融入场景光影', hint: 'Candidate strategy: scene-harmony. Prioritize lighting, shadow, perspective, occlusion, and atmospheric harmony with the scene.' },
 ];
 
+const insertElementKindOptions: Array<{ value: InsertElementKind; label: string; description: string }> = [
+  { value: 'volumetric-object', label: '三维对象', description: '绿植、人物、摆件、灯具、雕塑等真实空间对象。' },
+  { value: 'planar-graphic', label: '二维平面图形', description: 'logo、墙面文字、医院名称、海报、导视、屏幕画面等平面贴附内容。' },
+];
+
+const planarAttachmentModeLabels: Record<PlanarAttachmentMode, string> = {
+  'flat-decal': '墙贴',
+  'flat-sign': '平面标牌',
+  'raised-lettering': '立体字',
+  'screen-content': '屏幕内容',
+};
+
 const objectTypeOptions: Array<{ value: ObjectInsertType; label: string }> = [
   { value: 'sofa', label: '沙发' },
   { value: 'chair', label: '椅子' },
@@ -156,6 +171,13 @@ const objectTypeOptions: Array<{ value: ObjectInsertType; label: string }> = [
   { value: 'person', label: '人物' },
   { value: 'tree', label: '树木' },
   { value: 'signage', label: '标识' },
+  { value: 'logo', label: 'Logo' },
+  { value: 'wall-text', label: '墙面文字' },
+  { value: 'hospital-signage', label: '医院名称' },
+  { value: 'brand-signage', label: '品牌标识' },
+  { value: 'poster', label: '海报' },
+  { value: 'wayfinding', label: '导视' },
+  { value: 'screen-content', label: '屏幕画面' },
   { value: 'custom', label: '自定义' },
 ];
 const legacyObjectTypeLabels: Record<string, string> = {
@@ -189,6 +211,29 @@ const softAnchorPlacementConfig = {
   maxScaleAdjustmentRatio: 0.18,
   maxRotationAdjustmentDeg: 20,
 };
+const planarLockedPlacementConfig = {
+  placementConstraintMode: 'strict' as const,
+  placementAnchorStrength: 1,
+  maxCenterOffsetRatio: 0,
+  maxScaleAdjustmentRatio: 0,
+  maxRotationAdjustmentDeg: 0,
+};
+
+function buildPlanarFusionConfig(attachmentMode: PlanarAttachmentMode, edgeBandPx: number) {
+  return {
+    attachmentMode,
+    fusionStrategy: 'deterministic-planar-composite' as const,
+    lockPosition: true,
+    lockSize: true,
+    lockAspectRatio: true,
+    preserveGraphicContent: true,
+    preserveBackground: true,
+    aiEditableRegion: 'edge-band-only' as const,
+    coreMaskMode: 'locked' as const,
+    edgeBandPx,
+    maxMaskExpansionPx: Math.max(1, edgeBandPx),
+  };
+}
 
 interface DebugSubmitPreviewItem {
   id: string;
@@ -243,7 +288,7 @@ export function ObjectInsertPanel({
 
   const sourceWidth = sourceImage?.width || 1200;
   const sourceHeight = sourceImage?.height || 800;
-  const configObjectItems = useMemo(() => toObjectInsertConfigItems(objectItems), [objectItems]);
+  const configObjectItems = useMemo(() => toObjectInsertConfigItems(objectItems, sourceWidth, sourceHeight), [objectItems, sourceHeight, sourceWidth]);
 
   const getObjectPlacementStyle = useCallback((itemPlacement: ObjectPlacement): React.CSSProperties => ({
     left: `${(itemPlacement.x / sourceWidth) * 100}%`,
@@ -285,6 +330,7 @@ export function ObjectInsertPanel({
   const allowAutoAdjustScale = readObjectInsertAutoAdjust(state.config, 'allowAutoAdjustScale');
   const activeObjectType = readActiveObjectType(state.config, activeObjectItem);
   const activeObjectInsertSurface = readActiveObjectInsertSurface(state.config, activeObjectItem);
+  const activeInsertElementKind = readActiveInsertElementKind(state.config, activeObjectItem);
   const activeObjectFidelity = readActiveObjectFidelity(state.config, activeObjectItem);
   const enforceContactShadow = readObjectInsertBooleanConstraint(state.config, activeObjectItem, 'enforceContactShadow');
   const enforceOcclusion = readObjectInsertBooleanConstraint(state.config, activeObjectItem, 'enforceOcclusion');
@@ -328,6 +374,17 @@ export function ObjectInsertPanel({
     const nextAllowScale = patch.allowAutoAdjustScale ?? allowAutoAdjustScale;
     const nextObjectType = patch.objectType || activeObjectType;
     const nextObjectInsertSurface = patch.objectInsertSurface || activeObjectInsertSurface;
+    const nestedPatch: ObjectInsertConfigPatch = patch.objectInsert || {};
+    const nextInsertElementKind = readInsertElementKind(
+      patch.insertElementKind
+        || nestedPatch.insertElementKind
+        || activeObjectItem?.insertElementKind
+        || state.config.insertElementKind
+        || state.config.objectInsert?.insertElementKind,
+      nextObjectType,
+      nextObjectInsertSurface,
+      nextPlacementIntent,
+    );
     const nextObjectFidelity = patch.objectFidelity || activeObjectFidelity;
     const nextEnforceContactShadow = patch.enforceContactShadow ?? enforceContactShadow;
     const nextEnforceOcclusion = patch.enforceOcclusion ?? enforceOcclusion;
@@ -344,7 +401,6 @@ export function ObjectInsertPanel({
       batchCount: nextCandidateCount,
     }, nextCandidateCount);
     const nextCandidatePromptHints = patch.objectInsertCandidatePromptHints || buildObjectInsertCandidatePromptHints(nextCandidateStrategies);
-    const nestedPatch: ObjectInsertConfigPatch = patch.objectInsert || {};
 
     return {
       ...patch,
@@ -361,6 +417,7 @@ export function ObjectInsertPanel({
       allowAutoAdjustRotation: nextAllowRotation,
       allowAutoAdjustScale: nextAllowScale,
       objectType: nextObjectType,
+      insertElementKind: nextInsertElementKind,
       objectInsertSurface: nextObjectInsertSurface,
       objectFidelity: nextObjectFidelity,
       enforceContactShadow: nextEnforceContactShadow,
@@ -391,6 +448,7 @@ export function ObjectInsertPanel({
         workflowMode: nestedPatch.workflowMode || patch.objectInsertWorkflowMode || workflowMode,
         sceneEnrichment: nestedPatch.sceneEnrichment || patch.objectInsertSceneEnrichment || sceneEnrichment,
         objectType: nestedPatch.objectType || nextObjectType,
+        insertElementKind: nestedPatch.insertElementKind || nextInsertElementKind,
         objectInsertSurface: nestedPatch.objectInsertSurface || nextObjectInsertSurface,
         objectFidelity: nestedPatch.objectFidelity || nextObjectFidelity,
         enforceContactShadow: nestedPatch.enforceContactShadow ?? nextEnforceContactShadow,
@@ -402,6 +460,7 @@ export function ObjectInsertPanel({
     activeObjectItem?.referenceImages,
     activeObjectFidelity,
     activeObjectInsertSurface,
+    activeObjectItem?.insertElementKind,
     activeObjectType,
     allowAutoAdjustPosition,
     allowAutoAdjustRotation,
@@ -421,6 +480,7 @@ export function ObjectInsertPanel({
     sourceImage?.assetId,
     sceneEnrichment,
     state.config.customPrompt,
+    state.config.insertElementKind,
     state.config.objectInsert,
     state.config.objectInsertExtraPrompt,
     uiMode,
@@ -441,7 +501,7 @@ export function ObjectInsertPanel({
       objectPlacement: next,
       objectInsert: {
         ...(state.config.objectInsert || {}),
-        objectItems: toObjectInsertConfigItems(nextItems),
+        objectItems: toObjectInsertConfigItems(nextItems, sourceWidth, sourceHeight),
       },
       objectInsertExtraPrompt: state.config.objectInsertExtraPrompt || '',
       customPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
@@ -484,7 +544,7 @@ export function ObjectInsertPanel({
       placementIntent: nextActiveItem?.placementIntent || placementIntent,
       objectInsert: {
         ...(state.config.objectInsert || {}),
-        objectItems: toObjectInsertConfigItems(safeItems),
+        objectItems: toObjectInsertConfigItems(safeItems, sourceWidth, sourceHeight),
       },
     }));
   }, [activeItemId, buildObjectInsertConfigPatch, cloneObjectItems, objectItems, onUpdateConfig, onUpdateMaterialImage, placementIntent, placementMode, state.config.objectInsert]);
@@ -682,7 +742,7 @@ export function ObjectInsertPanel({
           objectInsert: {
             ...(state.config.objectInsert || {}),
             sourceImageAssetId: image.assetId,
-            objectItems: toObjectInsertConfigItems(nextItems),
+            objectItems: toObjectInsertConfigItems(nextItems, sourceWidth, sourceHeight),
           },
         });
       } else {
@@ -1031,6 +1091,7 @@ export function ObjectInsertPanel({
       referenceImages: [image],
       placement: sourceImage ? offsetPlacement(basePlacement, sourceWidth, sourceHeight, objectItems.length) : basePlacement,
       objectType: activeObjectType,
+      insertElementKind: activeInsertElementKind,
       objectInsertSurface: activeObjectInsertSurface,
       zIndex: objectItems.length,
     };
@@ -1069,14 +1130,30 @@ export function ObjectInsertPanel({
   };
 
   const handleObjectTypeChange = (value: string) => {
+    const nextKind = readInsertElementKind(undefined, value, activeObjectInsertSurface, placementIntent);
     if (activeObjectItem) {
-      handleUpdateObjectItem(activeObjectItem.id, { objectType: value });
+      handleUpdateObjectItem(activeObjectItem.id, { objectType: value, insertElementKind: nextKind });
     }
     onUpdateConfig(buildObjectInsertConfigPatch({
       objectType: value,
+      insertElementKind: nextKind,
       objectInsert: {
         ...(state.config.objectInsert || {}),
         objectType: value,
+        insertElementKind: nextKind,
+      },
+    }));
+  };
+
+  const handleInsertElementKindChange = (value: InsertElementKind) => {
+    if (activeObjectItem) {
+      handleUpdateObjectItem(activeObjectItem.id, { insertElementKind: value });
+    }
+    onUpdateConfig(buildObjectInsertConfigPatch({
+      insertElementKind: value,
+      objectInsert: {
+        ...(state.config.objectInsert || {}),
+        insertElementKind: value,
       },
     }));
   };
@@ -1382,11 +1459,33 @@ export function ObjectInsertPanel({
         previewFusionItems.map(item => ({
           image: item.referenceImages[0],
           placement: item.placement,
+          elementType: readInsertElementKind(item.insertElementKind, item.objectType, item.objectInsertSurface, item.extraPrompt),
+          objectType: item.objectType,
+          attachmentMode: resolvePlanarAttachmentMode(item),
         })),
       );
       const placementPreviewAsset = await uploadDataUrlAsset(placementPreview.dataUrl, `object-insert-placement-preview-${Date.now()}`);
       if (!placementPreviewAsset.id) {
         setMessage('摆放示意图生成失败，请重试。');
+        return;
+      }
+      const hasPlanarPreviewItems = previewFusionItems.some(item => readInsertElementKind(item.insertElementKind, item.objectType, item.objectInsertSurface, item.extraPrompt) === 'planar-graphic');
+      const hasVolumetricPreviewItems = previewFusionItems.some(item => readInsertElementKind(item.insertElementKind, item.objectType, item.objectInsertSurface, item.extraPrompt) !== 'planar-graphic');
+      const planarEdgeMask = hasPlanarPreviewItems && !hasVolumetricPreviewItems
+        ? await exportPlanarEdgeBandMask(
+            previewFusionSourceUpload.image,
+            previewFusionItems.map(item => ({
+              placement: item.placement,
+              elementType: readInsertElementKind(item.insertElementKind, item.objectType, item.objectInsertSurface, item.extraPrompt),
+              attachmentMode: resolvePlanarAttachmentMode(item),
+            })),
+          )
+        : null;
+      const planarEdgeMaskAsset = planarEdgeMask
+        ? await uploadDataUrlAsset(planarEdgeMask.dataUrl, `object-insert-planar-edge-mask-${Date.now()}`)
+        : null;
+      if (planarEdgeMask && !planarEdgeMaskAsset?.id) {
+        setMessage('二维平面边缘融合 mask 生成失败，请重试。');
         return;
       }
       const effectivePreviewFusionConfig = {
@@ -1403,18 +1502,30 @@ export function ObjectInsertPanel({
       const previewFusionAllowAutoAdjustPosition = true;
       const previewFusionAllowAutoAdjustRotation = readObjectInsertAutoAdjust(effectivePreviewFusionConfig, 'allowAutoAdjustRotation');
       const previewFusionAllowAutoAdjustScale = readObjectInsertAutoAdjust(effectivePreviewFusionConfig, 'allowAutoAdjustScale');
-      const previewFusionObjectItemConfigs: ObjectInsertItemConfig[] = previewFusionItems.map(item => ({
-        id: item.id,
-        objectType: item.objectType || 'custom',
-        objectLabel: item.objectLabel || undefined,
-        referenceAssetIds: item.referenceImages.map(image => image.assetId).filter((assetId): assetId is string => Boolean(assetId)),
-        placement: item.placement,
-        placementPreviewAssetId: placementPreviewAsset.id,
-        placementMode: item.placementMode || previewFusionPlacementMode,
-        placementIntent: item.placementIntent || undefined,
-        ...softAnchorPlacementConfig,
-        extraPrompt: item.extraPrompt || undefined,
-      }));
+      const previewFusionObjectItemConfigs: ObjectInsertItemConfig[] = previewFusionItems.map(item => {
+        const itemKind = readInsertElementKind(item.insertElementKind, item.objectType, item.objectInsertSurface, item.extraPrompt || previewFusionPlacementIntent);
+        const attachmentMode = resolvePlanarAttachmentMode(item);
+        const edgeBandPx = resolvePlanarEdgeBandPx(sourceWidth, sourceHeight);
+        return {
+          id: item.id,
+          objectType: item.objectType || 'custom',
+          objectLabel: item.objectLabel || undefined,
+          insertElementKind: itemKind,
+          elementType: itemKind,
+          referenceAssetIds: item.referenceImages.map(image => image.assetId).filter((assetId): assetId is string => Boolean(assetId)),
+          placement: buildPlacementForSubmit(item.placement, itemKind, sourceWidth, sourceHeight, item.objectInsertSurface),
+          placementPreviewAssetId: placementPreviewAsset.id,
+          placementMaskAssetId: itemKind === 'planar-graphic' ? planarEdgeMaskAsset?.id : undefined,
+          placementMode: itemKind === 'planar-graphic' ? 'strict' : item.placementMode || previewFusionPlacementMode,
+          placementIntent: item.placementIntent || undefined,
+          ...softAnchorPlacementConfig,
+          ...(itemKind === 'planar-graphic' ? planarLockedPlacementConfig : {}),
+          ...(itemKind === 'planar-graphic' ? buildPlanarFusionConfig(attachmentMode, edgeBandPx) : {}),
+          planarSizeLocked: itemKind === 'planar-graphic',
+          extraPrompt: item.extraPrompt || undefined,
+        };
+      });
+      logPlanarGraphicPlacementDebug(previewFusionObjectItemConfigs);
       const previewFusionConfigPatch: GenerationConfig = {
         ...effectivePreviewFusionConfig,
         step: 'object_insert',
@@ -1425,8 +1536,9 @@ export function ObjectInsertPanel({
         placementPreviewAssetId: placementPreviewAsset.id,
         placementGuideAssetId: placementPreviewAsset.id,
         objectReferenceAssetId: undefined,
-        placementMaskAssetId: undefined,
+        placementMaskAssetId: planarEdgeMaskAsset?.id,
         objectPlacement: previewFusionObjectItemConfigs[0]?.placement,
+        insertElementKind: previewFusionObjectItemConfigs[0]?.insertElementKind,
         objectInsertDebugMode: 'source_placement_preview',
         positionConstraintStrength: 'medium',
         placementMode: previewFusionPlacementMode,
@@ -1442,9 +1554,11 @@ export function ObjectInsertPanel({
           sceneEnrichment,
           sourceImageAssetId: previewFusionSourceUpload.assetId,
           objectItems: previewFusionObjectItemConfigs,
+          insertElementKind: previewFusionObjectItemConfigs[0]?.insertElementKind,
           globalExtraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
           previewAssetId: placementPreviewAsset.id,
           guideAssetId: placementPreviewAsset.id,
+          maskAssetId: planarEdgeMaskAsset?.id,
           placement: previewFusionObjectItemConfigs[0]?.placement,
           extraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
           debugMode: 'source_placement_preview',
@@ -1453,6 +1567,7 @@ export function ObjectInsertPanel({
           placementIntent: previewFusionPlacementIntent,
           harmonyPriority: previewFusionHarmonyPriority,
           ...softAnchorPlacementConfig,
+          ...(hasPlanarPreviewItems ? buildPlanarFusionConfig(resolvePlanarAttachmentMode(previewFusionItems[0]), resolvePlanarEdgeBandPx(sourceWidth, sourceHeight)) : {}),
           allowAutoAdjustPosition: previewFusionAllowAutoAdjustPosition,
           allowAutoAdjustRotation: previewFusionAllowAutoAdjustRotation,
           allowAutoAdjustScale: previewFusionAllowAutoAdjustScale,
@@ -1460,8 +1575,8 @@ export function ObjectInsertPanel({
         objectInsertInputOrder: undefined,
         objectInsertExtraPrompt: state.config.objectInsertExtraPrompt || '',
         customPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
-        maskMode: undefined,
-        maskAssetId: undefined,
+        maskMode: planarEdgeMaskAsset?.id ? 'asset-mask' : undefined,
+        maskAssetId: planarEdgeMaskAsset?.id,
         editTarget: 'furniture',
         preserveStructure: true,
         preserveCamera: true,
@@ -1470,7 +1585,7 @@ export function ObjectInsertPanel({
         objectInsertCandidateStrategies: candidateStrategies,
         objectInsertCandidatePromptHints: buildObjectInsertCandidatePromptHints(candidateStrategies),
       };
-      setExportResult({ preview: placementPreview, mask: placementPreview, placement: previewFusionObjectItemConfigs[0]?.placement || emptyPlacement });
+      setExportResult({ preview: placementPreview, mask: planarEdgeMask || placementPreview, placement: previewFusionObjectItemConfigs[0]?.placement || emptyPlacement });
       setObjectItems(objectItems.map(item => {
         const prepared = previewFusionItems.find(preparedItem => preparedItem.id === item.id);
         return prepared ? { ...item, placement: prepared.placement } : item;
@@ -1483,24 +1598,26 @@ export function ObjectInsertPanel({
         requestMode: 'inpaint',
         objectInsertMode: 'object_insert_preview_fusion',
         configMode: previewFusionConfigPatch.objectInsert?.mode,
-        inputAssetIds: [previewFusionSourceUpload.assetId, placementPreviewAsset.id],
+        inputAssetIds: [previewFusionSourceUpload.assetId, placementPreviewAsset.id, planarEdgeMaskAsset?.id].filter(Boolean),
         sourceImageAssetId: previewFusionSourceUpload.assetId,
         placementPreviewAssetId: placementPreviewAsset.id,
+        planarEdgeMaskAssetId: planarEdgeMaskAsset?.id,
         objectItemsCount: previewFusionObjectItemConfigs.length,
         objectItemsReferenceCount: previewFusionObjectItemConfigs.reduce((sum, item) => sum + item.referenceAssetIds.length, 0),
-        providerImageCount: 2,
+        providerImageCount: planarEdgeMaskAsset?.id ? 3 : 2,
         sendsFurnitureReferencesToProvider: false,
-        placementConstraintMode: 'soft-anchor',
+        placementConstraintMode: hasPlanarPreviewItems ? 'strict-planar-edge-fusion' : 'soft-anchor',
         cleanPlacementPreview: true,
       });
       console.info('[ObjectInsert] preview fusion generation job payload prepared', {
-        inputAssetIds: [previewFusionSourceUpload.assetId, placementPreviewAsset.id],
-        providerImageCount: 2,
+        inputAssetIds: [previewFusionSourceUpload.assetId, placementPreviewAsset.id, planarEdgeMaskAsset?.id].filter(Boolean),
+        providerImageCount: planarEdgeMaskAsset?.id ? 3 : 2,
         sourceAssetId: previewFusionSourceUpload.assetId,
         placementPreviewAssetId: placementPreviewAsset.id,
+        planarEdgeMaskAssetId: planarEdgeMaskAsset?.id,
         placementPreview: omitDataUrl(placementPreview),
         objectItems: previewFusionObjectItemConfigs,
-        placementConstraintMode: 'soft-anchor',
+        placementConstraintMode: hasPlanarPreviewItems ? 'strict-planar-edge-fusion' : 'soft-anchor',
       });
       setMessage(`已导出 ${placementPreview.width}x${placementPreview.height} placement preview，将以原图 + 示意图模式融合。`);
       onGenerate({
@@ -1572,18 +1689,29 @@ export function ObjectInsertPanel({
       const nextAllowAutoAdjustPosition = readObjectInsertAutoAdjust(effectiveConfig, 'allowAutoAdjustPosition');
       const nextAllowAutoAdjustRotation = readObjectInsertAutoAdjust(effectiveConfig, 'allowAutoAdjustRotation');
       const nextAllowAutoAdjustScale = readObjectInsertAutoAdjust(effectiveConfig, 'allowAutoAdjustScale');
-      const objectItemConfigs: ObjectInsertItemConfig[] = preparedItems.map(item => ({
-        id: item.id,
-        objectType: item.objectType || 'custom',
-        objectLabel: item.objectLabel || undefined,
-        referenceAssetIds: includeObject ? item.referenceAssetIds : [],
-        placement: item.placement,
-        placementPreviewAssetId: includePreview ? item.placementPreviewAssetId : undefined,
-        placementMaskAssetId: includeMask ? item.placementMaskAssetId : undefined,
-        placementMode: item.placementMode || nextPlacementMode,
-        placementIntent: item.placementIntent || undefined,
-        extraPrompt: item.extraPrompt || undefined,
-      }));
+      const objectItemConfigs: ObjectInsertItemConfig[] = preparedItems.map(item => {
+        const itemKind = readInsertElementKind(item.insertElementKind, item.objectType, item.objectInsertSurface, item.extraPrompt || nextPlacementIntent);
+        const attachmentMode = resolvePlanarAttachmentMode(item);
+        const edgeBandPx = resolvePlanarEdgeBandPx(sourceWidth, sourceHeight);
+        return {
+          id: item.id,
+          objectType: item.objectType || 'custom',
+          objectLabel: item.objectLabel || undefined,
+          insertElementKind: itemKind,
+          elementType: itemKind,
+          referenceAssetIds: includeObject ? item.referenceAssetIds : [],
+          placement: buildPlacementForSubmit(item.placement, itemKind, sourceWidth, sourceHeight, item.objectInsertSurface),
+          placementPreviewAssetId: includePreview ? item.placementPreviewAssetId : undefined,
+          placementMaskAssetId: includeMask ? item.placementMaskAssetId : undefined,
+          placementMode: itemKind === 'planar-graphic' ? 'strict' : item.placementMode || nextPlacementMode,
+          placementIntent: item.placementIntent || undefined,
+          ...(itemKind === 'planar-graphic' ? planarLockedPlacementConfig : {}),
+          ...(itemKind === 'planar-graphic' ? buildPlanarFusionConfig(attachmentMode, edgeBandPx) : {}),
+          planarSizeLocked: itemKind === 'planar-graphic',
+          extraPrompt: item.extraPrompt || undefined,
+        };
+      });
+      logPlanarGraphicPlacementDebug(objectItemConfigs);
       const multiObject = objectItemConfigs.length > 1;
       const maskImage: UploadedImage | null = firstMask && firstMaskAssetId && !multiObject ? {
         id: `object-insert-mask-${firstMaskAssetId}`,
@@ -1604,6 +1732,7 @@ export function ObjectInsertPanel({
         placementGuideAssetId: includePreview ? firstItem.placementPreviewAssetId : undefined,
         placementMaskAssetId: includeMask ? firstItem.placementMaskAssetId : undefined,
         objectPlacement: firstItem.placement,
+        insertElementKind: objectItemConfigs[0]?.insertElementKind,
         objectInsertDebugMode: activeDebugMode,
         positionConstraintStrength,
         placementMode: nextPlacementMode,
@@ -1615,6 +1744,7 @@ export function ObjectInsertPanel({
         objectInsert: {
           sourceImageAssetId: sourceAssetId,
           objectItems: objectItemConfigs,
+          insertElementKind: objectItemConfigs[0]?.insertElementKind,
           globalExtraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
           objectReferenceAssetId: includeObject ? firstItem.referenceAssetIds[0] : undefined,
           objectReferenceAssetIds: includeObject ? firstItem.referenceAssetIds : undefined,
@@ -1742,6 +1872,42 @@ export function ObjectInsertPanel({
     }
   };
 
+  const objectInsertSummaryCard = (
+    <div className="rounded-2xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
+      <p className="font-black text-slate-900">生成摘要</p>
+      <div className="mt-2 space-y-1.5">
+        <p>模式：元素植入</p>
+        <p>元素类型：{readInsertElementKindSummary(objectItems)}</p>
+        <p>修改策略：仅新增，不改原图</p>
+        <p>材质保护：已开启</p>
+        <p>非目标区域：严格保持不变</p>
+        {objectItems.some(item => readInsertElementKind(item.insertElementKind, item.objectType, item.objectInsertSurface, item.extraPrompt) === 'planar-graphic')
+          ? (
+            <>
+              <p>贴附方式：{readPlanarAttachmentModeSummary(objectItems)}</p>
+              <p>位置：已锁定</p>
+              <p>尺寸：已锁定</p>
+              <p>图形内容：严格保留</p>
+              <p>原图材质：严格保护</p>
+              <p>融合方式：局部贴附融合</p>
+            </>
+          )
+          : null}
+        <p>原图：{sourceImage ? '1 张' : '未上传'}</p>
+        <p>对象数量：{objectItems.length}</p>
+        {objectItems.map((item, index) => {
+          const typeLabel = readObjectTypeLabel(item.objectType);
+          return (
+            <p key={item.id} className="truncate">
+              {item.objectLabel || `${typeLabel} ${index + 1}`}：参考图 {item.referenceImages.length} 张
+            </p>
+          );
+        })}
+      </div>
+      {uploadErrors.object ? <p className="mt-2 text-xs leading-5 text-rose-600">{uploadErrors.object}</p> : null}
+    </div>
+  );
+
   return (
     <div className="workspace-layout workspace-surface flex min-h-0 flex-1 overflow-hidden p-3">
       <input ref={sourceInputRef} type="file" accept={IMAGE_UPLOAD_ACCEPT} className="hidden" onChange={event => { void handleUploadImage('source', event.currentTarget.files); event.currentTarget.value = ''; }} />
@@ -1825,6 +1991,27 @@ export function ObjectInsertPanel({
                   onUndo={handleUndoObjectEdit}
                   onRedo={handleRedoObjectEdit}
                 />
+                <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                  <p className="text-xs font-black text-slate-900">元素类型</p>
+                  <p className="mt-1 text-[11px] font-semibold leading-5 text-slate-500">Logo、墙面文字、导视和屏幕画面建议选择二维平面图形。</p>
+                  <div className="mt-3 grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
+                    {insertElementKindOptions.map(option => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => handleInsertElementKindChange(option.value)}
+                        className={`rounded-lg px-2 py-2 text-xs font-black transition ${
+                          activeInsertElementKind === option.value
+                            ? 'bg-white text-blue-700 shadow-sm'
+                            : 'text-slate-500 hover:text-slate-800'
+                        }`}
+                        title={option.description}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <ObjectInsertLayerPanel
                   items={objectItems.map(item => ({
                     id: item.id,
@@ -1842,6 +2029,7 @@ export function ObjectInsertPanel({
                   onDelete={handleRemoveObjectItem}
                   onRename={handleRenameLayer}
                 />
+                {objectInsertSummaryCard}
                 <button
                   type="button"
                   onClick={() => void handleRemoveActiveBackground()}
@@ -1894,22 +2082,7 @@ export function ObjectInsertPanel({
           onRemoveReference={handleRemoveObjectReference}
         />
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
-          <p className="font-black text-slate-900">生成摘要</p>
-          <div className="mt-2 space-y-1.5">
-            <p>原图：{sourceImage ? '1 张' : '未上传'}</p>
-            <p>对象数量：{objectItems.length}</p>
-            {objectItems.map((item, index) => {
-              const typeLabel = readObjectTypeLabel(item.objectType);
-              return (
-                <p key={item.id} className="truncate">
-                  {item.objectLabel || `${typeLabel} ${index + 1}`}：参考图 {item.referenceImages.length} 张
-                </p>
-              );
-            })}
-          </div>
-          {uploadErrors.object ? <p className="mt-2 text-xs leading-5 text-rose-600">{uploadErrors.object}</p> : null}
-        </div>
+        {objectInsertSummaryCard}
 
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
           <p className="text-xs font-black text-slate-900">元素配置</p>
@@ -1925,6 +2098,16 @@ export function ObjectInsertPanel({
                   <option value={activeObjectType}>{readObjectTypeLabel(activeObjectType)}</option>
                 ) : null}
                 {objectTypeOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">元素类型</span>
+              <select
+                value={activeInsertElementKind}
+                onChange={event => handleInsertElementKindChange(event.currentTarget.value as InsertElementKind)}
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800 outline-none focus:border-blue-300"
+              >
+                {insertElementKindOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
             <label className="block">
@@ -2252,11 +2435,6 @@ export function ObjectInsertPanel({
                 sourceMissingMessage="暂无原图，无法对比。"
               />
             </div>
-            {selectedResult ? (
-              <div className="border-t border-slate-100 px-4 py-3">
-                <ResultQualityReport resultId={selectedResult.id} metadata={selectedResult.metadata} />
-              </div>
-            ) : null}
             <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 bg-white px-4 py-3">
               {canSaveTemplate && selectedResult ? (
                 <button
@@ -2785,6 +2963,7 @@ function createDefaultObjectItem(index = 0): ObjectInsertDraftItem {
   return {
     id: createObjectItemId(),
     objectType: 'custom',
+    insertElementKind: 'volumetric-object',
     objectLabel: `对象 ${index + 1}`,
     referenceImages: [],
     placement: emptyPlacement,
@@ -2808,6 +2987,7 @@ function createInitialObjectItems(config: GenerationConfig, legacyObjectImage: U
     return items.slice(0, maxObjectItems).map((item, index) => ({
       id: item.id || createObjectItemId(),
       objectType: item.objectType || readActiveObjectType(config, null),
+      insertElementKind: readInsertElementKind(item.insertElementKind, item.objectType || readActiveObjectType(config, null), item.objectInsertSurface || readActiveObjectInsertSurface(config, null), item.extraPrompt || config.objectInsertExtraPrompt || config.customPrompt),
       objectLabel: item.objectLabel || `对象 ${index + 1}`,
       referenceImages: [],
       placement: sanitizePlacement(item.placement || (index === 0 ? config.objectPlacement : undefined) || emptyPlacement),
@@ -2818,6 +2998,7 @@ function createInitialObjectItems(config: GenerationConfig, legacyObjectImage: U
       enforcePerspectiveScale: item.enforcePerspectiveScale ?? readObjectInsertBooleanConstraint(config, null, 'enforcePerspectiveScale'),
       placementMode: item.placementMode === 'strict' ? 'strict' : 'natural',
       placementIntent: item.placementIntent || '',
+      attachmentMode: item.attachmentMode,
       extraPrompt: item.extraPrompt || '',
       visible: item.visible !== false,
       locked: item.locked === true,
@@ -2832,6 +3013,7 @@ function createInitialObjectItems(config: GenerationConfig, legacyObjectImage: U
     referenceImages: legacyObjectImage ? [legacyObjectImage] : [],
     placement: sanitizePlacement(config.objectPlacement || config.objectInsert?.placement || emptyPlacement),
     objectType: readActiveObjectType(config, null),
+    insertElementKind: readActiveInsertElementKind(config, null),
     objectInsertSurface: readActiveObjectInsertSurface(config, null),
     objectFidelity: readActiveObjectFidelity(config, null),
     enforceContactShadow: readObjectInsertBooleanConstraint(config, null, 'enforceContactShadow'),
@@ -2839,6 +3021,7 @@ function createInitialObjectItems(config: GenerationConfig, legacyObjectImage: U
     enforcePerspectiveScale: readObjectInsertBooleanConstraint(config, null, 'enforcePerspectiveScale'),
     placementMode: readObjectInsertPlacementMode(config),
     placementIntent: readObjectInsertPlacementIntent(config),
+    attachmentMode: config.objectInsert?.attachmentMode,
     extraPrompt: config.objectInsertExtraPrompt || config.objectInsert?.extraPrompt || config.customPrompt || '',
     visible: true,
     locked: false,
@@ -2954,41 +3137,142 @@ function readPositiveNumber(...values: unknown[]): number | null {
   return null;
 }
 
-function toObjectInsertConfigItems(items: ObjectInsertDraftItem[]): ObjectInsertItemConfig[] {
-  return items.slice(0, maxObjectItems).map(item => ({
-    id: item.id,
-    objectType: item.objectType || 'custom',
-    objectLabel: item.objectLabel || undefined,
-    referenceAssetIds: item.referenceImages
-      .map(image => image.assetId)
-      .filter((assetId): assetId is string => Boolean(assetId))
-      .slice(0, maxReferencesPerObject),
-    placement: item.placement,
-    objectInsertSurface: item.objectInsertSurface,
-    objectFidelity: item.objectFidelity,
-    enforceContactShadow: item.enforceContactShadow,
-    enforceOcclusion: item.enforceOcclusion,
-    enforcePerspectiveScale: item.enforcePerspectiveScale,
-    placementMode: item.placementMode,
-    placementIntent: item.placementIntent || undefined,
-    extraPrompt: item.extraPrompt || undefined,
-    visible: item.visible,
-    locked: item.locked,
-    zIndex: item.zIndex,
-    backgroundRemovedAssetId: item.backgroundRemovedAssetId,
+function toObjectInsertConfigItems(items: ObjectInsertDraftItem[], sourceWidth = 1200, sourceHeight = 800): ObjectInsertItemConfig[] {
+  return items.slice(0, maxObjectItems).map(item => {
+    const itemKind = readInsertElementKind(item.insertElementKind, item.objectType, item.objectInsertSurface, item.extraPrompt);
+    const attachmentMode = resolvePlanarAttachmentMode(item);
+    const edgeBandPx = resolvePlanarEdgeBandPx(sourceWidth, sourceHeight);
+    return {
+      id: item.id,
+      objectType: item.objectType || 'custom',
+      objectLabel: item.objectLabel || undefined,
+      insertElementKind: itemKind,
+      elementType: itemKind,
+      referenceAssetIds: item.referenceImages
+        .map(image => image.assetId)
+        .filter((assetId): assetId is string => Boolean(assetId))
+        .slice(0, maxReferencesPerObject),
+      placement: buildPlacementForSubmit(item.placement, itemKind, sourceWidth, sourceHeight, item.objectInsertSurface),
+      objectInsertSurface: item.objectInsertSurface,
+      objectFidelity: item.objectFidelity,
+      enforceContactShadow: item.enforceContactShadow,
+      enforceOcclusion: item.enforceOcclusion,
+      enforcePerspectiveScale: item.enforcePerspectiveScale,
+      placementMode: itemKind === 'planar-graphic' ? 'strict' : item.placementMode,
+      placementIntent: item.placementIntent || undefined,
+      ...(itemKind === 'planar-graphic' ? planarLockedPlacementConfig : {}),
+      ...(itemKind === 'planar-graphic' ? buildPlanarFusionConfig(attachmentMode, edgeBandPx) : {}),
+      extraPrompt: item.extraPrompt || undefined,
+      planarSizeLocked: itemKind === 'planar-graphic',
+      visible: item.visible,
+      locked: item.locked,
+      zIndex: item.zIndex,
+      backgroundRemovedAssetId: item.backgroundRemovedAssetId,
+    };
+  });
+}
+
+function buildPlacementForSubmit(
+  placement: ObjectPlacement,
+  elementType: InsertElementKind,
+  sourceWidth: number,
+  sourceHeight: number,
+  surfacePlane?: ObjectInsertSurface,
+): ObjectPlacement {
+  const safePlacement = sanitizePlacement(placement, sourceWidth, sourceHeight);
+  if (elementType !== 'planar-graphic') return safePlacement;
+  return {
+    ...safePlacement,
+    anchor: 'top-left',
+    cornerPoints: buildPlacementCornerPoints(safePlacement),
+    normalizedBox: buildNormalizedPlacementBox(safePlacement, sourceWidth, sourceHeight),
+    surfacePlane,
+    sizeLocked: true,
+  };
+}
+
+function buildPlacementCornerPoints(placement: ObjectPlacement): Array<{ x: number; y: number }> {
+  const cx = placement.x + placement.width / 2;
+  const cy = placement.y + placement.height / 2;
+  const radians = placement.rotation * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return [
+    { x: -placement.width / 2, y: -placement.height / 2 },
+    { x: placement.width / 2, y: -placement.height / 2 },
+    { x: placement.width / 2, y: placement.height / 2 },
+    { x: -placement.width / 2, y: placement.height / 2 },
+  ].map(point => ({
+    x: Math.round((cx + point.x * cos - point.y * sin) * 10) / 10,
+    y: Math.round((cy + point.x * sin + point.y * cos) * 10) / 10,
   }));
 }
 
+function buildNormalizedPlacementBox(
+  placement: ObjectPlacement,
+  sourceWidth: number,
+  sourceHeight: number,
+): NonNullable<ObjectPlacement['normalizedBox']> {
+  const safeWidth = Math.max(1, sourceWidth);
+  const safeHeight = Math.max(1, sourceHeight);
+  return {
+    x: roundPlacementRatio(placement.x / safeWidth),
+    y: roundPlacementRatio(placement.y / safeHeight),
+    width: roundPlacementRatio(placement.width / safeWidth),
+    height: roundPlacementRatio(placement.height / safeHeight),
+  };
+}
+
+function roundPlacementRatio(value: number): number {
+  return Math.round(clamp(value, -1, 2) * 1000000) / 1000000;
+}
+
+function logPlanarGraphicPlacementDebug(items: ObjectInsertItemConfig[]): void {
+  if (!import.meta.env.DEV) return;
+  for (const item of items) {
+    if (item.insertElementKind !== 'planar-graphic') continue;
+    console.debug('[Planar graphic placement]', {
+      placementWidth: item.placement?.width,
+      placementHeight: item.placement?.height,
+      normalizedBox: item.placement?.normalizedBox,
+      rotation: item.placement?.rotation,
+      elementType: item.insertElementKind,
+      attachmentMode: item.attachmentMode,
+      edgeBandPx: item.edgeBandPx,
+      fusionStrategy: item.fusionStrategy,
+    });
+  }
+}
+
 function buildObjectInsertSummary(items: ObjectInsertItemConfig[]): string {
+  const hasPlanarGraphic = items.some(item => readInsertElementKind(item.insertElementKind, item.objectType, item.objectInsertSurface, item.extraPrompt) === 'planar-graphic');
   return [
     '正在创建多元素植入任务...',
     `原图：1 张`,
     `对象数量：${items.length}`,
+    `元素类型：${readInsertElementKindSummary(items)}`,
+    '修改策略：仅新增，不改原图',
+    '材质保护：已开启',
+    '非目标区域：严格保持不变',
+    hasPlanarGraphic ? `贴附方式：${readPlanarAttachmentModeSummary(items)}` : '',
+    hasPlanarGraphic ? '位置：已锁定' : '',
+    hasPlanarGraphic ? '尺寸：已锁定' : '',
+    hasPlanarGraphic ? '图形内容：严格保留' : '',
+    hasPlanarGraphic ? '原图材质：严格保护' : '',
+    hasPlanarGraphic ? '融合方式：局部贴附融合' : '',
     ...items.map((item, index) => {
       const typeLabel = readObjectTypeLabel(item.objectType || item.objectLabel || `对象 ${index + 1}`);
       return `${item.objectLabel || typeLabel}参考图：${item.referenceAssetIds.length} 张`;
     }),
-  ].join('\n');
+  ].filter(Boolean).join('\n');
+}
+
+function readPlanarAttachmentModeSummary(items: Array<{ insertElementKind?: InsertElementKind; objectType?: string; objectLabel?: string; objectInsertSurface?: ObjectInsertSurface; attachmentMode?: PlanarAttachmentMode; extraPrompt?: string }>): string {
+  const modes = Array.from(new Set(items
+    .filter(item => readInsertElementKind(item.insertElementKind, item.objectType, item.objectInsertSurface, item.extraPrompt) === 'planar-graphic')
+    .map(item => resolvePlanarAttachmentMode(item))));
+  if (modes.length === 0) return planarAttachmentModeLabels['flat-sign'];
+  return modes.map(mode => planarAttachmentModeLabels[mode]).join(' / ');
 }
 
 function readObjectTypeLabel(value: string | undefined): string {
@@ -2996,8 +3280,73 @@ function readObjectTypeLabel(value: string | undefined): string {
   return objectTypeOptions.find(option => option.value === value)?.label || legacyObjectTypeLabels[value] || value;
 }
 
+function readInsertElementKindLabel(value: InsertElementKind): string {
+  return value === 'planar-graphic' ? '二维平面图形' : '三维对象';
+}
+
+function readInsertElementKindSummary(items: Array<{ insertElementKind?: InsertElementKind; objectType?: string; objectInsertSurface?: ObjectInsertSurface; extraPrompt?: string }>): string {
+  const kinds = Array.from(new Set(items.map(item => readInsertElementKind(item.insertElementKind, item.objectType, item.objectInsertSurface, item.extraPrompt))));
+  if (kinds.length === 0) return '三维对象';
+  if (kinds.length === 1) return readInsertElementKindLabel(kinds[0]);
+  return '二维平面图形 / 三维对象';
+}
+
+function resolvePlanarAttachmentMode(item: {
+  attachmentMode?: PlanarAttachmentMode;
+  objectType?: string;
+  objectLabel?: string;
+  extraPrompt?: string;
+}): PlanarAttachmentMode {
+  if (item.attachmentMode) return item.attachmentMode;
+  const objectType = item.objectType || '';
+  const text = [objectType, item.objectLabel || '', item.extraPrompt || ''].join('\n');
+  if (objectType === 'screen-content' || /screen|屏幕|显示屏|电视|monitor/iu.test(text)) return 'screen-content';
+  if (/立体字|发光字|立体logo|raised|channel letter|3d letter/iu.test(text)) return 'raised-lettering';
+  if (objectType === 'poster' || objectType === 'artwork' || /海报|墙贴|贴膜|喷绘|poster|decal|vinyl/iu.test(text)) return 'flat-decal';
+  return 'flat-sign';
+}
+
+function resolvePlanarEdgeBandPx(sourceWidth: number, sourceHeight: number): number {
+  return Math.max(1, Math.min(2, Math.round(Math.max(sourceWidth, sourceHeight) / 1400)));
+}
+
 function readActiveObjectType(config: GenerationConfig, item: ObjectInsertDraftItem | null): string {
   return item?.objectType || config.objectInsert?.objectType || config.objectType || 'custom';
+}
+
+function readActiveInsertElementKind(config: GenerationConfig, item: ObjectInsertDraftItem | null): InsertElementKind {
+  return readInsertElementKind(
+    item?.insertElementKind || config.objectInsert?.insertElementKind || config.insertElementKind,
+    readActiveObjectType(config, item),
+    readActiveObjectInsertSurface(config, item),
+    item?.extraPrompt || config.objectInsertExtraPrompt || config.objectInsert?.extraPrompt || config.customPrompt,
+  );
+}
+
+function readInsertElementKind(
+  value: unknown,
+  objectType: string | undefined,
+  surface?: ObjectInsertSurface,
+  prompt?: string,
+): InsertElementKind {
+  if (value === 'planar-graphic' || value === 'volumetric-object') return value;
+  if (isPlanarGraphicObjectType(objectType)) return 'planar-graphic';
+  const text = `${objectType || ''}\n${prompt || ''}`;
+  if (surface === 'wall' && /logo|标识|导视|海报|医院|名称|文字|屏幕|screen|poster|signage|wayfinding|brand/iu.test(text)) {
+    return 'planar-graphic';
+  }
+  return 'volumetric-object';
+}
+
+function isPlanarGraphicObjectType(value: string | undefined): boolean {
+  return value === 'signage'
+    || value === 'logo'
+    || value === 'wall-text'
+    || value === 'hospital-signage'
+    || value === 'brand-signage'
+    || value === 'poster'
+    || value === 'wayfinding'
+    || value === 'screen-content';
 }
 
 function readActiveObjectInsertSurface(config: GenerationConfig, item: ObjectInsertDraftItem | null): ObjectInsertSurface {
@@ -3135,7 +3484,7 @@ async function exportPlacementMask(sourceImage: UploadedImage, objectImage: Uplo
 
 async function exportCompositePlacementPreview(
   sourceImage: UploadedImage,
-  items: Array<{ image: UploadedImage; placement: ObjectPlacement }>,
+  items: Array<{ image: UploadedImage; placement: ObjectPlacement; elementType?: InsertElementKind; objectType?: string; attachmentMode?: PlanarAttachmentMode }>,
 ): Promise<ExportedImageInfo> {
   const [source, ...objects] = await Promise.all([
     loadCanvasImage(readImageSrc(sourceImage)),
@@ -3153,16 +3502,280 @@ async function exportCompositePlacementPreview(
   items.forEach((item, index) => {
     const object = objects[index];
     if (!object) return;
-    context.save();
-    context.translate(item.placement.x + item.placement.width / 2, item.placement.y + item.placement.height / 2);
-    context.rotate(item.placement.rotation * Math.PI / 180);
-    context.globalAlpha = 0.92;
-    context.drawImage(object, -item.placement.width / 2, -item.placement.height / 2, item.placement.width, item.placement.height);
-    context.restore();
+    if (item.elementType === 'planar-graphic') {
+      drawPlanarGraphicComposite(context, source, object, item.placement, item.attachmentMode || resolvePlanarAttachmentMode(item), width, height);
+      return;
+    }
+    drawPreviewObjectLayer(context, object, item.placement);
   });
 
   const dataUrl = canvas.toDataURL('image/png');
   return { dataUrl, width, height, bytesApprox: estimateDataUrlBytes(dataUrl) };
+}
+
+async function exportPlanarEdgeBandMask(
+  sourceImage: UploadedImage,
+  items: Array<{ placement: ObjectPlacement; elementType?: InsertElementKind; attachmentMode?: PlanarAttachmentMode }>,
+): Promise<ExportedImageInfo> {
+  const width = sourceImage.width || 1200;
+  const height = sourceImage.height || 800;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas export is not supported in this browser.');
+  context.fillStyle = '#000000';
+  context.fillRect(0, 0, width, height);
+  const edgeBandPx = resolvePlanarEdgeBandPx(width, height);
+  items.forEach(item => {
+    if (item.elementType !== 'planar-graphic') return;
+    drawPlanarEdgeBandMask(context, item.placement, edgeBandPx, item.attachmentMode || 'flat-sign');
+  });
+  const dataUrl = canvas.toDataURL('image/png');
+  return { dataUrl, width, height, bytesApprox: estimateDataUrlBytes(dataUrl) };
+}
+
+function drawPreviewObjectLayer(context: CanvasRenderingContext2D, object: HTMLImageElement, placement: ObjectPlacement): void {
+  context.save();
+  context.translate(placement.x + placement.width / 2, placement.y + placement.height / 2);
+  context.rotate(placement.rotation * Math.PI / 180);
+  context.globalAlpha = 0.92;
+  context.drawImage(object, -placement.width / 2, -placement.height / 2, placement.width, placement.height);
+  context.restore();
+}
+
+function drawPlanarGraphicComposite(
+  context: CanvasRenderingContext2D,
+  source: HTMLImageElement,
+  object: HTMLImageElement,
+  placement: ObjectPlacement,
+  attachmentMode: PlanarAttachmentMode,
+  sourceWidth: number,
+  sourceHeight: number,
+): void {
+  const planarCanvas = createPlanarGraphicCanvas(source, object, placement, attachmentMode, sourceWidth, sourceHeight);
+  drawPlanarContactShadow(context, placement, attachmentMode);
+  context.save();
+  context.translate(placement.x + placement.width / 2, placement.y + placement.height / 2);
+  context.rotate(placement.rotation * Math.PI / 180);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(planarCanvas, -placement.width / 2, -placement.height / 2, placement.width, placement.height);
+  context.restore();
+}
+
+function createPlanarGraphicCanvas(
+  source: HTMLImageElement,
+  object: HTMLImageElement,
+  placement: ObjectPlacement,
+  attachmentMode: PlanarAttachmentMode,
+  sourceWidth: number,
+  sourceHeight: number,
+): HTMLCanvasElement {
+  const width = Math.max(1, Math.round(placement.width));
+  const height = Math.max(1, Math.round(placement.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) return canvas;
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(object, 0, 0, width, height);
+  const sourceStats = sampleSourceRingStats(source, placement, sourceWidth, sourceHeight);
+  const strength = attachmentMode === 'screen-content' ? 0.12 : attachmentMode === 'flat-decal' ? 0.24 : 0.18;
+  matchPlanarGraphicEnvironment(context, width, height, sourceStats, strength);
+  return canvas;
+}
+
+function drawPlanarContactShadow(
+  context: CanvasRenderingContext2D,
+  placement: ObjectPlacement,
+  attachmentMode: PlanarAttachmentMode,
+): void {
+  if (attachmentMode === 'flat-decal' || attachmentMode === 'screen-content') return;
+  const shadowAlpha = attachmentMode === 'raised-lettering' ? 0.12 : 0.055;
+  const blur = attachmentMode === 'raised-lettering' ? 3 : 1.4;
+  const offset = attachmentMode === 'raised-lettering' ? 2 : 0.7;
+  context.save();
+  context.translate(placement.x + placement.width / 2, placement.y + placement.height / 2);
+  context.rotate(placement.rotation * Math.PI / 180);
+  context.shadowColor = `rgba(15, 23, 42, ${shadowAlpha})`;
+  context.shadowBlur = blur;
+  context.shadowOffsetX = offset;
+  context.shadowOffsetY = offset;
+  context.fillStyle = 'rgba(15, 23, 42, 0.01)';
+  context.fillRect(-placement.width / 2, -placement.height / 2, placement.width, placement.height);
+  context.restore();
+}
+
+function drawPlanarEdgeBandMask(
+  context: CanvasRenderingContext2D,
+  placement: ObjectPlacement,
+  edgeBandPx: number,
+  attachmentMode: PlanarAttachmentMode,
+): void {
+  const contactBand = attachmentMode === 'raised-lettering' ? 2 : attachmentMode === 'flat-sign' ? 1 : 0;
+  const lineWidth = Math.max(2, edgeBandPx * 2 + contactBand);
+  context.save();
+  context.translate(placement.x + placement.width / 2, placement.y + placement.height / 2);
+  context.rotate(placement.rotation * Math.PI / 180);
+  context.strokeStyle = '#ffffff';
+  context.lineWidth = lineWidth;
+  context.lineJoin = 'round';
+  context.strokeRect(-placement.width / 2, -placement.height / 2, placement.width, placement.height);
+  context.restore();
+}
+
+interface PlanarImageStats {
+  red: number;
+  green: number;
+  blue: number;
+  luminance: number;
+  contrast: number;
+}
+
+function sampleSourceRingStats(
+  source: HTMLImageElement,
+  placement: ObjectPlacement,
+  sourceWidth: number,
+  sourceHeight: number,
+): PlanarImageStats {
+  const sampleCanvas = document.createElement('canvas');
+  sampleCanvas.width = Math.max(1, sourceWidth);
+  sampleCanvas.height = Math.max(1, sourceHeight);
+  const sampleContext = sampleCanvas.getContext('2d', { willReadFrequently: true });
+  if (!sampleContext) return defaultPlanarStats();
+  sampleContext.drawImage(source, 0, 0, sourceWidth, sourceHeight);
+  const pad = Math.max(6, Math.min(24, Math.round(Math.min(placement.width, placement.height) * 0.08)));
+  const left = clamp(Math.floor(placement.x - pad), 0, sourceWidth - 1);
+  const top = clamp(Math.floor(placement.y - pad), 0, sourceHeight - 1);
+  const right = clamp(Math.ceil(placement.x + placement.width + pad), left + 1, sourceWidth);
+  const bottom = clamp(Math.ceil(placement.y + placement.height + pad), top + 1, sourceHeight);
+  const innerLeft = placement.x;
+  const innerTop = placement.y;
+  const innerRight = placement.x + placement.width;
+  const innerBottom = placement.y + placement.height;
+  let imageData: ImageData;
+  try {
+    imageData = sampleContext.getImageData(left, top, right - left, bottom - top);
+  } catch {
+    return defaultPlanarStats();
+  }
+  const values: number[] = [];
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+  let count = 0;
+  for (let y = 0; y < imageData.height; y += 1) {
+    for (let x = 0; x < imageData.width; x += 1) {
+      const absoluteX = left + x;
+      const absoluteY = top + y;
+      if (absoluteX >= innerLeft && absoluteX <= innerRight && absoluteY >= innerTop && absoluteY <= innerBottom) continue;
+      const index = (y * imageData.width + x) * 4;
+      const r = imageData.data[index];
+      const g = imageData.data[index + 1];
+      const b = imageData.data[index + 2];
+      const lum = luminanceOf(r, g, b);
+      red += r;
+      green += g;
+      blue += b;
+      values.push(lum);
+      count += 1;
+    }
+  }
+  if (count === 0) return defaultPlanarStats();
+  const luminance = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const variance = values.reduce((sum, value) => sum + (value - luminance) ** 2, 0) / values.length;
+  return {
+    red: red / count,
+    green: green / count,
+    blue: blue / count,
+    luminance,
+    contrast: Math.sqrt(variance),
+  };
+}
+
+function matchPlanarGraphicEnvironment(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  sourceStats: PlanarImageStats,
+  strength: number,
+): void {
+  let imageData: ImageData;
+  try {
+    imageData = context.getImageData(0, 0, width, height);
+  } catch {
+    return;
+  }
+  const objectStats = readCanvasStats(imageData);
+  const pixels = imageData.data;
+  const luminanceRatio = clamp(sourceStats.luminance / Math.max(1, objectStats.luminance), 0.86, 1.14);
+  const redRatio = clamp(sourceStats.red / Math.max(1, objectStats.red), 0.92, 1.08);
+  const greenRatio = clamp(sourceStats.green / Math.max(1, objectStats.green), 0.92, 1.08);
+  const blueRatio = clamp(sourceStats.blue / Math.max(1, objectStats.blue), 0.92, 1.08);
+  const contrastRatio = clamp(sourceStats.contrast / Math.max(1, objectStats.contrast), 0.92, 1.06);
+  for (let index = 0; index < pixels.length; index += 4) {
+    const alpha = pixels[index + 3];
+    if (alpha < 4) continue;
+    const originalR = pixels[index];
+    const originalG = pixels[index + 1];
+    const originalB = pixels[index + 2];
+    const originalLum = luminanceOf(originalR, originalG, originalB);
+    const contrastR = sourceStats.luminance + (originalR - originalLum) * contrastRatio + (originalLum - objectStats.luminance) * luminanceRatio;
+    const contrastG = sourceStats.luminance + (originalG - originalLum) * contrastRatio + (originalLum - objectStats.luminance) * luminanceRatio;
+    const contrastB = sourceStats.luminance + (originalB - originalLum) * contrastRatio + (originalLum - objectStats.luminance) * luminanceRatio;
+    pixels[index] = blendChannel(originalR, contrastR * redRatio, strength);
+    pixels[index + 1] = blendChannel(originalG, contrastG * greenRatio, strength);
+    pixels[index + 2] = blendChannel(originalB, contrastB * blueRatio, strength);
+  }
+  context.putImageData(imageData, 0, 0);
+}
+
+function readCanvasStats(imageData: ImageData): PlanarImageStats {
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+  let luminance = 0;
+  let count = 0;
+  const luminanceValues: number[] = [];
+  for (let index = 0; index < imageData.data.length; index += 4) {
+    const alpha = imageData.data[index + 3];
+    if (alpha < 16) continue;
+    const r = imageData.data[index];
+    const g = imageData.data[index + 1];
+    const b = imageData.data[index + 2];
+    const lum = luminanceOf(r, g, b);
+    red += r;
+    green += g;
+    blue += b;
+    luminance += lum;
+    luminanceValues.push(lum);
+    count += 1;
+  }
+  if (count === 0) return defaultPlanarStats();
+  const avgLuminance = luminance / count;
+  const variance = luminanceValues.reduce((sum, value) => sum + (value - avgLuminance) ** 2, 0) / luminanceValues.length;
+  return {
+    red: red / count,
+    green: green / count,
+    blue: blue / count,
+    luminance: avgLuminance,
+    contrast: Math.sqrt(variance),
+  };
+}
+
+function defaultPlanarStats(): PlanarImageStats {
+  return { red: 128, green: 128, blue: 128, luminance: 128, contrast: 32 };
+}
+
+function luminanceOf(red: number, green: number, blue: number): number {
+  return red * 0.2126 + green * 0.7152 + blue * 0.0722;
+}
+
+function blendChannel(original: number, adjusted: number, strength: number): number {
+  return Math.round(clamp(original * (1 - strength) + adjusted * strength, 0, 255));
 }
 
 function drawPlacementGuide(context: CanvasRenderingContext2D, object: HTMLImageElement, placement: ObjectPlacement) {

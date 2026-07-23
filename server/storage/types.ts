@@ -260,45 +260,6 @@ export interface ImageAsset {
   createdAt: string;
 }
 
-export type DesignWorkflowStageKey =
-  | 'input'
-  | 'base-render'
-  | 'design-variants'
-  | 'material-replace'
-  | 'object-insert'
-  | 'continuous-edit'
-  | 'image-polish'
-  | 'delivery';
-
-export interface DesignWorkflow {
-  id: string;
-  userId: string;
-  projectId: string;
-  title: string;
-  status: 'active' | 'completed' | 'archived';
-  currentNodeId: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface DesignWorkflowNode {
-  id: string;
-  workflowId: string;
-  parentNodeId: string | null;
-  stageKey: DesignWorkflowStageKey;
-  status: 'active' | 'completed' | 'skipped';
-  sourceFeature: string | null;
-  inputAssetId: string | null;
-  parentJobId: string | null;
-  parentResultId: string | null;
-  outputJobId: string | null;
-  outputResultId: string | null;
-  outputAssetId: string | null;
-  metadata: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export type RegionPolygon = [number, number][];
 export type FloorPlanRegionType = 'living' | 'dining' | 'bedroom' | 'kitchen' | 'bathroom' | 'circulation' | 'service' | 'outdoor' | 'commercial' | 'office' | 'other';
 
@@ -607,8 +568,6 @@ export interface AppDatabase {
   assetVersions: AssetVersion[];
   floorPlanRegionSets: FloorPlanRegionSet[];
   floorPlanRegionMaterials: FloorPlanRegionMaterial[];
-  designWorkflows: DesignWorkflow[];
-  designWorkflowNodes: DesignWorkflowNode[];
 }
 
 export type CreateUserProfileInput = {
@@ -723,14 +682,6 @@ export type CreateImageAssetInput = {
   size: number;
 };
 
-export type CreateDesignWorkflowInput = Pick<DesignWorkflow, 'userId' | 'projectId' | 'title'>;
-export type UpdateDesignWorkflowInput = Partial<Pick<DesignWorkflow, 'currentNodeId' | 'status' | 'title'>>;
-export type CreateDesignWorkflowNodeInput = Omit<DesignWorkflowNode, 'id' | 'createdAt' | 'updatedAt'>;
-export type UpdateDesignWorkflowNodeInput = Partial<Pick<
-  DesignWorkflowNode,
-  'status' | 'outputJobId' | 'outputResultId' | 'outputAssetId' | 'metadata'
->>;
-
 export type CreateFloorPlanRegionSetInput = Omit<FloorPlanRegionSet, 'id' | 'status' | 'versionNumber' | 'baseRegionSetId' | 'lockedAt' | 'confirmedAt' | 'createdAt' | 'updatedAt'> & {
   versionNumber?: number;
   baseRegionSetId?: string | null;
@@ -844,15 +795,6 @@ export interface StorageAdapter {
   listGenerationResults(jobId: string, userId?: string): Promise<GenerationResult[]>;
   createGenerationResult(input: CreateGenerationResultInput): Promise<GenerationResult | null>;
   updateGenerationResult(id: string, userId: string, input: UpdateGenerationResultInput): Promise<GenerationResult | null>;
-
-  createDesignWorkflow(input: CreateDesignWorkflowInput): Promise<DesignWorkflow>;
-  getActiveDesignWorkflow(projectId: string, userId: string): Promise<DesignWorkflow | null>;
-  getDesignWorkflow(id: string, projectId: string, userId: string): Promise<DesignWorkflow | null>;
-  updateDesignWorkflow(id: string, projectId: string, userId: string, input: UpdateDesignWorkflowInput): Promise<DesignWorkflow | null>;
-  listDesignWorkflowNodes(workflowId: string, projectId: string, userId: string): Promise<DesignWorkflowNode[]>;
-  getDesignWorkflowNode(id: string, workflowId: string, projectId: string, userId: string): Promise<DesignWorkflowNode | null>;
-  createDesignWorkflowNode(input: CreateDesignWorkflowNodeInput): Promise<DesignWorkflowNode>;
-  updateDesignWorkflowNode(id: string, input: UpdateDesignWorkflowNodeInput): Promise<DesignWorkflowNode | null>;
 
   createGenerationJob(input: CreateGenerationJobInput): Promise<GenerationJob | null>;
   getGenerationJob(id: string, userId?: string): Promise<GenerationJob | null>;

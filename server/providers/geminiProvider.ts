@@ -256,6 +256,21 @@ function buildObjectInsertPrompt(input: GenerateImageInput): string {
 
 function buildObjectInsertPreviewFusionPrompt(input: GenerateImageInput): string {
   const userPrompt = readObjectInsertPreviewFusionUserPrompt(input.config, input.prompt);
+  if (hasPlanarGraphicObjectInsert(input.config)) {
+    return [
+      'Image 1 is the original scene.',
+      'Image 2 is the clean deterministic placement preview for a planar graphic. If a mask is provided, it is only the extremely narrow edgeBand/contact mask.',
+      'Planar graphic insertion branch: use deterministic planar compositing as the main method, not ordinary volumetric object insertion.',
+      buildPlanarGraphicPlacementAndFusionPrompt(input.config),
+      'The graphic core/logo/text/poster/screen content is locked. Do not redraw, rewrite, hallucinate, blur, or reconstruct the graphic body.',
+      'Only edgeBand/contact pixels may be lightly fused for anti-aliasing, brightness/color-temperature match, grain/compression texture, and a necessary tiny contact shadow.',
+      'Do not modify placement-outside pixels, wall material, wall seams, screen frame, furniture, equipment, camera, perspective, or composition.',
+      'Do not enlarge, shrink, crop, stretch, move, or change the aspect ratio of the planar graphic.',
+      'Attachment modes: flat-decal almost no shadow; flat-sign very light contact shadow only; raised-lettering small directional shadow/thickness; screen-content only screen pixels, bezel unchanged.',
+      'User extra instruction:',
+      userPrompt,
+    ].filter(Boolean).join('\n');
+  }
   return [
     'Image 1 is the original scene.',
     'Image 2 is the clean placement preview. It shows the object type, approximate location, approximate size, and approximate orientation intended by the user.',
@@ -283,6 +298,76 @@ function buildObjectInsertPreviewFusionPrompt(input: GenerateImageInput): string
     'User extra instruction:',
     userPrompt,
   ].join('\n');
+}
+
+function buildPlanarGraphicPlacementAndFusionPrompt(config: Record<string, unknown>): string {
+  const items = readPlanarGraphicItems(config);
+  return [
+    'Planar deterministic composite + local fusion:',
+    'coreMask=locked; edgeBandMask=only 1-2 original pixels; protectedBackgroundMask=frozen.',
+    'If local AI fusion is used, it may only touch edgeBand/contact pixels; the graphic core and placement-outside background are not editable.',
+    ...items.map((item, index) => `Planar graphic ${index + 1} (${item.label}): placement=${formatPlanarPlacementForPrompt(item.placement)}; attachmentMode=${item.attachmentMode || 'flat-sign'}; fusionStrategy=${item.fusionStrategy || 'deterministic-planar-composite'}; aiEditableRegion=${item.aiEditableRegion || 'edge-band-only'}; edgeBandPx=${item.edgeBandPx ?? 2}.`),
+  ].join('\n');
+}
+
+function readPlanarGraphicItems(config: Record<string, unknown>): Array<{
+  label: string;
+  placement?: Record<string, unknown>;
+  attachmentMode?: string;
+  fusionStrategy?: string;
+  aiEditableRegion?: string;
+  edgeBandPx?: number;
+}> {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const rawItems = Array.isArray(nested.objectItems) ? nested.objectItems.filter(isRecord) : [];
+  const items = rawItems
+    .filter(item => readInsertElementKind(item.insertElementKind || item.elementType, readConfigString(item.objectType) || readConfigString(nested.objectType) || readConfigString(config.objectType)) === 'planar-graphic')
+    .map((item, index) => ({
+      label: readConfigString(item.objectLabel) || readConfigString(item.objectType) || `planar graphic ${index + 1}`,
+      placement: isRecord(item.placement) ? item.placement : undefined,
+      attachmentMode: readConfigString(item.attachmentMode),
+      fusionStrategy: readConfigString(item.fusionStrategy),
+      aiEditableRegion: readConfigString(item.aiEditableRegion),
+      edgeBandPx: readConfigNumber(item.edgeBandPx),
+    }));
+  if (items.length > 0) return items;
+  return [{
+    label: readConfigString(nested.objectLabel) || readConfigString(config.objectLabel) || readConfigString(nested.objectType) || readConfigString(config.objectType) || 'planar graphic',
+    placement: isRecord(nested.placement) ? nested.placement : isRecord(config.objectPlacement) ? config.objectPlacement : undefined,
+    attachmentMode: readConfigString(nested.attachmentMode) || readConfigString(config.attachmentMode),
+    fusionStrategy: readConfigString(nested.fusionStrategy) || readConfigString(config.fusionStrategy),
+    aiEditableRegion: readConfigString(nested.aiEditableRegion) || readConfigString(config.aiEditableRegion),
+    edgeBandPx: readConfigNumber(nested.edgeBandPx) ?? readConfigNumber(config.edgeBandPx),
+  }];
+}
+
+function formatPlanarPlacementForPrompt(placement: Record<string, unknown> | undefined): string {
+  if (!placement) return 'use Image 2 exact placement box';
+  const normalizedBox = isRecord(placement.normalizedBox)
+    ? `; normalizedBox x=${readPromptNumber(placement.normalizedBox.x)}, y=${readPromptNumber(placement.normalizedBox.y)}, width=${readPromptNumber(placement.normalizedBox.width)}, height=${readPromptNumber(placement.normalizedBox.height)}`
+    : '';
+  return `x=${readPromptNumber(placement.x)}, y=${readPromptNumber(placement.y)}, width=${readPromptNumber(placement.width)}, height=${readPromptNumber(placement.height)}, rotation=${readPromptNumber(placement.rotation)}, sizeLocked=true${normalizedBox}`;
+}
+
+function hasPlanarGraphicObjectInsert(config: Record<string, unknown>): boolean {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  if (readInsertElementKind(nested.insertElementKind || config.insertElementKind, readConfigString(nested.objectType) || readConfigString(config.objectType)) === 'planar-graphic') return true;
+  const items = Array.isArray(nested.objectItems) ? nested.objectItems.filter(isRecord) : [];
+  return items.some(item => readInsertElementKind(item.insertElementKind || item.elementType, readConfigString(item.objectType) || readConfigString(nested.objectType) || readConfigString(config.objectType)) === 'planar-graphic');
+}
+
+function readInsertElementKind(value: unknown, objectType: string | undefined): 'volumetric-object' | 'planar-graphic' {
+  if (value === 'planar-graphic' || value === 'volumetric-object') return value;
+  return objectType === 'signage'
+    || objectType === 'logo'
+    || objectType === 'wall-text'
+    || objectType === 'hospital-signage'
+    || objectType === 'brand-signage'
+    || objectType === 'poster'
+    || objectType === 'wayfinding'
+    || objectType === 'screen-content'
+    ? 'planar-graphic'
+    : 'volumetric-object';
 }
 
 function readObjectInsertPreviewFusionUserPrompt(config: Record<string, unknown>, fallback: string): string {
@@ -727,4 +812,16 @@ function extractImageDataUrl(parts: Part[] | undefined): { dataUrl: string; mime
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readConfigString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function readConfigNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function readPromptNumber(value: unknown): number | string {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value * 1000) / 1000 : 'unknown';
 }

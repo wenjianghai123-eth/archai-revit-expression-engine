@@ -3,10 +3,13 @@ export {
   IMAGE_POLISH_DEFAULT_PROMPT,
   IMAGE_POLISH_MATERIAL_ENHANCE_NEGATIVE_PROMPT,
   IMAGE_POLISH_MATERIAL_ENHANCE_PROMPT,
+  IMAGE_POLISH_STANDARD_NEGATIVE_PROMPT,
+  IMAGE_POLISH_STANDARD_PROMPT,
   DEFAULT_IMAGE_POLISH_CONTROLS,
   IMAGE_POLISH_NEGATIVE_PROMPT,
   IMAGE_POLISH_PROMPT,
   resolveImagePolishControls,
   resolveImagePolishMode,
   resolveImagePolishPrompts,
+  isImagePolishMaterializationMode,
 } from '../../src/constants/imagePolishPrompt';

@@ -6,9 +6,6 @@ import { logAssetUploadSuccess } from '../utils/assetUrl';
 import { compressImageBeforeUpload } from '../utils/imageCompression';
 import type {
   AssetVersion,
-  DesignWorkflowDetail,
-  DesignWorkflowNode,
-  DesignWorkflowStageKey,
   EditMessage,
   EditSession,
   FloorPlanRegion,
@@ -20,6 +17,20 @@ import type {
 const fileUploadCache = new WeakMap<File, Promise<ImageAsset>>();
 
 const BACKEND_UNAVAILABLE_MESSAGE = '后端服务暂不可用，请稍后重试或检查 VITE_API_BASE_URL 是否指向已部署的 Express 后端。';
+const SAFE_INTERNAL_SERVICE_ERROR_MESSAGE = '当前服务暂时不可用，请稍后重试。';
+const INTERNAL_ERROR_CODES = new Set([
+  'SUPABASE_SCHEMA_MISMATCH',
+  'PGRST205',
+  'INTERNAL_SERVICE_ERROR',
+]);
+const INTERNAL_ERROR_PATTERNS = [
+  /SUPABASE_SCHEMA_MISMATCH/iu,
+  /PGRST205/iu,
+  /public\.project_design_workflows/iu,
+  /schema cache/iu,
+  /SUPABASE_SETUP\.md/iu,
+  /service_role/iu,
+];
 
 export interface AuthUser {
   id: string;
@@ -435,6 +446,12 @@ export interface RefineMaskInput {
   roughMask: string;
   maskMode: 'smart' | 'precise';
   targetObject?: string;
+  targetType?: string;
+  previousMask?: string;
+  positivePoints?: Array<{ x: number; y: number }>;
+  negativePoints?: Array<{ x: number; y: number }>;
+  positiveStrokes?: string[];
+  negativeStrokes?: string[];
 }
 
 export interface RefineMaskResult {
@@ -713,80 +730,6 @@ export async function uploadImageAsset(file: Blob, filename = 'image.png', optio
   }
 
   return uploadImageAssetUncached(file, filename, options);
-}
-
-export async function getProjectDesignWorkflow(projectId: string): Promise<DesignWorkflowDetail | null> {
-  const response = await request<{
-    workflow: DesignWorkflowDetail['workflow'] | null;
-    nodes: DesignWorkflowNode[];
-  }>(`/api/projects/${encodeURIComponent(projectId)}/design-workflow`);
-  return response.workflow ? { workflow: response.workflow, nodes: response.nodes } : null;
-}
-
-export async function createProjectDesignWorkflow(input: {
-  projectId: string;
-  inputAssetId: string;
-  sourceFeature?: string;
-  title?: string;
-}): Promise<DesignWorkflowDetail> {
-  const response = await request<DesignWorkflowDetail>(
-    `/api/projects/${encodeURIComponent(input.projectId)}/design-workflow`,
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        inputAssetId: input.inputAssetId,
-        sourceFeature: input.sourceFeature,
-        title: input.title,
-      }),
-    },
-  );
-  return response;
-}
-
-export async function advanceProjectDesignWorkflow(input: {
-  projectId: string;
-  workflowId: string;
-  stageKey: DesignWorkflowStageKey;
-  sourceFeature: string;
-  inputAssetId?: string | null;
-  parentJobId?: string | null;
-  parentResultId?: string | null;
-  metadata?: Record<string, unknown>;
-}): Promise<DesignWorkflowDetail & { node: DesignWorkflowNode }> {
-  return request(
-    `/api/projects/${encodeURIComponent(input.projectId)}/design-workflow/${encodeURIComponent(input.workflowId)}/advance`,
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        stageKey: input.stageKey,
-        sourceFeature: input.sourceFeature,
-        inputAssetId: input.inputAssetId,
-        parentJobId: input.parentJobId,
-        parentResultId: input.parentResultId,
-        metadata: input.metadata,
-      }),
-    },
-  );
-}
-
-export async function skipProjectDesignWorkflow(
-  projectId: string,
-  workflowId: string,
-): Promise<DesignWorkflowDetail & { node: DesignWorkflowNode }> {
-  return request(
-    `/api/projects/${encodeURIComponent(projectId)}/design-workflow/${encodeURIComponent(workflowId)}/skip`,
-    { method: 'POST' },
-  );
-}
-
-export async function backProjectDesignWorkflow(
-  projectId: string,
-  workflowId: string,
-): Promise<DesignWorkflowDetail & { node: DesignWorkflowNode }> {
-  return request(
-    `/api/projects/${encodeURIComponent(projectId)}/design-workflow/${encodeURIComponent(workflowId)}/back`,
-    { method: 'POST' },
-  );
 }
 
 async function uploadImageAssetUncached(file: Blob, filename = 'image.png', options: UploadImageAssetOptions = {}): Promise<ImageAsset> {
@@ -1183,6 +1126,9 @@ export async function convertModelAsset(id: string): Promise<ModelAssetRecord> {
 }
 
 function formatApiError(error: ApiErrorResponse): string {
+  if (isInternalApiError(error)) {
+    return SAFE_INTERNAL_SERVICE_ERROR_MESSAGE;
+  }
   if (error.code === 'AUTH_REQUIRED') {
     return '请先登录。';
   }
@@ -1221,6 +1167,18 @@ function formatApiError(error: ApiErrorResponse): string {
   if (typeof error.statusCode === 'number') parts.push(`statusCode=${error.statusCode}`);
   if (error.rawSnippet) parts.push(`raw=${error.rawSnippet}`);
   return parts.join(' | ');
+}
+
+function isInternalApiError(error: ApiErrorResponse): boolean {
+  return Boolean(
+    (error.code && INTERNAL_ERROR_CODES.has(error.code))
+    || containsInternalErrorText(error.message)
+    || containsInternalErrorText(error.rawSnippet)
+  );
+}
+
+function containsInternalErrorText(value: unknown): boolean {
+  return typeof value === 'string' && INTERNAL_ERROR_PATTERNS.some(pattern => pattern.test(value));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

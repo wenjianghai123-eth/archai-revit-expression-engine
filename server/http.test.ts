@@ -13,12 +13,15 @@ describe('createErrorHandler', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns sanitized error code and message outside production', async () => {
+  it('returns a generic internal service error for Supabase schema mismatches', async () => {
     process.env.NODE_ENV = 'test';
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const app = express();
     app.get('/boom', (_req: Request, _res: Response, next: NextFunction) => {
-      next(new SupabaseStorageError('SUPABASE_SCHEMA_MISMATCH', 'missing column output_asset_ids\nsecret'));
+      next(new SupabaseStorageError(
+        'SUPABASE_SCHEMA_MISMATCH',
+        "Supabase database error while reading active project design workflow: Could not find the table 'public.project_design_workflows' in the schema cache code=PGRST205",
+      ));
     });
     app.use(createErrorHandler('1mb'));
 
@@ -26,22 +29,23 @@ describe('createErrorHandler', () => {
       .get('/boom')
       .set('X-Request-Id', 'req-123');
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(503);
     expect(response.body).toMatchObject({
       ok: false,
       error: {
-        code: 'SUPABASE_SCHEMA_MISMATCH',
-        message: 'missing column output_asset_ids secret',
+        code: 'INTERNAL_SERVICE_ERROR',
+        message: '当前服务暂时不可用，请稍后重试。',
       },
     });
-    expect(console.error).toHaveBeenCalledWith('API error', expect.objectContaining({
+    expect(response.body.error.message).not.toContain('project_design_workflows');
+    expect(response.body.error.message).not.toContain('schema cache');
+    expect(console.error).toHaveBeenCalledWith('[Supabase schema mismatch]', expect.objectContaining({
       requestId: 'req-123',
       method: 'GET',
       path: '/boom',
-      errorName: 'SupabaseStorageError',
-      errorMessage: 'missing column output_asset_ids secret',
-      errorCode: 'SUPABASE_SCHEMA_MISMATCH',
-      errorStack: expect.any(Array),
+      code: 'SUPABASE_SCHEMA_MISMATCH',
+      message: expect.stringContaining('project_design_workflows'),
+      stack: expect.any(Array),
     }));
   });
 

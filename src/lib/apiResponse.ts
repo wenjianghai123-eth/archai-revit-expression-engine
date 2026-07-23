@@ -3,6 +3,21 @@ export interface ParsedApiResponse<T> {
   data: T | null;
 }
 
+const SAFE_INTERNAL_SERVICE_ERROR_MESSAGE = '当前服务暂时不可用，请稍后重试。';
+const INTERNAL_ERROR_CODES = new Set([
+  'SUPABASE_SCHEMA_MISMATCH',
+  'PGRST205',
+  'INTERNAL_SERVICE_ERROR',
+]);
+const INTERNAL_ERROR_PATTERNS = [
+  /SUPABASE_SCHEMA_MISMATCH/iu,
+  /PGRST205/iu,
+  /public\.project_design_workflows/iu,
+  /schema cache/iu,
+  /SUPABASE_SETUP\.md/iu,
+  /service_role/iu,
+];
+
 export async function parseApiResponse<T>(response: Response): Promise<T | null> {
   if (response.status === 204) {
     return null;
@@ -41,6 +56,9 @@ export async function parseApiResponseEnvelope<T>(response: Response): Promise<P
 
 export function readApiErrorMessage(value: unknown, fallbackStatus?: number): string | null {
   const code = readApiErrorCode(value);
+  if (isInternalErrorCode(code) || containsInternalErrorDetails(value)) {
+    return SAFE_INTERNAL_SERVICE_ERROR_MESSAGE;
+  }
   if (code === 'AUTH_REQUIRED') {
     return '请先登录。';
   }
@@ -70,6 +88,9 @@ export function readApiErrorMessage(value: unknown, fallbackStatus?: number): st
   }
   const message = readRawApiErrorMessage(value);
   if (message) {
+    if (containsInternalErrorDetails(message)) {
+      return SAFE_INTERNAL_SERVICE_ERROR_MESSAGE;
+    }
     const detail = readApiErrorDetails(value);
     const base = code ? `${code}: ${message}` : message;
     return detail.length > 0 ? `${base} | ${detail.join(' | ')}` : base;
@@ -94,6 +115,7 @@ function readApiErrorDetails(value: unknown): string[] {
     details.push(`statusCode=${error.statusCode}`);
   }
   if (typeof error.rawSnippet === 'string' && error.rawSnippet.trim().length > 0) {
+    if (containsInternalErrorDetails(error.rawSnippet)) return details;
     details.push(`raw=${error.rawSnippet.trim()}`);
   }
   return details;
@@ -111,6 +133,24 @@ export function readApiErrorCode(value: unknown): string | null {
   }
 
   return null;
+}
+
+function isInternalErrorCode(code: string | null): boolean {
+  return Boolean(code && INTERNAL_ERROR_CODES.has(code));
+}
+
+function containsInternalErrorDetails(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return INTERNAL_ERROR_PATTERNS.some(pattern => pattern.test(value));
+  }
+  if (!isRecord(value)) return false;
+  if (typeof value.code === 'string' && isInternalErrorCode(value.code)) return true;
+  if (typeof value.message === 'string' && containsInternalErrorDetails(value.message)) return true;
+  if (typeof value.details === 'string' && containsInternalErrorDetails(value.details)) return true;
+  if (typeof value.hint === 'string' && containsInternalErrorDetails(value.hint)) return true;
+  if (isRecord(value.error)) return containsInternalErrorDetails(value.error);
+  if (typeof value.error === 'string') return containsInternalErrorDetails(value.error);
+  return false;
 }
 
 function readRawApiErrorMessage(value: unknown): string | null {

@@ -59,8 +59,14 @@ export function InpaintMaskPanel({
 }: InpaintMaskPanelProps) {
   const panelRef = useRef<HTMLElement>(null);
   const isMaterialReplace = mode === 'material-replace';
-  const isSemantic = isMaterialReplace && config?.editMode !== 'mask';
-  const isSmartMask = isMaterialReplace && config?.editMode === 'mask' && config.maskSelectionMode === 'smart';
+  const configuredMaterialSelectionMode = config?.selectionMode === 'semantic-auto' || config?.selectionMode === 'smart-select'
+    ? config.selectionMode
+    : null;
+  const activeSelectionMode = isMaterialReplace
+    ? configuredMaterialSelectionMode || (config?.editMode === 'mask' ? 'smart-select' : 'semantic-auto')
+    : 'local-paint';
+  const isSemantic = isMaterialReplace && activeSelectionMode === 'semantic-auto';
+  const isSmartMask = isMaterialReplace && activeSelectionMode === 'smart-select';
   const [view, setView] = useState<'selection' | 'original' | 'control' | 'result'>('selection');
   const [panelSize, setPanelSize] = useState({ width: 0, height: 0 });
   const [draftMask, setDraftMask] = useState(maskImageDataUrl);
@@ -103,13 +109,15 @@ export function InpaintMaskPanel({
   const confirmDraftMask = () => {
     onUpdateMaskImage(draftMask, draftUseFullImage, draftFeather, draftProtectionMask, draftExpansion, draftHasValidPixels);
     onUpdateConfig?.({
-      maskWorkflowMode: draftMask || draftUseFullImage
-        ? config?.maskSelectionMode === 'smart' ? 'smart' : 'manual'
-        : 'none',
+      selectionMode: draftMask || draftUseFullImage ? 'smart-select' : 'semantic-auto',
+      maskSelectionMode: draftMask || draftUseFullImage ? 'smart' : undefined,
+      maskWorkflowMode: draftMask || draftUseFullImage ? 'smart' : 'none',
       maskWorkflowActive: Boolean(draftMask || draftUseFullImage),
+      smartSelectionStatus: draftMask || draftUseFullImage ? 'confirmed' : 'idle',
+      smartSelectionConfirmed: undefined,
       smartMaskConfirmed: undefined,
       smartMaskIsRefining: false,
-      smartMaskStage: config?.maskSelectionMode === 'smart' ? 'ready-to-segment' : undefined,
+      smartMaskStage: undefined,
     });
     setView(isMaterialReplace ? 'control' : 'original');
   };
@@ -117,12 +125,15 @@ export function InpaintMaskPanel({
   const cancelMaskEditing = () => {
     resetDraftFromConfirmed();
     onUpdateConfig?.({
+      selectionMode: maskImageDataUrl || useFullImageMask
+        ? 'smart-select'
+        : 'semantic-auto',
       maskWorkflowMode: maskImageDataUrl || useFullImageMask
-        ? config?.maskSelectionMode === 'smart' ? 'smart' : 'manual'
+        ? 'smart'
         : 'none',
       maskWorkflowActive: Boolean(maskImageDataUrl || useFullImageMask),
       smartMaskIsRefining: false,
-      smartMaskStage: config?.maskSelectionMode === 'smart' ? 'ready-to-segment' : undefined,
+      smartMaskStage: undefined,
     });
     setView('original');
   };
@@ -155,7 +166,7 @@ export function InpaintMaskPanel({
     if (!import.meta.env.DEV || import.meta.env.MODE === 'test' || !isMaterialReplace) return;
     console.debug('[MaskEditor render]', {
       isMaskEditorOpen: view === 'selection',
-      maskMode: isSmartMask ? 'smart' : isSemantic ? 'semantic' : 'precise',
+      maskMode: isSmartMask ? 'smart' : isSemantic ? 'semantic' : 'local-precise',
       sourceImageUrl: Boolean(sourceUrl),
       containerWidth: panelSize.width,
       containerHeight: panelSize.height,
@@ -164,7 +175,7 @@ export function InpaintMaskPanel({
   }, [isMaterialReplace, isSemantic, isSmartMask, panelSize.height, panelSize.width, sourceUrl, view]);
 
   const views = [
-    ['selection', isSemantic ? '对象选择' : isSmartMask ? '智能 Mask' : '精致 Mask'] as const,
+    ['selection', isSemantic ? '自动同类' : isSmartMask ? '智能选区' : '局部涂抹'] as const,
     ['original', '原图'] as const,
     ...(isMaterialReplace ? [['control', '控制图'] as const] : []),
     ['result', '结果图'] as const,
@@ -175,7 +186,7 @@ export function InpaintMaskPanel({
       <div className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white/70 px-4 py-2">
         <div>
           <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{isMaterialReplace ? '材质替换工作区' : '统一局部重绘工作区'}</span>
-          <p className="text-xs font-medium text-slate-500">{isSemantic ? '选择对象类型后在图片内连续点击，形成可控的多对象语义锚点。' : isSmartMask ? '先粗略涂抹，再由服务端识别完整对象；确认前不会生成。' : '蓝色是编辑区，红色是保护区；未选区域保持不变。'}</p>
+          <p className="text-xs font-medium text-slate-500">{isSemantic ? '不指定局部区域，由系统按已选目标区域自动替换同类目标。' : isSmartMask ? '在目标对象或局部材质区域上轻刷，系统自动扩展为完整选区；确认前不会生成。' : '手动绘制需要修改的局部修饰区域，蓝色是编辑区，红色是保护区。'}</p>
         </div>
         <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{providerForStatus || 'provider 待连接'}</span>
       </div>
@@ -200,9 +211,12 @@ export function InpaintMaskPanel({
                 onConfirmRefinedMask={refinement => {
                   onUpdateMaskImage(refinement.refinedMask, false, draftFeather, draftProtectionMask, draftExpansion, true);
                   onUpdateConfig?.({
+                    selectionMode: 'smart-select',
                     maskWorkflowMode: 'smart',
                     maskWorkflowActive: true,
-                    smartMaskStage: 'confirmed',
+                    smartSelectionStatus: 'confirmed',
+                    smartSelectionConfirmed: true,
+                    smartMaskStage: undefined,
                     smartMaskConfirmed: true,
                     smartMaskIsRefining: false,
                     smartMaskDetectedObject: refinement.detectedObject,

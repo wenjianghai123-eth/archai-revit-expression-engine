@@ -58,16 +58,28 @@ export function createErrorHandler(jsonLimit: string) {
     const requestId = req.headers['x-request-id'];
     const safeRequestId = typeof requestId === 'string' ? sanitizeLogText(requestId) : undefined;
     const safeError = sanitizeErrorForLog(error);
-    console.error('API error', {
-      requestId: safeRequestId,
-      method: req.method,
-      path: req.path,
-      errorName: safeError.name,
-      errorMessage: safeError.message,
-      errorCode: safeError.code,
-      errorStack: safeError.stack,
-      error: safeError,
-    });
+    if (isSupabaseSchemaMismatchError(error)) {
+      console.error('[Supabase schema mismatch]', {
+        requestId: safeRequestId,
+        method: req.method,
+        path: req.path,
+        code: safeError.code,
+        message: safeError.message,
+        operation: readSupabaseOperation(error),
+        stack: process.env.NODE_ENV !== 'production' ? safeError.stack : undefined,
+      });
+    } else {
+      console.error('API error', {
+        requestId: safeRequestId,
+        method: req.method,
+        path: req.path,
+        errorName: safeError.name,
+        errorMessage: safeError.message,
+        errorCode: safeError.code,
+        errorStack: safeError.stack,
+        error: safeError,
+      });
+    }
 
     if (isPayloadTooLargeError(error)) {
       res.status(413).json(apiError(`Request body is too large. Current API limit is ${jsonLimit}.`, 'REQUEST_BODY_TOO_LARGE'));
@@ -79,11 +91,13 @@ export function createErrorHandler(jsonLimit: string) {
       return;
     }
 
-    const errorCode = safeError.code || 'INTERNAL_SERVER_ERROR';
+    const errorCode = isSupabaseSchemaMismatchError(error)
+      ? 'INTERNAL_SERVICE_ERROR'
+      : safeError.code || 'INTERNAL_SERVER_ERROR';
     res.status(resolveErrorHttpStatus(errorCode)).json(apiError(
       resolveErrorResponseMessage(error, errorCode),
       errorCode,
-      readPublicErrorDetails(error),
+      errorCode === 'INTERNAL_SERVICE_ERROR' ? {} : readPublicErrorDetails(error),
     ));
   };
 }
@@ -140,6 +154,9 @@ export function sanitizeLogText(value: string): string {
 }
 
 function resolveErrorResponseMessage(error: unknown, errorCode: string): string {
+  if (errorCode === 'INTERNAL_SERVICE_ERROR') {
+    return '当前服务暂时不可用，请稍后重试。';
+  }
   if (errorCode === 'FLOOR_PLAN_SCHEMA_NOT_READY') {
     return '平面图区域数据库尚未初始化，请管理员执行 Supabase migration 后重试。';
   }
@@ -152,7 +169,7 @@ function resolveErrorResponseMessage(error: unknown, errorCode: string): string 
 }
 
 function resolveErrorHttpStatus(errorCode: string): number {
-  return errorCode === 'FLOOR_PLAN_SCHEMA_NOT_READY' ? 503 : 500;
+  return errorCode === 'FLOOR_PLAN_SCHEMA_NOT_READY' || errorCode === 'INTERNAL_SERVICE_ERROR' ? 503 : 500;
 }
 
 function readPublicErrorDetails(error: unknown): Partial<Omit<ApiError, 'message' | 'code'>> {
@@ -172,6 +189,25 @@ function readPublicErrorDetails(error: unknown): Partial<Omit<ApiError, 'message
 function sanitizeStackForLog(stack: string | undefined): string[] | undefined {
   if (!stack) return undefined;
   return stack.split(/\r?\n/u).slice(0, 6).map(line => sanitizeLogText(line));
+}
+
+function isSupabaseSchemaMismatchError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const record = error as Record<string, unknown>;
+  const code = typeof record.code === 'string' ? record.code : undefined;
+  if (code === 'SUPABASE_SCHEMA_MISMATCH' || code === 'PGRST205') return true;
+  const text = [
+    typeof record.message === 'string' ? record.message : '',
+    typeof record.details === 'string' ? record.details : '',
+    typeof record.hint === 'string' ? record.hint : '',
+  ].join(' ');
+  return /PGRST205|schema cache|public\.project_design_workflows|SUPABASE_SCHEMA_MISMATCH/iu.test(text);
+}
+
+function readSupabaseOperation(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const operation = (error as Record<string, unknown>).operation;
+  return typeof operation === 'string' ? sanitizeLogText(operation) : undefined;
 }
 
 export function isPayloadTooLargeError(error: unknown): boolean {

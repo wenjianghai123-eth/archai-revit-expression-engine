@@ -153,7 +153,136 @@ describe('Grsai Banana2 provider timing, timeout and retry', () => {
     expect(body.prompt).toContain('People level: moderate. Add 3-5 naturally distributed people');
     expect(body.prompt).toContain('Decorations level: few. Add 1-2 restrained decorative objects');
     expect(body.prompt).toContain('Candidate strategy: scene-harmony. Prioritize lighting and shadow integration.');
-    expect(body.prompt).toContain('do not globally restyle the image');
+    expect(body.prompt).toContain('do not run a whole-image style rewrite');
+  });
+
+  it('adds object-only preservation constraints for volumetric object insertion', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: 'task-object-insert' }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { id: 'task-object-insert', status: 'succeeded', progress: 100, results: [{ url: tinyPngDataUrl }] } }));
+    globalThis.fetch = fetchMock;
+
+    await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage({
+      mode: 'inpaint',
+      step: 'object_insert',
+      inputImageDataUrl: tinyPngDataUrl,
+      referenceImageDataUrls: [tinyPngDataUrl],
+      prompt: 'Insert a plant near the sofa.',
+      config: {
+        objectInsertMode: 'object_insert_preview_fusion',
+        objectType: 'plant',
+        insertElementKind: 'volumetric-object',
+        objectInsert: {
+          mode: 'object_insert_preview_fusion',
+          objectItems: [{
+            id: 'plant-1',
+            objectType: 'plant',
+            insertElementKind: 'volumetric-object',
+            referenceAssetIds: ['asset-plant'],
+            placement: { x: 120, y: 160, width: 220, height: 300, rotation: 0 },
+          }],
+        },
+      },
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as { prompt: string };
+    expect(body.prompt).toContain('Element insertion definition: only add the specified new element');
+    expect(body.prompt).toContain('仅新增，不改原图');
+    expect(body.prompt).toContain('Do not change wall material');
+    expect(body.prompt).toContain('Do not change floor material');
+    expect(body.prompt).toContain('Do not change ceiling material');
+    expect(body.prompt).toContain('Do not change countertop material');
+    expect(body.prompt).toContain('Volumetric object insertion branch');
+    expect(body.prompt).toContain('The overlay position is a soft anchor, not a rigid bounding box.');
+    expect(body.prompt).not.toContain('Planar graphic size lock');
+    expect(body.prompt).not.toContain('Planar deterministic composite + local fusion');
+    expect(body.prompt).not.toContain('coreMask=locked');
+    expect(body.prompt).not.toContain('Generate a polished interior design visualization');
+    expect(body.prompt).not.toContain('Do not optimize overall atmosphere');
+    expect(body.prompt).not.toContain('improve the whole image');
+  });
+
+  it('uses the planar graphic insertion branch for logo and signage placement', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: 'task-planar-logo' }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { id: 'task-planar-logo', status: 'succeeded', progress: 100, results: [{ url: tinyPngDataUrl }] } }));
+    globalThis.fetch = fetchMock;
+
+    await createGrsaiBanana2Provider({ apiKey: 'test-key' }).generateImage({
+      mode: 'inpaint',
+      step: 'object_insert',
+      inputImageDataUrl: tinyPngDataUrl,
+      referenceImageDataUrls: [tinyPngDataUrl],
+      prompt: 'Place the hospital logo on the wall.',
+      config: {
+        objectInsertMode: 'object_insert_preview_fusion',
+        objectType: 'logo',
+        objectInsertSurface: 'wall',
+        insertElementKind: 'planar-graphic',
+        objectInsert: {
+          mode: 'object_insert_preview_fusion',
+          insertElementKind: 'planar-graphic',
+          objectItems: [{
+            id: 'logo-1',
+            objectType: 'logo',
+            insertElementKind: 'planar-graphic',
+            planarSizeLocked: true,
+            referenceAssetIds: ['asset-logo'],
+            objectInsertSurface: 'wall',
+            placement: {
+              x: 96,
+              y: 144,
+              width: 240,
+              height: 80,
+              rotation: -4,
+              anchor: 'top-left',
+              cornerPoints: [{ x: 101.8, y: 135.8 }, { x: 341.2, y: 119.1 }, { x: 346.8, y: 198.9 }, { x: 107.4, y: 215.6 }],
+              normalizedBox: { x: 0.08, y: 0.18, width: 0.2, height: 0.1 },
+              surfacePlane: 'wall',
+              sizeLocked: true,
+            },
+            attachmentMode: 'flat-sign',
+            fusionStrategy: 'deterministic-planar-composite',
+            lockPosition: true,
+            lockSize: true,
+            lockAspectRatio: true,
+            preserveGraphicContent: true,
+            preserveBackground: true,
+            aiEditableRegion: 'edge-band-only',
+            coreMaskMode: 'locked',
+            edgeBandPx: 2,
+            maxMaskExpansionPx: 2,
+          }],
+        },
+      },
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as { prompt: string };
+    expect(body.prompt).toContain('Planar graphic insertion branch');
+    expect(body.prompt).toContain('Planar graphic size lock');
+    expect(body.prompt).toContain('width=240');
+    expect(body.prompt).toContain('height=80');
+    expect(body.prompt).toContain('normalizedBox x=0.08');
+    expect(body.prompt).toContain('cornerPoints=');
+    expect(body.prompt).toContain('surfacePlane=wall');
+    expect(body.prompt).toContain('sizeLocked=true');
+    expect(body.prompt).toContain('Planar deterministic composite + local fusion');
+    expect(body.prompt).toContain('coreMask=locked');
+    expect(body.prompt).toContain('edgeBandMask=only an extremely narrow 1-2 original-pixel transition/contact band');
+    expect(body.prompt).toContain('protectedBackgroundMask=all original pixels outside the placement box frozen');
+    expect(body.prompt).toContain('attachmentMode=flat-sign');
+    expect(body.prompt).toContain('aiEditableRegion=edge-band-only');
+    expect(body.prompt).toContain('edgeBandPx=2');
+    expect(body.prompt).toContain('Do not AI-redraw the planar graphic core');
+    expect(body.prompt).toContain('Do not let the model decide a new size');
+    expect(body.prompt).toContain('Do not automatically enlarge, shrink, crop, stretch, or change proportion');
+    expect(body.prompt).toContain('Preserve the reference graphic/logo/text');
+    expect(body.prompt).toContain('Keep graphic content, text content, proportions, letterforms, emblem pattern, and edges clear and accurate');
+    expect(body.prompt).toContain('Do not use the ordinary volumetric-object insertion strategy');
+    expect(body.prompt).toContain('Do not generate a similar logo');
+    expect(body.prompt).toContain('Do not change the wall/screen material itself');
+    expect(body.prompt).not.toContain('Volumetric object insertion branch');
+    expect(body.prompt).not.toContain('Do not generate brand Logo');
   });
 
   it('adds the floorplan English text requirement to floorplan prompts', async () => {

@@ -17,7 +17,7 @@ const targetLabels: Record<ReplacementTarget, string> = {
   plant: '绿植',
   wall: '墙面',
   floor: '地面',
-  furniture: '桌椅 / 家具',
+  furniture: '桌椅',
   lighting: '灯具',
   artwork: '装饰画',
   decor: '摆件',
@@ -28,7 +28,8 @@ interface Scenario {
   reference?: boolean;
   mask?: boolean;
   maskHasVisiblePixels?: boolean;
-  maskMode?: 'smart' | 'precise';
+  maskMode?: 'smart';
+  selectionMode?: GenerationConfig['selectionMode'];
   maskConfirmed?: boolean;
   maskWorkflowActive?: boolean;
   maskWorkflowMode?: GenerationConfig['maskWorkflowMode'];
@@ -46,8 +47,9 @@ function createState({
   reference = false,
   mask = false,
   maskHasVisiblePixels = mask,
-  maskMode = 'precise',
-  maskConfirmed = maskMode === 'precise',
+  maskMode = 'smart',
+  selectionMode,
+  maskConfirmed = mask,
   maskWorkflowActive,
   maskWorkflowMode,
   isGenerating = false,
@@ -58,13 +60,18 @@ function createState({
   targetMaterial,
   result = false,
 }: Scenario = {}): StepState {
+  const resolvedSelectionMode = selectionMode
+    || (maskWorkflowMode === 'none' ? 'semantic-auto' : 'smart-select');
   return {
     config: {
       ...DEFAULT_CONFIGS[GenerationStep.MaterialReplace],
       editTarget,
       editMode: maskWorkflowMode === 'none' ? 'smart-type' : 'mask',
-      maskSelectionMode: maskMode,
+      selectionMode: resolvedSelectionMode,
+      maskSelectionMode: maskWorkflowMode === 'none' ? undefined : maskMode,
       maskWorkflowMode,
+      smartSelectionStatus: maskConfirmed ? 'confirmed' : 'idle',
+      smartSelectionConfirmed: maskConfirmed,
       smartMaskConfirmed: maskConfirmed,
       smartMaskIsRefining: false,
       maskWorkflowActive,
@@ -198,8 +205,8 @@ describe('MainWorkspace material replacement preview', () => {
       maskWorkflowMode: 'none',
     });
     expect(previewButton().disabled).toBe(false);
-    expect(view.textContent).toContain('区域来源');
-    expect(view.textContent).toContain('自动识别');
+    expect(view.textContent).toContain('模式：自动同类替换');
+    expect(view.textContent).toContain('自动同类替换');
     clickPreview();
     expect(view.textContent).not.toContain('请选择需要替换的材质区域');
     expect(onGenerate).toHaveBeenCalledTimes(1);
@@ -226,25 +233,24 @@ describe('MainWorkspace material replacement preview', () => {
       maskWorkflowActive: true,
     });
     clickPreview();
-    expect(view.textContent).toContain('请先完成智能识别并确认替换区域');
+    expect(view.textContent).toContain('请在需要替换的对象或区域上轻微涂抹一下。');
     expect(view.textContent).not.toContain('精细涂抹模式');
     expect(onGenerate).not.toHaveBeenCalled();
   });
 
-  it('uses manual-mask validation copy only for manual workflow', () => {
+  it('does not require target area in smart workflow', () => {
     const view = renderScenario({
       editTarget: 'material',
-      targetObjectType: 'plant',
       reference: true,
       mask: false,
-      maskMode: 'precise',
+      maskMode: 'smart',
       maskConfirmed: false,
-      maskWorkflowMode: 'manual',
+      maskWorkflowMode: 'smart',
       maskWorkflowActive: true,
     });
     clickPreview();
-    expect(view.textContent).toContain('请先确认替换区域');
-    expect(view.textContent).not.toContain('请先完成智能识别并确认替换区域');
+    expect(view.textContent).not.toContain('请选择目标区域');
+    expect(view.textContent).toContain('请在需要替换的对象或区域上轻微涂抹一下。');
     expect(onGenerate).not.toHaveBeenCalled();
   });
 
@@ -262,35 +268,39 @@ describe('MainWorkspace material replacement preview', () => {
     expect(onGenerate).toHaveBeenCalledTimes(1);
     expect(onGenerate.mock.calls[0][0]).toMatchObject({
       config: {
-        replacementTarget: 'furniture',
         editingScope: 'masked',
-        maskWorkflowMode: 'smart',
+        selectionMode: 'smart-select',
         replacementStrategy: 'replace-masked',
+        semanticAssistFromSelection: true,
         preserveUnmaskedArea: true,
       },
     });
+    expect(onGenerate.mock.calls[0][0].config.replacementTarget).toBeUndefined();
+    expect(onGenerate.mock.calls[0][0].config.targetObjectType).toBeUndefined();
   });
 
-  it('submits manual workflow and masked scope after precise mask confirmation', () => {
+  it('submits smart workflow without stale target area after selection confirmation', () => {
     renderScenario({
       editTarget: 'material',
       targetObjectType: 'wall',
+      replacementTarget: 'wall',
       reference: true,
       mask: true,
-      maskMode: 'precise',
+      maskMode: 'smart',
       maskConfirmed: true,
-      maskWorkflowMode: 'manual',
+      maskWorkflowMode: 'smart',
     });
     clickPreview();
     expect(onGenerate).toHaveBeenCalledTimes(1);
     expect(onGenerate.mock.calls[0][0]).toMatchObject({
       config: {
-        replacementTarget: 'wall',
         editingScope: 'masked',
-        maskWorkflowMode: 'manual',
+        selectionMode: 'smart-select',
         replacementStrategy: 'replace-masked',
       },
     });
+    expect(onGenerate.mock.calls[0][0].config.replacementTarget).toBeUndefined();
+    expect(onGenerate.mock.calls[0][0].config.targetObjectType).toBeUndefined();
   });
 
   it.each(Object.entries(targetLabels) as Array<[ReplacementTarget, string]>)(
@@ -306,13 +316,31 @@ describe('MainWorkspace material replacement preview', () => {
       });
 
       const summary = view.querySelector('[data-testid="material-replacement-task-summary"]');
-      expect(summary?.textContent).toContain(`替换对象：${label}`);
-      expect(summary?.textContent).toContain('区域来源：自动识别');
-      expect(summary?.textContent).toContain('操作模式：原位替换');
-      expect(summary?.textContent).toContain('额外新增：禁止');
-      expect(summary?.textContent).toContain('非目标区域：保持不变');
+      expect(summary?.textContent).toContain('模式：自动同类替换');
+      expect(summary?.textContent).toContain(`目标区域：${label}`);
+      expect(summary?.textContent).toContain('替换范围：所有同类型元素');
+      expect(summary?.textContent).toContain('参考图：已上传');
+      expect(summary?.textContent).toContain('控图约束：已内置');
     },
   );
+
+  it('shows smart-select task summary with semantic assist state', () => {
+    const view = renderScenario({
+      editTarget: 'material',
+      reference: true,
+      mask: true,
+      maskMode: 'smart',
+      maskConfirmed: true,
+      maskWorkflowMode: 'smart',
+    });
+
+    const summary = view.querySelector('[data-testid="material-replacement-task-summary"]');
+    expect(summary?.textContent).toContain('模式：智能选区');
+    expect(summary?.textContent).toContain('目标区域：根据选区识别');
+    expect(summary?.textContent).toContain('语义识别：已开启');
+    expect(summary?.textContent).toContain('替换范围：仅确认选区');
+    expect(summary?.textContent).toContain('控图约束：已内置');
+  });
 
   it('renders one material texture library in the default material replacement workspace', () => {
     const view = renderScenario();

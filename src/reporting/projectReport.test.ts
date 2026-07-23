@@ -35,8 +35,8 @@ describe('project report data model', () => {
     expect(report.candidateSchemes[0]).toMatchObject({
       title: '暖木主方案',
       feature: '方案变体',
-      qualityStatus: 'passed',
     });
+    expect(report.candidateSchemes[0]).not.toHaveProperty('qualityStatus');
     expect(report.primaryScheme).toMatchObject({
       sourceType: 'edit-version',
       versionId: 'version-2',
@@ -115,7 +115,6 @@ function createGeneration(): GenerationRecord {
           designDescription: '以暖木和浅米色石材形成稳定、亲和的接待氛围。',
           differenceSummary: '调整材质体系和灯光氛围，结构不变。',
           sourceImageAssetId: 'asset-source',
-          qualityStatus: 'passed',
           floorPlanMaterialAssignments: [{ regionId: '客厅', materialName: '浅米色石材' }],
         },
         createdAt: '2026-07-10T00:01:00.000Z',

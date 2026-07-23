@@ -12,14 +12,13 @@ import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider, MaskM
 import { getImageSizeFromDataUrl, isValidTargetDimension, parseImageDataUrl as parseRawImageDataUrl } from './image/imageMetadata';
 import { prepareImageForProvider, prepareMaskForProvider, PreparedProviderImage } from './image/prepareProviderImage';
 import { composeLocalInpaintResult, createLocalInpaintContext, cropImageDataUrlToBox, LocalInpaintContext, prepareEditableMask } from './image/localInpaint';
-import { analyzeGenerationQuality, createUnavailableQualityReport } from './image/generationQuality';
 import { buildFloorplanTextLanguageRequirement, buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode } from '../src/promptTemplates/intelligentPromptTemplates';
 import { normalizeReplacementTarget, type ReplacementTarget } from '../src/utils/materialReplacementTarget';
 import { findPlanColorizeStyle, maxPlanColorizeBatchCount, planColorizeStyleOptions, resolvePlanColorizeStyles, type PlanColorizeStyleOption } from '../src/constants/planColorizeStyles';
 import { resolveFloorplanBatchCount, resolveFloorplanVariantPlans, type FloorplanVariantPlan } from '../src/constants/floorplanVariants';
 import { getGenerationOutputCount } from '../src/utils/generationCredits';
 import { buildDesignVariantMatrixPrompt, buildDesignVariantReportNarrative, readDesignVariantDiversity, resolveDesignVariantMatrix } from '../src/utils/designVariantMatrix';
-import { resolveImagePolishPrompts } from './prompts/imagePolishPrompt';
+import { isImagePolishMaterializationMode, resolveImagePolishPrompts } from './prompts/imagePolishPrompt';
 import {
   adjustCredits,
   claimGenerationJob,
@@ -42,7 +41,6 @@ import {
 } from './storage';
 import { isNonEmptyString } from './validation';
 import { completeEditGeneration, failEditGeneration, markEditGenerationRunning } from './editSessionLifecycle';
-import { completeDesignWorkflowGeneration } from './projectWorkflowLifecycle';
 import {
   calculateGenerationRetryDelayMs,
   classifyGenerationFailure,
@@ -132,25 +130,6 @@ interface ProviderBatchFailure {
 }
 
 type ProviderBatchResult = ProviderBatchSuccess | ProviderBatchFailure;
-
-function shouldExpectStructurePreservation(job: GenerationJob): boolean {
-  if (
-    job.config.preserveStructure === true
-    || job.config.preserveGeometry === true
-    || job.config.preserveLayout === true
-    || job.config.preserveLinework === true
-    || job.config.strictStructure === true
-  ) {
-    return true;
-  }
-  const step = job.step ?? readGenerationJobStep(job.config);
-  return job.mode === 'floorplan'
-    || job.mode === 'plan-colorize'
-    || job.mode === 'material-replace'
-    || job.mode === 'inpaint'
-    || step === 'image_polish'
-    || step === 'object_insert';
-}
 
 export function getGenerationProviderName(config?: Record<string, unknown>): ProviderName {
   return resolveGenerationProviderName(config);
@@ -495,11 +474,14 @@ async function processGenerationJob(job: GenerationJob, workerId: string): Promi
         : undefined;
       const imagePolishPromptConfig = job.step === 'image_polish' || readGenerationJobStep(job.config) === 'image_polish'
         ? resolveImagePolishPrompts({
-            mode: job.config.imagePolishMode === 'conservative' || job.config.imagePolishMode === 'white-model-materialization'
-              ? job.config.imagePolishMode
-              : undefined,
+            mode: readImagePolishModeInput(job.config.imagePolishMode),
             controls: isRecord(job.config.imagePolishControls) ? job.config.imagePolishControls : undefined,
             enhanceMaterials: job.config.enhanceMaterials === true,
+            addPeople: job.config.addPeople,
+            peopleLevel: job.config.peopleLevel,
+            addPlants: job.config.addPlants,
+            plantLevel: job.config.plantLevel,
+            preserveStrictness: job.config.preserveStrictness,
           })
         : null;
 
@@ -546,34 +528,6 @@ async function processGenerationJob(job: GenerationJob, workerId: string): Promi
       if (!firstOutputAsset) firstOutputAsset = outputAsset;
       outputAssetIds.push(outputAsset.id);
       const originalOutputMetadata = buildOriginalOutputMetadata(outputAsset, savedOutputMetadata, providerOriginalMetadata);
-      let qualityReport;
-      try {
-        qualityReport = await analyzeGenerationQuality({
-          sourceImageDataUrl: localInpaint?.originalImageDataUrl || input.inputImageDataUrl,
-          resultImageDataUrl: outputDataUrl,
-          maskImageDataUrl: localInpaint?.originalMaskDataUrl || input.maskImageDataUrl,
-          sourceOriginalWidth: localInpaint?.originalWidth || imageDiagnostics.inputWidthBefore,
-          sourceOriginalHeight: localInpaint?.originalHeight || imageDiagnostics.inputHeightBefore,
-          expectedWidth: localInpaint?.originalWidth || input.targetWidth,
-          expectedHeight: localInpaint?.originalHeight || input.targetHeight,
-          preserveStructure: shouldExpectStructurePreservation(job),
-        });
-      } catch (qualityError) {
-        qualityReport = createUnavailableQualityReport(qualityError);
-        console.warn('Generation quality check unavailable', {
-          jobId: job.id,
-          resultIndex: index,
-          error: qualityError instanceof Error ? qualityError.message : String(qualityError),
-        });
-      }
-      console.info('Generation quality checked', {
-        jobId: job.id,
-        resultIndex: index,
-        outputAssetId: outputAsset.id,
-        qualityStatus: qualityReport.status,
-        qualityScore: qualityReport.score,
-        qualityIssueCodes: qualityReport.issues.map(issue => issue.code),
-      });
 
       const generationResult = await createGenerationResult({
         jobId: job.id,
@@ -686,8 +640,13 @@ async function processGenerationJob(job: GenerationJob, workerId: string): Promi
                 sourceImageAssetId: typeof job.config.sourceImageAssetId === 'string' ? job.config.sourceImageAssetId : job.inputAssetIds[0],
                 imagePolishMode: imagePolishPromptConfig.mode,
                 imagePolishControls: imagePolishPromptConfig.controls,
-                enhanceMaterials: imagePolishPromptConfig.mode === 'white-model-materialization',
-                promptMode: imagePolishPromptConfig.mode === 'white-model-materialization' ? 'white_model_materialization' : 'conservative_polish',
+                addPeople: imagePolishPromptConfig.options.addPeople,
+                peopleLevel: imagePolishPromptConfig.options.peopleLevel,
+                addPlants: imagePolishPromptConfig.options.addPlants,
+                plantLevel: imagePolishPromptConfig.options.plantLevel,
+                preserveStrictness: imagePolishPromptConfig.options.preserveStrictness,
+                enhanceMaterials: isImagePolishMaterializationMode(imagePolishPromptConfig.mode),
+                promptMode: isImagePolishMaterializationMode(imagePolishPromptConfig.mode) ? 'materialization' : imagePolishPromptConfig.mode === 'standard' ? 'standard_polish' : 'conservative_polish',
                 compiledPrompt: imagePolishPromptConfig.prompt,
               }
           : job.mode === 'material-replace'
@@ -782,9 +741,6 @@ async function processGenerationJob(job: GenerationJob, workerId: string): Promi
               ...(providerOutput.metadata || {}),
               ...originalOutputMetadata,
             }),
-          qualityReport,
-          qualityStatus: qualityReport.status,
-          qualityWarnings: qualityReport.warnings,
         },
       });
 
@@ -815,7 +771,6 @@ async function processGenerationJob(job: GenerationJob, workerId: string): Promi
 
     await assertGenerationLeaseActive(job.id, workerId, lease);
     await completeEditGeneration({ ...job, diagnostics }, firstOutputAsset.id);
-    await completeDesignWorkflowGeneration({ ...job, diagnostics }, firstGenerationResult);
     await updateClaimedJob({
       status: 'succeeded',
       progress: 100,
@@ -1038,10 +993,13 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   const isFloorPlanMaterialMappingMode = job.mode === 'plan-colorize' && job.config.floorPlanMaterialMapping === true;
   const objectInsertConfig = readObjectInsertJobConfig(job);
   const objectInsertDebugMode = isObjectInsertMode ? readObjectInsertDebugMode(job.config) : 'full';
+  const objectInsertItems = isObjectInsertMode ? readObjectInsertItemsFromJob(job) : [];
+  const objectInsertPreviewFusionHasEdgeBandMask = isObjectInsertPreviewFusionMode
+    && objectInsertItems.some(item => item.insertElementKind === 'planar-graphic' && item.aiEditableRegion === 'edge-band-only')
+    && Boolean(objectInsertConfig.maskAssetId);
   const objectInsertNeedsObject = isObjectInsertPreviewFusionMode ? false : objectInsertIncludesObject(objectInsertDebugMode);
   const objectInsertNeedsPreview = isObjectInsertPreviewFusionMode ? true : objectInsertIncludesPreview(objectInsertDebugMode);
-  const objectInsertNeedsMask = isObjectInsertPreviewFusionMode ? false : objectInsertIncludesMask(objectInsertDebugMode);
-  const objectInsertItems = isObjectInsertMode ? readObjectInsertItemsFromJob(job) : [];
+  const objectInsertNeedsMask = isObjectInsertPreviewFusionMode ? objectInsertPreviewFusionHasEdgeBandMask : objectInsertIncludesMask(objectInsertDebugMode);
   const objectReferenceAssetId = isObjectInsertMode ? objectInsertConfig.objectReferenceAssetId : '';
   const placementPreviewAssetId = isObjectInsertMode ? objectInsertConfig.previewAssetId : '';
   const placementMaskAssetId = isObjectInsertMode ? objectInsertConfig.maskAssetId : '';
@@ -1083,6 +1041,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     ? [
         readConfigStringValue(job.config.sourceImageAssetId) || objectInsertConfig.sourceImageAssetId || job.inputAssetIds[0],
         placementPreviewAssetId || job.inputAssetIds[1],
+        objectInsertNeedsMask ? placementMaskAssetId || job.inputAssetIds[2] : undefined,
       ].filter(isNonEmptyString)
     : isObjectInsertMode
     ? objectInsertOrderedAssetIds
@@ -1173,9 +1132,10 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
       inputAssetIds: assetIds,
       sourceImageAssetId: assetIds[0],
       placementPreviewAssetId: assetIds[1],
+      placementMaskAssetId: objectInsertNeedsMask ? placementMaskAssetId : undefined,
       providerImageCount: 1 + referenceImageDataUrls.length,
       materialImageIncluded: false,
-      maskImageIncluded: false,
+      maskImageIncluded: objectInsertNeedsMask,
       furnitureReferencesIncluded: false,
       objectItemsCount: objectInsertItems.length,
     });
@@ -1204,22 +1164,38 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   const targetDimensions = resolveQualityTargetDimensions(job.mode, qualityMode, await resolveTargetDimensions(job.mode, job.config, inputImageDataUrl));
   if (isImagePolishMode && process.env.NODE_ENV !== 'production') {
     const imagePolishPromptConfig = resolveImagePolishPrompts({
-      mode: job.config.imagePolishMode === 'conservative' || job.config.imagePolishMode === 'white-model-materialization'
-        ? job.config.imagePolishMode
-        : undefined,
+      mode: readImagePolishModeInput(job.config.imagePolishMode),
       controls: isRecord(job.config.imagePolishControls) ? job.config.imagePolishControls : undefined,
       enhanceMaterials: job.config.enhanceMaterials === true,
+      addPeople: job.config.addPeople,
+      peopleLevel: job.config.peopleLevel,
+      addPlants: job.config.addPlants,
+      plantLevel: job.config.plantLevel,
+      preserveStrictness: job.config.preserveStrictness,
     });
-    const enhanceMaterials = imagePolishPromptConfig.mode === 'white-model-materialization';
+    const enhanceMaterials = isImagePolishMaterializationMode(imagePolishPromptConfig.mode);
+    const jobOptions = {
+      addPeople: imagePolishPromptConfig.options.addPeople,
+      peopleLevel: imagePolishPromptConfig.options.peopleLevel,
+      addPlants: imagePolishPromptConfig.options.addPlants,
+      plantLevel: imagePolishPromptConfig.options.plantLevel,
+      preserveStrictness: imagePolishPromptConfig.options.preserveStrictness,
+    };
+    console.debug('[Quality enhancement worker options]', jobOptions);
+    console.debug('[Quality enhancement final prompt]', {
+      prompt: imagePolishPromptConfig.prompt,
+      negativePrompt: imagePolishPromptConfig.negativePrompt,
+    });
     console.debug({
       event: 'image_polish_provider_prepare',
       jobId: job.id,
       enhanceMaterials,
       imagePolishMode: imagePolishPromptConfig.mode,
       imagePolishControls: imagePolishPromptConfig.controls,
+      imagePolishOptions: jobOptions,
       promptMode: typeof job.config.promptMode === 'string'
         ? job.config.promptMode
-        : enhanceMaterials ? 'white_model_materialization' : 'conservative_polish',
+        : enhanceMaterials ? 'materialization' : imagePolishPromptConfig.mode === 'standard' ? 'standard_polish' : 'conservative_polish',
       provider: job.provider,
       mode: job.mode,
       step: job.step ?? readGenerationJobStep(job.config),
@@ -1540,6 +1516,17 @@ function isObjectInsertInput(input: GenerateImageInput): boolean {
   return input.step === 'object_insert'
     || input.config.step === 'object_insert'
     || isRecord(input.config.objectInsert);
+}
+
+type ImagePolishModeInput = 'conservative' | 'standard' | 'materialization' | 'white-model-materialization';
+
+function readImagePolishModeInput(value: unknown): ImagePolishModeInput | undefined {
+  return value === 'conservative'
+    || value === 'standard'
+    || value === 'materialization'
+    || value === 'white-model-materialization'
+    ? value
+    : undefined;
 }
 
 function isFloorplanMultiPlanJob(job: GenerationJob): boolean {
@@ -2995,11 +2982,14 @@ function buildProviderPromptForJob(job: GenerationJob, qualityMode: QualityMode 
 
   if (job.step === 'image_polish' || readGenerationJobStep(job.config) === 'image_polish') {
     return resolveImagePolishPrompts({
-      mode: job.config.imagePolishMode === 'conservative' || job.config.imagePolishMode === 'white-model-materialization'
-        ? job.config.imagePolishMode
-        : undefined,
+      mode: readImagePolishModeInput(job.config.imagePolishMode),
       controls: isRecord(job.config.imagePolishControls) ? job.config.imagePolishControls : undefined,
       enhanceMaterials: job.config.enhanceMaterials === true,
+      addPeople: job.config.addPeople,
+      peopleLevel: job.config.peopleLevel,
+      addPlants: job.config.addPlants,
+      plantLevel: job.config.plantLevel,
+      preserveStrictness: job.config.preserveStrictness,
     }).prompt;
   }
 
@@ -3063,17 +3053,44 @@ function readObjectInsertPreviewFusionUserPromptForJob(job: GenerationJob): stri
   ];
   const userPrompt = values.map(value => value.trim()).find(value => value.length > 0 && !looksLikeLegacyObjectInsertPrompt(value)) || '';
   const objectItems = readObjectInsertItemsFromJob(job);
-  return buildObjectInsertSoftAnchorPrompt(userPrompt, objectItems.length);
+  return buildObjectInsertSoftAnchorPrompt(userPrompt, objectItems);
 }
 
-function buildObjectInsertSoftAnchorPrompt(userPrompt: string, objectCount: number): string {
+function buildObjectInsertSoftAnchorPrompt(userPrompt: string, objectItems: ObjectInsertItemForJob[]): string {
+  const objectCount = objectItems.length;
+  const hasPlanarGraphic = objectItems.some(item => item.insertElementKind === 'planar-graphic');
+  const hasVolumetricObject = objectItems.some(item => item.insertElementKind !== 'planar-graphic');
+  logPlanarGraphicPlacementDebug(objectItems);
+  const planarPlacementPrompt = buildPlanarGraphicPlacementLockPrompt(objectItems);
+  const planarFusionPrompt = buildPlanarGraphicDeterministicFusionPrompt(objectItems);
   return [
     'Image 1 is the original scene.',
     'Image 2 is the clean placement preview. It shows the object type, approximate location, approximate size, and approximate orientation intended by the user.',
     '',
+    'Element insertion = only add the specified element(s), do not modify any existing content in the original image.',
+    '仅新增，不改原图。严格保持原图已有建筑结构、空间结构、墙面、地面、顶面、柜台、家具、设备、屏幕、标识、导视、装饰、材质种类、材质边界、色彩体系、相机机位、透视和构图不变。',
+    'Area outside the target placement / selection must stay strictly frozen. Inside the target area, only insert the new element; do not redo wall, floor, ceiling, countertop, furniture, equipment, signage, screen, or decorative materials.',
+    'No whole-image atmosphere changes, no whole-image quality pass, no global style rewrite, no unified style rewrite, no surrounding-region redesign, and no surrounding material changes.',
+    '',
+    hasPlanarGraphic
+      ? 'Planar graphic insertion branch: preserve the reference graphic, logo, text, emblem, poster, wayfinding, or screen content itself. Do not redraw, reinterpret, rewrite, or redesign the graphic/text. Only perform planar attachment and natural fusion.'
+      : 'Volumetric object insertion branch: insert the requested three-dimensional object as a new believable scene object while preserving every existing scene element and material.',
+    hasPlanarGraphic
+      ? 'For planar graphics: use controlled planar attachment. The user placement box is a hard size and position constraint, not a suggestion. Keep graphic content clear and accurate, keep text content and letterforms unchanged, attach to the indicated wall/screen/surface with perspective, clean edges, light, white balance, and very subtle contact shadow. It must look physically installed or naturally attached, not like a floating sticker layer. Do not change the wall/screen material itself.'
+      : '',
+    planarPlacementPrompt,
+    planarFusionPrompt,
+    '',
     'Insert the object into the original scene near the position indicated in Image 2.',
-    'The overlay position is a soft anchor, not a rigid bounding box.',
-    'Small local adjustments are allowed for realism, perspective, floor contact, circulation, and composition, but the object must stay in the same nearby area.',
+    hasPlanarGraphic
+      ? 'For planar graphics, the overlay position, width, height, aspect ratio, and rotation are rigid bounding-box constraints. Do not automatically enlarge, shrink, crop, stretch, or change the planar graphic proportion. Only perspective attachment and natural fusion are allowed.'
+      : 'The overlay position is a soft anchor, not a rigid bounding box.',
+    hasPlanarGraphic && hasVolumetricObject
+      ? 'For volumetric objects only, the overlay position remains a soft anchor and natural scale adjustment is still allowed according to the existing three-dimensional object logic.'
+      : '',
+    hasPlanarGraphic
+      ? 'Small local adjustments are allowed only for planar fusion quality such as perspective warp, edge blending, light, white balance, and subtle contact shadow; size and aspect ratio must remain locked.'
+      : 'Small local adjustments are allowed only for the inserted element realism, perspective, contact, circulation, and scale; the original scene content must stay unchanged.',
     'Keep the final placement close to the user-indicated overlay position. Do not move the object to a far-away area of the scene. Do not relocate it to a different side of the room.',
     '',
     'Prioritize:',
@@ -3088,7 +3105,7 @@ function buildObjectInsertSoftAnchorPrompt(userPrompt: string, objectCount: numb
       ? 'For multiple objects, keep every object near its own overlay position. Do not omit objects and do not swap their positions.'
       : '',
     'The result should look like the object is naturally placed near the indicated overlay position, not rigidly pasted, and not relocated far away.',
-    'Do not redesign the whole room. Do not move unrelated furniture. Do not add extra copies of the object. Do not create a collage or split-screen.',
+    'Do not redesign the whole room. Do not move unrelated furniture. Do not change wall/floor/ceiling/countertop/furniture materials. Do not add extra copies of the object. Do not create a collage or split-screen.',
     '',
     '中文补充：用户拖动图层所示的位置是主要参考位置。请将物体自然融合到该位置附近，允许为了真实感做小范围微调，但不要偏离过远，不要移动到画面其他区域。重点保证自然摆放、真实光影、统一透视和合理尺度。',
     userPrompt ? `User extra instruction: ${userPrompt}` : '',
@@ -3097,6 +3114,87 @@ function buildObjectInsertSoftAnchorPrompt(userPrompt: string, objectCount: numb
 
 function looksLikeLegacyObjectInsertPrompt(value: string): boolean {
   return /\bimage\s+[3-9]\b|Generation config JSON|Object list:|placement guide|edit-area mask|object_insert|object insert placement mode/iu.test(value);
+}
+
+function buildPlanarGraphicPlacementLockPrompt(objectItems: ObjectInsertItemForJob[]): string {
+  const planarItems = objectItems.filter(item => item.insertElementKind === 'planar-graphic');
+  if (planarItems.length === 0) return '';
+  const lines = planarItems.map((item, index) => {
+    const label = item.objectLabel || item.objectType || `planar graphic ${index + 1}`;
+    return `Planar graphic ${index + 1} (${label}) locked placement: ${formatPlanarGraphicPlacementForPrompt(item.placement)}; attachmentMode=${item.attachmentMode || 'flat-sign'}; edgeBandPx=${item.edgeBandPx ?? 2}.`;
+  });
+  return [
+    'Planar graphic size lock / controlled attachment:',
+    'The final generated planar graphic must match the user placement preview box exactly: same position, same width, same height, same aspect ratio, and same rotation.',
+    'Do not enlarge or shrink the planar graphic. Do not change its width/height ratio. Do not make it more prominent or smaller for visual harmony. The model may only perform perspective attachment and natural fusion inside the locked box.',
+    '请将该二维平面图形严格按照用户当前放置框的位置、宽度、高度和比例贴附到目标平面上。最终生成中的图形尺寸必须与放置预览一致，不得自动放大、缩小或改变比例。只允许进行透视贴附与自然融合。',
+    ...lines,
+  ].join('\n');
+}
+
+function buildPlanarGraphicDeterministicFusionPrompt(objectItems: ObjectInsertItemForJob[]): string {
+  const planarItems = objectItems.filter(item => item.insertElementKind === 'planar-graphic');
+  if (planarItems.length === 0) return '';
+  const itemLines = planarItems.map((item, index) => {
+    const label = item.objectLabel || item.objectType || `planar graphic ${index + 1}`;
+    return `Planar graphic ${index + 1} (${label}): fusionStrategy=${item.fusionStrategy || 'deterministic-planar-composite'}, attachmentMode=${item.attachmentMode || 'flat-sign'}, coreMask=locked, aiEditableRegion=${item.aiEditableRegion || 'edge-band-only'}, edgeBandPx=${item.edgeBandPx ?? 2}, maxMaskExpansionPx=${item.maxMaskExpansionPx ?? item.edgeBandPx ?? 2}.`;
+  });
+  return [
+    'Planar deterministic composite + local fusion:',
+    'Treat the planar graphic body as a deterministic composite from the user placement preview. The core graphic/logo/text/poster/screen content is locked and must not be sent through AI redraw, rewritten, blurred, hallucinated, or reconstructed.',
+    'Use a three-mask mental model: coreMask = locked graphic body; edgeBandMask = only an extremely narrow 1-2 original-pixel transition/contact band; protectedBackgroundMask = all original pixels outside the placement box frozen.',
+    'If local model fusion is needed, it may only affect edgeBandMask and the minimum contact-shadow pixels. Never repaint the core graphic and never repaint the wall/screen/background outside the edge band.',
+    'Color, exposure, white balance, contrast, grain, compression texture, and sharpness matching must be applied to the inserted planar graphic only. Do not adjust the original wall, seams, material, lighting, furniture, equipment, frame, or surrounding content to fit the graphic.',
+    'Preserve logo brand colors and all text exactly. Use high-quality resampling; avoid large-radius Gaussian blur, halo, gray glow, double edges, jagged borders, or sticker/PPT look.',
+    'Attachment-mode rules: flat-decal = almost no shadow, inherit slight wall brightness only; flat-sign = very light contact shadow only, no obvious thickness; raised-lettering = small directional thickness/shadow while outer bounds stay locked; screen-content = replace only screen pixels and keep bezel/frame unchanged with subtle screen brightness/reflection.',
+    'Do not use a large expanded inpainting mask. Do not modify placement-outside pixels except the minimal contact band explicitly allowed by the attachment mode.',
+    ...itemLines,
+  ].join('\n');
+}
+
+function formatPlanarGraphicPlacementForPrompt(placement: Record<string, unknown> | undefined): string {
+  if (!placement) return 'placement box missing; use Image 2 placement preview as the exact hard box';
+  const x = readPromptNumber(placement.x);
+  const y = readPromptNumber(placement.y);
+  const width = readPromptNumber(placement.width);
+  const height = readPromptNumber(placement.height);
+  const rotation = readPromptNumber(placement.rotation);
+  const normalizedBox = isRecord(placement.normalizedBox) ? placement.normalizedBox : undefined;
+  const normalized = normalizedBox
+    ? ` normalizedBox=(${[
+        `x=${readPromptNumber(normalizedBox.x)}`,
+        `y=${readPromptNumber(normalizedBox.y)}`,
+        `width=${readPromptNumber(normalizedBox.width)}`,
+        `height=${readPromptNumber(normalizedBox.height)}`,
+      ].join(', ')})`
+    : '';
+  const cornerPoints = Array.isArray(placement.cornerPoints)
+    ? ` cornerPoints=${placement.cornerPoints.filter(isRecord).map(point => `(${readPromptNumber(point.x)},${readPromptNumber(point.y)})`).join(' ')}`
+    : '';
+  const surfacePlane = typeof placement.surfacePlane === 'string' ? ` surfacePlane=${placement.surfacePlane}` : '';
+  return `x=${x}, y=${y}, width=${width}, height=${height}, rotation=${rotation}, anchor=${placement.anchor === 'center' ? 'center' : 'top-left'}, sizeLocked=true.${normalized}${cornerPoints}${surfacePlane}`;
+}
+
+function readPromptNumber(value: unknown): number | string {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value * 1000) / 1000 : 'unknown';
+}
+
+function logPlanarGraphicPlacementDebug(objectItems: ObjectInsertItemForJob[]): void {
+  if (process.env.NODE_ENV === 'production') return;
+  for (const item of objectItems) {
+    if (item.insertElementKind !== 'planar-graphic') continue;
+    const placement = item.placement;
+    console.debug('[Planar graphic placement]', {
+      placementWidth: typeof placement?.width === 'number' ? placement.width : undefined,
+      placementHeight: typeof placement?.height === 'number' ? placement.height : undefined,
+      normalizedBox: isRecord(placement?.normalizedBox) ? placement.normalizedBox : undefined,
+      rotation: typeof placement?.rotation === 'number' ? placement.rotation : undefined,
+      elementType: item.insertElementKind,
+      attachmentMode: item.attachmentMode,
+      edgeBandPx: item.edgeBandPx,
+      fusionStrategy: item.fusionStrategy,
+    });
+  }
 }
 
 interface BuildSmartPromptInputForJob {
@@ -3294,11 +3392,15 @@ type ObjectInsertFusionPreference = 'conservative' | 'balanced' | 'design';
 type ObjectInsertSurface = 'floor' | 'wall' | 'ceiling' | 'tabletop' | 'outdoor-ground' | 'auto';
 type ObjectInsertCandidateStrategy = 'strict-placement' | 'natural-fit' | 'object-fidelity' | 'scene-harmony';
 type ObjectFidelity = 'strict' | 'balanced' | 'loose';
+type InsertElementKind = 'volumetric-object' | 'planar-graphic';
+type PlanarAttachmentMode = 'flat-decal' | 'flat-sign' | 'raised-lettering' | 'screen-content';
 
 interface ObjectInsertItemForJob {
   id: string;
   objectType: string;
   objectLabel?: string;
+  insertElementKind: InsertElementKind;
+  elementType?: InsertElementKind;
   referenceAssetIds: string[];
   placementPreviewAssetId?: string;
   placementMaskAssetId?: string;
@@ -3316,6 +3418,18 @@ interface ObjectInsertItemForJob {
   placementIntent: string;
   extraPrompt: string;
   placement?: Record<string, unknown>;
+  planarSizeLocked?: boolean;
+  attachmentMode?: PlanarAttachmentMode;
+  fusionStrategy?: 'deterministic-planar-composite' | 'model-assisted-object-insert';
+  lockPosition?: boolean;
+  lockSize?: boolean;
+  lockAspectRatio?: boolean;
+  preserveGraphicContent?: boolean;
+  preserveBackground?: boolean;
+  aiEditableRegion?: 'edge-band-only' | 'full-object';
+  coreMaskMode?: 'locked';
+  edgeBandPx?: number;
+  maxMaskExpansionPx?: number;
 }
 
 function readObjectInsertDebugMode(config: Record<string, unknown>): ObjectInsertDebugMode {
@@ -3366,6 +3480,10 @@ function readObjectInsertPlacementConstraintMode(config: Record<string, unknown>
 
 function readObjectInsertNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function readOptionalObjectInsertNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function readObjectInsertHarmonyPriority(config: Record<string, unknown>): ObjectInsertHarmonyPriority {
@@ -3456,6 +3574,57 @@ function readObjectInsertType(config: Record<string, unknown>): string {
   return value || 'custom';
 }
 
+function readObjectInsertElementKind(config: Record<string, unknown>): InsertElementKind {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const explicit = readConfigStringValue(nested.insertElementKind) || readConfigStringValue(config.insertElementKind);
+  if (explicit === 'planar-graphic' || explicit === 'volumetric-object') return explicit;
+  const objectType = readObjectInsertType(config);
+  if (isPlanarGraphicObjectType(objectType)) return 'planar-graphic';
+  const surface = readObjectInsertSurface(config);
+  const text = [
+    objectType,
+    readConfigStringValue(nested.objectLabel),
+    readConfigStringValue(config.objectLabel),
+    readConfigStringValue(nested.extraPrompt),
+    readConfigStringValue(config.objectInsertExtraPrompt),
+    readConfigStringValue(config.customPrompt),
+    readObjectInsertPlacementIntent(config),
+  ].join('\n');
+  if (surface === 'wall' && /logo|标识|导视|海报|医院|名称|文字|屏幕|screen|poster|signage|wayfinding|brand/iu.test(text)) {
+    return 'planar-graphic';
+  }
+  return 'volumetric-object';
+}
+
+function isPlanarGraphicObjectType(value: string): boolean {
+  return value === 'signage'
+    || value === 'logo'
+    || value === 'wall-text'
+    || value === 'hospital-signage'
+    || value === 'brand-signage'
+    || value === 'poster'
+    || value === 'wayfinding'
+    || value === 'screen-content';
+}
+
+function readPlanarAttachmentMode(
+  value: unknown,
+  objectType?: string,
+  objectLabel?: unknown,
+  extraPrompt?: unknown,
+): PlanarAttachmentMode {
+  if (value === 'flat-decal' || value === 'flat-sign' || value === 'raised-lettering' || value === 'screen-content') return value;
+  const text = [
+    objectType || '',
+    typeof objectLabel === 'string' ? objectLabel : '',
+    typeof extraPrompt === 'string' ? extraPrompt : '',
+  ].join('\n');
+  if (objectType === 'screen-content' || /screen|屏幕|显示屏|电视|monitor/iu.test(text)) return 'screen-content';
+  if (/立体字|发光字|立体logo|raised|channel letter|3d letter/iu.test(text)) return 'raised-lettering';
+  if (objectType === 'poster' || objectType === 'artwork' || /海报|墙贴|贴膜|喷绘|poster|decal|vinyl/iu.test(text)) return 'flat-decal';
+  return 'flat-sign';
+}
+
 function readObjectInsertSurface(config: Record<string, unknown>): ObjectInsertSurface {
   const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
   const value = readConfigStringValue(nested.objectInsertSurface) || readConfigStringValue(config.objectInsertSurface);
@@ -3508,6 +3677,7 @@ function readObjectInsertJobConfig(job: GenerationJob): {
   placementIntent: string;
   harmonyPriority: ObjectInsertHarmonyPriority;
   objectType: string;
+  insertElementKind: InsertElementKind;
   objectInsertSurface: ObjectInsertSurface;
   objectFidelity: ObjectFidelity;
   enforceContactShadow: boolean;
@@ -3534,6 +3704,7 @@ function readObjectInsertJobConfig(job: GenerationJob): {
     placementIntent: readObjectInsertPlacementIntent(job.config),
     harmonyPriority: readObjectInsertHarmonyPriority(job.config),
     objectType: readObjectInsertType(job.config),
+    insertElementKind: readObjectInsertElementKind(job.config),
     objectInsertSurface: readObjectInsertSurface(job.config),
     objectFidelity: readObjectFidelity(job.config),
     enforceContactShadow: readObjectInsertBooleanConstraint(job.config, 'enforceContactShadow'),
@@ -3559,6 +3730,8 @@ function readObjectInsertItemsFromJob(job: GenerationJob): ObjectInsertItemForJo
       id: readConfigStringValue(item.id) || `object-item-${index + 1}`,
       objectType: readConfigStringValue(item.objectType) || 'custom',
       objectLabel: readConfigStringValue(item.objectLabel) || undefined,
+      insertElementKind: readObjectInsertElementKind({ ...job.config, objectInsert: { ...nested, ...item } }),
+      elementType: readObjectInsertElementKind({ ...job.config, objectInsert: { ...nested, ...item } }),
       referenceAssetIds: readStringArray(item.referenceAssetIds).slice(0, 6),
       placementPreviewAssetId: readConfigStringValue(item.placementPreviewAssetId),
       placementMaskAssetId: readConfigStringValue(item.placementMaskAssetId),
@@ -3576,6 +3749,18 @@ function readObjectInsertItemsFromJob(job: GenerationJob): ObjectInsertItemForJo
       placementIntent: readConfigStringValue(item.placementIntent),
       extraPrompt: readConfigStringValue(item.extraPrompt),
       placement: isRecord(item.placement) ? item.placement : undefined,
+      planarSizeLocked: item.planarSizeLocked === true || item.sizeLocked === true,
+      attachmentMode: readPlanarAttachmentMode(item.attachmentMode, readConfigStringValue(item.objectType), readConfigStringValue(item.objectLabel), readConfigStringValue(item.extraPrompt)),
+      fusionStrategy: item.fusionStrategy === 'deterministic-planar-composite' ? 'deterministic-planar-composite' : item.fusionStrategy === 'model-assisted-object-insert' ? 'model-assisted-object-insert' : undefined,
+      lockPosition: item.lockPosition === true,
+      lockSize: item.lockSize === true,
+      lockAspectRatio: item.lockAspectRatio === true,
+      preserveGraphicContent: item.preserveGraphicContent === true,
+      preserveBackground: item.preserveBackground === true,
+      aiEditableRegion: item.aiEditableRegion === 'edge-band-only' ? 'edge-band-only' : item.aiEditableRegion === 'full-object' ? 'full-object' : undefined,
+      coreMaskMode: item.coreMaskMode === 'locked' ? 'locked' : undefined,
+      edgeBandPx: readOptionalObjectInsertNumber(item.edgeBandPx),
+      maxMaskExpansionPx: readOptionalObjectInsertNumber(item.maxMaskExpansionPx),
     }))
     .filter(item => item.referenceAssetIds.length > 0 || item.placementPreviewAssetId || item.placementMaskAssetId);
 
@@ -3590,6 +3775,8 @@ function readObjectInsertItemsFromJob(job: GenerationJob): ObjectInsertItemForJo
     id: 'legacy-object-1',
     objectType: 'custom',
     objectLabel: 'Object 1',
+    insertElementKind: legacy.insertElementKind,
+    elementType: legacy.insertElementKind,
     referenceAssetIds: uniqueReferenceAssetIds,
     placementPreviewAssetId: legacy.previewAssetId,
     placementMaskAssetId: legacy.maskAssetId,
@@ -3607,6 +3794,18 @@ function readObjectInsertItemsFromJob(job: GenerationJob): ObjectInsertItemForJo
     placementIntent: legacy.placementIntent,
     extraPrompt: readConfigStringValue(nested.extraPrompt) || readConfigStringValue(job.config.objectInsertExtraPrompt) || readConfigStringValue(job.config.customPrompt),
     placement: legacy.placement,
+    planarSizeLocked: legacy.insertElementKind === 'planar-graphic',
+    attachmentMode: legacy.insertElementKind === 'planar-graphic' ? readPlanarAttachmentMode(nested.attachmentMode, legacy.objectType, nested.objectLabel, nested.extraPrompt) : undefined,
+    fusionStrategy: legacy.insertElementKind === 'planar-graphic' ? 'deterministic-planar-composite' : 'model-assisted-object-insert',
+    lockPosition: legacy.insertElementKind === 'planar-graphic',
+    lockSize: legacy.insertElementKind === 'planar-graphic',
+    lockAspectRatio: legacy.insertElementKind === 'planar-graphic',
+    preserveGraphicContent: legacy.insertElementKind === 'planar-graphic',
+    preserveBackground: legacy.insertElementKind === 'planar-graphic',
+    aiEditableRegion: legacy.insertElementKind === 'planar-graphic' ? 'edge-band-only' : undefined,
+    coreMaskMode: legacy.insertElementKind === 'planar-graphic' ? 'locked' : undefined,
+    edgeBandPx: legacy.insertElementKind === 'planar-graphic' ? readOptionalObjectInsertNumber(nested.edgeBandPx) || 2 : undefined,
+    maxMaskExpansionPx: legacy.insertElementKind === 'planar-graphic' ? readOptionalObjectInsertNumber(nested.maxMaskExpansionPx) || 2 : undefined,
   }];
 }
 
@@ -3669,6 +3868,8 @@ function buildObjectInsertInputOrder(
     id: item.id,
     objectType: item.objectType,
     objectLabel: item.objectLabel,
+    insertElementKind: item.insertElementKind,
+    elementType: item.elementType || item.insertElementKind,
     referenceImageIndexes: needsObject ? item.referenceAssetIds.map(() => imageIndex++) : [],
     objectInsertSurface: item.objectInsertSurface,
     objectFidelity: item.objectFidelity,
@@ -3677,6 +3878,19 @@ function buildObjectInsertInputOrder(
     enforcePerspectiveScale: item.enforcePerspectiveScale,
     placementMode: item.placementMode,
     placementIntent: item.placementIntent,
+    placement: item.placement,
+    planarSizeLocked: item.planarSizeLocked === true || item.insertElementKind === 'planar-graphic',
+    attachmentMode: item.attachmentMode,
+    fusionStrategy: item.fusionStrategy,
+    lockPosition: item.lockPosition,
+    lockSize: item.lockSize,
+    lockAspectRatio: item.lockAspectRatio,
+    preserveGraphicContent: item.preserveGraphicContent,
+    preserveBackground: item.preserveBackground,
+    aiEditableRegion: item.aiEditableRegion,
+    coreMaskMode: item.coreMaskMode,
+    edgeBandPx: item.edgeBandPx,
+    maxMaskExpansionPx: item.maxMaskExpansionPx,
     extraPrompt: item.extraPrompt,
   }));
   const controlIndexes = new Map<string, number>();

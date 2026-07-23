@@ -31,7 +31,6 @@ export interface ProjectReportScheme {
   parentVersionId?: string | null;
   isPrimary: boolean;
   isFavorite: boolean;
-  qualityStatus?: string;
   createdAt: string;
 }
 
@@ -287,7 +286,6 @@ function buildGenerationScheme(candidate: GenerationCandidate, index: number): P
     generationResultId: result.id,
     isPrimary: result.isSelected,
     isFavorite: result.isFavorite,
-    qualityStatus: readMetadataString(result.metadata, 'qualityStatus'),
     createdAt: result.createdAt,
   };
 }

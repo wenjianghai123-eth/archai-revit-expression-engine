@@ -1,6 +1,6 @@
-import type { GenerationConfig, MaskWorkflowMode, ReplacementTarget, SmartMaskStage } from '../types';
+import type { GenerationConfig, MaskWorkflowMode, ReplacementTarget, SelectionMode, SmartSelectionStatus } from '../types';
 
-export type MaterialReplaceSelectionMode = 'smart' | 'precise' | 'semantic';
+export type MaterialReplaceSelectionMode = SelectionMode | 'smart' | 'semantic';
 export type MaterialReplacementMode = 'auto-enhance' | 'local-material' | 'local-furnishing';
 
 export const AUTO_MATERIAL_REPLACEMENT_PROMPT = [
@@ -32,7 +32,7 @@ export interface MaterialReplacePreviewValidationInput {
   selectionMode: MaterialReplaceSelectionMode;
   maskWorkflowMode?: MaskWorkflowMode;
   maskWorkflowActive?: boolean;
-  smartMaskStage?: SmartMaskStage;
+  smartSelectionStatus?: SmartSelectionStatus;
   maskConfirmed: boolean;
   replacementPrompt: string;
   useDefaultPreset: boolean;
@@ -80,15 +80,15 @@ export function validateMaterialReplacePreviewInput(
 
   const targetLabel = input.mode === 'local-furnishing' ? '软装' : '材质';
   const hasTargetObject = input.hasTargetObject || Boolean(input.replacementTarget);
-  const maskWorkflowMode = input.maskWorkflowMode
-    || (input.maskWorkflowActive === true
-      ? input.selectionMode === 'smart' ? 'smart' : 'manual'
-      : input.hasMask ? input.selectionMode === 'smart' ? 'smart' : 'manual' : 'none');
-  const smartMaskConfirmed = input.maskConfirmed || input.smartMaskStage === 'confirmed';
+  const selectionMode = normalizeSelectionMode(input.selectionMode, input.maskWorkflowMode);
+  const smartMaskConfirmed = input.maskConfirmed
+    || input.smartSelectionStatus === 'confirmed'
+    || false;
 
-  if (!hasTargetObject) {
-    missingItems.push('请选择替换对象类型');
-  } else if (input.hasMask && !input.hasValidMaskPixels) {
+  if (selectionMode === 'semantic-auto' && !hasTargetObject) {
+    missingItems.push('请选择目标区域');
+  }
+  if (input.hasMask && !input.hasValidMaskPixels) {
     missingItems.push('蒙版为空，请重新涂抹');
   }
 
@@ -96,12 +96,14 @@ export function validateMaterialReplacePreviewInput(
     missingItems.push(`请上传${targetLabel}参考图或填写${targetLabel}替换描述，至少完成一项`);
   }
 
-  if (input.isSegmenting || input.smartMaskStage === 'segmenting') {
-    missingItems.push('正在识别替换区域，请稍候');
-  } else if (maskWorkflowMode === 'smart' && (!input.hasMask || !smartMaskConfirmed)) {
-    missingItems.push('请先完成智能识别并确认替换区域');
-  } else if (maskWorkflowMode === 'manual' && !input.hasMask) {
-    missingItems.push('请先确认替换区域');
+  if (input.isSegmenting || input.smartSelectionStatus === 'predicting') {
+    missingItems.push('正在推测替换区域，请稍候');
+  } else if (selectionMode === 'smart-select') {
+    if (!input.hasMask) {
+      missingItems.push('请在需要替换的对象或区域上轻微涂抹一下。');
+    } else if (!smartMaskConfirmed) {
+      missingItems.push('请确认当前识别区域。');
+    }
   }
 
   if (input.enablePhysicalMaterialLayout) {
@@ -120,6 +122,19 @@ export function validateMaterialReplacePreviewInput(
   }
 
   return result(missingItems);
+}
+
+function normalizeSelectionMode(
+  selectionMode: MaterialReplaceSelectionMode,
+  legacyWorkflowMode?: MaskWorkflowMode,
+): SelectionMode {
+  if (selectionMode === 'semantic-auto' || selectionMode === 'smart-select') {
+    return selectionMode;
+  }
+  if (selectionMode === 'smart') return 'smart-select';
+  if (selectionMode === 'semantic') return 'semantic-auto';
+  if (legacyWorkflowMode === 'smart') return 'smart-select';
+  return 'semantic-auto';
 }
 
 function isFiniteNumberInRange(value: unknown, min: number, max: number): value is number {

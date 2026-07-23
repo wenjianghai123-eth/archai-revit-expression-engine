@@ -17,8 +17,10 @@ interface MaskEditorProps {
 
 export type MaskEditorExternalCommand = {
   id: number;
-  type: 'undo' | 'redo' | 'clear';
-};
+} & (
+  | { type: 'undo' | 'redo' | 'clear' }
+  | { type: 'select-tool'; tool: 'brush' | 'eraser' }
+);
 
 type MaskTool = 'brush' | 'eraser' | 'rectangle' | 'lasso' | 'pan';
 type MaskLayer = 'edit' | 'protect';
@@ -208,7 +210,10 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
     const previewData = previewContext.createImageData(previewCanvas.width, previewCanvas.height);
 
     for (let index = 0; index < maskData.data.length; index += 4) {
-      const selected = maskData.data[index] > 10 || maskData.data[index + 1] > 10 || maskData.data[index + 2] > 10;
+      const pixelIndex = index / 4;
+      const x = pixelIndex % maskCanvas.width;
+      const y = Math.floor(pixelIndex / maskCanvas.width);
+      const selected = isMaskPixelSelected(maskData.data, pixelIndex);
       const protectedPixel = protectionData.data[index] > 10 || protectionData.data[index + 1] > 10 || protectionData.data[index + 2] > 10;
       if (protectedPixel) {
         previewData.data[index] = 244;
@@ -216,10 +221,18 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
         previewData.data[index + 2] = 94;
         previewData.data[index + 3] = Math.round(maskOpacity * 2.55);
       } else if (selected) {
-        previewData.data[index] = 37;
-        previewData.data[index + 1] = 99;
-        previewData.data[index + 2] = 235;
-        previewData.data[index + 3] = Math.round(maskOpacity * 2.3);
+        const edgePixel = x === 0
+          || y === 0
+          || x === maskCanvas.width - 1
+          || y === maskCanvas.height - 1
+          || !isMaskPixelSelected(maskData.data, pixelIndex - 1)
+          || !isMaskPixelSelected(maskData.data, pixelIndex + 1)
+          || !isMaskPixelSelected(maskData.data, pixelIndex - maskCanvas.width)
+          || !isMaskPixelSelected(maskData.data, pixelIndex + maskCanvas.width);
+        previewData.data[index] = edgePixel ? 16 : 37;
+        previewData.data[index + 1] = edgePixel ? 185 : 99;
+        previewData.data[index + 2] = edgePixel ? 129 : 235;
+        previewData.data[index + 3] = edgePixel ? 235 : Math.round(maskOpacity * 2.3);
       }
     }
 
@@ -481,6 +494,10 @@ export function MaskEditor({ imageDataUrl, imageName, maskImageDataUrl, protecti
     if (externalCommand.type === 'undo') handleUndo();
     if (externalCommand.type === 'redo') handleRedo();
     if (externalCommand.type === 'clear') handleClear();
+    if (externalCommand.type === 'select-tool') {
+      setTool(externalCommand.tool);
+      setLayer('edit');
+    }
   });
 
   const handleMorph = (amount: number) => {
@@ -883,6 +900,12 @@ function normalizeRect(start: Point, end: Point): Rect {
 
 function clamp(value: number): number {
   return Math.max(0, Math.min(1, value));
+}
+
+function isMaskPixelSelected(data: Uint8ClampedArray, pixelIndex: number): boolean {
+  if (pixelIndex < 0 || pixelIndex * 4 + 2 >= data.length) return false;
+  const offset = pixelIndex * 4;
+  return data[offset] > 10 || data[offset + 1] > 10 || data[offset + 2] > 10;
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {

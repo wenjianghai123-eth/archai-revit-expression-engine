@@ -103,6 +103,153 @@ describe('API易 Nano Banana 2 provider', () => {
     expect(sources).toEqual([onePixelPng, onePixelPng]);
   });
 
+  it('uses element-only preservation prompts for volumetric object insertion', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const provider = createApiYiNanoBanana2Provider({
+      apiKey: 'test-key',
+      fetchImpl: vi.fn(async (url, init) => {
+        requests.push({ url: String(url), init });
+        return new Response(JSON.stringify({
+          responseId: 'apiyi-object-insert-response',
+          candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: onePixelPng.replace(/^data:image\/png;base64,/u, '') } }] } }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }) as typeof fetch,
+    });
+
+    await provider.generateImage(createInput({
+      mode: 'inpaint',
+      step: 'object_insert',
+      prompt: 'Insert a plant near the sofa.',
+      referenceImageDataUrls: [onePixelPng],
+      materialReferenceImageDataUrls: [],
+      config: {
+        step: 'object_insert',
+        objectInsertMode: 'object_insert_preview_fusion',
+        objectType: 'plant',
+        insertElementKind: 'volumetric-object',
+        objectInsert: {
+          mode: 'object_insert_preview_fusion',
+          objectItems: [{
+            id: 'plant-1',
+            objectType: 'plant',
+            insertElementKind: 'volumetric-object',
+            referenceAssetIds: ['asset-plant'],
+            placement: { x: 120, y: 160, width: 220, height: 300, rotation: 0 },
+          }],
+        },
+      },
+    }));
+
+    const body = JSON.parse(String(requests[0].init?.body)) as {
+      contents: Array<{ parts: Array<{ text?: string }> }>;
+    };
+    const text = body.contents[0].parts[0].text || '';
+    expect(text).toContain('Element insertion definition: only add the specified new element');
+    expect(text).toContain('Do not change wall material');
+    expect(text).toContain('Do not change floor material');
+    expect(text).toContain('Volumetric object insertion branch');
+    expect(text).toContain('The overlay position is a soft anchor, not a rigid bounding box.');
+    expect(text).not.toContain('Planar graphic size lock');
+    expect(text).not.toContain('Planar deterministic composite + local fusion');
+    expect(text).not.toContain('coreMask=locked');
+    expect(text).not.toContain('Generate a polished interior design visualization');
+    expect(text).not.toContain('Do not optimize overall atmosphere');
+    expect(text).not.toContain('improve the whole image');
+  });
+
+  it('uses planar graphic insertion prompts for logo and signage placement', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const provider = createApiYiNanoBanana2Provider({
+      apiKey: 'test-key',
+      fetchImpl: vi.fn(async (url, init) => {
+        requests.push({ url: String(url), init });
+        return new Response(JSON.stringify({
+          responseId: 'apiyi-planar-logo-response',
+          candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: onePixelPng.replace(/^data:image\/png;base64,/u, '') } }] } }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }) as typeof fetch,
+    });
+
+    await provider.generateImage(createInput({
+      mode: 'inpaint',
+      step: 'object_insert',
+      prompt: 'Place the hospital logo on the wall.',
+      referenceImageDataUrls: [onePixelPng],
+      materialReferenceImageDataUrls: [],
+      config: {
+        step: 'object_insert',
+        objectInsertMode: 'object_insert_preview_fusion',
+        objectType: 'logo',
+        objectInsertSurface: 'wall',
+        insertElementKind: 'planar-graphic',
+        objectInsert: {
+          mode: 'object_insert_preview_fusion',
+          insertElementKind: 'planar-graphic',
+          objectItems: [{
+            id: 'logo-1',
+            objectType: 'logo',
+            insertElementKind: 'planar-graphic',
+            planarSizeLocked: true,
+            referenceAssetIds: ['asset-logo'],
+            objectInsertSurface: 'wall',
+            placement: {
+              x: 96,
+              y: 144,
+              width: 240,
+              height: 80,
+              rotation: -4,
+              anchor: 'top-left',
+              cornerPoints: [{ x: 101.8, y: 135.8 }, { x: 341.2, y: 119.1 }, { x: 346.8, y: 198.9 }, { x: 107.4, y: 215.6 }],
+              normalizedBox: { x: 0.08, y: 0.18, width: 0.2, height: 0.1 },
+              surfacePlane: 'wall',
+              sizeLocked: true,
+            },
+            attachmentMode: 'flat-sign',
+            fusionStrategy: 'deterministic-planar-composite',
+            lockPosition: true,
+            lockSize: true,
+            lockAspectRatio: true,
+            preserveGraphicContent: true,
+            preserveBackground: true,
+            aiEditableRegion: 'edge-band-only',
+            coreMaskMode: 'locked',
+            edgeBandPx: 2,
+            maxMaskExpansionPx: 2,
+          }],
+        },
+      },
+    }));
+
+    const body = JSON.parse(String(requests[0].init?.body)) as {
+      contents: Array<{ parts: Array<{ text?: string }> }>;
+    };
+    const text = body.contents[0].parts[0].text || '';
+    expect(text).toContain('Planar graphic insertion branch');
+    expect(text).toContain('Planar graphic size lock');
+    expect(text).toContain('width=240');
+    expect(text).toContain('height=80');
+    expect(text).toContain('normalizedBox x=0.08');
+    expect(text).toContain('cornerPoints=');
+    expect(text).toContain('surfacePlane=wall');
+    expect(text).toContain('sizeLocked=true');
+    expect(text).toContain('Planar deterministic composite + local fusion');
+    expect(text).toContain('coreMask=locked');
+    expect(text).toContain('edgeBandMask=only an extremely narrow 1-2 original-pixel transition/contact band');
+    expect(text).toContain('protectedBackgroundMask=all original pixels outside the placement box frozen');
+    expect(text).toContain('attachmentMode=flat-sign');
+    expect(text).toContain('aiEditableRegion=edge-band-only');
+    expect(text).toContain('edgeBandPx=2');
+    expect(text).toContain('Do not AI-redraw the planar graphic core');
+    expect(text).toContain('Do not let the model decide a new size');
+    expect(text).toContain('Do not automatically enlarge, shrink, crop, stretch, or change proportion');
+    expect(text).toContain('Preserve the reference graphic/logo/text');
+    expect(text).toContain('Do not use the ordinary volumetric-object insertion strategy');
+    expect(text).toContain('Do not generate a similar logo');
+    expect(text).toContain('Do not change the wall/screen material itself');
+    expect(text).not.toContain('Volumetric object insertion branch');
+    expect(text).not.toContain('Do not generate brand Logo');
+  });
+
   it('keeps the text part separate from all image parts', () => {
     const parts = buildApiYiParts('prompt', [
       { mimeType: 'image/png', data: 'abc' },

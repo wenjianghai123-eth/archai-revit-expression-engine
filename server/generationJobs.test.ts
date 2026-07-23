@@ -276,6 +276,118 @@ describe('POST /api/generation-jobs asset ownership', () => {
     });
   });
 
+  it('preserves planar graphic locked placement size metadata in object_insert jobs', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Planar graphic placement lock' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const previewAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const edgeMaskAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const placement = {
+      x: 96,
+      y: 144,
+      width: 240,
+      height: 80,
+      rotation: -4,
+      anchor: 'top-left',
+      cornerPoints: [{ x: 101.8, y: 135.8 }, { x: 341.2, y: 119.1 }, { x: 346.8, y: 198.9 }, { x: 107.4, y: 215.6 }],
+      normalizedBox: { x: 0.08, y: 0.18, width: 0.2, height: 0.1 },
+      surfacePlane: 'wall',
+      sizeLocked: true,
+    };
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'inpaint',
+        step: 'object_insert',
+        prompt: 'place the hospital logo on the wall',
+        config: {
+          step: 'object_insert',
+          sourceImageAssetId: sourceAsset.id,
+          objectInsertMode: 'object_insert_preview_fusion',
+          objectType: 'logo',
+          insertElementKind: 'planar-graphic',
+          objectInsertSurface: 'wall',
+          objectInsert: {
+            mode: 'object_insert_preview_fusion',
+            insertElementKind: 'planar-graphic',
+            objectType: 'logo',
+            objectInsertSurface: 'wall',
+            previewAssetId: previewAsset.id,
+            maskAssetId: edgeMaskAsset.id,
+            objectItems: [{
+              id: 'logo-1',
+              objectType: 'logo',
+              objectLabel: 'Hospital logo',
+              insertElementKind: 'planar-graphic',
+              elementType: 'planar-graphic',
+              planarSizeLocked: true,
+              referenceAssetIds: ['logo-reference-asset'],
+              placementPreviewAssetId: previewAsset.id,
+              placementMaskAssetId: edgeMaskAsset.id,
+              objectInsertSurface: 'wall',
+              attachmentMode: 'flat-sign',
+              fusionStrategy: 'deterministic-planar-composite',
+              aiEditableRegion: 'edge-band-only',
+              coreMaskMode: 'locked',
+              edgeBandPx: 2,
+              placement,
+            }],
+          },
+        },
+        inputAssetIds: [sourceAsset.id, previewAsset.id, edgeMaskAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).toMatchObject({
+      objectType: 'logo',
+      insertElementKind: 'planar-graphic',
+      maskMode: 'asset-mask',
+      maskAssetId: edgeMaskAsset.id,
+      objectInsert: {
+        insertElementKind: 'planar-graphic',
+        maskAssetId: edgeMaskAsset.id,
+        fusionStrategy: 'deterministic-planar-composite',
+        aiEditableRegion: 'edge-band-only',
+        coreMaskMode: 'locked',
+        objectItems: [{
+          objectType: 'logo',
+          insertElementKind: 'planar-graphic',
+          elementType: 'planar-graphic',
+          planarSizeLocked: true,
+          placementMode: 'strict',
+          placementConstraintMode: 'strict',
+          maxCenterOffsetRatio: 0,
+          maxScaleAdjustmentRatio: 0,
+          maxRotationAdjustmentDeg: 0,
+          attachmentMode: 'flat-sign',
+          fusionStrategy: 'deterministic-planar-composite',
+          lockPosition: true,
+          lockSize: true,
+          lockAspectRatio: true,
+          preserveGraphicContent: true,
+          preserveBackground: true,
+          aiEditableRegion: 'edge-band-only',
+          coreMaskMode: 'locked',
+          edgeBandPx: 2,
+          maxMaskExpansionPx: 2,
+          placement: {
+            x: 96,
+            y: 144,
+            width: 240,
+            height: 80,
+            rotation: -4,
+            anchor: 'top-left',
+            cornerPoints: [{ x: 101.8, y: 135.8 }, { x: 341.2, y: 119.1 }, { x: 346.8, y: 198.9 }, { x: 107.4, y: 215.6 }],
+            normalizedBox: { x: 0.08, y: 0.18, width: 0.2, height: 0.1 },
+            surfacePlane: 'wall',
+            sizeLocked: true,
+          },
+        }],
+      },
+    });
+  });
+
   it('rejects a project owned by another user', async () => {
     const otherProject = await storage.createProject({ userId: 'other-user', name: 'Other project' });
     const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
@@ -410,7 +522,9 @@ describe('POST /api/generation-jobs asset ownership', () => {
         sourceImageAssetId: sourceAsset.id,
         maskMode: 'asset-mask',
         maskAssetId: maskAsset.id,
-        targetObjectType: 'floor',
+        selectionMode: 'smart-select',
+        maskWorkflowMode: 'smart',
+        maskSelectionMode: 'smart',
         targetMaterial: 'light-wood',
         materialReferenceAssetIds: [materialAsset.id],
         preserveLighting: true,
@@ -418,6 +532,8 @@ describe('POST /api/generation-jobs asset ownership', () => {
         strength: 'balanced',
       },
     });
+    expect(response.body.data.job.config.targetObjectType).toBeUndefined();
+    expect(response.body.data.job.config.replacementTarget).toBeUndefined();
     expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 1);
   });
 
@@ -527,8 +643,10 @@ describe('POST /api/generation-jobs asset ownership', () => {
           sourceImageAssetId: sourceAsset.id,
           maskMode: 'asset-mask',
           maskAssetId: maskAsset.id,
+          selectionMode: 'smart-select',
+          maskWorkflowMode: 'smart',
+          maskSelectionMode: 'smart',
           protectionMaskAssetId: protectionAsset.id,
-          targetObjectType: 'floor',
           targetMaterial: 'tile',
           materialCandidateCount: 3,
           enablePhysicalMaterialLayout: true,
@@ -557,7 +675,12 @@ describe('POST /api/generation-jobs asset ownership', () => {
       semanticObjectSelections: [{ id: 'floor-left', objectType: 'floor', x: 0.25, y: 0.6 }],
       feather: 6,
       maskExpansion: 4,
+      selectionMode: 'smart-select',
+      maskWorkflowMode: 'smart',
+      maskSelectionMode: 'smart',
     });
+    expect(response.body.data.job.config.targetObjectType).toBeUndefined();
+    expect(response.body.data.job.config.replacementTarget).toBeUndefined();
     expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 3);
   });
 
@@ -586,7 +709,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
       });
 
     expect(response.status).toBe(400);
-    expect(response.body.error.code).toBe('GENERATION_JOB_SMART_MASK_NOT_CONFIRMED');
+    expect(response.body.error.code).toBe('GENERATION_JOB_SMART_SELECTION_NOT_CONFIRMED');
   });
 
   it('stores confirmed smart mask metadata on the generation job', async () => {
@@ -621,6 +744,8 @@ describe('POST /api/generation-jobs asset ownership', () => {
       editMode: 'mask',
       maskWorkflowMode: 'smart',
       maskSelectionMode: 'smart',
+      selectionMode: 'smart-select',
+      smartSelectionConfirmed: true,
       smartMaskConfirmed: true,
       confirmedSmartMaskAssetId: maskAsset.id,
       editingScope: 'masked',
@@ -682,8 +807,8 @@ describe('POST /api/generation-jobs asset ownership', () => {
       });
 
     expect(response.status).toBe(400);
-    expect(response.body.error.code).toBe('GENERATION_JOB_MASK_REQUIRED');
-    expect(response.body.error.message).toBe('\u7cbe\u7ec6\u6d82\u62b9\u6a21\u5f0f\u4e0b\u8bf7\u5148\u9009\u62e9\u5e76\u786e\u8ba4\u9700\u8981\u66ff\u6362\u7684\u533a\u57df');
+    expect(response.body.error.code).toBe('GENERATION_JOB_SMART_SELECTION_REQUIRED');
+    expect(response.body.error.message).toBe('请在需要替换的对象或区域上轻微涂抹一下。');
   });
 
   it('returns smart-mask-specific copy when smart mode has no confirmed mask asset', async () => {
@@ -707,8 +832,46 @@ describe('POST /api/generation-jobs asset ownership', () => {
       });
 
     expect(response.status).toBe(400);
-    expect(response.body.error.code).toBe('GENERATION_JOB_SMART_MASK_REQUIRED');
-    expect(response.body.error.message).toBe('\u667a\u80fd\u6d82\u62b9\u6a21\u5f0f\u4e0b\u8bf7\u5148\u5b8c\u6210\u8bc6\u522b\u5e76\u786e\u8ba4\u66ff\u6362\u533a\u57df');
+    expect(response.body.error.code).toBe('GENERATION_JOB_SMART_SELECTION_REQUIRED');
+    expect(response.body.error.message).toBe('请在需要替换的对象或区域上轻微涂抹一下。');
+  });
+
+  it('rejects removed material precise/manual selection modes', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Removed material selection mode' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const preciseResponse = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          selectionMode: 'precise-paint',
+          sourceImageAssetId: sourceAsset.id,
+          targetMaterial: 'microcement',
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    const manualResponse = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          maskWorkflowMode: 'manual',
+          sourceImageAssetId: sourceAsset.id,
+          targetMaterial: 'microcement',
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(preciseResponse.status).toBe(400);
+    expect(preciseResponse.body.error.code).toBe('GENERATION_JOB_SELECTION_MODE_INVALID');
+    expect(manualResponse.status).toBe(400);
+    expect(manualResponse.body.error.code).toBe('GENERATION_JOB_MASK_WORKFLOW_MODE_INVALID');
   });
 
   it('accepts semantic-auto material replacement without a mask', async () => {
@@ -792,7 +955,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
     ['lighting', 'lighting', 'linear-light'],
     ['artwork', 'artwork', 'art-paint'],
     ['decor', 'decor', 'metal'],
-  ] as const)('normalizes masked replacement for %s without changing target', async (replacementTarget, targetObjectType, targetMaterial) => {
+  ] as const)('normalizes smart-select replacement for %s without sending target area', async (replacementTarget, targetObjectType, targetMaterial) => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: `Material replace ${replacementTarget} masked` });
     const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
     const maskAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
@@ -805,7 +968,10 @@ describe('POST /api/generation-jobs asset ownership', () => {
         prompt: '',
         config: {
           editMode: 'mask',
-          maskWorkflowMode: 'manual',
+          selectionMode: 'smart-select',
+          maskWorkflowMode: 'smart',
+          maskSelectionMode: 'smart',
+          smartMaskConfirmed: true,
           sourceImageAssetId: sourceAsset.id,
           maskMode: 'asset-mask',
           maskAssetId: maskAsset.id,
@@ -819,13 +985,17 @@ describe('POST /api/generation-jobs asset ownership', () => {
     expect(response.status).toBe(201);
     expect(response.body.data.job.config).toMatchObject({
       editMode: 'mask',
-      maskWorkflowMode: 'manual',
+      selectionMode: 'smart-select',
+      maskWorkflowMode: 'smart',
+      maskSelectionMode: 'smart',
       maskMode: 'asset-mask',
       maskAssetId: maskAsset.id,
       editingScope: 'masked',
       replacementStrategy: 'replace-masked',
-      replacementTarget,
+      confirmedSmartMaskAssetId: maskAsset.id,
     });
+    expect(response.body.data.job.config.replacementTarget).toBeUndefined();
+    expect(response.body.data.job.config.targetObjectType).toBeUndefined();
   });
 
   it('rejects smart-type material-replace without target object type', async () => {
@@ -888,7 +1058,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
     expect(missingSource.status).toBe(400);
     expect(missingSource.body.error.code).toBe('GENERATION_JOB_SOURCE_IMAGE_REQUIRED');
     expect(missingMask.status).toBe(400);
-    expect(missingMask.body.error.code).toBe('GENERATION_JOB_MASK_REQUIRED');
+    expect(missingMask.body.error.code).toBe('GENERATION_JOB_SMART_SELECTION_REQUIRED');
     expect(missingTarget.status).toBe(400);
     expect(missingTarget.body.error.code).toBe('GENERATION_JOB_MATERIAL_TARGET_REQUIRED');
   });
@@ -1442,6 +1612,11 @@ describe('POST /api/generation-jobs asset ownership', () => {
       config: {
         imagePolishMode: 'conservative',
         imagePolishControls: controls,
+        addPeople: false,
+        peopleLevel: 'none',
+        addPlants: false,
+        plantLevel: 'none',
+        preserveStrictness: 'strict',
         enhanceMaterials: false,
         promptMode: 'conservative_polish',
         preserveStructure: true,
@@ -1453,7 +1628,58 @@ describe('POST /api/generation-jobs asset ownership', () => {
     expect(response.body.data.job.prompt).toContain('\u4e25\u7981\u65b0\u589e');
   });
 
-  it('maps the legacy enhanceMaterials flag to white-model materialization', async () => {
+  it('persists image polish optional element settings and compiles asymmetric safety prompts', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Image polish optional controls' });
+    const source = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app).post('/api/generation-jobs').send({
+      projectId: project.id,
+      mode: 'inpaint',
+      step: 'image_polish',
+      prompt: '',
+      inputAssetIds: [source.id],
+      config: {
+        sourceImageAssetId: source.id,
+        imagePolishMode: 'conservative',
+        addPeople: true,
+        peopleLevel: 'high',
+        addPlants: false,
+        plantLevel: 'high',
+        preserveStrictness: 'standard',
+      },
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).toMatchObject({
+      addPeople: true,
+      peopleLevel: 'high',
+      addPlants: false,
+      plantLevel: 'none',
+      preserveStrictness: 'standard',
+    });
+    expect(response.body.data.job.prompt).toContain('增加人物：必须增加真实自然的人物');
+    expect(response.body.data.job.prompt).toContain('人物数量：增加约16—25名人物');
+    expect(response.body.data.job.prompt).toContain('人物是本次唯一允许新增的内容');
+    expect(response.body.data.job.prompt).toContain('增加绿植：不增加；不得新增绿植');
+    expect(response.body.data.job.prompt).toContain('原图保持强度：标准');
+    expect(response.body.data.job.prompt).toContain('仅允许按照人物增强设置新增人物');
+    expect(response.body.data.job.prompt).toContain('不得新增绿植');
+    expect(response.body.data.job.prompt).not.toContain('严禁新增人物');
+    expect(response.body.data.job.prompt).not.toContain('不得新增任何元素');
+    expect(response.body.data.job.prompt).not.toContain('保持原图所有对象数量不变');
+    expect(response.body.data.job.config.negativePrompt).toContain('新增绿植');
+    expect(response.body.data.job.config.negativePrompt).not.toMatch(/people, person|新增人物|行人|访客|工作人员/iu);
+    const storedJob = await storage.getGenerationJob(response.body.data.job.id, DEV_AUTH_USER_ID);
+    expect(storedJob?.config).toMatchObject({
+      addPeople: true,
+      peopleLevel: 'high',
+      addPlants: false,
+      plantLevel: 'none',
+      preserveStrictness: 'standard',
+    });
+  });
+
+  it('maps the legacy enhanceMaterials flag to materialization mode', async () => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Legacy image polish project' });
     const source = await createImageAssetForUser(DEV_AUTH_USER_ID);
 
@@ -1468,9 +1694,9 @@ describe('POST /api/generation-jobs asset ownership', () => {
 
     expect(response.status).toBe(201);
     expect(response.body.data.job.config).toMatchObject({
-      imagePolishMode: 'white-model-materialization',
+      imagePolishMode: 'materialization',
       enhanceMaterials: true,
-      promptMode: 'white_model_materialization',
+      promptMode: 'materialization',
     });
     expect(response.body.data.job.prompt).toContain('\u6267\u884c');
   });
@@ -1850,6 +2076,11 @@ describe('generation job credits', () => {
           sourceImageAssetId: sourceAsset.id,
           imagePolishMode: 'white-model-materialization',
           imagePolishControls: controls,
+          addPeople: true,
+          peopleLevel: 'medium',
+          addPlants: false,
+          plantLevel: 'none',
+          preserveStrictness: 'strict',
         },
       });
 
@@ -1861,12 +2092,18 @@ describe('generation job credits', () => {
       expect(results[0].metadata).toMatchObject({
         step: 'image_polish',
         sourceImageAssetId: sourceAsset.id,
-        imagePolishMode: 'white-model-materialization',
+        imagePolishMode: 'materialization',
         imagePolishControls: controls,
+        addPeople: true,
+        peopleLevel: 'medium',
+        addPlants: false,
+        plantLevel: 'none',
+        preserveStrictness: 'strict',
         enhanceMaterials: true,
-        promptMode: 'white_model_materialization',
-        compiledPrompt: expect.stringContaining('\u6267\u884c'),
+        promptMode: 'materialization',
+        compiledPrompt: expect.stringContaining('人物数量：增加约8—15名人物'),
       });
+      expect(results[0].metadata?.compiledPrompt).not.toContain('严禁新增人物');
     } finally {
       process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
     }
@@ -2681,108 +2918,34 @@ describe('credit adjustments', () => {
   });
 });
 
-describe('project design workflow API', () => {
-  it('persists formal asset transfers, skipped stages, back navigation, and generation output links', async () => {
+describe('removed project design workflow API', () => {
+  it('does not expose the design workflow endpoint', async () => {
     const project = await storage.createProject({
       userId: DEV_AUTH_USER_ID,
-      name: 'Workflow orchestrator',
+      name: 'Workflow removed',
+    });
+    const response = await request(app)
+      .get(`/api/projects/${project.id}/design-workflow`);
+
+    expect(response.status).toBe(404);
+  });
+
+  it('does not validate or link legacy design workflow config fields when creating generation jobs', async () => {
+    const project = await storage.createProject({
+      userId: DEV_AUTH_USER_ID,
+      name: 'Workflow fields ignored',
     });
     const source = await createImageAssetForUser(DEV_AUTH_USER_ID);
-    const created = await request(app)
-      .post(`/api/projects/${project.id}/design-workflow`)
-      .send({
-        inputAssetId: source.id,
-        sourceFeature: 'floorplan-to-3d',
-      });
-
-    expect(created.status).toBe(201);
-    expect(created.body.data.nodes).toEqual([
-      expect.objectContaining({
-        stageKey: 'input',
-        inputAssetId: source.id,
-        parentNodeId: null,
-      }),
-    ]);
-    const workflowId = created.body.data.workflow.id;
-
-    const base = await request(app)
-      .post(`/api/projects/${project.id}/design-workflow/${workflowId}/advance`)
-      .send({
-        stageKey: 'base-render',
-        sourceFeature: 'project-input',
-        inputAssetId: source.id,
-      });
-    expect(base.status).toBe(201);
-    expect(base.body.data.node).toMatchObject({
-      stageKey: 'base-render',
-      inputAssetId: source.id,
-      parentNodeId: created.body.data.nodes[0].id,
-    });
-
-    const skipped = await request(app)
-      .post(`/api/projects/${project.id}/design-workflow/${workflowId}/skip`)
-      .send({});
-    expect(skipped.status).toBe(201);
-    expect(skipped.body.data.skippedNode).toMatchObject({
-      id: base.body.data.node.id,
-      status: 'skipped',
-    });
-    expect(skipped.body.data.node.stageKey).toBe('design-variants');
-
-    const backed = await request(app)
-      .post(`/api/projects/${project.id}/design-workflow/${workflowId}/back`)
-      .send({});
-    expect(backed.status).toBe(200);
-    expect(backed.body.data.node).toMatchObject({
-      stageKey: 'base-render',
-      status: 'skipped',
-    });
-
-    const parentJob = await storage.createGenerationJob({
-      userId: DEV_AUTH_USER_ID,
-      projectId: project.id,
-      mode: 'floorplan',
-      step: 'floorplan_to_3d',
-      prompt: 'Base render',
-      config: {},
-      inputAssetIds: [source.id],
-      provider: 'mock',
-    });
-    const baseOutput = await createImageAssetForUser(DEV_AUTH_USER_ID);
-    const parentResult = await storage.createGenerationResult({
-      userId: DEV_AUTH_USER_ID,
-      projectId: project.id,
-      jobId: parentJob!.id,
-      assetId: baseOutput.id,
-      imageUrl: baseOutput.url,
-      isSelected: true,
-    });
-
-    const variants = await request(app)
-      .post(`/api/projects/${project.id}/design-workflow/${workflowId}/advance`)
-      .send({
-        stageKey: 'design-variants',
-        sourceFeature: 'floorplan-to-3d',
-        inputAssetId: baseOutput.id,
-        parentJobId: parentJob!.id,
-        parentResultId: parentResult!.id,
-      });
-    expect(variants.status).toBe(201);
-    expect(variants.body.data.node).toMatchObject({
-      stageKey: 'design-variants',
-      inputAssetId: baseOutput.id,
-      parentJobId: parentJob!.id,
-      parentResultId: parentResult!.id,
-    });
     await storage.adjustCredits({
       userId: DEV_AUTH_USER_ID,
       type: 'grant',
       amount: 10,
-      reason: 'Workflow generation test',
+      reason: 'Workflow removal generation test',
       referenceType: 'system',
-      referenceId: `workflow_${workflowId}`,
+      referenceId: `workflow_removed_${Date.now()}`,
     });
-    const jobResponse = await request(app)
+
+    const response = await request(app)
       .post('/api/generation-jobs')
       .send({
         projectId: project.id,
@@ -2791,98 +2954,17 @@ describe('project design workflow API', () => {
         prompt: '',
         config: {
           batchCount: 2,
-          designWorkflowId: workflowId,
-          designWorkflowNodeId: variants.body.data.node.id,
+          designWorkflowId: 'deleted-workflow',
+          designWorkflowNodeId: 'deleted-node',
           designWorkflowStageKey: 'design-variants',
         },
-        inputAssetIds: [baseOutput.id],
+        inputAssetIds: [source.id],
       });
-    expect(jobResponse.status).toBe(201);
 
-    const linked = await storage.getDesignWorkflowNode(
-      variants.body.data.node.id,
-      workflowId,
-      project.id,
-      DEV_AUTH_USER_ID,
-    );
-    expect(linked?.outputJobId).toBe(jobResponse.body.data.job.id);
-
-    const generatedAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
-    const generatedResult = await storage.createGenerationResult({
-      userId: DEV_AUTH_USER_ID,
-      projectId: project.id,
-      jobId: jobResponse.body.data.job.id,
-      assetId: generatedAsset.id,
-      imageUrl: generatedAsset.url,
-      isSelected: true,
-    });
-    const { completeDesignWorkflowGeneration } = await import('./projectWorkflowLifecycle');
-    await completeDesignWorkflowGeneration(jobResponse.body.data.job, generatedResult!);
-
-    const detail = await request(app)
-      .get(`/api/projects/${project.id}/design-workflow`);
-    expect(detail.status).toBe(200);
-    expect(detail.body.data.nodes).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: variants.body.data.node.id,
-        status: 'completed',
-        outputJobId: jobResponse.body.data.job.id,
-        outputResultId: generatedResult!.id,
-        outputAssetId: generatedAsset.id,
-      }),
-    ]));
-    const storedResult = (await storage.listGenerationResults(
-      jobResponse.body.data.job.id,
-      DEV_AUTH_USER_ID,
-    )).find(result => result.id === generatedResult!.id);
-    expect(storedResult?.metadata).toMatchObject({
-      designWorkflowId: workflowId,
-      designWorkflowNodeId: variants.body.data.node.id,
-      designWorkflowStageKey: 'design-variants',
-      parentJobId: parentJob!.id,
-      parentResultId: parentResult!.id,
-      sourceFeature: 'floorplan-to-3d',
-    });
-  });
-
-  it('rejects a generation result that does not match the transferred asset', async () => {
-    const project = await storage.createProject({
-      userId: DEV_AUTH_USER_ID,
-      name: 'Workflow mismatch',
-    });
-    const source = await createImageAssetForUser(DEV_AUTH_USER_ID);
-    const other = await createImageAssetForUser(DEV_AUTH_USER_ID);
-    const created = await request(app)
-      .post(`/api/projects/${project.id}/design-workflow`)
-      .send({ inputAssetId: source.id });
-    const job = await storage.createGenerationJob({
-      userId: DEV_AUTH_USER_ID,
-      projectId: project.id,
-      mode: 'floorplan',
-      prompt: 'base',
-      config: {},
-      inputAssetIds: [source.id],
-      provider: 'mock',
-    });
-    const result = await storage.createGenerationResult({
-      userId: DEV_AUTH_USER_ID,
-      projectId: project.id,
-      jobId: job!.id,
-      assetId: source.id,
-      imageUrl: source.url,
-    });
-
-    const response = await request(app)
-      .post(`/api/projects/${project.id}/design-workflow/${created.body.data.workflow.id}/advance`)
-      .send({
-        stageKey: 'base-render',
-        sourceFeature: 'input',
-        inputAssetId: other.id,
-        parentJobId: job!.id,
-        parentResultId: result!.id,
-      });
-    expect(response.status).toBe(409);
-    expect(response.body.error.code).toBe('DESIGN_WORKFLOW_RESULT_ASSET_MISMATCH');
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).not.toHaveProperty('designWorkflowId');
+    expect(response.body.data.job.config).not.toHaveProperty('designWorkflowNodeId');
+    expect(response.body.data.job.config).not.toHaveProperty('designWorkflowStageKey');
   });
 });
 

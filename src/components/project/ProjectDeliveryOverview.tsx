@@ -1,8 +1,6 @@
-import { ArrowLeft, Clock, FileDown, Flag, GitBranch, Share2, Star } from 'lucide-react';
+import { Clock, FileDown, Flag, GitBranch, Share2, Star } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { EditSessionDetail } from '../../lib/api';
-import type { DesignWorkflowDetail } from '../../types';
-import { designWorkflowStages } from '../../constants/designWorkflow';
 import { AspectRatioImage } from '../common/AspectRatioImage';
 
 interface ProjectDeliveryOverviewProps {
@@ -11,8 +9,6 @@ interface ProjectDeliveryOverviewProps {
   selectedReportCount: number;
   reportOptionCount: number;
   reportExportedAt?: string | null;
-  designWorkflow?: DesignWorkflowDetail | null;
-  onBackDesignWorkflow?: () => void;
   onOpenSession: (sessionId: string) => void;
 }
 
@@ -22,8 +18,6 @@ export function ProjectDeliveryOverview({
   selectedReportCount,
   reportOptionCount,
   reportExportedAt,
-  designWorkflow,
-  onBackDesignWorkflow,
   onOpenSession,
 }: ProjectDeliveryOverviewProps) {
   const primaryVersions = editSessions.flatMap(detail => {
@@ -49,10 +43,6 @@ export function ProjectDeliveryOverview({
       .map(message => ({ detail, message })))
     .sort((a, b) => b.message.createdAt.localeCompare(a.message.createdAt))
     .slice(0, 6);
-  const currentWorkflowNode = designWorkflow?.nodes.find(
-    node => node.id === designWorkflow.workflow.currentNodeId,
-  );
-
   return (
     <section className="arch-card mb-4 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -63,26 +53,11 @@ export function ProjectDeliveryOverview({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {currentWorkflowNode?.parentNodeId && onBackDesignWorkflow ? (
-            <button
-              type="button"
-              onClick={onBackDesignWorkflow}
-              className="arch-button-secondary px-3 py-2 text-xs"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              返回上一流程步骤
-            </button>
-          ) : null}
           <span className="arch-pill">{editSessions.length} 个连续修改会话</span>
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-        <DeliveryMetric
-          icon={<GitBranch className="h-4 w-4" />}
-          label="设计表达流程"
-          value={readWorkflowStage(designWorkflow)}
-        />
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <DeliveryMetric
           icon={<Star className="h-4 w-4" />}
           label="主方案"
@@ -252,10 +227,4 @@ function readMessageStatus(status: string) {
   if (status === 'succeeded') return '已完成';
   if (status === 'failed' || status === 'cancelled' || status === 'timeout') return '失败';
   return '处理中';
-}
-
-function readWorkflowStage(detail: DesignWorkflowDetail | null | undefined) {
-  if (!detail) return '未开始';
-  const current = detail.nodes.find(node => node.id === detail.workflow.currentNodeId);
-  return designWorkflowStages.find(stage => stage.key === current?.stageKey)?.label || '未开始';
 }

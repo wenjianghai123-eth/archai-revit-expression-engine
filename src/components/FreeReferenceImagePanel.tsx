@@ -8,7 +8,6 @@ import { resolveAssetUrl } from '../utils/assetUrl';
 import { ContinuousEditAction, ResultSendActions } from './workspace/SecondaryEditActions';
 import { AspectRatioImage } from './common/AspectRatioImage';
 import { GenerationImageViewer } from './common/GenerationImageViewer';
-import { ResultQualityReport } from './common/ResultQualityReport';
 import { IMAGE_UPLOAD_ACCEPT } from '../utils/imageValidation';
 import { buildFreeReferenceRoleSummary, buildFreeReferenceTargetSize, findFreeReferenceConflicts, freeReferenceAspectRatioOptions, freeReferenceStylePresets } from '../utils/freeReferenceWorkflow';
 import { normalizeStepGenerationResult } from '../utils/normalizeGenerationResult';
@@ -440,11 +439,6 @@ export function FreeReferenceImagePanel({
             </div>
           </div>
           <div className="border-b border-slate-100 px-4 py-3"><NormalizedGenerationProgress result={normalizedResult} compact /></div>
-          {originalResultImage && selectedResult ? (
-            <div className="border-b border-slate-100 px-4 py-3">
-              <ResultQualityReport resultId={selectedResult.id} metadata={selectedResult.metadata} />
-            </div>
-          ) : null}
           {originalResultImage && selectedResult && onSendResultToStep ? (
             <div className="border-b border-slate-100 bg-white/45 px-4 py-3">
               <div className="flex flex-wrap items-start gap-2">

@@ -35,8 +35,6 @@ import {
   UpdateUserProfileInput,
   UserProfile,
   EditSession, EditMessage, AssetVersion, CreateEditSessionInput, CreateEditMessageInput, CreateAssetVersionInput,
-  DesignWorkflow, DesignWorkflowNode, CreateDesignWorkflowInput, CreateDesignWorkflowNodeInput,
-  UpdateDesignWorkflowInput, UpdateDesignWorkflowNodeInput,
 } from './types';
 
 type ProjectRow = {
@@ -119,35 +117,6 @@ type GenerationResultRow = {
   is_favorite: boolean;
   result_key?: string | null;
   metadata?: Record<string, unknown> | null;
-  created_at: string;
-  updated_at: string;
-};
-
-type DesignWorkflowRow = {
-  id: string;
-  user_id: string;
-  project_id: string;
-  title: string;
-  status: DesignWorkflow['status'];
-  current_node_id: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-type DesignWorkflowNodeRow = {
-  id: string;
-  workflow_id: string;
-  parent_node_id: string | null;
-  stage_key: DesignWorkflowNode['stageKey'];
-  status: DesignWorkflowNode['status'];
-  source_feature: string | null;
-  input_asset_id: string | null;
-  parent_job_id: string | null;
-  parent_result_id: string | null;
-  output_job_id: string | null;
-  output_result_id: string | null;
-  output_asset_id: string | null;
-  metadata: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 };
@@ -857,158 +826,6 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     return data ? mapImageAssetRow(data as ImageAssetRow) : null;
   }
 
-  async createDesignWorkflow(input: CreateDesignWorkflowInput): Promise<DesignWorkflow> {
-    const now = new Date().toISOString();
-    const row: DesignWorkflowRow = {
-      id: `design_workflow_${randomUUID()}`,
-      user_id: input.userId,
-      project_id: input.projectId,
-      title: input.title,
-      status: 'active',
-      current_node_id: null,
-      created_at: now,
-      updated_at: now,
-    };
-    const { data, error } = await this.client
-      .from('project_design_workflows')
-      .insert(row)
-      .select('*')
-      .single();
-    assertNoSupabaseError(error, 'creating project design workflow');
-    return mapDesignWorkflowRow(data as DesignWorkflowRow);
-  }
-
-  async getActiveDesignWorkflow(projectId: string, userId: string) {
-    const { data, error } = await this.client
-      .from('project_design_workflows')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('user_id', userId)
-      .neq('status', 'archived')
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    assertNoSupabaseError(error, 'reading active project design workflow');
-    return data ? mapDesignWorkflowRow(data as DesignWorkflowRow) : null;
-  }
-
-  async getDesignWorkflow(id: string, projectId: string, userId: string) {
-    const { data, error } = await this.client
-      .from('project_design_workflows')
-      .select('*')
-      .eq('id', id)
-      .eq('project_id', projectId)
-      .eq('user_id', userId)
-      .maybeSingle();
-    assertNoSupabaseError(error, 'reading project design workflow');
-    return data ? mapDesignWorkflowRow(data as DesignWorkflowRow) : null;
-  }
-
-  async updateDesignWorkflow(
-    id: string,
-    projectId: string,
-    userId: string,
-    input: UpdateDesignWorkflowInput,
-  ) {
-    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
-    if (input.currentNodeId !== undefined) patch.current_node_id = input.currentNodeId;
-    if (input.status !== undefined) patch.status = input.status;
-    if (input.title !== undefined) patch.title = input.title;
-    const { data, error } = await this.client
-      .from('project_design_workflows')
-      .update(patch)
-      .eq('id', id)
-      .eq('project_id', projectId)
-      .eq('user_id', userId)
-      .select('*')
-      .maybeSingle();
-    assertNoSupabaseError(error, 'updating project design workflow');
-    return data ? mapDesignWorkflowRow(data as DesignWorkflowRow) : null;
-  }
-
-  async listDesignWorkflowNodes(workflowId: string, projectId: string, userId: string) {
-    const workflow = await this.getDesignWorkflow(workflowId, projectId, userId);
-    if (!workflow) return [];
-    const { data, error } = await this.client
-      .from('project_design_workflow_nodes')
-      .select('*')
-      .eq('workflow_id', workflowId)
-      .order('created_at', { ascending: true });
-    assertNoSupabaseError(error, 'listing project design workflow nodes');
-    return ((data || []) as DesignWorkflowNodeRow[]).map(mapDesignWorkflowNodeRow);
-  }
-
-  async getDesignWorkflowNode(
-    id: string,
-    workflowId: string,
-    projectId: string,
-    userId: string,
-  ) {
-    const workflow = await this.getDesignWorkflow(workflowId, projectId, userId);
-    if (!workflow) return null;
-    const { data, error } = await this.client
-      .from('project_design_workflow_nodes')
-      .select('*')
-      .eq('id', id)
-      .eq('workflow_id', workflowId)
-      .maybeSingle();
-    assertNoSupabaseError(error, 'reading project design workflow node');
-    return data ? mapDesignWorkflowNodeRow(data as DesignWorkflowNodeRow) : null;
-  }
-
-  async createDesignWorkflowNode(input: CreateDesignWorkflowNodeInput) {
-    const now = new Date().toISOString();
-    const row: DesignWorkflowNodeRow = {
-      id: `design_workflow_node_${randomUUID()}`,
-      workflow_id: input.workflowId,
-      parent_node_id: input.parentNodeId,
-      stage_key: input.stageKey,
-      status: input.status,
-      source_feature: input.sourceFeature,
-      input_asset_id: input.inputAssetId,
-      parent_job_id: input.parentJobId,
-      parent_result_id: input.parentResultId,
-      output_job_id: input.outputJobId,
-      output_result_id: input.outputResultId,
-      output_asset_id: input.outputAssetId,
-      metadata: input.metadata,
-      created_at: now,
-      updated_at: now,
-    };
-    const { data, error } = await this.client
-      .from('project_design_workflow_nodes')
-      .insert(row)
-      .select('*')
-      .single();
-    assertNoSupabaseError(error, 'creating project design workflow node');
-    return mapDesignWorkflowNodeRow(data as DesignWorkflowNodeRow);
-  }
-
-  async updateDesignWorkflowNode(id: string, input: UpdateDesignWorkflowNodeInput) {
-    const current = await this.client
-      .from('project_design_workflow_nodes')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle();
-    assertNoSupabaseError(current.error, 'reading project design workflow node');
-    if (!current.data) return null;
-    const existing = current.data as DesignWorkflowNodeRow;
-    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
-    if (input.status !== undefined) patch.status = input.status;
-    if (input.outputJobId !== undefined) patch.output_job_id = input.outputJobId;
-    if (input.outputResultId !== undefined) patch.output_result_id = input.outputResultId;
-    if (input.outputAssetId !== undefined) patch.output_asset_id = input.outputAssetId;
-    if (input.metadata !== undefined) patch.metadata = { ...(existing.metadata || {}), ...input.metadata };
-    const { data, error } = await this.client
-      .from('project_design_workflow_nodes')
-      .update(patch)
-      .eq('id', id)
-      .select('*')
-      .maybeSingle();
-    assertNoSupabaseError(error, 'updating project design workflow node');
-    return data ? mapDesignWorkflowNodeRow(data as DesignWorkflowNodeRow) : null;
-  }
-
   async listImageAssets(userId: string, limit = 40): Promise<ImageAsset[]> {
     const { data, error } = await this.client
       .from('image_assets')
@@ -1642,39 +1459,6 @@ function mapImageAssetRow(row: ImageAssetRow): ImageAsset {
     mimeType: row.mime_type,
     size: row.size,
     createdAt: row.created_at,
-  };
-}
-
-function mapDesignWorkflowRow(row: DesignWorkflowRow): DesignWorkflow {
-  return {
-    id: row.id,
-    userId: row.user_id,
-    projectId: row.project_id,
-    title: row.title,
-    status: row.status,
-    currentNodeId: row.current_node_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function mapDesignWorkflowNodeRow(row: DesignWorkflowNodeRow): DesignWorkflowNode {
-  return {
-    id: row.id,
-    workflowId: row.workflow_id,
-    parentNodeId: row.parent_node_id,
-    stageKey: row.stage_key,
-    status: row.status,
-    sourceFeature: row.source_feature,
-    inputAssetId: row.input_asset_id,
-    parentJobId: row.parent_job_id,
-    parentResultId: row.parent_result_id,
-    outputJobId: row.output_job_id,
-    outputResultId: row.output_result_id,
-    outputAssetId: row.output_asset_id,
-    metadata: row.metadata || {},
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
   };
 }
 

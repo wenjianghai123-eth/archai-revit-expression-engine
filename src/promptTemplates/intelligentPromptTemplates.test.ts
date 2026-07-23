@@ -163,15 +163,21 @@ describe('intelligent prompt templates', () => {
       hasMask: true,
       config: {
         editMode: 'mask',
+        selectionMode: 'smart-select',
         maskSelectionMode: 'smart',
         targetObjectType: 'sofa',
         targetMaterial: 'fabric',
+        semanticAssistFromSelection: true,
       },
     });
 
-    expect(prompt).toContain('automatically detected by AI');
-    expect(prompt).toContain('Modify only the detected object region');
-    expect(prompt).toContain('Preserve the original geometry, lighting, perspective and surrounding objects');
+    expect(prompt).toContain('Material / soft furnishing replacement mode: smart-select.');
+    expect(prompt).toContain('Only modify the confirmed highlighted selection mask');
+    expect(prompt).toContain('Smart-select scope: only modify the confirmed selected local object');
+    expect(prompt).toContain('Semantic assist from selection is enabled');
+    expect(prompt).toContain('Built-in control constraints:');
+    expect(prompt).toContain('严格保持建筑结构不变');
+    expect(prompt).toContain('不保留旧目标再叠加新目标');
   });
 
   it('builds furniture material replacement prompts without floor or ground replacement bias', () => {
@@ -184,6 +190,7 @@ describe('intelligent prompt templates', () => {
         targetObjectType: 'table-chair',
         targetMaterial: 'fabric',
         editMode: 'mask',
+        selectionMode: 'smart-select',
         maskSelectionMode: 'smart',
         smartMaskConfirmed: true,
         materialDirection: 'auto',
@@ -191,8 +198,9 @@ describe('intelligent prompt templates', () => {
       },
     });
 
-    expect(prompt).toContain('Replacement target: table, chair, or furniture surfaces only');
+    expect(prompt).toContain('Selection target: confirmed selected local object / material region');
     expect(prompt).toContain('Mask has the highest spatial priority');
+    expect(prompt).not.toContain('Replacement target: table, chair, or furniture surfaces only');
     expect(prompt).not.toContain('Replacement target: floor surfaces only');
     expect(prompt).not.toContain('Paving origin');
     expect(prompt).not.toContain('floor material candidate');
@@ -204,6 +212,7 @@ describe('intelligent prompt templates', () => {
       hasMaterialReferences: true,
       hasMask: false,
       config: {
+        selectionMode: 'semantic-auto',
         replacementTarget: 'plant',
         targetObjectType: 'plant',
         targetMaterial: 'plant',
@@ -225,6 +234,7 @@ describe('intelligent prompt templates', () => {
       mode: 'material-replace',
       hasMaterialReferences: true,
       config: {
+        selectionMode: 'semantic-auto',
         replacementTarget: 'wall',
         targetObjectType: 'wall',
         targetMaterial: 'microcement',
@@ -237,6 +247,7 @@ describe('intelligent prompt templates', () => {
       mode: 'material-replace',
       hasMaterialReferences: true,
       config: {
+        selectionMode: 'semantic-auto',
         replacementTarget: 'floor',
         targetObjectType: 'floor',
         targetMaterial: 'walnut',
@@ -259,6 +270,7 @@ describe('intelligent prompt templates', () => {
       hasMaterialReferences: true,
       hasMask: false,
       config: {
+        selectionMode: 'semantic-auto',
         replacementTarget,
         targetObjectType: replacementTarget === 'furniture' ? 'table-chair' : replacementTarget,
         targetMaterial: materialByReplacementTarget[replacementTarget],
@@ -274,32 +286,39 @@ describe('intelligent prompt templates', () => {
     expect(prompt).toContain('Do not add extra objects or surfaces of the same type');
     expect(prompt).toContain('Do not place the target in a new position');
     expect(prompt).toContain('Strictly preserve every non-target area');
+    expect(prompt).toContain('Built-in control constraints:');
+    expect(prompt).toContain('严格保持建筑结构不变');
+    expect(prompt).toContain('不修改无关家具、设备、装饰、导视和远景元素');
+    expect(prompt).toContain('不保留旧目标再叠加新目标');
     expect(prompt).not.toMatch(/\binsert new\b|\bplace new\b|\badd some\b|\badd a few\b/iu);
   });
 
-  it.each(replacementTargets)('builds masked in-place replacement prompt for %s', (replacementTarget) => {
+  it('builds smart-select prompt from confirmed selection instead of target area', () => {
     const prompt = buildSmartPrompt({
       mode: 'material-replace',
       hasMaterialReferences: true,
       hasMask: true,
       config: {
-        replacementTarget,
-        targetObjectType: replacementTarget === 'furniture' ? 'table-chair' : replacementTarget,
-        targetMaterial: materialByReplacementTarget[replacementTarget],
+        selectionMode: 'smart-select',
+        replacementTarget: 'floor',
+        targetObjectType: 'floor',
+        targetMaterial: 'walnut',
         editMode: 'mask',
         editingScope: 'masked',
         replacementStrategy: 'replace-masked',
         maskSelectionMode: 'smart',
         smartMaskConfirmed: true,
+        semanticAssistFromSelection: false,
       },
     });
 
-    expect(prompt).toContain('统一替换原则：识别已有目标并原位替换。');
-    expect(prompt).toContain('Mask mode: identify only existing');
-    expect(prompt).toContain('inside the confirmed white mask and replace them in place');
+    expect(prompt).toContain('Material / soft furnishing replacement mode: smart-select.');
     expect(prompt).toContain('Mask has the highest spatial priority');
-    expect(prompt).toContain('Only pixels inside the white mask may be edited');
-    expect(prompt).toContain('Do not add extra objects or surfaces of the same type');
+    expect(prompt).toContain('Only pixels inside the confirmed white smart-selection mask may be edited');
+    expect(prompt).toContain('Do not infer a global target category');
+    expect(prompt).not.toContain('Automatic semantic mode: identify all existing');
+    expect(prompt).not.toContain('Replacement target: floor surfaces only');
+    expect(prompt).not.toContain('Semantic assist from selection is enabled');
     expect(prompt).not.toMatch(/\binsert new\b|\bplace new\b|\badd some\b|\badd a few\b/iu);
   });
 

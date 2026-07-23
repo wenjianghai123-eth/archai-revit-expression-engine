@@ -9,7 +9,6 @@ import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 import { ResultSendActions } from './workspace/SecondaryEditActions';
 import { AspectRatioImage } from './common/AspectRatioImage';
 import { GenerationImageViewer } from './common/GenerationImageViewer';
-import { ResultQualityReport } from './common/ResultQualityReport';
 import { DesignVariantComparison } from './design-variants/DesignVariantComparison';
 import { designVariantVariableDefinitions, findSimilarDesignVariantPairs, readDesignVariantDiversity, readDesignVariantVariableLabel, resolveDesignVariantMatrix } from '../utils/designVariantMatrix';
 import { normalizeStepGenerationResult, type NormalizedGenerationResult } from '../utils/normalizeGenerationResult';
@@ -437,11 +436,6 @@ export function DesignVariantsPanel({
                   </div>
                 )}
               </div>
-              {selectedResult ? (
-                <div className="border-t border-slate-100 p-3">
-                  <ResultQualityReport resultId={selectedResult.id} metadata={selectedResult.metadata} />
-                </div>
-              ) : null}
             </div>
 
             {resultOptions.length > 0 ? <DesignVariantComparison results={resultOptions} selectedIds={compareResultIds} onToggle={handleCompareToggle} /> : null}
