@@ -280,12 +280,12 @@ describe('intelligent prompt templates', () => {
       },
     });
 
-    expect(prompt).toContain('统一替换原则：识别已有目标并原位替换。');
-    expect(prompt).toContain('Automatic semantic mode: identify all existing');
-    expect(prompt).toContain('replace them in place');
-    expect(prompt).toContain('Do not add extra objects or surfaces of the same type');
-    expect(prompt).toContain('Do not place the target in a new position');
-    expect(prompt).toContain('Strictly preserve every non-target area');
+    expect(prompt).toContain('Specified-object replacement scope: current-object.');
+    expect(prompt).toContain('Use the currently selected');
+    expect(prompt).toContain('Remove the old visual appearance of the current target');
+    expect(prompt).toContain('Keep the current target silhouette, position, size');
+    expect(prompt).toContain('Do not replace other');
+    expect(prompt).toContain('in place');
     expect(prompt).toContain('Built-in control constraints:');
     expect(prompt).toContain('严格保持建筑结构不变');
     expect(prompt).toContain('不修改无关家具、设备、装饰、导视和远景元素');
@@ -320,6 +320,74 @@ describe('intelligent prompt templates', () => {
     expect(prompt).not.toContain('Replacement target: floor surfaces only');
     expect(prompt).not.toContain('Semantic assist from selection is enabled');
     expect(prompt).not.toMatch(/\binsert new\b|\bplace new\b|\badd some\b|\badd a few\b/iu);
+  });
+
+  it('builds all-scene material-category replacement prompts for wood', () => {
+    const prompt = buildSmartPrompt({
+      mode: 'material-replace',
+      hasMaterialReferences: true,
+      hasMask: false,
+      config: {
+        materialReplacementMode: 'material-category',
+        materialCategory: 'wood',
+        replacementScope: 'all-scene',
+        selectionMode: 'semantic-auto',
+        targetMaterial: 'walnut',
+      },
+    });
+
+    expect(prompt).toContain('Material category replacement mode: 同类材质替换');
+    expect(prompt).toContain('Selected MaterialCategory: wood');
+    expect(prompt).toContain('木饰面、木梁、木柜、木门、木桌、木椅');
+    expect(prompt).toContain('Automatically identify all wood / 木材 material regions in the whole source image');
+    expect(prompt).toContain('自动识别并替换原图中所有木质表面，包括木饰面、木构件、木柜、木桌、木椅等');
+    expect(prompt).toContain('只替换材质贴图、颜色、纹理、光泽和粗糙度');
+    expect(prompt).toContain('将所有识别出的wood材质区域替换为参考材质');
+    expect(prompt).toContain('Strictly preserve all non-target materials unchanged');
+    expect(prompt).toContain('物体轮廓、位置、尺寸、相机机位');
+    expect(prompt).not.toContain('Replacement target: wall surfaces only');
+    expect(prompt).not.toContain('Replacement target: floor surfaces only');
+  });
+
+  it('limits material-category replacement to same material inside the selected region', () => {
+    const prompt = buildSmartPrompt({
+      mode: 'material-replace',
+      hasMaterialReferences: true,
+      hasMask: true,
+      config: {
+        materialReplacementMode: 'material-category',
+        materialCategory: 'wood',
+        replacementScope: 'selected-region',
+        selectionMode: 'smart-select',
+        maskSelectionMode: 'smart',
+        smartMaskConfirmed: true,
+        targetMaterial: 'dark-wood',
+      },
+    });
+
+    expect(prompt).toContain('Replacement scope: selected-region / 指定区域内同类材质');
+    expect(prompt).toContain('Only inside the user-confirmed selected region');
+    expect(prompt).toContain('Within that selected region, replace only the identified wood material regions');
+    expect(prompt).toContain('Inside the selected region, non-wood materials must remain unchanged');
+    expect(prompt).toContain('Similar material outside the mask must remain unchanged');
+  });
+
+  it('builds stone material-category prompt without changing other materials', () => {
+    const prompt = buildSmartPrompt({
+      mode: 'material-replace',
+      hasMaterialReferences: true,
+      config: {
+        materialReplacementMode: 'material-category',
+        materialCategory: 'stone',
+        replacementScope: 'all-scene',
+        selectionMode: 'semantic-auto',
+        targetMaterial: 'marble',
+      },
+    });
+
+    expect(prompt).toContain('Selected MaterialCategory: stone');
+    expect(prompt).toContain('大理石、岩板、水磨石、石材墙地面、石材台面');
+    expect(prompt).toContain('Do not change material categories that do not match the selected MaterialCategory');
   });
 
   it('adds professional object insert constraints to the prompt', () => {

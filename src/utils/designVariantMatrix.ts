@@ -1,4 +1,5 @@
 import { getDesignVariantPack } from '../constants/designVariantPacks';
+import { readDesignVariantStylePresetName } from '../constants/designVariantStylePresets';
 import type {
   DesignVariantBatchCount,
   DesignVariantDiversity,
@@ -15,6 +16,7 @@ export const designVariantVariableDefinitions: Array<{ key: DesignVariantVariabl
   { key: 'furniture-style', label: '家具样式' },
   { key: 'furniture-layout', label: '家具布局' },
   { key: 'soft-decoration-richness', label: '软装丰富度' },
+  { key: 'decoration-details', label: '装饰细节' },
   { key: 'brand-character', label: '品牌气质' },
   { key: 'overall-design-style', label: '整体设计风格' },
 ];
@@ -32,15 +34,26 @@ const fallbackSeeds: Record<DesignVariantVariableKey, string[]> = {
   'furniture-style': ['简洁现代家具', '圆润柔软家具', '低矮自然家具', '精致轻奢家具', '原木休闲家具', '理性几何家具', '工业混搭家具', '典雅酒店家具'],
   'furniture-layout': ['保持原布局并优化间距', '围合式交流布局', '留白型松弛布局', '中心焦点布局', '面向采光布局', '轴线清晰布局', '灵活混合布局', '礼序对称布局'],
   'soft-decoration-richness': ['少量点缀', '适度丰富', '克制留白', '丰富精致', '自然适中', '少而有序', '个性丰富', '完整陈设'],
+  'decoration-details': ['克制艺术挂画与摆件', '柔和布艺与小型陈设', '自然陶器与枝叶点缀', '金属线条与精致饰品', '手作质感装饰与绿植', '秩序化装饰构件', '粗粝材质装置与灯具', '成组成套的展示陈设'],
   'brand-character': ['克制专业', '亲和柔软', '自然松弛', '精致高级', '健康自然', '理性稳重', '个性先锋', '典雅礼序'],
-  'overall-design-style': ['现代极简', '奶油风', '侘寂', '轻奢', '自然木质', '高级灰', '工业风', '酒店大堂风'],
+  'overall-design-style': ['现代简约', '轻奢', '现代东方', '新中式', '地中海', '日式侘寂', '工业风', '法式现代', '意式极简', '北欧自然', 'Art Deco艺术装饰', '未来科技'],
 };
 
 const styleLabels: Record<string, string> = {
-  'modern-minimal': '现代极简',
+  'modern-minimal': '现代简约',
+  'modern-oriental': '现代东方',
   'cream-style': '奶油风',
-  'wabi-sabi': '侘寂',
+  'wabi-sabi': '日式侘寂',
   'light-luxury': '轻奢',
+  'new-chinese': '新中式',
+  'japanese-wabi-sabi': '日式侘寂',
+  mediterranean: '地中海',
+  japanese: '日式侘寂',
+  'french-modern': '法式现代',
+  'italian-minimal': '意式极简',
+  'nordic-natural': '北欧自然',
+  'art-deco': 'Art Deco艺术装饰',
+  futuristic: '未来科技',
   'natural-wood': '自然木质',
   'premium-gray': '高级灰',
   industrial: '工业风',
@@ -146,7 +159,7 @@ function buildVariableValues(
   return Object.fromEntries(designVariantVariableDefinitions.map(({ key }) => {
     const previous = readOptionalString(existingValues[key]);
     if (previous) return [key, previous];
-    if (key === 'overall-design-style' && style) return [key, styleLabels[style] || style];
+    if (key === 'overall-design-style' && style) return [key, styleLabels[style] || readDesignVariantStylePresetName(style)];
     const seeds = packSeeds[key]?.length ? packSeeds[key] : fallbackSeeds[key];
     return [key, seeds[index % seeds.length]];
   })) as DesignVariantVariableValues;

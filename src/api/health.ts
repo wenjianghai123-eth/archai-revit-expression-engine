@@ -63,6 +63,7 @@ function isGenerationProvider(value: unknown): value is GenerationProvider {
     || value === 'gemini'
     || value === 'grsai-banana2'
     || value === 'grsai-nano-banana'
+    || value === 'apiyi'
     || value === 'apiyi-nano-banana2-edit';
 }
 

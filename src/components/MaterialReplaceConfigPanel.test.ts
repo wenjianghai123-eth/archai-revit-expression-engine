@@ -17,19 +17,26 @@ describe('MaterialReplaceConfigPanel', () => {
       semanticAssistFromSelection: true,
       batchCount: 1,
       materialCandidateCount: 1,
+      materialReplacementMode: 'smart-select',
+      materialReplaceMode: 'smart-select',
+      materialCategory: 'wood',
+      replacementScope: 'selected-region',
       enablePhysicalMaterialLayout: false,
     });
   });
 
-  it('renders only semantic-auto and smart-select mode controls', () => {
+  it('renders object-category, material-category, and smart-select mode controls', () => {
     const config: GenerationConfig = {
       prompt: '',
       lighting: '匹配原图',
       materialStrength: 0.8,
-      editMode: 'mask',
-      selectionMode: 'smart-select',
-      maskSelectionMode: 'smart',
-      maskWorkflowMode: 'smart',
+      editMode: 'smart-type',
+      selectionMode: 'semantic-auto',
+      materialReplacementMode: 'material-category',
+      materialReplaceMode: 'material-category',
+      materialCategory: 'wood',
+      replacementScope: 'all-scene',
+      maskWorkflowMode: 'none',
       targetMaterial: 'dark-wood',
       strength: 'balanced',
       materialPatternScale: 'medium',
@@ -47,42 +54,53 @@ describe('MaterialReplaceConfigPanel', () => {
     }));
 
     expect(html).toContain('智能材质替换');
-    expect(html).toContain('自动同类替换');
-    expect(html).toContain('智能选区');
-    expect(html).toContain('在目标对象上点击或轻刷，系统将自动扩展并识别完整区域。');
+    expect(html).toContain('指定对象替换');
+    expect(html).toContain('同类材质替换');
+    expect(html).toContain('智能选区替换');
+    expect(html).toContain('材质类别');
+    expect(html).toContain('木材');
+    expect(html).toContain('木饰面、木梁、木柜、木桌、木椅');
+    expect(html).toContain('全场景同类材质');
+    expect(html).toContain('指定区域内同类材质');
+    expect(html).toContain('当前对象');
     expect(html).not.toContain('精细涂抹');
     expect(html).not.toContain('精准涂抹');
     expect(html).not.toContain('手动精确绘制需要修改的区域。');
-    expect(html).toContain('当前区域方式');
+    expect(html).toContain('当前目标');
+    expect(html).toContain('data-testid="material-category-target"');
     expect(html).not.toContain('data-testid="semantic-auto-target-region"');
-    expect(html).toContain('根据涂抹点识别所在物体 / 区域');
-    expect(html).toContain('不需要选择“目标区域”');
     expect(html).toContain('目标材质');
     expect(html).toContain('纹理尺度');
     expect(html).toContain('铺贴方向');
     expect(html).toContain('表面光泽');
     expect(html).toContain('替换范围');
+    expect(html).toContain('变化内容');
     expect(html).toContain('人字拼');
     expect(html).toContain('材质 + 软装微调');
     expect(html).toContain('上传对应贴图');
+    expect(html).toContain('任务摘要');
     expect(html).toContain('系统已默认内置建筑结构不变、空间结构不变、构图不变和非目标区域保持不变等约束。此处只需补充说明您希望替换成什么。');
   });
 
-  it('shows target area only in semantic-auto mode', () => {
+  it('shows target object only in object-category mode', () => {
     const semanticHtml = renderToStaticMarkup(React.createElement(MaterialReplaceConfigPanel, {
       config: {
         ...DEFAULT_CONFIGS[GenerationStep.MaterialReplace],
         editMode: 'smart-type',
         selectionMode: 'semantic-auto',
+        materialReplacementMode: 'object-category',
+        materialReplaceMode: 'object-category',
+        replacementScope: 'current-object',
         maskSelectionMode: undefined,
         maskWorkflowMode: 'none',
         replacementTarget: 'furniture',
+        targetObjectCategory: 'table-chair',
         targetObjectType: 'table-chair',
       },
       onUpdateConfig: () => undefined,
     }));
     expect(semanticHtml).toContain('data-testid="semantic-auto-target-region"');
-    expect(semanticHtml).toContain('目标区域');
+    expect(semanticHtml).toContain('目标对象');
     expect(semanticHtml).toContain('桌椅');
     expect(semanticHtml).not.toContain('根据涂抹点识别所在物体 / 区域');
 
@@ -91,6 +109,9 @@ describe('MaterialReplaceConfigPanel', () => {
         ...DEFAULT_CONFIGS[GenerationStep.MaterialReplace],
         editMode: 'mask',
         selectionMode: 'smart-select',
+        materialReplacementMode: 'smart-select',
+        materialReplaceMode: 'smart-select',
+        replacementScope: 'selected-region',
         maskSelectionMode: 'smart',
         maskWorkflowMode: 'smart',
       },

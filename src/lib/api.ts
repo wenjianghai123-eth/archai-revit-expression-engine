@@ -352,25 +352,12 @@ export interface GenerationJobInput {
   projectId: string;
   mode: GenerationJob['mode'];
   step?: GenerationJob['step'];
-  provider: 'grsai-banana2' | 'apiyi-nano-banana2-edit';
   prompt: string;
   generationStep?: GenerationJob['step'];
   featureName?: string;
   config: Record<string, unknown>;
   inputAssetIds: string[];
   idempotencyKey?: string;
-}
-
-export interface AiProviderOption {
-  value: 'grsai-banana2' | 'apiyi-nano-banana2-edit';
-  label: string;
-  enabled: boolean;
-  missingConfig: string[];
-}
-
-export interface AiProvidersConfig {
-  defaultProvider: AiProviderOption['value'];
-  providers: AiProviderOption[];
 }
 
 export interface ShareLink {
@@ -901,10 +888,42 @@ export async function deletePromptTemplate(id: string): Promise<PromptTemplateRe
 
 export async function createGenerationJob(input: GenerationJobInput): Promise<GenerationJob> {
   const idempotencyKey = input.idempotencyKey || globalThis.crypto?.randomUUID?.();
-  const { idempotencyKey: _ignored, ...body } = input;
+  const requestId = idempotencyKey || globalThis.crypto?.randomUUID?.() || `generation-${Date.now()}`;
+  const {
+    idempotencyKey: _ignored,
+    provider: _provider,
+    selectedProvider: _selectedProvider,
+    model: _model,
+    api_url: _apiUrlSnake,
+    api_key: _apiKeySnake,
+    apiUrl: _apiUrl,
+    apiKey: _apiKey,
+    ...bodyWithoutClientModelSelection
+  } = input as GenerationJobInput & Record<string, unknown>;
+  const body = {
+    ...bodyWithoutClientModelSelection,
+    config: sanitizeGenerationRequestConfig(input.config),
+  };
+  const taskType = typeof body.config.taskType === 'string' ? body.config.taskType : undefined;
+  const panoramaTaskType = typeof body.config.panoramaTaskType === 'string' ? body.config.panoramaTaskType : undefined;
+  if (import.meta.env.DEV && (taskType?.startsWith('panorama-') || panoramaTaskType?.startsWith('panorama-'))) {
+    console.debug('[PanoramaQuickRender] createGenerationJob request', {
+      requestId,
+      endpoint: '/api/generation-jobs',
+      method: 'POST',
+      mode: body.mode,
+      step: body.step,
+      taskType: taskType || panoramaTaskType,
+      inputAssetCount: Array.isArray(body.inputAssetIds) ? body.inputAssetIds.length : 0,
+      referenceAssetCount: Array.isArray(body.config.panoramaReferenceAssetIds) ? body.config.panoramaReferenceAssetIds.length : 0,
+    });
+  }
   const response = await request<{ job: GenerationJob }>('/api/generation-jobs', {
     method: 'POST',
-    headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+    headers: {
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+      'X-Request-ID': requestId,
+    },
     body: JSON.stringify(body),
   });
   return response.job;
@@ -1114,8 +1133,19 @@ export async function markEditVersionExported(sessionId: string, versionId: stri
   return response.version;
 }
 
-export async function getAiProviders(init: RequestInit = {}): Promise<AiProvidersConfig> {
-  return request<AiProvidersConfig>('/api/ai-providers', init);
+function sanitizeGenerationRequestConfig(config: Record<string, unknown>): Record<string, unknown> {
+  const {
+    aiProvider: _aiProvider,
+    selectedProvider: _selectedProvider,
+    provider: _provider,
+    model: _model,
+    api_url: _apiUrlSnake,
+    api_key: _apiKeySnake,
+    apiUrl: _apiUrl,
+    apiKey: _apiKey,
+    ...safeConfig
+  } = config;
+  return safeConfig;
 }
 
 export async function convertModelAsset(id: string): Promise<ModelAssetRecord> {

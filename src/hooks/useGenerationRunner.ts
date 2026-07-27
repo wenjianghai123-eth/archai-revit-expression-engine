@@ -15,11 +15,19 @@ import {
   uploadImageAsset,
   type CreditBalance,
 } from '../lib/api';
-import { DesignVariantBatchCount, DesignVariantVariableKey, DesignVariantVariableValues, FreeReferenceReference, GenerationBatchItem, GenerationConfig, GenerationHistoryItem, GenerationJobStep, GenerationMode, GenerationProvider, GenerationResultOption, GenerationRunStateOverride, GenerationStep, ObjectFidelity, ObjectInsertCandidateStrategy, ObjectInsertDebugMode, ObjectInsertHarmonyPriority, ObjectInsertItemConfig, ObjectInsertPlacementMode, ObjectInsertPositionConstraintStrength, ObjectInsertSurface, StepState, UploadedImage, VariantStyleKey, type MaskWorkflowMode, type SelectionMode } from '../types';
+import { DesignVariantBatchCount, DesignVariantVariableKey, DesignVariantVariableValues, FreeReferenceReference, GenerationBatchItem, GenerationConfig, GenerationHistoryItem, GenerationJobStep, GenerationMode, GenerationProvider, GenerationResultOption, GenerationRunStateOverride, GenerationStep, ObjectFidelity, ObjectInsertCandidateStrategy, ObjectInsertDebugMode, ObjectInsertHarmonyPriority, ObjectInsertItemConfig, ObjectInsertPlacementMode, ObjectInsertPositionConstraintStrength, ObjectInsertSurface, StepState, UploadedImage, VariantStyleKey, type MaskWorkflowMode, type MaterialReplacementMode, type MaterialReplacementTargetScope, type SelectionMode } from '../types';
 import { getGenerationCreditCost } from '../utils/generationCredits';
 import { isGenerationJobRunningStatus, normalizeGenerationJobResult } from '../utils/generationJobResult';
 import { buildFreeReferenceControlPrompt as compileFreeReferenceControlPrompt, buildFreeReferenceTargetSize } from '../utils/freeReferenceWorkflow';
 import { designVariantVariableKeys, readDesignVariantDiversity, resolveDesignVariantMatrix } from '../utils/designVariantMatrix';
+import {
+  assignDesignVariantStylePresets,
+  designVariantQualityPreset,
+  isDesignVariantStylePresetId,
+  normalizeLegacyStyleId,
+  readDesignVariantCount,
+  readDesignVariantStylePresetName,
+} from '../constants/designVariantStylePresets';
 import { isImagePolishMaterializationMode, resolveImagePolishControls, resolveImagePolishMode, resolveImagePolishOptions } from '../constants/imagePolishPrompt';
 import { resolveMaterialReplacementMode, validateMaterialReplacePreviewInput } from '../utils/materialReplaceReadiness';
 import {
@@ -73,10 +81,7 @@ export function useGenerationRunner({
       }
       : baseState;
     const requiredCredits = getGenerationCreditCost(getGenerationRecordMode(currentStep), stateAtStart.config);
-    const selectedProvider = stateAtStart.config.aiProvider;
-    const disabledReason = !selectedProvider
-      ? '正在读取 AI 接口配置，请稍后重试。'
-      : stateAtStart.isGenerating
+    const disabledReason = stateAtStart.isGenerating
         ? '正在生成中。'
         : !stateAtStart.inputImage
           ? '请先上传图片。'
@@ -86,23 +91,11 @@ export function useGenerationRunner({
     if (import.meta.env.DEV) {
       console.debug({
         action: 'generate_clicked',
-        selectedProvider,
         currentFeature: currentStep,
         hasSourceImage: Boolean(stateAtStart.inputImage),
         promptLength: (stateAtStart.config.prompt || '').trim().length,
         disabledReason,
       });
-    }
-    if (!selectedProvider) {
-      setStepStates(prev => ({
-        ...prev,
-        [currentStep]: {
-          ...prev[currentStep],
-          generationStatus: 'error',
-          generationError: disabledReason,
-        },
-      }));
-      return;
     }
     if (hasCreditBalance && currentCreditBalance < requiredCredits) {
       setStepStates(prev => ({
@@ -185,16 +178,29 @@ export function useGenerationRunner({
     const configuredMaterialSelectionMode = stateAtStart.config.selectionMode === 'semantic-auto' || stateAtStart.config.selectionMode === 'smart-select'
       ? stateAtStart.config.selectionMode
       : null;
-    const materialSelectionModeAtStart: SelectionMode = configuredMaterialSelectionMode
+    let materialSelectionModeAtStart: SelectionMode = configuredMaterialSelectionMode
       || (stateAtStart.config.editMode !== 'mask'
         ? 'semantic-auto'
         : 'smart-select');
     const materialReplacementTargetAtStart = currentStep === GenerationStep.MaterialReplace
       ? resolveReplacementTargetFromConfig(stateAtStart.config)
       : null;
+    const materialReplaceTargetModeAtStart = currentStep === GenerationStep.MaterialReplace
+      ? readMaterialReplaceTargetMode(stateAtStart.config, materialSelectionModeAtStart)
+      : 'object-category';
+    const materialReplacementScopeAtStart = currentStep === GenerationStep.MaterialReplace
+      ? readMaterialReplacementTargetScope(stateAtStart.config, materialReplaceTargetModeAtStart, materialSelectionModeAtStart)
+      : 'current-object';
+    if (currentStep === GenerationStep.MaterialReplace) {
+      materialSelectionModeAtStart = materialReplaceTargetModeAtStart === 'smart-select' || materialReplacementScopeAtStart === 'selected-region'
+        ? 'smart-select'
+        : 'semantic-auto';
+    }
+    const materialReplacementUsesObjectTarget = currentStep === GenerationStep.MaterialReplace
+      && materialReplaceTargetModeAtStart === 'object-category';
     const materialReplacementEffectiveEditTarget = currentStep === GenerationStep.MaterialReplace
       && (stateAtStart.config.editTarget || 'general') === 'general'
-      && materialReplacementTargetAtStart
+      && (materialReplacementTargetAtStart || stateAtStart.config.materialReplacementMode || stateAtStart.config.materialReplaceMode)
         ? 'material'
         : stateAtStart.config.editTarget;
     const materialReplaceReference = stateAtStart.materialTextures[0] || stateAtStart.materialImage;
@@ -217,6 +223,10 @@ export function useGenerationRunner({
           : configuredMaterialMaskWorkflowMode
       : 'none';
     const materialReplaceMaskWorkflowActive = materialMaskWorkflowModeAtStart !== 'none';
+    const materialSelectionMaskConfirmedAtStart = materialSelectionModeAtStart !== 'smart-select'
+      || stateAtStart.config.confirmedSelectionMask === true
+      || stateAtStart.config.smartSelectionConfirmed === true
+      || stateAtStart.config.smartMaskConfirmed === true;
     const materialReplaceValidation = validateMaterialReplacePreviewInput({
       mode: resolveMaterialReplacementMode(materialReplacementEffectiveEditTarget),
       hasSourceImage: Boolean(
@@ -231,14 +241,16 @@ export function useGenerationRunner({
       hasValidMaskPixels: materialReplaceHasMaskSelection
         && (stateAtStart.maskHasVisiblePixels ?? true),
       hasTargetObject: Boolean(materialReplacementTargetAtStart),
+      materialReplacementMode: materialReplaceTargetModeAtStart,
+      materialReplaceMode: materialReplaceTargetModeAtStart,
+      materialCategory: stateAtStart.config.materialCategory,
+      replacementScope: materialReplacementScopeAtStart,
       replacementTarget: materialReplacementTargetAtStart,
       selectionMode: materialSelectionModeAtStart,
       maskWorkflowMode: materialMaskWorkflowModeAtStart,
       maskWorkflowActive: materialReplaceMaskWorkflowActive,
       smartSelectionStatus: stateAtStart.config.smartSelectionStatus,
-      maskConfirmed: materialSelectionModeAtStart !== 'smart-select'
-        || stateAtStart.config.smartSelectionConfirmed === true
-        || stateAtStart.config.smartMaskConfirmed === true,
+      maskConfirmed: materialSelectionMaskConfirmedAtStart,
       replacementPrompt: stateAtStart.config.customMaterialPrompt || stateAtStart.config.prompt || '',
       useDefaultPreset: Boolean(stateAtStart.config.targetMaterial),
       isSegmenting: stateAtStart.config.smartSelectionStatus === 'predicting' || stateAtStart.config.smartMaskIsRefining === true,
@@ -447,12 +459,31 @@ export function useGenerationRunner({
         const designVariantMatrix = currentStep === GenerationStep.DesignVariants && isDesignVariantSingleRetry
           ? resolvedDesignVariantMatrix.filter(item => item.variantIndex === designVariantRetryIndex)
           : resolvedDesignVariantMatrix.slice(0, designVariantMatrixBatchCount);
+        if (currentStep === GenerationStep.DesignVariants) {
+          const selectedPresets = assignDesignVariantStylePresets(
+            isDesignVariantSingleRetry ? 1 : readDesignVariantCount(stateAtStart.config.batchCount),
+            resolveVariantStyles(stateAtStart.config),
+          );
+          console.debug('[Variant style assignment]', {
+            variantCount: selectedPresets.length,
+            selectedStyles: selectedPresets.map(style => ({
+              id: style.id,
+              name: style.name,
+              cluster: style.cluster,
+            })),
+          });
+        }
         const objectInsertDebugMode = isObjectInsert ? readObjectInsertDebugMode(stateAtStart.config) : 'full';
         const objectInsertItems = isObjectInsert ? readObjectInsertItems(stateAtStart.config) : [];
+        const objectInsertHasPlanarGraphic = isObjectInsertPreviewFusion
+          && objectInsertItems.some(item => item.insertElementKind === 'planar-graphic' || item.elementType === 'planar-graphic');
+        const objectInsertPreviewFusionReferenceAssetIds = objectInsertHasPlanarGraphic
+          ? Array.from(new Set(objectInsertItems.flatMap(item => item.referenceAssetIds))).filter((assetId): assetId is string => Boolean(assetId))
+          : [];
         const objectInsertHasPlanarEdgeBandMask = isObjectInsertPreviewFusion
           && objectInsertItems.some(item => item.insertElementKind === 'planar-graphic' && item.aiEditableRegion === 'edge-band-only')
           && Boolean(readObjectInsertMaskAssetId(stateAtStart.config));
-        const objectInsertNeedsObject = isObjectInsertPreviewFusion ? false : objectInsertIncludesObject(objectInsertDebugMode);
+        const objectInsertNeedsObject = isObjectInsertPreviewFusion ? objectInsertHasPlanarGraphic : objectInsertIncludesObject(objectInsertDebugMode);
         const objectInsertNeedsPreview = isObjectInsertPreviewFusion ? true : objectInsertIncludesPreview(objectInsertDebugMode);
         const objectInsertNeedsMask = isObjectInsertPreviewFusion ? objectInsertHasPlanarEdgeBandMask : objectInsertIncludesMask(objectInsertDebugMode);
         const objectInsertPositionConstraintStrength = isObjectInsert ? readObjectInsertPositionConstraintStrength(stateAtStart.config) : 'high';
@@ -481,7 +512,7 @@ export function useGenerationRunner({
         const placementPreviewAssetId = isObjectInsert ? readObjectInsertPreviewAssetId(stateAtStart.config) : undefined;
         const placementMaskAssetId = isObjectInsert ? readObjectInsertMaskAssetId(stateAtStart.config) : undefined;
         const objectPlacement = isObjectInsert ? readObjectInsertPlacement(stateAtStart.config) : undefined;
-        const objectInsertInputOrder = isObjectInsert && !isObjectInsertPreviewFusion
+        const objectInsertInputOrder = isObjectInsert && (!isObjectInsertPreviewFusion || objectInsertNeedsObject)
           ? buildObjectInsertInputOrder(objectInsertItems, objectInsertNeedsObject, objectInsertNeedsPreview, objectInsertNeedsMask)
           : undefined;
         const objectInsertConfig = isObjectInsert && (objectPlacement || objectInsertItems.length > 0)
@@ -491,6 +522,7 @@ export function useGenerationRunner({
               objectItems: objectInsertItems.length > 0 ? objectInsertItems : undefined,
               globalExtraPrompt: stateAtStart.config.objectInsertExtraPrompt || stateAtStart.config.customPrompt || '',
               objectReferenceAssetId: objectInsertNeedsObject ? objectReferenceAssetId : undefined,
+              objectReferenceAssetIds: objectInsertNeedsObject ? objectInsertPreviewFusionReferenceAssetIds : undefined,
               guideAssetId: objectInsertNeedsPreview ? placementPreviewAssetId : undefined,
               previewAssetId: objectInsertNeedsPreview ? placementPreviewAssetId : undefined,
               maskAssetId: objectInsertNeedsMask ? placementMaskAssetId : undefined,
@@ -543,7 +575,7 @@ export function useGenerationRunner({
               ? 'asset-mask'
               : undefined
           : undefined;
-        const materialReplacementTarget = materialSelectionModeAtStart === 'semantic-auto'
+        const materialReplacementTarget = materialSelectionModeAtStart === 'semantic-auto' && materialReplacementUsesObjectTarget
           ? materialReplacementTargetAtStart
           : null;
         const materialReplacementEditingScope: MaterialReplacementEditingScope | undefined = currentStep === GenerationStep.MaterialReplace
@@ -558,6 +590,10 @@ export function useGenerationRunner({
               editingScope: materialReplacementEditingScope,
               replacementStrategy: materialReplacementStrategy,
               replacementTarget: materialReplacementTarget,
+              materialReplacementMode: materialReplaceTargetModeAtStart,
+              replacementScope: materialReplacementScopeAtStart,
+              confirmedSelectionMask: materialSelectionModeAtStart === 'smart-select' ? materialSelectionMaskConfirmedAtStart : undefined,
+              includeObjectTarget: materialReplacementUsesObjectTarget,
             })
           : configForRequest;
         if (isObjectInsert) {
@@ -585,6 +621,7 @@ export function useGenerationRunner({
           inputAssetIds = isObjectInsertPreviewFusion
             ? [
                 stateAtStart.inputImage.assetId,
+                ...(objectInsertNeedsObject ? objectInsertPreviewFusionReferenceAssetIds : []),
                 placementPreviewAssetId,
                 objectInsertNeedsMask ? placementMaskAssetId : undefined,
               ].filter((assetId): assetId is string => Boolean(assetId))
@@ -661,7 +698,6 @@ export function useGenerationRunner({
               mode: generationMode,
               step: generationStep,
               generationStep,
-              provider: selectedProvider,
               hasSourceImage: Boolean(stateAtStart.inputImage.assetId),
               promptRequired: false,
             });
@@ -674,13 +710,17 @@ export function useGenerationRunner({
             inputAssetIds,
             panoramaAssetId: isPanoramaQuickRender ? stateAtStart.inputImage.assetId : undefined,
             panoramaReferenceAssetIds: isPanoramaQuickRender ? panoramaReferenceAssetIds : undefined,
+            taskType: isPanoramaQuickRender ? 'panorama-generation' : undefined,
             objectInsert: isObjectInsert ? {
               debugMode: objectInsertDebugMode,
               objectReferenceAssetId,
+              objectReferenceAssetIds: objectInsertNeedsObject ? objectInsertPreviewFusionReferenceAssetIds : undefined,
               placementPreviewAssetId,
               placementMaskAssetId,
               placement: objectPlacement,
               objectItems: objectInsertItems,
+              elementType: objectInsertHasPlanarGraphic ? 'planar-graphic' : undefined,
+              hasReferenceImage: objectInsertNeedsObject ? objectInsertPreviewFusionReferenceAssetIds.length > 0 || Boolean(objectReferenceAssetId) : undefined,
               positionConstraintStrength: objectInsertPositionConstraintStrength,
               placementMode: objectInsertPlacementMode,
               placementIntent: objectInsertPlacementIntent,
@@ -724,12 +764,16 @@ export function useGenerationRunner({
           console.debug({
             event: 'generate_submit',
             feature: generationStep,
-            provider: selectedProvider,
             aspectRatio: targetSizeConfig.targetAspectRatio || configForRequest.targetAspectRatio,
-            imageSize: selectedProvider === 'apiyi-nano-banana2-edit' ? stateAtStart.config.apiyiImageSize || '2K' : undefined,
+            imageSize: stateAtStart.config.apiyiImageSize,
             inputAssetCount: inputAssetIds.length,
             materialReplacement: currentStep === GenerationStep.MaterialReplace ? {
+              materialReplacementMode: materialReplaceTargetModeAtStart,
+              materialCategory: materialReplaceTargetModeAtStart === 'material-category' ? stateAtStart.config.materialCategory : undefined,
+              replacementScope: materialReplacementScopeAtStart,
               replacementTarget: materialReplacementTarget,
+              targetObjectCategory: materialReplacementUsesObjectTarget ? stateAtStart.config.targetObjectCategory || stateAtStart.config.targetObjectType : undefined,
+              confirmedSelectionMask: materialSelectionModeAtStart === 'smart-select' ? materialSelectionMaskConfirmedAtStart : undefined,
               editingScope: materialReplacementEditingScope,
               replacementStrategy: materialReplacementStrategy,
               maskWorkflowMode: materialMaskWorkflowModeAtStart,
@@ -745,7 +789,6 @@ export function useGenerationRunner({
           step: generationStep,
           generationStep,
           featureName: isImagePolish ? '质感提升' : undefined,
-          provider: selectedProvider,
           prompt: promptForRequest,
             config: {
               ...configForSubmit,
@@ -765,11 +808,13 @@ export function useGenerationRunner({
               plantLevel: isImagePolish ? imagePolishOptions.plantLevel : undefined,
               preserveStrictness: isImagePolish ? imagePolishOptions.preserveStrictness : undefined,
               promptMode: isImagePolish ? imagePolishPromptMode : undefined,
-            qualityMode: stateAtStart.config.qualityMode || 'balanced',
+            qualityMode: currentStep === GenerationStep.DesignVariants ? 'high' : stateAtStart.config.qualityMode || 'balanced',
+            qualityPreset: currentStep === GenerationStep.DesignVariants ? designVariantQualityPreset : undefined,
+            apiyiImageSize: currentStep === GenerationStep.DesignVariants ? '4K' : isPanoramaQuickRender ? stateAtStart.config.panoramaQuality === 'standard' ? '2K' : '4K' : stateAtStart.config.apiyiImageSize,
             batchCount: isDesignVariantSingleRetry
               ? 1
-              : currentStep === GenerationStep.DesignVariants && (stateAtStart.config.batchCount === 1 || stateAtStart.config.batchCount === 2 || stateAtStart.config.batchCount === 4 || stateAtStart.config.batchCount === 8)
-              ? stateAtStart.config.batchCount
+              : currentStep === GenerationStep.DesignVariants
+              ? readDesignVariantCount(stateAtStart.config.batchCount)
               : isPlanColorize
                 ? Math.min(Math.max(planColorizeStyles.length || 1, 1), 6) as GenerationConfig['batchCount']
                 : isFloorplanMultiPlan
@@ -784,6 +829,7 @@ export function useGenerationRunner({
             variantStrategy: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.variantStrategy || 'style-matrix' : undefined,
             stylePackId: currentStep === GenerationStep.DesignVariants ? stateAtStart.config.stylePackId || 'interior-common' : undefined,
             variantStyles: currentStep === GenerationStep.DesignVariants ? resolveVariantStyles(stateAtStart.config) : undefined,
+            selectedStyleIds: currentStep === GenerationStep.DesignVariants ? resolveVariantStyles(stateAtStart.config) : undefined,
             variantNames: currentStep === GenerationStep.DesignVariants
               ? resolveVariantNames(stateAtStart.config)
               : isFloorplanMultiPlan
@@ -849,13 +895,15 @@ export function useGenerationRunner({
             panoramaReferenceTypes: isPanoramaQuickRender ? stateAtStart.config.panoramaReferenceTypes : undefined,
             panoramaReferenceMode: isPanoramaQuickRender && panoramaReferenceAssetIds.length > 0 ? 'reference_guided' : undefined,
             panoramaReferenceStrength: isPanoramaQuickRender ? stateAtStart.config.panoramaReferenceStrength || 'medium' : undefined,
-            objectReferenceAssetId: isObjectInsert && objectInsertNeedsObject && !isObjectInsertPreviewFusion ? objectReferenceAssetId : undefined,
+            taskType: isPanoramaQuickRender ? 'panorama-generation' : undefined,
+            panoramaTaskType: isPanoramaQuickRender ? 'panorama-generation' : undefined,
+            objectReferenceAssetId: isObjectInsert && objectInsertNeedsObject ? objectReferenceAssetId : undefined,
             placementGuideAssetId: isObjectInsert && objectInsertNeedsPreview ? placementPreviewAssetId : undefined,
             placementPreviewAssetId: isObjectInsert && objectInsertNeedsPreview ? placementPreviewAssetId : undefined,
             placementMaskAssetId: isObjectInsert && objectInsertNeedsMask ? placementMaskAssetId : undefined,
             objectPlacement: isObjectInsert ? objectPlacement : undefined,
             objectInsert: objectInsertConfig,
-            objectInsertInputOrder: isObjectInsertPreviewFusion ? undefined : objectInsertInputOrder,
+            objectInsertInputOrder,
             objectInsertDebugMode: isObjectInsert ? objectInsertDebugMode : undefined,
             positionConstraintStrength: isObjectInsert ? objectInsertPositionConstraintStrength : undefined,
             placementMode: isObjectInsert ? objectInsertPlacementMode : undefined,
@@ -888,8 +936,8 @@ export function useGenerationRunner({
             freeReferenceStylePresetId: isFreeReferenceImage ? stateAtStart.config.freeReferenceStylePresetId : undefined,
             freeReferenceStylePromptHint: isFreeReferenceImage ? stateAtStart.config.freeReferenceStylePromptHint : undefined,
             aspectRatio: isFreeReferenceImage ? freeReferenceTargetSizeConfig.targetAspectRatio : isImagePolish ? stateAtStart.config.aspectRatio || targetSizeConfig.targetAspectRatio : isPanoramaQuickRender ? '2:1' : currentStep === GenerationStep.ModelSnapshotRender ? targetSizeConfig.targetAspectRatio : '16:9',
-            apiyiAspectRatio: isFreeReferenceImage ? freeReferenceTargetSizeConfig.targetAspectRatio : isImagePolish ? undefined : isPanoramaQuickRender ? undefined : currentStep === GenerationStep.ModelSnapshotRender ? undefined : '16:9',
-            inputSource: currentStep === GenerationStep.ModelSnapshotRender ? stateAtStart.config.inputSource : currentStep === GenerationStep.PanoramaQuickRender ? 'panorama-capture' : undefined,
+            apiyiAspectRatio: isFreeReferenceImage ? freeReferenceTargetSizeConfig.targetAspectRatio : isImagePolish ? undefined : isPanoramaQuickRender ? '2:1' : currentStep === GenerationStep.ModelSnapshotRender ? undefined : '16:9',
+            inputSource: currentStep === GenerationStep.ModelSnapshotRender ? stateAtStart.config.inputSource : currentStep === GenerationStep.PanoramaQuickRender ? stateAtStart.config.inputSource || 'panorama-capture' : undefined,
             modelSnapshotMetadata: stateAtStart.config.modelSnapshotMetadata,
             panoramaCapture: currentStep === GenerationStep.PanoramaQuickRender ? stateAtStart.config.panoramaCapture : undefined,
             buildingType: stateAtStart.config.buildingType,
@@ -907,10 +955,20 @@ export function useGenerationRunner({
             panoramaChangeStrength: stateAtStart.config.panoramaChangeStrength,
             panoramaQuality: stateAtStart.config.panoramaQuality,
             customPrompt: isImagePolish ? '' : stateAtStart.config.customPrompt,
-            targetObjectType: currentStep === GenerationStep.MaterialReplace && materialSelectionModeAtStart === 'semantic-auto'
-              ? stateAtStart.config.targetObjectType
+            targetObjectType: currentStep === GenerationStep.MaterialReplace && materialSelectionModeAtStart === 'semantic-auto' && materialReplacementUsesObjectTarget
+              ? stateAtStart.config.targetObjectCategory || stateAtStart.config.targetObjectType
               : undefined,
-            replacementTarget: currentStep === GenerationStep.MaterialReplace ? materialReplacementTarget || undefined : undefined,
+            targetObjectCategory: currentStep === GenerationStep.MaterialReplace && materialSelectionModeAtStart === 'semantic-auto' && materialReplacementUsesObjectTarget
+              ? stateAtStart.config.targetObjectCategory || stateAtStart.config.targetObjectType
+              : undefined,
+            replacementTarget: currentStep === GenerationStep.MaterialReplace && materialReplacementUsesObjectTarget ? materialReplacementTarget || undefined : undefined,
+            materialReplacementMode: currentStep === GenerationStep.MaterialReplace ? materialReplaceTargetModeAtStart : undefined,
+            materialReplaceMode: currentStep === GenerationStep.MaterialReplace ? materialReplaceTargetModeAtStart : undefined,
+            materialCategory: currentStep === GenerationStep.MaterialReplace && materialReplaceTargetModeAtStart === 'material-category' ? stateAtStart.config.materialCategory : undefined,
+            replacementScope: currentStep === GenerationStep.MaterialReplace ? materialReplacementScopeAtStart : undefined,
+            confirmedSelectionMask: currentStep === GenerationStep.MaterialReplace && materialSelectionModeAtStart === 'smart-select'
+              ? materialSelectionMaskConfirmedAtStart
+              : undefined,
             editingScope: currentStep === GenerationStep.MaterialReplace ? materialReplacementEditingScope : undefined,
             replacementStrategy: currentStep === GenerationStep.MaterialReplace ? materialReplacementStrategy : undefined,
             maskWorkflowActive: currentStep === GenerationStep.MaterialReplace ? materialReplaceMaskWorkflowActive : undefined,
@@ -955,8 +1013,13 @@ export function useGenerationRunner({
               name: texture.name,
               url: texture.url,
               source: texture.source,
-              targetObjectType: currentStep === GenerationStep.MaterialReplace ? stateAtStart.config.targetObjectType : undefined,
-              replacementTarget: currentStep === GenerationStep.MaterialReplace ? materialReplacementTarget || undefined : undefined,
+              targetObjectType: currentStep === GenerationStep.MaterialReplace && materialReplacementUsesObjectTarget ? stateAtStart.config.targetObjectCategory || stateAtStart.config.targetObjectType : undefined,
+              targetObjectCategory: currentStep === GenerationStep.MaterialReplace && materialReplacementUsesObjectTarget ? stateAtStart.config.targetObjectCategory || stateAtStart.config.targetObjectType : undefined,
+              replacementTarget: currentStep === GenerationStep.MaterialReplace && materialReplacementUsesObjectTarget ? materialReplacementTarget || undefined : undefined,
+              materialReplacementMode: currentStep === GenerationStep.MaterialReplace ? materialReplaceTargetModeAtStart : undefined,
+              materialReplaceMode: currentStep === GenerationStep.MaterialReplace ? materialReplaceTargetModeAtStart : undefined,
+              materialCategory: currentStep === GenerationStep.MaterialReplace && materialReplaceTargetModeAtStart === 'material-category' ? stateAtStart.config.materialCategory : undefined,
+              replacementScope: currentStep === GenerationStep.MaterialReplace ? materialReplacementScopeAtStart : undefined,
             })),
             furnitureReferenceAssetIds: isImagePolish ? [] : furnitureReferenceAssetIds,
             furnitureReferenceSources: isImagePolish ? [] : stateAtStart.furnitureReferences.map(reference => ({
@@ -1537,20 +1600,6 @@ async function runFloorplanMultiPlanJobs({
   }
 
   let lastProvider: GenerationProvider | null = null;
-  const selectedProvider = stateAtStart.config.aiProvider;
-  if (!selectedProvider) {
-    const message = '正在读取 AI 接口配置，请稍后重试。';
-    setStepStates(prev => ({
-      ...prev,
-      [currentStep]: {
-        ...prev[currentStep],
-        isGenerating: false,
-        generationStatus: 'error',
-        generationError: message,
-      },
-    }));
-    return;
-  }
 
   for (const plan of plansToRun) {
     const variantFocus = readFloorplanPayloadVariantFocus(stateAtStart.config.floorplanVariantType, stateAtStart.config.floorplanVariantFocus);
@@ -1613,7 +1662,6 @@ async function runFloorplanMultiPlanJobs({
       projectId: activeProjectId,
       mode: generationMode,
       step: generationStep,
-      provider: selectedProvider,
       prompt,
       config: config as unknown as Record<string, unknown>,
       inputAssetIds: [sourceImageAssetId],
@@ -1897,7 +1945,22 @@ function formatGenerationJobError(job: Awaited<ReturnType<typeof getGenerationJo
   ].filter((item): item is string => Boolean(item));
   const message = provider?.userMessage || job.errorMessage || job.failureReason || '生成任务失败。';
   const refundMessage = job.creditRefunded ? '已退还算力点。' : '';
+  if (import.meta.env.DEV) {
+    const errorCode = provider?.providerError
+      || job.lastErrorCode
+      || (typeof (provider?.statusCode ?? provider?.httpStatus) === 'number'
+        ? `HTTP_${provider?.statusCode ?? provider?.httpStatus}`
+        : 'GENERATION_FAILED');
+    const shortMessage = message.split(/\r?\n/u).map(part => part.trim()).filter(Boolean)[0] || '生成任务失败。';
+    return [
+      `请求失败：${errorCode} - ${shortMessage}`,
+      refundMessage,
+      details.length > 0 ? details.join('\n') : '',
+    ].filter(part => part.trim().length > 0).join('\n');
+  }
+  const shouldShowDiagnostics = !provider?.userMessage;
   return [message, refundMessage, details.length > 0 ? details.join('\n') : '']
+    .filter((part, index) => index !== 2 || shouldShowDiagnostics)
     .filter(part => part.trim().length > 0)
     .join('\n');
 }
@@ -2373,6 +2436,10 @@ function buildConfigForGeneration(step: GenerationStep, config: GenerationConfig
         targetWidth: config.targetWidth || panoramaSize.width,
         targetHeight: config.targetHeight || panoramaSize.height,
         targetAspectRatio: config.targetAspectRatio || '2:1',
+        aspectRatio: '2:1',
+        apiyiAspectRatio: '2:1',
+        taskType: 'panorama-generation',
+        panoramaTaskType: 'panorama-generation',
       };
     }
     return isStandardImageOutputStep(step)
@@ -2399,6 +2466,10 @@ function buildMaterialReplaceRequestConfig(
     editingScope: MaterialReplacementEditingScope | undefined;
     replacementStrategy: GenerationConfig['replacementStrategy'];
     replacementTarget: GenerationConfig['replacementTarget'] | null;
+    materialReplacementMode: MaterialReplacementMode;
+    replacementScope: MaterialReplacementTargetScope;
+    confirmedSelectionMask: boolean | undefined;
+    includeObjectTarget: boolean;
   },
 ): GenerationConfig {
   const {
@@ -2423,10 +2494,43 @@ function buildMaterialReplaceRequestConfig(
     selectionMode: input.selectionMode,
     editingScope: input.editingScope,
     replacementStrategy: input.replacementStrategy,
-    replacementTarget: input.selectionMode === 'semantic-auto' ? input.replacementTarget || config.replacementTarget : undefined,
-    targetObjectType: input.selectionMode === 'semantic-auto' ? config.targetObjectType : undefined,
+    materialReplacementMode: input.materialReplacementMode,
+    materialReplaceMode: input.materialReplacementMode,
+    replacementScope: input.replacementScope,
+    replacementTarget: input.selectionMode === 'semantic-auto' && input.includeObjectTarget ? input.replacementTarget || config.replacementTarget : undefined,
+    targetObjectCategory: input.selectionMode === 'semantic-auto' && input.includeObjectTarget ? config.targetObjectCategory || config.targetObjectType : undefined,
+    targetObjectType: input.selectionMode === 'semantic-auto' && input.includeObjectTarget ? config.targetObjectCategory || config.targetObjectType : undefined,
+    confirmedSelectionMask: input.selectionMode === 'smart-select' ? input.confirmedSelectionMask === true : undefined,
     preserveUnmaskedArea: true,
   };
+}
+
+function readMaterialReplaceTargetMode(
+  config: GenerationConfig,
+  selectionMode: SelectionMode,
+): MaterialReplacementMode {
+  const rawConfig = config as unknown as Record<string, unknown>;
+  const mode = rawConfig.materialReplacementMode || rawConfig.materialReplaceMode;
+  if (mode === 'object-category' || mode === 'material-category' || mode === 'smart-select') return mode;
+  if (mode === 'object-target') return 'object-category';
+  if (mode === 'smart-selection') return 'smart-select';
+  return selectionMode === 'smart-select' ? 'smart-select' : 'object-category';
+}
+
+function readMaterialReplacementTargetScope(
+  config: GenerationConfig,
+  mode: MaterialReplacementMode,
+  selectionMode: SelectionMode,
+): MaterialReplacementTargetScope {
+  const rawConfig = config as unknown as Record<string, unknown>;
+  const scope = rawConfig.replacementScope;
+  if (scope === 'all-scene' || scope === 'selected-region' || scope === 'current-object') return scope;
+  if (scope === 'all_scene') return 'all-scene';
+  if (scope === 'selected_region') return 'selected-region';
+  if (scope === 'current_object') return 'current-object';
+  if (mode === 'material-category') return selectionMode === 'smart-select' ? 'selected-region' : 'all-scene';
+  if (mode === 'object-category') return rawConfig.materialReplacementMode === 'object-category' || rawConfig.materialReplaceMode === 'object-category' ? 'current-object' : 'all-scene';
+  return 'selected-region';
 }
 
 function forceSingleOutputConfig(config: GenerationConfig): GenerationConfig {
@@ -2434,36 +2538,24 @@ function forceSingleOutputConfig(config: GenerationConfig): GenerationConfig {
 }
 
 function resolveVariantStyles(config: GenerationConfig) {
-  const batchCount = config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8 ? config.batchCount : 1;
-  const defaults = batchCount === 1
-    ? ['modern-minimal']
-    : batchCount === 2
-    ? ['modern-minimal', 'natural-wood']
-    : batchCount === 8
-      ? ['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby']
-      : ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'];
-  const styles = Array.isArray(config.variantStyles) ? [...config.variantStyles] : [];
-  for (const style of defaults) {
-    if (styles.length >= batchCount) break;
-    if (!styles.includes(style as never)) styles.push(style as never);
-  }
-  return styles.slice(0, batchCount);
+  const batchCount = readDesignVariantCount(config.batchCount);
+  return assignDesignVariantStylePresets(batchCount, config.variantStyles).map(preset => preset.id);
 }
 
 function resolveVariantNames(config: GenerationConfig) {
-  const batchCount = config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8 ? config.batchCount : 1;
+  const batchCount = readDesignVariantCount(config.batchCount);
   const names = Array.isArray(config.variantNames) ? [...config.variantNames] : [];
   return Array.from({ length: batchCount }, (_, index) => names[index] || readVariantLabel(index));
 }
 
 function resolveVariantLocks(config: GenerationConfig) {
-  const allowed = ['structure', 'camera', 'walls-openings', 'fixed-furniture', 'floor-material', 'ceiling', 'main-color'];
-  const locks = Array.isArray(config.variantLocks) ? config.variantLocks : ['structure', 'camera', 'walls-openings'];
+  const allowed = ['structure', 'space-layout', 'fixed-hard-decoration', 'camera', 'walls-openings', 'fixed-furniture', 'floor-material', 'ceiling', 'main-color'];
+  const locks = Array.isArray(config.variantLocks) ? config.variantLocks : ['structure', 'space-layout', 'fixed-hard-decoration', 'camera'];
   return locks.filter((lock): lock is NonNullable<GenerationConfig['variantLocks']>[number] => allowed.includes(lock));
 }
 
 function resolveVariantStrategyNotes(config: GenerationConfig) {
-  const batchCount = config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8 ? config.batchCount : 1;
+  const batchCount = readDesignVariantCount(config.batchCount);
   const notes = Array.isArray(config.variantStrategyNotes) ? config.variantStrategyNotes : [];
   return Array.from({ length: batchCount }, (_, index) => notes[index] || '');
 }
@@ -2562,8 +2654,8 @@ function createBatchGroupId(prefix: string): string {
 }
 
 function readVariantStyle(style: string | undefined): VariantStyleKey | undefined {
-  const allowed: VariantStyleKey[] = ['modern-minimal', 'wabi-sabi', 'cream-style', 'light-luxury', 'industrial', 'commercial-showroom', 'hotel-lobby', 'office-space', 'natural-wood', 'premium-gray', 'custom'];
-  return allowed.find(item => item === style);
+  if (!style) return undefined;
+  return isDesignVariantStylePresetId(style) ? style : normalizeLegacyStyleId(style);
 }
 
 function readMetadataString(metadata: Record<string, unknown> | undefined, key: string): string | undefined {
@@ -2590,9 +2682,9 @@ function readMetadataVariableValues(metadata: Record<string, unknown> | undefine
 }
 
 function readDesignVariantMatrixBatchCount(config: GenerationConfig): DesignVariantBatchCount {
-  if (config.batchCount === 1 || config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 8) return config.batchCount;
+  if (config.batchCount === 1 || config.batchCount === 2 || config.batchCount === 4 || config.batchCount === 6 || config.batchCount === 8) return config.batchCount;
   const matrixLength = Array.isArray(config.variantMatrix) ? config.variantMatrix.length : 0;
-  return matrixLength >= 8 ? 8 : matrixLength >= 4 ? 4 : matrixLength >= 2 ? 2 : 1;
+  return matrixLength >= 8 ? 8 : matrixLength >= 6 ? 6 : matrixLength >= 4 ? 4 : matrixLength >= 2 ? 2 : 1;
 }
 
 function readMetadataNumber(metadata: Record<string, unknown> | undefined, key: string): number | undefined {
@@ -2722,20 +2814,7 @@ function readConfigStringArray(value: unknown): string[] {
 
 function readVariantStyleLabel(style: string | undefined): string | undefined {
   if (!style) return undefined;
-  const labels: Record<string, string> = {
-    'modern-minimal': '现代极简',
-    'wabi-sabi': '侘寂',
-    'cream-style': '奶油风',
-    'light-luxury': '轻奢',
-    industrial: '工业风',
-    'commercial-showroom': '商业展示风',
-    'hotel-lobby': '酒店大堂风',
-    'office-space': '办公空间风',
-    'natural-wood': '自然木质',
-    'premium-gray': '高级灰',
-    custom: '自定义',
-  };
-  return labels[style] || style;
+  return readDesignVariantStylePresetName(style);
 }
 
 function readHistoryStyle(step: GenerationStep, config: GenerationConfig): string {
@@ -2778,6 +2857,7 @@ function parseGenerationProvider(value: string): GenerationProvider | null {
     || value === 'gemini'
     || value === 'grsai-banana2'
     || value === 'grsai-nano-banana'
+    || value === 'apiyi'
     || value === 'apiyi-nano-banana2-edit') {
     return value;
   }

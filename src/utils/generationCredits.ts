@@ -38,8 +38,8 @@ export function getGenerationOutputCount(mode: GenerationMode, config: object = 
   return 1;
 }
 
-function isDesignVariantBatchCount(value: unknown): value is 1 | 2 | 4 | 8 {
-  return value === 1 || value === 2 || value === 4 || value === 8;
+function isDesignVariantBatchCount(value: unknown): value is 1 | 2 | 4 | 6 | 8 {
+  return value === 1 || value === 2 || value === 4 || value === 6 || value === 8;
 }
 
 function isPlanColorizeBatchCount(value: unknown): value is 1 | 2 | 3 | 4 | 5 | 6 {

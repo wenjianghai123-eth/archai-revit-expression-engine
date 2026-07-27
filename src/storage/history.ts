@@ -103,6 +103,7 @@ function isStoredGenerationRecord(value: unknown): value is StoredGenerationReco
       || value.provider === 'gemini'
       || value.provider === 'grsai-banana2'
       || value.provider === 'grsai-nano-banana'
+      || value.provider === 'apiyi'
       || value.provider === 'apiyi-nano-banana2-edit') &&
     typeof value.outputImage === 'string' &&
     (value.inputImageUrl === undefined || typeof value.inputImageUrl === 'string') &&

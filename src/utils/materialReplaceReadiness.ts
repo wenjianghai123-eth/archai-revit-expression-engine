@@ -1,4 +1,13 @@
-import type { GenerationConfig, MaskWorkflowMode, ReplacementTarget, SelectionMode, SmartSelectionStatus } from '../types';
+import type {
+  GenerationConfig,
+  MaskWorkflowMode,
+  MaterialCategory,
+  MaterialReplacementMode as StructuredMaterialReplacementMode,
+  MaterialReplacementTargetScope,
+  ReplacementTarget,
+  SelectionMode,
+  SmartSelectionStatus,
+} from '../types';
 
 export type MaterialReplaceSelectionMode = SelectionMode | 'smart' | 'semantic';
 export type MaterialReplacementMode = 'auto-enhance' | 'local-material' | 'local-furnishing';
@@ -28,6 +37,10 @@ export interface MaterialReplacePreviewValidationInput {
   hasMask: boolean;
   hasValidMaskPixels: boolean;
   hasTargetObject: boolean;
+  materialReplacementMode?: StructuredMaterialReplacementMode | null;
+  materialReplaceMode?: StructuredMaterialReplacementMode | null;
+  materialCategory?: MaterialCategory | null;
+  replacementScope?: MaterialReplacementTargetScope | null;
   replacementTarget?: ReplacementTarget | null;
   selectionMode: MaterialReplaceSelectionMode;
   maskWorkflowMode?: MaskWorkflowMode;
@@ -81,11 +94,19 @@ export function validateMaterialReplacePreviewInput(
   const targetLabel = input.mode === 'local-furnishing' ? '软装' : '材质';
   const hasTargetObject = input.hasTargetObject || Boolean(input.replacementTarget);
   const selectionMode = normalizeSelectionMode(input.selectionMode, input.maskWorkflowMode);
+  const targetMode = normalizeMaterialReplaceTargetMode(input.materialReplacementMode ?? input.materialReplaceMode, selectionMode);
+  const replacementScope = normalizeReplacementScope(input.replacementScope, targetMode, selectionMode);
   const smartMaskConfirmed = input.maskConfirmed
     || input.smartSelectionStatus === 'confirmed'
     || false;
 
-  if (selectionMode === 'semantic-auto' && !hasTargetObject) {
+  if (targetMode === 'material-category' && !input.materialCategory) {
+    missingItems.push('请选择材质类别');
+  }
+
+  const requiresObjectTarget = targetMode === 'object-category';
+
+  if (requiresObjectTarget && !hasTargetObject) {
     missingItems.push('请选择目标区域');
   }
   if (input.hasMask && !input.hasValidMaskPixels) {
@@ -98,7 +119,7 @@ export function validateMaterialReplacePreviewInput(
 
   if (input.isSegmenting || input.smartSelectionStatus === 'predicting') {
     missingItems.push('正在推测替换区域，请稍候');
-  } else if (selectionMode === 'smart-select') {
+  } else if (selectionMode === 'smart-select' || replacementScope === 'selected-region' || targetMode === 'smart-select') {
     if (!input.hasMask) {
       missingItems.push('请在需要替换的对象或区域上轻微涂抹一下。');
     } else if (!smartMaskConfirmed) {
@@ -122,6 +143,32 @@ export function validateMaterialReplacePreviewInput(
   }
 
   return result(missingItems);
+}
+
+function normalizeMaterialReplaceTargetMode(
+  mode: MaterialReplacePreviewValidationInput['materialReplaceMode'],
+  selectionMode: SelectionMode,
+): StructuredMaterialReplacementMode {
+  const rawMode = mode as unknown;
+  if (rawMode === 'object-category' || rawMode === 'material-category' || rawMode === 'smart-select') return rawMode;
+  if (rawMode === 'object-target') return 'object-category';
+  if (rawMode === 'smart-selection') return 'smart-select';
+  return selectionMode === 'smart-select' ? 'smart-select' : 'object-category';
+}
+
+function normalizeReplacementScope(
+  scope: MaterialReplacePreviewValidationInput['replacementScope'],
+  mode: StructuredMaterialReplacementMode,
+  selectionMode: SelectionMode,
+): MaterialReplacementTargetScope {
+  const rawScope = scope as unknown;
+  if (rawScope === 'all-scene' || rawScope === 'selected-region' || rawScope === 'current-object') return rawScope;
+  if (rawScope === 'all_scene') return 'all-scene';
+  if (rawScope === 'selected_region') return 'selected-region';
+  if (rawScope === 'current_object') return 'current-object';
+  if (mode === 'material-category') return selectionMode === 'smart-select' ? 'selected-region' : 'all-scene';
+  if (mode === 'object-category') return 'current-object';
+  return 'selected-region';
 }
 
 function normalizeSelectionMode(

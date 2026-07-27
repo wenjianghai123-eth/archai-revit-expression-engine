@@ -188,7 +188,7 @@ export function InpaintMaskPanel({
           <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{isMaterialReplace ? '材质替换工作区' : '统一局部重绘工作区'}</span>
           <p className="text-xs font-medium text-slate-500">{isSemantic ? '不指定局部区域，由系统按已选目标区域自动替换同类目标。' : isSmartMask ? '在目标对象或局部材质区域上轻刷，系统自动扩展为完整选区；确认前不会生成。' : '手动绘制需要修改的局部修饰区域，蓝色是编辑区，红色是保护区。'}</p>
         </div>
-        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{providerForStatus || 'provider 待连接'}</span>
+        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{providerForStatus ? '后端生成' : '后端待连接'}</span>
       </div>
       <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-slate-100 bg-white/60 p-2">
         {views.map(([value, label]) => <button key={value} type="button" disabled={value === 'result' && !resultImageUrl} onClick={() => setView(value)} className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-black ${view === value ? 'bg-slate-950 text-white' : 'text-slate-500 hover:bg-slate-100'} disabled:opacity-40`}>{label}</button>)}

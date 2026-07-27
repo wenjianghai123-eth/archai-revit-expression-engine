@@ -24,11 +24,11 @@ export function isGenerationStatus(value: unknown): value is GenerationRecord['s
   return value === 'succeeded' || value === 'failed';
 }
 
-export function isBatchCount(value: unknown): value is 1 | 2 | 4 | 8 {
-  return value === 1 || value === 2 || value === 4 || value === 8;
+export function isBatchCount(value: unknown): value is 1 | 2 | 4 | 6 | 8 {
+  return value === 1 || value === 2 || value === 4 || value === 6 || value === 8;
 }
 
-export function readBatchCount(value: unknown): 1 | 2 | 4 | 8 {
+export function readBatchCount(value: unknown): 1 | 2 | 4 | 6 | 8 {
   return isBatchCount(value) ? value : 1;
 }
 

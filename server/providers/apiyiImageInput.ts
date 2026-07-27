@@ -62,6 +62,9 @@ function parseDataUrl(dataUrl: string): { mimeType: string; content: Buffer } {
 
   const parameters = match[2] || '';
   const payload = match[3];
+  if (/(?:^|;)base64(?:;|$)/iu.test(parameters) && !isStrictBase64(payload)) {
+    throw createUnsupportedMimeError('Image base64 payload is invalid.');
+  }
   const content = /(?:^|;)base64(?:;|$)/iu.test(parameters)
     ? Buffer.from(payload, 'base64')
     : Buffer.from(decodeURIComponent(payload));
@@ -72,6 +75,13 @@ function parseDataUrl(dataUrl: string): { mimeType: string; content: Buffer } {
     mimeType: normalizeMimeType(match[1]),
     content,
   };
+}
+
+function isStrictBase64(value: string): boolean {
+  const normalized = value.replace(/\s/g, '');
+  if (!normalized || normalized.startsWith('data:')) return false;
+  if (!/^[a-z0-9+/]+={0,2}$/iu.test(normalized)) return false;
+  return Buffer.from(normalized, 'base64').length > 0;
 }
 
 async function readUrlOrUpload(value: string): Promise<{ mimeType: string; content: Buffer }> {
@@ -120,7 +130,7 @@ function createUnsupportedMimeError(message: string, userMessage?: string): Erro
     providerStatus?: string;
     userMessage?: string;
   };
-  error.provider = 'apiyi-nano-banana2-edit';
+  error.provider = 'apiyi';
   error.providerError = 'APIYI_UNSUPPORTED_IMAGE_MIME_TYPE';
   error.providerStatus = 'failed';
   error.userMessage = userMessage || 'API易图片编辑不支持当前图片格式，请使用 PNG 或 JPEG 后重试。';

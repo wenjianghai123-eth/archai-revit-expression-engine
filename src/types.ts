@@ -25,8 +25,8 @@ export type GenerationJobStep =
   | 'object_insert'
   | 'free_reference_image'
   | 'image_polish';
-export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana' | 'apiyi-nano-banana2-edit';
-export type SelectableImageProvider = 'grsai-banana2' | 'apiyi-nano-banana2-edit';
+export type GenerationProvider = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana' | 'apiyi' | 'apiyi-nano-banana2-edit';
+export type SelectableImageProvider = 'apiyi';
 export type AsyncGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
 export type GenerationJobPhase = 'queued' | 'prepare-input' | 'provider-request' | 'postprocess' | 'save-result' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
 export type QualityMode = 'draft' | 'fast' | 'balanced' | 'high';
@@ -47,8 +47,8 @@ export interface ImagePolishControls {
 }
 export type VariantGenerationStrategy = 'style-matrix' | 'same-style';
 export type VariantChangeScope = 'material-only' | 'soft-decoration' | 'lighting' | 'furniture-layout' | 'color-palette' | 'full-design';
-export type VariantLock = 'structure' | 'camera' | 'walls-openings' | 'fixed-furniture' | 'floor-material' | 'ceiling' | 'main-color';
-export type DesignVariantBatchCount = 1 | 2 | 4 | 8;
+export type VariantLock = 'structure' | 'space-layout' | 'fixed-hard-decoration' | 'camera' | 'walls-openings' | 'fixed-furniture' | 'floor-material' | 'ceiling' | 'main-color';
+export type DesignVariantBatchCount = 1 | 2 | 4 | 6 | 8;
 export type DesignVariantDiversity = 'low' | 'balanced' | 'high';
 export type DesignVariantVariableKey =
   | 'material-system'
@@ -57,6 +57,7 @@ export type DesignVariantVariableKey =
   | 'furniture-style'
   | 'furniture-layout'
   | 'soft-decoration-richness'
+  | 'decoration-details'
   | 'brand-character'
   | 'overall-design-style';
 export type DesignVariantVariableValues = Partial<Record<DesignVariantVariableKey, string>>;
@@ -82,21 +83,46 @@ export type FloorPlanTextLanguage = 'zh-CN' | 'en' | 'none';
 export type FloorPlanRegionType = 'living' | 'dining' | 'bedroom' | 'kitchen' | 'bathroom' | 'circulation' | 'service' | 'outdoor' | 'commercial' | 'office' | 'other';
 export type VariantStyleKey =
   | 'modern-minimal'
+  | 'modern-oriental'
   | 'wabi-sabi'
   | 'cream-style'
   | 'light-luxury'
+  | 'new-chinese'
+  | 'japanese-wabi-sabi'
   | 'industrial'
+  | 'mediterranean'
+  | 'french-modern'
+  | 'italian-minimal'
+  | 'nordic-natural'
+  | 'art-deco'
+  | 'futuristic'
   | 'commercial-showroom'
   | 'hotel-lobby'
   | 'office-space'
   | 'natural-wood'
   | 'premium-gray'
+  | 'japanese'
   | 'custom';
 export type MaterialReplaceStrength = 'subtle' | 'balanced' | 'strong';
 export type MaterialPatternScale = 'small' | 'medium' | 'large';
 export type MaterialDirection = 'auto' | 'horizontal' | 'vertical' | 'diagonal' | 'herringbone';
 export type MaterialFinish = 'matte' | 'satin' | 'glossy' | 'rough';
 export type MaterialReplaceScope = 'material-only' | 'material-and-soft-decor' | 'creative';
+export type MaterialReplacementMode = 'object-category' | 'material-category' | 'smart-select';
+/** @deprecated Use MaterialReplacementMode. */
+export type MaterialReplaceTargetMode = MaterialReplacementMode;
+export type MaterialCategory =
+  | 'wood'
+  | 'stone'
+  | 'metal'
+  | 'glass'
+  | 'fabric'
+  | 'leather'
+  | 'tile'
+  | 'paint'
+  | 'concrete'
+  | 'custom';
+export type MaterialReplacementTargetScope = 'all-scene' | 'selected-region' | 'current-object';
 export type MaterialCandidateCount = 1 | 2 | 3 | 4;
 export type MaterialTextureAlignment = 'auto' | 'surface' | 'center' | 'edge' | 'custom-origin';
 export interface MaterialTextureOrigin { x: number; y: number }
@@ -525,6 +551,10 @@ export interface GenerationConfig {
   keepOriginalMaterial?: boolean;
   preserveStructure?: boolean;
   preserveCamera?: boolean;
+  preserveArchitecture?: boolean;
+  preserveSpatialLayout?: boolean;
+  preserveHardscapeFramework?: boolean;
+  preserveFurnitureLayout?: boolean;
   preserveColor?: boolean;
   preserveMaterialAppearance?: boolean;
   keepOriginalAspectRatio?: boolean;
@@ -562,6 +592,7 @@ export interface GenerationConfig {
   variantStrategy?: VariantGenerationStrategy;
   stylePackId?: string;
   variantStyles?: VariantStyleKey[];
+  selectedStyleIds?: VariantStyleKey[];
   variantNames?: string[];
   variantChangeScope?: VariantChangeScope;
   variantLocks?: VariantLock[];
@@ -570,6 +601,7 @@ export interface GenerationConfig {
   variantMatrixVariables?: DesignVariantVariableKey[];
   variantVariableLocks?: DesignVariantVariableKey[];
   variantMatrix?: DesignVariantMatrixItem[];
+  qualityPreset?: string;
   retryVariantIndex?: number;
   targetVariantIndex?: number;
   customStyleLabel?: string;
@@ -617,6 +649,13 @@ export interface GenerationConfig {
   editingScope?: MaterialReplacementEditingScope;
   replacementStrategy?: ReplacementStrategy;
   preserveUnmaskedArea?: boolean;
+  materialReplacementMode?: MaterialReplacementMode;
+  /** @deprecated Use materialReplacementMode. */
+  materialReplaceMode?: MaterialReplaceTargetMode;
+  materialCategory?: MaterialCategory;
+  replacementScope?: MaterialReplacementTargetScope;
+  targetObjectCategory?: MaterialReplaceTargetObject;
+  confirmedSelectionMask?: boolean;
   targetObjectType?: MaterialReplaceTargetObject;
   targetMaterial?: MaterialReplaceTargetMaterial;
   materialPatternScale?: MaterialPatternScale;
@@ -699,7 +738,10 @@ export interface GenerationConfig {
   maxScaleAdjustmentRatio?: number;
   maxRotationAdjustmentDeg?: number;
   objectInsertExtraPrompt?: string;
-  inputSource?: 'model-capture' | 'uploaded-snapshot';
+  inputSource?: 'model-capture' | 'uploaded-snapshot' | 'panorama-capture' | 'uploaded-panorama';
+  taskType?: 'panorama-generation' | 'panorama-upload' | string;
+  panoramaTaskType?: 'panorama-generation' | 'panorama-upload';
+  generationKind?: 'panorama-generation' | 'preview-edit' | 'final-render' | string;
   modelSnapshotMetadata?: ModelSnapshotMetadata;
   panoramaCapture?: PanoramaCapturePayload;
   drawingType?: PlanDrawingType;

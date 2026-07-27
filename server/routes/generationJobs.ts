@@ -22,6 +22,8 @@ import {
   sanitizeLogText,
 } from '../http';
 import {
+  DEFAULT_IMAGE_GENERATION_MODEL,
+  DEFAULT_IMAGE_GENERATION_PROVIDER,
   enqueueGenerationJob,
   isGenerationWorkerDisabled,
   refundGenerationJobCredits,
@@ -74,6 +76,8 @@ export function createGenerationJobsRouter(options: GenerationJobsRouterOptions)
     try {
       const user = getRequiredCurrentUser(req);
       const idempotencyKey = readGenerationIdempotencyKey(req);
+      const requestId = readGenerationRequestId(req, idempotencyKey);
+      body.value.config.__requestId = requestId;
       if (idempotencyKey) {
         const existingJob = await getGenerationJobByIdempotencyKey(user.id, idempotencyKey);
         if (existingJob) {
@@ -85,9 +89,11 @@ export function createGenerationJobsRouter(options: GenerationJobsRouterOptions)
       if (process.env.NODE_ENV !== 'production') {
         console.debug({
           event: 'generation_job_create',
+          requestId,
           mode: body.value.mode,
           step: body.value.step,
           generationStep: body.value.config.generationStep || body.value.step,
+          taskType: body.value.config.taskType,
           provider: body.value.provider,
           inputAssetCount: body.value.inputAssetIds.length,
         });
@@ -148,6 +154,11 @@ export function createGenerationJobsRouter(options: GenerationJobsRouterOptions)
         res.status(404).json(apiError('Project not found.', 'PROJECT_NOT_FOUND'));
         return;
       }
+      console.log({
+        provider: DEFAULT_IMAGE_GENERATION_PROVIDER,
+        model: DEFAULT_IMAGE_GENERATION_MODEL,
+        taskId: job.id,
+      });
       if (process.env.NODE_ENV !== 'production') {
         console.debug({
           event: 'generation_job_created',
@@ -391,6 +402,13 @@ function readGenerationIdempotencyKey(req: Request): string | null {
     throw error;
   }
   return normalized;
+}
+
+function readGenerationRequestId(req: Request, fallback: string | null): string {
+  const value = req.headers['x-request-id'];
+  const headerValue = typeof value === 'string' ? value.trim() : '';
+  const candidate = headerValue || fallback || `generation-${Date.now()}`;
+  return sanitizeLogText(candidate).slice(0, 128);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

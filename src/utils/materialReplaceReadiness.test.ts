@@ -153,6 +153,50 @@ describe('material replacement click validation', () => {
     }).valid).toBe(true);
   });
 
+  it('allows all-scene material-category replacement without an object target', () => {
+    expect(validate({
+      materialReplacementMode: 'material-category',
+      materialCategory: 'wood',
+      replacementScope: 'all-scene',
+      selectionMode: 'semantic-auto',
+      maskWorkflowMode: 'none',
+      hasTargetObject: false,
+      replacementTarget: null,
+      hasMask: false,
+      hasValidMaskPixels: false,
+    }).valid).toBe(true);
+  });
+
+  it('requires a category for material-category replacement', () => {
+    expect(validate({
+      materialReplacementMode: 'material-category',
+      materialCategory: null,
+      replacementScope: 'all-scene',
+      selectionMode: 'semantic-auto',
+      maskWorkflowMode: 'none',
+      hasTargetObject: false,
+      replacementTarget: null,
+      hasMask: false,
+      hasValidMaskPixels: false,
+    }).missingItems).toContain('请选择材质类别');
+  });
+
+  it('requires a confirmed selection for material-category selected-region replacement', () => {
+    expect(validate({
+      materialReplacementMode: 'material-category',
+      materialCategory: 'wood',
+      replacementScope: 'selected-region',
+      selectionMode: 'smart-select',
+      maskWorkflowMode: 'smart',
+      maskWorkflowActive: true,
+      hasTargetObject: false,
+      replacementTarget: null,
+      hasMask: false,
+      hasValidMaskPixels: false,
+      maskConfirmed: false,
+    }).missingItems).toContain('请在需要替换的对象或区域上轻微涂抹一下。');
+  });
+
   it('does not require physical dimensions while the advanced control is disabled', () => {
     expect(validate({
       enablePhysicalMaterialLayout: false,

@@ -157,7 +157,6 @@ export function ImagePolishPanel({
           imagePolishControls: nextControls,
           imagePolishOptions: nextOptions,
           promptMode: isImagePolishMaterializationMode(nextMode) ? 'materialization' : nextMode === 'standard' ? 'standard_polish' : 'conservative_polish',
-          provider: config.aiProvider,
         });
       }
       onGenerate({

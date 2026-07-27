@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import sharp from 'sharp';
 import { createStoredFilename, fileStorageProvider, uploadsDir } from './fileStorage';
 import { isProviderFallbackEnabled } from './providers/fallback';
 import { createGeminiProvider } from './providers/geminiProvider';
@@ -9,15 +10,26 @@ import { createGrsaiNanoBananaProvider } from './providers/grsaiNanoBananaProvid
 import { collectApiYiImageSources, createApiYiNanoBanana2Provider } from './providers/apiyiNanoBanana2Provider';
 import { createMockGeneration, mockProvider } from './providers/mockProvider';
 import { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider, MaskMode, ProviderName, QualityMode } from './providers/types';
-import { getImageSizeFromDataUrl, isValidTargetDimension, parseImageDataUrl as parseRawImageDataUrl } from './image/imageMetadata';
+import { getImageSizeFromDataUrl, isValidTargetDimension, parseImageDataUrl as parseRawImageDataUrl, toImageDataUrl } from './image/imageMetadata';
 import { prepareImageForProvider, prepareMaskForProvider, PreparedProviderImage } from './image/prepareProviderImage';
-import { composeLocalInpaintResult, createLocalInpaintContext, cropImageDataUrlToBox, LocalInpaintContext, prepareEditableMask } from './image/localInpaint';
+import { composeLocalInpaintResult, composePlanarGraphicPreviewResult, createLocalInpaintContext, cropImageDataUrlToBox, LocalInpaintContext, prepareEditableMask, type PlanarPreviewPlacement } from './image/localInpaint';
 import { buildFloorplanTextLanguageRequirement, buildSmartPrompt, readSmartPromptUserSupplement, type SmartPromptMode } from '../src/promptTemplates/intelligentPromptTemplates';
 import { normalizeReplacementTarget, type ReplacementTarget } from '../src/utils/materialReplacementTarget';
 import { findPlanColorizeStyle, maxPlanColorizeBatchCount, planColorizeStyleOptions, resolvePlanColorizeStyles, type PlanColorizeStyleOption } from '../src/constants/planColorizeStyles';
 import { resolveFloorplanBatchCount, resolveFloorplanVariantPlans, type FloorplanVariantPlan } from '../src/constants/floorplanVariants';
 import { getGenerationOutputCount } from '../src/utils/generationCredits';
 import { buildDesignVariantMatrixPrompt, buildDesignVariantReportNarrative, readDesignVariantDiversity, resolveDesignVariantMatrix } from '../src/utils/designVariantMatrix';
+import {
+  assignDesignVariantStylePresets,
+  buildStylePresetPrompt,
+  designVariantArchitectureProtectionPrompt,
+  designVariantCinematicQualityPrompt,
+  designVariantQualityPreset,
+  readDesignVariantCount,
+  readDesignVariantStylePreset,
+  readDesignVariantStylePresetName,
+  type StylePreset,
+} from '../src/constants/designVariantStylePresets';
 import { isImagePolishMaterializationMode, resolveImagePolishPrompts } from './prompts/imagePolishPrompt';
 import {
   adjustCredits,
@@ -60,6 +72,8 @@ export interface GenerateResponseBody {
 }
 
 const maxImageMb = Number(process.env.MAX_IMAGE_MB || 10);
+export const DEFAULT_IMAGE_GENERATION_PROVIDER = 'apiyi' as const satisfies ProviderName;
+export const DEFAULT_IMAGE_GENERATION_MODEL = 'nano-banana2';
 const defaultProvider = selectProvider();
 const embeddedWorkerId = createGenerationWorkerId('embedded');
 const activeGenerationJobIds = new Set<string>();
@@ -136,34 +150,24 @@ export function getGenerationProviderName(config?: Record<string, unknown>): Pro
 }
 
 export interface SelectableGenerationProviderInfo {
-  value: 'grsai-banana2' | 'apiyi-nano-banana2-edit';
+  value: 'apiyi';
   label: string;
   enabled: boolean;
   missingConfig: string[];
 }
 
 export function getSelectableGenerationProviders(): {
-  defaultProvider: 'grsai-banana2' | 'apiyi-nano-banana2-edit';
+  defaultProvider: 'apiyi';
   providers: SelectableGenerationProviderInfo[];
 } {
-  const configuredDefault = normalizeProviderName(readRequestedProviderName());
-  const defaultProvider = configuredDefault === 'apiyi-nano-banana2-edit'
-    ? configuredDefault
-    : 'grsai-banana2';
   const apiYiEnabled = process.env.APIYI_IMAGE_PROVIDER_ENABLED !== 'false' && Boolean(process.env.APIYI_API_KEY);
 
   return {
-    defaultProvider,
+    defaultProvider: DEFAULT_IMAGE_GENERATION_PROVIDER,
     providers: [
       {
-        value: 'grsai-banana2',
-        label: 'Grsai Banana2',
-        enabled: Boolean(process.env.GRSAI_API_KEY),
-        missingConfig: process.env.GRSAI_API_KEY ? [] : ['GRSAI_API_KEY'],
-      },
-      {
-        value: 'apiyi-nano-banana2-edit',
-        label: 'API易 Nano Banana 2 图片编辑',
+        value: DEFAULT_IMAGE_GENERATION_PROVIDER,
+        label: 'API易 Nano Banana 2',
         enabled: apiYiEnabled,
         missingConfig: apiYiEnabled ? [] : [
           ...(process.env.APIYI_API_KEY ? [] : ['APIYI_API_KEY']),
@@ -177,7 +181,7 @@ export function getSelectableGenerationProviders(): {
 export function normalizeGenerationProviderName(value: unknown): ProviderName | null {
   if (typeof value !== 'string' || value.trim().length === 0) return null;
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'apiyi' || normalized === 'apiyi-nano-banana2-edit') return 'apiyi-nano-banana2-edit';
+  if (normalized === 'apiyi' || normalized === 'apiyi-nano-banana2-edit') return DEFAULT_IMAGE_GENERATION_PROVIDER;
   if (normalized === 'grsai' || normalized === 'grsai-banana2') return 'grsai-banana2';
   if (isProviderName(normalized)) return normalized;
   return null;
@@ -241,7 +245,7 @@ export function isLegacyGenerationEndpointEnabled(): boolean {
 
   if (configured === 'true') return true;
 
-  return readRequestedProviderName() === 'mock' && (process.env.AUTH_MODE || 'dev') === 'dev';
+  return false;
 }
 
 export function removeQueuedGenerationJob(_jobId: string): void {
@@ -348,7 +352,10 @@ async function processGenerationJob(job: GenerationJob, workerId: string): Promi
     if (process.env.NODE_ENV !== 'production') {
       console.debug({
         event: 'generation_provider_dispatch',
+        requestId: readGenerationJobRequestId(job),
         jobId: job.id,
+        route: 'generation-worker',
+        taskType: readGenerationJobTaskType(job),
         provider: selectedProvider.name,
         model: readProviderModelName(selectedProvider.name),
         step: job.step ?? readGenerationJobStep(job.config),
@@ -365,7 +372,7 @@ async function processGenerationJob(job: GenerationJob, workerId: string): Promi
 
     markTiming(diagnostics, 'prepareInputStartedAt', 'prepare-input');
     await updateClaimedJob({ progress: 15, diagnostics });
-    const { input, imageDiagnostics, localInpaint } = await buildGenerateInputFromJob(job);
+    const { input, imageDiagnostics, localInpaint, planarPreviewComposite } = await buildGenerateInputFromJob(job);
     diagnostics.images = imageDiagnostics;
     markTiming(diagnostics, 'prepareInputFinishedAt');
     await updateClaimedJob({ progress: 22, diagnostics });
@@ -499,6 +506,29 @@ async function processGenerationJob(job: GenerationJob, workerId: string): Promi
             : Math.max(0, Math.min(30, readConfigNumber(job.config.feather, readPositiveInteger(process.env.LOCAL_INPAINT_FEATHER_RADIUS, 2)))),
         });
       }
+      if (planarPreviewComposite) {
+        outputDataUrl = await composePlanarGraphicPreviewResult({
+          baseImageDataUrl: outputDataUrl,
+          originalImageDataUrl: planarPreviewComposite.originalImageDataUrl,
+          placementPreviewDataUrl: planarPreviewComposite.placementPreviewDataUrl,
+          placements: planarPreviewComposite.placements,
+          featherRadius: 0.45,
+        });
+        if (process.env.NODE_ENV !== 'production') {
+          console.debug('[ObjectInsert planar graphic composite]', {
+            taskId: job.id,
+            elementType: planarPreviewComposite.elementType,
+            hasReferenceImage: planarPreviewComposite.hasReferenceImage,
+            placement: planarPreviewComposite.placements[0],
+            attachmentMode: planarPreviewComposite.attachmentMode,
+            providerModel: readProviderModelName(selectedProvider.name),
+            enteredPlanarGraphicBranch: planarPreviewComposite.enteredPlanarGraphicBranch,
+          });
+        }
+      }
+      if (job.mode === 'panorama-roam-render') {
+        outputDataUrl = await normalizePanoramaOutputTo2To1(outputDataUrl, job.config);
+      }
       const savedOutputMetadata = await readImageDataUrlMetadata(outputDataUrl);
       const output = {
         ...providerOutput,
@@ -528,6 +558,7 @@ async function processGenerationJob(job: GenerationJob, workerId: string): Promi
       if (!firstOutputAsset) firstOutputAsset = outputAsset;
       outputAssetIds.push(outputAsset.id);
       const originalOutputMetadata = buildOriginalOutputMetadata(outputAsset, savedOutputMetadata, providerOriginalMetadata);
+      const designVariantStylePreset = job.mode === 'design-variants' ? readDesignVariantStylePreset(variantStyle) : null;
 
       const generationResult = await createGenerationResult({
         jobId: job.id,
@@ -548,6 +579,12 @@ async function processGenerationJob(job: GenerationJob, workerId: string): Promi
               variantName: resolveVariantName(job.config, index),
               variantLabel: readVariantLabel(readDesignVariantTargetIndex(job.config, index)),
               variantStyle,
+              stylePresetId: designVariantStylePreset?.id,
+              selectedStyleName: designVariantStylePreset?.name,
+              styleCluster: designVariantStylePreset?.cluster,
+              independentSeed: designVariantStylePreset ? readDesignVariantSeed(job, readDesignVariantTargetIndex(job.config, index), designVariantStylePreset.id) : undefined,
+              qualityPreset: designVariantQualityPreset,
+              requestedImageSize: '4K',
               stylePackId: typeof job.config.stylePackId === 'string' ? job.config.stylePackId : 'interior-common',
               designDirection: buildDesignVariantDirectionLabel(job.config, index, variantStyle),
               changeScopeLabel: readVariantChangeScopeLabel(job.config),
@@ -654,8 +691,14 @@ async function processGenerationJob(job: GenerationJob, workerId: string): Promi
                 ...(providerOutput.metadata || {}),
                 ...originalOutputMetadata,
                 mode: 'material-replace',
+                materialReplacementMode: readMaterialReplacementMode(job.config),
+                materialReplaceMode: readMaterialReplacementMode(job.config),
+                materialCategory: typeof job.config.materialCategory === 'string' ? job.config.materialCategory : undefined,
+                replacementScope: typeof job.config.replacementScope === 'string' ? job.config.replacementScope : undefined,
+                targetObjectCategory: typeof job.config.targetObjectCategory === 'string' ? job.config.targetObjectCategory : undefined,
                 targetObjectType: typeof job.config.targetObjectType === 'string' ? job.config.targetObjectType : undefined,
-                replacementTarget: readMaterialReplacementTarget(job.config),
+                replacementTarget: readMaterialReplacementMode(job.config) === 'object-category' ? readMaterialReplacementTarget(job.config) : undefined,
+                confirmedSelectionMask: readMaterialReplacementMode(job.config) === 'smart-select' ? job.config.confirmedSelectionMask === true : undefined,
                 editingScope: typeof job.config.editingScope === 'string' ? job.config.editingScope : undefined,
                 replacementStrategy: typeof job.config.replacementStrategy === 'string' ? job.config.replacementStrategy : undefined,
                 targetMaterial: typeof job.config.targetMaterial === 'string' ? job.config.targetMaterial : undefined,
@@ -834,6 +877,28 @@ async function processGenerationJob(job: GenerationJob, workerId: string): Promi
       };
     }
     const failure = classifyGenerationFailure(error);
+    if (job.mode === 'panorama-roam-render' || readGenerationJobTaskType(job).startsWith('panorama-')) {
+      const firstPrepared = diagnostics.images?.prepared?.[0];
+      console.error('[Panorama generation worker failure]', {
+        requestId: readGenerationJobRequestId(job),
+        taskId: job.id,
+        taskType: readGenerationJobTaskType(job),
+        route: 'generation-worker',
+        provider: selectedProvider.name,
+        model: readProviderModelName(selectedProvider.name),
+        hasSourceImage: job.inputAssetIds.length > 0,
+        mimeType: firstPrepared?.mime,
+        imageBytes: firstPrepared?.outputBytes,
+        upstreamStatus: providerError.statusCode,
+        errorCode: providerError.providerError || failure.code,
+        errorMessage: error instanceof Error ? error.message : message,
+        userMessage: providerError.userMessage,
+        responseBodySummary: providerError.rawSnippet,
+        errorStack: process.env.NODE_ENV !== 'production' && error instanceof Error
+          ? error.stack?.split(/\r?\n/u).slice(0, 8).join('\n')
+          : undefined,
+      });
+    }
     const terminalStatus = failure.category === 'timeout' ? 'timeout' : 'failed';
     markTiming(diagnostics, 'jobFinishedAt', terminalStatus);
     finalizeDurations(diagnostics);
@@ -977,10 +1042,21 @@ async function runWithJobDeadline<T>(job: GenerationJob, operation: () => Promis
   }
 }
 
+interface PlanarPreviewCompositeContext {
+  originalImageDataUrl: string;
+  placementPreviewDataUrl: string;
+  placements: PlanarPreviewPlacement[];
+  elementType: 'planar-graphic';
+  hasReferenceImage: boolean;
+  attachmentMode?: string;
+  enteredPlanarGraphicBranch: boolean;
+}
+
 async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   input: GenerateImageInput;
   imageDiagnostics: NonNullable<GenerationJobDiagnostics['images']>;
   localInpaint?: LocalInpaintContext;
+  planarPreviewComposite?: PlanarPreviewCompositeContext;
 }> {
   const isPanoramaReferenceMode = job.mode === 'panorama-roam-render';
   const isObjectInsertMode = isObjectInsertJob(job);
@@ -994,15 +1070,26 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   const objectInsertConfig = readObjectInsertJobConfig(job);
   const objectInsertDebugMode = isObjectInsertMode ? readObjectInsertDebugMode(job.config) : 'full';
   const objectInsertItems = isObjectInsertMode ? readObjectInsertItemsFromJob(job) : [];
+  const objectInsertHasPlanarGraphic = isObjectInsertMode
+    && (
+      objectInsertConfig.insertElementKind === 'planar-graphic'
+      || objectInsertItems.some(item => item.insertElementKind === 'planar-graphic')
+    );
   const objectInsertPreviewFusionHasEdgeBandMask = isObjectInsertPreviewFusionMode
     && objectInsertItems.some(item => item.insertElementKind === 'planar-graphic' && item.aiEditableRegion === 'edge-band-only')
     && Boolean(objectInsertConfig.maskAssetId);
-  const objectInsertNeedsObject = isObjectInsertPreviewFusionMode ? false : objectInsertIncludesObject(objectInsertDebugMode);
+  const objectInsertNeedsObject = isObjectInsertPreviewFusionMode ? objectInsertHasPlanarGraphic : objectInsertIncludesObject(objectInsertDebugMode);
   const objectInsertNeedsPreview = isObjectInsertPreviewFusionMode ? true : objectInsertIncludesPreview(objectInsertDebugMode);
   const objectInsertNeedsMask = isObjectInsertPreviewFusionMode ? objectInsertPreviewFusionHasEdgeBandMask : objectInsertIncludesMask(objectInsertDebugMode);
   const objectReferenceAssetId = isObjectInsertMode ? objectInsertConfig.objectReferenceAssetId : '';
   const placementPreviewAssetId = isObjectInsertMode ? objectInsertConfig.previewAssetId : '';
   const placementMaskAssetId = isObjectInsertMode ? objectInsertConfig.maskAssetId : '';
+  const objectInsertReferenceAssetIds = objectInsertNeedsObject
+    ? Array.from(new Set([
+        ...objectInsertItems.flatMap(item => item.referenceAssetIds),
+        objectReferenceAssetId,
+      ].filter(isNonEmptyString))).slice(0, 6)
+    : [];
   const materialReferenceAssetIds = isPanoramaReferenceMode || isObjectInsertMode || isFreeReferenceImageMode || isImagePolishMode || isFloorPlanMaterialMappingMode
     ? []
     : isContinuousEditMode
@@ -1040,6 +1127,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   const assetIds = isObjectInsertPreviewFusionMode
     ? [
         readConfigStringValue(job.config.sourceImageAssetId) || objectInsertConfig.sourceImageAssetId || job.inputAssetIds[0],
+        ...objectInsertReferenceAssetIds,
         placementPreviewAssetId || job.inputAssetIds[1],
         objectInsertNeedsMask ? placementMaskAssetId || job.inputAssetIds[2] : undefined,
       ].filter(isNonEmptyString)
@@ -1105,7 +1193,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     : isPanoramaReferenceMode ? undefined : materialReferenceImageDataUrls[0] || additionalImageDataUrls[0];
   const floorplanTextureUrls = job.mode === 'floorplan' ? await getFloorplanTextureDataUrls(job.config) : [];
   const uncroppedReferenceImageDataUrls = isObjectInsertPreviewFusionMode
-    ? additionalImageDataUrls.slice(0, 1)
+    ? additionalImageDataUrls
     : isObjectInsertMode
     ? objectInputDataUrls.slice(objectReferenceImageDataUrl ? 1 : 0)
     : isFloorPlanMaterialMappingMode
@@ -1123,6 +1211,26 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
   const referenceImageDataUrls = isFreeReferenceImageMode
     ? await applyFreeReferenceCrops(uncroppedReferenceImageDataUrls, job.config)
     : uncroppedReferenceImageDataUrls;
+  const placementPreviewDataUrl = isObjectInsertPreviewFusionMode
+    ? imageDataUrls[assetIds.findIndex(assetId => assetId === placementPreviewAssetId)]
+    : undefined;
+  const planarItems = objectInsertItems.filter(item => item.insertElementKind === 'planar-graphic');
+  const planarPreviewComposite: PlanarPreviewCompositeContext | undefined = isObjectInsertPreviewFusionMode
+    && objectInsertHasPlanarGraphic
+    && placementPreviewDataUrl
+    ? {
+        originalImageDataUrl: inputImageDataUrl,
+        placementPreviewDataUrl,
+        placements: planarItems
+          .map(item => item.placement)
+          .filter(isRecord)
+          .map(placement => placement as PlanarPreviewPlacement),
+        elementType: 'planar-graphic',
+        hasReferenceImage: objectInsertReferenceAssetIds.length > 0,
+        attachmentMode: planarItems[0]?.attachmentMode,
+        enteredPlanarGraphicBranch: true,
+      }
+    : undefined;
   if (isObjectInsertPreviewFusionMode && process.env.NODE_ENV !== 'production') {
     console.debug('[ObjectInsert] object_insert_preview_fusion provider inputs', {
       jobId: job.id,
@@ -1131,13 +1239,26 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
       objectInsertMode: 'object_insert_preview_fusion',
       inputAssetIds: assetIds,
       sourceImageAssetId: assetIds[0],
-      placementPreviewAssetId: assetIds[1],
+      placementPreviewAssetId,
       placementMaskAssetId: objectInsertNeedsMask ? placementMaskAssetId : undefined,
       providerImageCount: 1 + referenceImageDataUrls.length,
       materialImageIncluded: false,
+      referenceImagesIncluded: objectInsertReferenceAssetIds.length,
       maskImageIncluded: objectInsertNeedsMask,
       furnitureReferencesIncluded: false,
       objectItemsCount: objectInsertItems.length,
+    });
+  }
+  if (isObjectInsertMode && objectInsertHasPlanarGraphic && process.env.NODE_ENV !== 'production') {
+    const firstPlanar = planarItems[0];
+    console.debug('[ObjectInsert planar graphic worker options]', {
+      taskId: job.id,
+      elementType: firstPlanar?.insertElementKind || objectInsertConfig.insertElementKind,
+      hasReferenceImage: objectInsertReferenceAssetIds.length > 0,
+      placement: firstPlanar?.placement || objectInsertConfig.placement,
+      attachmentMode: firstPlanar?.attachmentMode,
+      providerModel: readProviderModelName(selectedJobProviderName(job)),
+      enteredPlanarGraphicBranch: objectInsertHasPlanarGraphic,
     });
   }
   const isMaskedEditMode = job.mode === 'inpaint' || job.mode === 'material-replace' || isObjectInsertMode || isContinuousEditMode;
@@ -1203,6 +1324,17 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
       usesInternalPrompt: true,
     });
   }
+  if (job.mode === 'material-replace' && process.env.NODE_ENV !== 'production') {
+    console.debug('[Material replacement worker options]', {
+      materialReplacementMode: readMaterialReplacementMode(job.config),
+      materialReplaceMode: readMaterialReplacementMode(job.config),
+      materialCategory: typeof job.config.materialCategory === 'string' ? job.config.materialCategory : undefined,
+      replacementScope: readMaterialReplacementScope(job.config),
+      targetObjectCategory: typeof job.config.targetObjectCategory === 'string' ? job.config.targetObjectCategory : undefined,
+      targetObjectType: typeof job.config.targetObjectType === 'string' ? job.config.targetObjectType : undefined,
+      confirmedSelectionMask: job.config.confirmedSelectionMask === true,
+    });
+  }
   const rawInput: GenerateImageInput = {
     mode: job.mode,
     step: isObjectInsertMode ? 'object_insert' : job.step ?? readGenerationJobStep(job.config) ?? undefined,
@@ -1218,7 +1350,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
       ? {
           ...removeInternalConfig(job.config),
           __generationJobId: job.id,
-          objectInsertInputOrder: isObjectInsertPreviewFusionMode ? undefined : buildObjectInsertInputOrder(objectInsertItems, objectInsertNeedsObject, objectInsertNeedsPreview, objectInsertNeedsMask),
+          objectInsertInputOrder: buildObjectInsertInputOrder(objectInsertItems, objectInsertNeedsObject, objectInsertNeedsPreview, objectInsertNeedsMask),
         }
       : {
           ...removeInternalConfig(job.config),
@@ -1282,9 +1414,25 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
         },
       }
     : rawInput;
-  const prepared = selectedJobProviderName(job) === 'apiyi-nano-banana2-edit'
+  const prepared = isApiYiProvider(selectedJobProviderName(job))
     ? await prepareGenerateInputForApiYi(providerInput)
     : await prepareGenerateInputForProvider(providerInput);
+  if (job.mode === 'panorama-roam-render' && process.env.NODE_ENV !== 'production') {
+    const firstPrepared = prepared.imageDiagnostics.prepared?.[0];
+    console.debug('[Panorama generation worker options]', {
+      requestId: readGenerationJobRequestId(job),
+      taskType: readGenerationJobTaskType(job),
+      route: 'generation-worker',
+      provider: selectedJobProviderName(job),
+      model: readProviderModelName(selectedJobProviderName(job)),
+      hasSourceImage: Boolean(inputImageDataUrl),
+      mimeType: firstPrepared?.mime,
+      imageBytes: firstPrepared?.outputBytes,
+      upstreamStatus: undefined,
+      errorCode: undefined,
+      errorMessage: undefined,
+    });
+  }
   prepared.imageDiagnostics.localInpaintEnabled = Boolean(localInpaint);
   if (localInpaint) {
     prepared.imageDiagnostics.maskBbox = localInpaint.bbox;
@@ -1296,7 +1444,7 @@ async function buildGenerateInputFromJob(job: GenerationJob): Promise<{
     prepared.imageDiagnostics.localEditMode = isObjectInsertMode ? 'object_insert_crop' : 'masked_crop';
     prepared.imageDiagnostics.localCropScale = isObjectInsertMode ? readObjectInsertLocalCropScale(rawInput.config) : undefined;
   }
-  return { ...prepared, localInpaint: localInpaint || undefined };
+  return { ...prepared, localInpaint: localInpaint || undefined, planarPreviewComposite };
 }
 
 async function resolveTargetDimensions(
@@ -1707,6 +1855,34 @@ async function readImageDataUrlMetadata(dataUrl: string): Promise<OriginalOutput
   };
 }
 
+async function normalizePanoramaOutputTo2To1(dataUrl: string, config: Record<string, unknown>): Promise<string> {
+  const parsed = parseRawImageDataUrl(dataUrl);
+  const metadata = await sharp(parsed.content).metadata();
+  if (!metadata.width || !metadata.height) return dataUrl;
+  const ratio = metadata.width / metadata.height;
+  const targetWidth = isValidTargetDimension(config.targetWidth) ? config.targetWidth : metadata.width >= 3000 ? 4096 : 2048;
+  const targetHeight = Math.max(64, Math.min(8192, Math.round(targetWidth / 2)));
+  if (Math.abs(ratio - 2) <= 0.01 && metadata.width === targetWidth && metadata.height === targetHeight) {
+    return dataUrl;
+  }
+  const output = await sharp(parsed.content)
+    .resize(targetWidth, targetHeight, { fit: 'cover', position: 'centre' })
+    .png()
+    .toBuffer();
+  if (process.env.NODE_ENV !== 'production') {
+    console.debug('[Panorama generation output normalized]', {
+      taskType: 'panorama-generation',
+      sourceWidth: metadata.width,
+      sourceHeight: metadata.height,
+      sourceRatio: Math.round(ratio * 1000) / 1000,
+      targetWidth,
+      targetHeight,
+      targetRatio: '2:1',
+    });
+  }
+  return toImageDataUrl(output, 'image/png');
+}
+
 function buildOriginalOutputMetadata(
   outputAsset: ImageAsset,
   saved: OriginalOutputMetadata,
@@ -1865,7 +2041,7 @@ async function generateWithFallback(input: GenerateImageInput, activeProvider: I
       }, fallbackProvider.name), startedAt);
     }
 
-    if (isMissingProviderSecretError(error) || isGrsaiProvider(activeProvider.name) || activeProvider.name === 'apiyi-nano-banana2-edit') {
+    if (isMissingProviderSecretError(error) || isGrsaiProvider(activeProvider.name) || isApiYiProvider(activeProvider.name)) {
       throw error;
     }
 
@@ -2081,6 +2257,7 @@ function isProviderName(value: unknown): value is ProviderName {
     || value === 'gemini'
     || value === 'grsai-banana2'
     || value === 'grsai-nano-banana'
+    || value === 'apiyi'
     || value === 'apiyi-nano-banana2-edit';
 }
 
@@ -2176,7 +2353,7 @@ function isValidImageDataUrl(value: unknown): value is string {
 }
 
 function selectProvider(): ImageGenerationProvider {
-  return selectProviderByName(normalizeProviderName(readRequestedProviderName()));
+  return selectProviderByName(DEFAULT_IMAGE_GENERATION_PROVIDER);
 }
 
 function selectProviderByName(requestedProvider: ProviderName): ImageGenerationProvider {
@@ -2206,7 +2383,7 @@ function selectProviderByName(requestedProvider: ProviderName): ImageGenerationP
     return createMissingSecretProvider('gemini', 'GEMINI_API_KEY');
   }
 
-  if (requestedProvider === 'apiyi-nano-banana2-edit') {
+  if (isApiYiProvider(requestedProvider)) {
     return createApiYiNanoBanana2Provider();
   }
 
@@ -2214,11 +2391,9 @@ function selectProviderByName(requestedProvider: ProviderName): ImageGenerationP
 }
 
 function resolveGenerationProviderName(config?: Record<string, unknown>, persistedProvider?: string): ProviderName {
-  const requested = config?.aiProvider ?? config?.selectedProvider ?? persistedProvider;
-  if (typeof requested === 'string' && requested.trim().length > 0) {
-    return normalizeProviderName(requested);
-  }
-  return defaultProvider.name;
+  void config;
+  void persistedProvider;
+  return DEFAULT_IMAGE_GENERATION_PROVIDER;
 }
 
 function selectedJobProviderName(job: GenerationJob): ProviderName {
@@ -2228,12 +2403,12 @@ function selectedJobProviderName(job: GenerationJob): ProviderName {
 function normalizeProviderName(value: string): ProviderName {
   const normalized = normalizeGenerationProviderName(value);
   if (normalized) return normalized;
-  return 'mock';
+  return DEFAULT_IMAGE_GENERATION_PROVIDER;
 }
 
 function readProviderModelName(provider: ProviderName): string {
-  if (provider === 'apiyi-nano-banana2-edit') {
-    return process.env.APIYI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview';
+  if (isApiYiProvider(provider)) {
+    return DEFAULT_IMAGE_GENERATION_MODEL;
   }
   if (provider === 'grsai-banana2') {
     return process.env.GRSAI_MODEL || process.env.GRSAI_BANANA2_MODEL || 'banana2';
@@ -2274,25 +2449,12 @@ function removeInternalConfig(config: Record<string, unknown>): Record<string, u
   return publicConfig;
 }
 
-const defaultVariantStylesByCount: Record<1 | 2 | 4 | 8, string[]> = {
+const defaultVariantStylesByCount: Record<1 | 2 | 4 | 6 | 8, string[]> = {
   1: ['modern-minimal'],
-  2: ['modern-minimal', 'natural-wood'],
-  4: ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'],
-  8: ['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby'],
-};
-
-const variantStylePrompts: Record<string, string> = {
-  'modern-minimal': 'Direction: modern minimalist, clean lines, calm neutral palette, refined materials.',
-  'wabi-sabi': 'Direction: wabi-sabi, natural textures, warm muted tones, imperfect handcrafted feeling.',
-  'cream-style': 'Direction: warm cream style, soft beige palette, cozy lighting, gentle materials.',
-  'light-luxury': 'Direction: modern light luxury, premium stone, metal accents, elegant lighting.',
-  industrial: 'Direction: industrial style, exposed texture, darker tones, metal and concrete.',
-  'commercial-showroom': 'Direction: commercial showroom, clear display focus, polished materials, attractive lighting.',
-  'hotel-lobby': 'Direction: hotel lobby style, premium atmosphere, layered lighting, elegant finishes.',
-  'office-space': 'Direction: modern office space, efficient layout, clean materials, professional lighting.',
-  'natural-wood': 'Direction: natural wood style, warm timber, soft daylight, relaxed atmosphere.',
-  'premium-gray': 'Direction: premium gray palette, restrained contrast, refined stone and metal.',
-  custom: 'Direction: custom design direction.',
+  2: ['modern-minimal', 'light-luxury'],
+  4: ['modern-minimal', 'light-luxury', 'modern-oriental', 'mediterranean'],
+  6: ['modern-minimal', 'light-luxury', 'modern-oriental', 'mediterranean', 'japanese-wabi-sabi', 'industrial'],
+  8: ['modern-minimal', 'light-luxury', 'modern-oriental', 'mediterranean', 'japanese-wabi-sabi', 'industrial', 'french-modern', 'futuristic'],
 };
 
 const sameStyleVariantPrompts = [
@@ -2315,24 +2477,16 @@ function resolveBatchCountForJobConfig(mode: GenerationRecord['mode'], config: R
   if (readGenerationJobStep(config) === 'free_reference_image') return outputCount === 2 || outputCount === 4 ? outputCount : 1;
   if (mode === 'material-replace') return outputCount === 2 || outputCount === 3 || outputCount === 4 ? outputCount : 1;
   if (mode === 'floorplan') return config.floorplanOutputMode === 'multi' ? resolveFloorplanBatchCount(outputCount) : 1;
-  if (mode === 'design-variants') return outputCount === 2 || outputCount === 4 || outputCount === 8 ? outputCount : 1;
+  if (mode === 'design-variants') return outputCount === 1 || outputCount === 2 || outputCount === 4 || outputCount === 6 || outputCount === 8 ? outputCount : 1;
   if (mode === 'plan-colorize') return outputCount >= 1 && outputCount <= maxPlanColorizeBatchCount ? Math.floor(outputCount) : 1;
   if (isObjectInsertConfig(config)) return readObjectInsertCandidateCount(config);
   return 1;
 }
 
 function resolveVariantStyles(config: Record<string, unknown>, batchCount: number): string[] {
-  if (batchCount === 1) return ['modern-minimal'];
-  const styles = Array.isArray(config.variantStyles)
-    ? config.variantStyles.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-    : [];
-  const defaults = batchCount === 1 || batchCount === 2 || batchCount === 4 || batchCount === 8 ? defaultVariantStylesByCount[batchCount] : defaultVariantStylesByCount[1];
-  const resolved = [...styles];
-  for (const style of defaults) {
-    if (resolved.length >= batchCount) break;
-    if (!resolved.includes(style)) resolved.push(style);
-  }
-  return resolved.slice(0, batchCount);
+  const variantCount = readDesignVariantCount(batchCount);
+  const requestedStyles = Array.isArray(config.variantStyles) ? config.variantStyles : defaultVariantStylesByCount[variantCount];
+  return assignDesignVariantStylePresets(variantCount, requestedStyles).map(preset => preset.id);
 }
 
 function resolvePlanColorizeStylesForJob(config: Record<string, unknown>, batchCount: number): PlanColorizeStyleOption[] {
@@ -2359,8 +2513,35 @@ function isProviderBatchFailure(result: ProviderBatchResult): result is Provider
 
 function readMaterialReplacementTarget(config: Record<string, unknown>): ReplacementTarget {
   return normalizeReplacementTarget(config.replacementTarget)
+    || normalizeReplacementTarget(config.targetObjectCategory)
     || normalizeReplacementTarget(config.targetObjectType)
     || 'decor';
+}
+
+function readMaterialReplacementMode(config: Record<string, unknown>): 'object-category' | 'material-category' | 'smart-select' {
+  const mode = config.materialReplacementMode || config.materialReplaceMode;
+  if (mode === 'object-category' || mode === 'material-category' || mode === 'smart-select') return mode;
+  if (mode === 'object-target') return 'object-category';
+  if (mode === 'smart-selection') return 'smart-select';
+  return config.selectionMode === 'smart-select' ? 'smart-select' : 'object-category';
+}
+
+function readMaterialCategory(config: Record<string, unknown>): string {
+  return typeof config.materialCategory === 'string' && config.materialCategory.trim()
+    ? config.materialCategory.trim()
+    : 'custom';
+}
+
+function readMaterialReplacementScope(config: Record<string, unknown>): 'all-scene' | 'selected-region' | 'current-object' {
+  if (config.replacementScope === 'all-scene' || config.replacementScope === 'selected-region' || config.replacementScope === 'current-object') return config.replacementScope;
+  if (config.replacementScope === 'all_scene') return 'all-scene';
+  if (config.replacementScope === 'selected_region') return 'selected-region';
+  if (config.replacementScope === 'current_object') return 'current-object';
+  return readMaterialReplacementMode(config) === 'smart-select'
+    ? 'selected-region'
+    : readMaterialReplacementMode(config) === 'material-category'
+      ? 'all-scene'
+      : 'current-object';
 }
 
 function buildMaterialReplacementCandidateHints(target: ReplacementTarget): string[] {
@@ -2378,6 +2559,20 @@ function buildMaterialReplacementCandidateHints(target: ReplacementTarget): stri
     `Candidate B: replace the same existing ${targetName} in place, but refine material scale, color, and integration.`,
     `Candidate C: replace the same existing ${targetName} in place, with a subtle alternative texture or style alignment on that target only.`,
     `Candidate D: replace only existing ${targetName} in place while refining roughness, reflections, and lighting integration. Do not add extra ${targetName}, do not stack new objects over old objects, and do not alter unrelated areas.`,
+  ];
+}
+
+function buildMaterialCategoryReplacementCandidateHints(category: string, scope: string): string[] {
+  const scopeText = scope === 'selected-region'
+    ? 'inside the confirmed selected region only'
+    : scope === 'current-object'
+      ? 'on the current selected object only'
+      : 'throughout the whole scene';
+  return [
+    `Candidate A: automatically identify all ${category} material regions ${scopeText} and replace only those material surfaces in place with the most conservative boundary preservation.`,
+    `Candidate B: replace the same identified ${category} material regions ${scopeText}, refining texture scale and color integration while keeping non-target materials unchanged.`,
+    `Candidate C: replace only the identified ${category} material regions ${scopeText}, with a subtle alternative texture alignment. Do not edit other material categories.`,
+    `Candidate D: replace the identified ${category} material regions ${scopeText} while refining roughness, reflections, seams, and lighting integration. Preserve architecture, silhouettes, positions, sizes, camera, and all non-target materials.`,
   ];
 }
 
@@ -2473,8 +2668,11 @@ function buildProviderInputForVariant(
   }
 
   if (job.mode === 'material-replace') {
+    const materialReplaceMode = readMaterialReplacementMode(job.config);
     const replacementTarget = readMaterialReplacementTarget(job.config);
-    const hints = buildMaterialReplacementCandidateHints(replacementTarget);
+    const hints = materialReplaceMode === 'material-category'
+      ? buildMaterialCategoryReplacementCandidateHints(readMaterialCategory(job.config), readMaterialReplacementScope(job.config))
+      : buildMaterialReplacementCandidateHints(replacementTarget);
     return {
       ...input,
       prompt: [input.prompt, hints[index] || hints[0], `This is material replacement candidate ${index + 1} of ${batchCount}. Do not change the selected material, replacement target, mask scope, or protected unmasked areas.`].join('\n'),
@@ -2485,17 +2683,26 @@ function buildProviderInputForVariant(
   if (job.mode !== 'design-variants') return input;
   const targetVariantIndex = readDesignVariantTargetIndex(job.config, index);
   const matrixItem = readDesignVariantMatrixItem(job.config, targetVariantIndex, index, batchCount);
+  const stylePreset = readDesignVariantStylePreset(variantStyle);
+  const independentSeed = readDesignVariantSeed(job, targetVariantIndex, stylePreset.id);
 
   return {
     ...input,
     prompt: buildDesignVariantPrompt(job, index, batchCount, variantStyle, input.qualityMode),
     config: {
       ...input.config,
+      apiyiImageSize: '4K',
+      qualityMode: 'high',
+      qualityPreset: designVariantQualityPreset,
       variantIndex: targetVariantIndex,
       variantCode: readVariantCode(targetVariantIndex),
       variantLabel: readVariantLabel(targetVariantIndex),
       variantName: resolveVariantName(job.config, index),
       variantStyle,
+      stylePresetId: stylePreset.id,
+      selectedStyleName: stylePreset.name,
+      styleCluster: stylePreset.cluster,
+      independentSeed,
       variantDiversity: readDesignVariantDiversity(job.config.variantDiversity),
       designVariantMatrixItem: matrixItem,
       changedVariables: matrixItem.changedVariables,
@@ -2777,9 +2984,8 @@ function readProviderMs(outputs: GenerateImageOutput[]): number | undefined {
 function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount: number, style: string, qualityMode: QualityMode = resolveQualityModeForJob(job)): string {
   const strategy = job.config.variantStrategy === 'same-style' ? 'same-style' : 'style-matrix';
   const targetVariantIndex = readDesignVariantTargetIndex(job.config, index);
-  const customStyle = style === 'custom' && typeof job.config.customStyleLabel === 'string'
-    ? `Direction: ${job.config.customStyleLabel.trim()}.`
-    : variantStylePrompts[style] || variantStylePrompts['modern-minimal'];
+  const stylePreset = readDesignVariantStylePreset(style);
+  const independentSeed = readDesignVariantSeed(job, targetVariantIndex, stylePreset.id);
   const matrixItem = readDesignVariantMatrixItem(job.config, targetVariantIndex, index, batchCount);
   const parts = [
     buildSmartPromptForJob(job, qualityMode, {
@@ -2787,11 +2993,20 @@ function buildDesignVariantPrompt(job: GenerationJob, index: number, batchCount:
         ...job.config,
         variantIndex: targetVariantIndex,
         variantName: resolveVariantName(job.config, index),
-        variantStyle: style,
+        variantStyle: stylePreset.id,
+        stylePresetId: stylePreset.id,
+        selectedStyleName: stylePreset.name,
+        styleCluster: stylePreset.cluster,
+        independentSeed,
+        apiyiImageSize: '4K',
+        qualityPreset: designVariantQualityPreset,
       },
-      variantStyle: customStyle,
+      variantStyle: buildStylePresetPrompt(stylePreset),
       variantName: resolveVariantName(job.config, index),
     }),
+    `Independent variant task. Variant index: ${targetVariantIndex}. StylePresetId: ${stylePreset.id}. Independent seed: ${independentSeed}. Do not share visual language with other variants except for the required source-image protection constraints.`,
+    designVariantArchitectureProtectionPrompt,
+    designVariantCinematicQualityPrompt,
     strategy === 'same-style' ? sameStyleVariantPrompts[index] : undefined,
     buildDesignVariantControlPrompt(job.config, index),
     buildDesignVariantMatrixPrompt(matrixItem, readDesignVariantDiversity(job.config.variantDiversity)),
@@ -2805,8 +3020,10 @@ function readDesignVariantMatrixItem(config: Record<string, unknown>, targetInde
   const highestIndex = rawMatrix.reduce((highest, item) => isRecord(item) && typeof item.variantIndex === 'number'
     ? Math.max(highest, Math.floor(item.variantIndex))
     : highest, -1);
-  const matrixCount = highestIndex >= 4 || batchCount >= 8
+  const matrixCount = highestIndex >= 6 || batchCount >= 8
     ? 8
+    : highestIndex >= 4 || batchCount >= 6
+      ? 6
     : highestIndex >= 2 || batchCount >= 4
       ? 4
       : 2;
@@ -2834,6 +3051,8 @@ const variantChangeScopeLabels: Record<string, string> = {
 
 const variantLockPromptMap: Record<string, string> = {
   structure: 'Lock structure: preserve architectural structure, room boundaries, columns, beams, stairs, and built elements.',
+  'space-layout': 'Lock spatial layout: preserve original zoning, circulation, room relationships, functional layout, and major object positions.',
+  'fixed-hard-decoration': 'Lock fixed hard decoration: preserve fixed wall/ceiling/floor constructions, built-in finishes, base hardscape, and permanent hard-decoration details.',
   camera: 'Lock camera: preserve original camera angle, perspective, crop, field of view, and composition.',
   'walls-openings': 'Lock walls and openings: preserve wall positions, doors, windows, openings, and facade apertures.',
   'fixed-furniture': 'Lock fixed furniture: preserve built-in cabinets, counters, kitchen systems, wardrobes, and fixed millwork.',
@@ -2843,8 +3062,10 @@ const variantLockPromptMap: Record<string, string> = {
 };
 
 const variantLockLabels: Record<string, string> = {
-  structure: '结构',
-  camera: '视角',
+  structure: '建筑结构',
+  'space-layout': '空间布局',
+  'fixed-hard-decoration': '固定硬装',
+  camera: '摄像机视角',
   'walls-openings': '门窗',
   'fixed-furniture': '固定家具',
   'floor-material': '地面',
@@ -2871,7 +3092,7 @@ function readVariantChangeScope(config: Record<string, unknown>): string {
 
 function readVariantLocks(config: Record<string, unknown>): string[] {
   const allowed = new Set(Object.keys(variantLockPromptMap));
-  const locks = Array.isArray(config.variantLocks) ? config.variantLocks : ['structure', 'camera', 'walls-openings'];
+  const locks = Array.isArray(config.variantLocks) ? config.variantLocks : ['structure', 'space-layout', 'fixed-hard-decoration', 'camera'];
   return locks.filter((lock): lock is string => typeof lock === 'string' && allowed.has(lock));
 }
 
@@ -2898,8 +3119,18 @@ function readVariantLocksLabel(config: Record<string, unknown>): string {
 function buildDesignVariantDirectionLabel(config: Record<string, unknown>, index: number, style: string): string {
   const customStyle = style === 'custom' && typeof config.customStyleLabel === 'string' && config.customStyleLabel.trim().length > 0
     ? config.customStyleLabel.trim()
-    : style;
+    : readDesignVariantStylePresetName(style);
   return `${resolveVariantName(config, index)} / ${customStyle}`;
+}
+
+function readDesignVariantSeed(job: GenerationJob, variantIndex: number, stylePresetId: string): number {
+  const source = `${job.id}:${variantIndex}:${stylePresetId}`;
+  let hash = 2166136261;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
 }
 
 function readDesignVariantTargetIndex(config: Record<string, unknown>, fallbackIndex: number): number {
@@ -2970,6 +3201,7 @@ function resolveVariantStartProgress(batchCount: number, index: number): number 
 function resolveVariantCompleteProgress(batchCount: number, index: number): number {
   if (batchCount === 2) return index === 0 ? 60 : 90;
   if (batchCount === 4) return [40, 60, 80, 90][index] || 90;
+  if (batchCount === 6) return [30, 45, 60, 72, 84, 92][index] || 92;
   if (batchCount === 8) return [25, 35, 45, 55, 65, 75, 84, 92][index] || 92;
   if (batchCount > 1) return Math.min(92, Math.round(30 + ((index + 1) / batchCount) * 60));
   return 80;
@@ -3363,6 +3595,22 @@ function readConfigNumber(value: unknown, fallback = 0): number {
 
 function readGenerationJobStep(config: Record<string, unknown>): GenerationJob['step'] {
   return isGenerationJobStep(config.step) ? config.step : null;
+}
+
+function readGenerationJobRequestId(job: GenerationJob): string | undefined {
+  const value = job.config.__requestId;
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim().slice(0, 128) : undefined;
+}
+
+function readGenerationJobTaskType(job: GenerationJob): string {
+  const taskType = typeof job.config.taskType === 'string' ? job.config.taskType.trim() : '';
+  if (taskType) return taskType;
+  const panoramaTaskType = typeof job.config.panoramaTaskType === 'string' ? job.config.panoramaTaskType.trim() : '';
+  if (panoramaTaskType) return panoramaTaskType;
+  if (job.mode === 'panorama-roam-render' || job.step === 'panorama_quick_render' || readGenerationJobStep(job.config) === 'panorama_quick_render') {
+    return 'panorama-generation';
+  }
+  return job.step || readGenerationJobStep(job.config) || job.mode;
 }
 
 function isGenerationJobStep(value: unknown): value is NonNullable<GenerationJob['step']> {
@@ -3922,6 +4170,10 @@ function readMaterialTextureSourceNames(config: Record<string, unknown>): string
 
 function isGrsaiProvider(name: ProviderName): boolean {
   return name === 'grsai-banana2' || name === 'grsai-nano-banana';
+}
+
+function isApiYiProvider(name: ProviderName): boolean {
+  return name === 'apiyi' || name === 'apiyi-nano-banana2-edit';
 }
 
 function readEditTarget(value: unknown): GenerateImageInput['editTarget'] {

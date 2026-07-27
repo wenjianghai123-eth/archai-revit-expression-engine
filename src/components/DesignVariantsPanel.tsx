@@ -1,16 +1,23 @@
 import { Download, FileText, Heart, ImagePlus, LayoutGrid, Printer, RefreshCcw, Sparkles, Star, Trash2 } from 'lucide-react';
-import { type ReactNode, useMemo, useState } from 'react';
-import { designVariantPacks, getDesignVariantPack } from '../constants/designVariantPacks';
-import { DesignVariantBatchCount, DesignVariantDiversity, DesignVariantMatrixItem, DesignVariantVariableKey, GenerationConfig, GenerationResultOption, GenerationStep, ResultSendTargetStep, SecondaryEditAction, StepState, UploadedImage, VariantChangeScope, VariantLock, VariantStyleKey } from '../types';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { DesignVariantBatchCount, DesignVariantMatrixItem, DesignVariantVariableKey, GenerationConfig, GenerationResultOption, GenerationStep, ResultSendTargetStep, SecondaryEditAction, StepState, UploadedImage, VariantLock, VariantStyleKey } from '../types';
+import {
+  assignDesignVariantStylePresets,
+  designVariantCounts,
+  designVariantQualityPreset,
+  designVariantStylePresets,
+  readDesignVariantCount,
+  readDesignVariantStylePresetName,
+  type StylePreset,
+} from '../constants/designVariantStylePresets';
 import { buildResultImageFilename, downloadAsset, downloadFallbackMessage } from '../utils/downloadAsset';
 import { getOriginalResultAssetId, getOriginalResultImageUrl } from '../utils/resultImage';
 import { PromptVoiceAssistant } from './PromptVoiceAssistant';
-import { SmartPromptAssistant } from './workspace/SmartPromptAssistant';
 import { ResultSendActions } from './workspace/SecondaryEditActions';
 import { AspectRatioImage } from './common/AspectRatioImage';
 import { GenerationImageViewer } from './common/GenerationImageViewer';
 import { DesignVariantComparison } from './design-variants/DesignVariantComparison';
-import { designVariantVariableDefinitions, findSimilarDesignVariantPairs, readDesignVariantDiversity, readDesignVariantVariableLabel, resolveDesignVariantMatrix } from '../utils/designVariantMatrix';
+import { designVariantVariableDefinitions, readDesignVariantVariableLabel, resolveDesignVariantMatrix } from '../utils/designVariantMatrix';
 import { normalizeStepGenerationResult, type NormalizedGenerationResult } from '../utils/normalizeGenerationResult';
 import { readAssetImageUrl } from '../utils/assetUrl';
 import { downloadImageFile } from '../utils/downloadImageFile';
@@ -41,26 +48,22 @@ interface DesignVariantsPanelProps {
   onReset?: () => void;
 }
 
-export const variantStyleOptions: Array<{ key: VariantStyleKey; label: string }> = [
-  { key: 'modern-minimal', label: '现代极简' },
-  { key: 'wabi-sabi', label: '侘寂' },
-  { key: 'cream-style', label: '奶油风' },
-  { key: 'light-luxury', label: '轻奢' },
-  { key: 'industrial', label: '工业风' },
-  { key: 'commercial-showroom', label: '商业展示风' },
-  { key: 'hotel-lobby', label: '酒店大堂风' },
-  { key: 'office-space', label: '办公空间风' },
-  { key: 'natural-wood', label: '自然木质' },
-  { key: 'premium-gray', label: '高级灰' },
-  { key: 'custom', label: '自定义' },
-];
-
 const styleDescriptionByKey: Record<string, string> = {
   'modern-minimal': '以简洁线条、克制色彩和精致材质为主，强调空间秩序与高级感。',
+  'modern-oriental': '现代空间秩序结合东方含蓄气质，强调轴线、木质、屏风感和克制装饰。',
   'cream-style': '采用柔和米色系与温暖材质，营造舒适、亲和的空间氛围。',
   'wabi-sabi': '强调自然肌理、低饱和色彩和朴素质感，呈现安静松弛的空间气质。',
   'light-luxury': '通过石材、金属和层次灯光提升精致度，形成更具品质感的视觉表达。',
+  'new-chinese': '以东方秩序、木质格栅、温润石材和克制装饰建立新中式空间气质。',
+  'japanese-wabi-sabi': '安静、自然、克制的日式侘寂空间，强调留白、原木和时间感。',
   industrial: '保留粗粝肌理、金属和混凝土质感，强化空间个性与展示张力。',
+  mediterranean: '以浅色墙面、自然石材、蓝白或陶土色调和放松光感营造地中海氛围。',
+  japanese: '强调原木、留白、自然光与低饱和色调，形成安静克制的日式空间。',
+  'french-modern': '现代克制的法式优雅，强调浅色、精致线条、软装比例和温柔光感。',
+  'italian-minimal': '高端、克制、材料比例精准的意式极简空间，强调大面材质和低调奢华。',
+  'nordic-natural': '明亮、温暖、自然舒适的北欧空间，强调浅木、织物和柔和日光。',
+  'art-deco': '几何秩序、精致材质和装饰艺术感结合的高辨识度方案。',
+  futuristic: '干净、理性、带科技感的未来空间表达，强调发光界面、流线和高性能材料。',
   'commercial-showroom': '突出展示焦点、精致灯光和清晰动线，适合商业陈列与品牌表达。',
   'hotel-lobby': '强调高级氛围、层次灯光和优雅饰面，适合公区和接待空间。',
   'office-space': '以高效布局、干净材料和专业光感为主，适合办公与企业空间。',
@@ -69,31 +72,27 @@ const styleDescriptionByKey: Record<string, string> = {
   custom: '根据自定义说明形成差异化方案方向。',
 };
 
-const defaultStylesByCount: Record<DesignVariantBatchCount, VariantStyleKey[]> = {
-  1: ['modern-minimal'],
-  2: ['modern-minimal', 'natural-wood'],
-  4: ['modern-minimal', 'cream-style', 'light-luxury', 'natural-wood'],
-  8: ['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby'],
-};
-
-const variantChangeScopeOptions: Array<{ value: VariantChangeScope; label: string }> = [
-  { value: 'material-only', label: '只变材质' },
-  { value: 'soft-decoration', label: '只变软装' },
-  { value: 'lighting', label: '只变灯光' },
-  { value: 'furniture-layout', label: '调整家具布局' },
-  { value: 'color-palette', label: '调整色彩体系' },
-  { value: 'full-design', label: '整体方案' },
+const variantAllowedChangeOptions: Array<{ key: DesignVariantVariableKey; label: string }> = [
+  { key: 'material-system', label: '材质' },
+  { key: 'color-system', label: '色彩' },
+  { key: 'lighting-atmosphere', label: '灯光' },
+  { key: 'soft-decoration-richness', label: '软装' },
+  { key: 'decoration-details', label: '装饰' },
 ];
 
 const variantLockOptions: Array<{ value: VariantLock; label: string }> = [
-  { value: 'structure', label: '锁定结构' },
-  { value: 'camera', label: '锁定视角' },
+  { value: 'structure', label: '建筑结构' },
+  { value: 'space-layout', label: '空间布局' },
+  { value: 'fixed-hard-decoration', label: '固定硬装' },
+  { value: 'camera', label: '摄像机视角' },
   { value: 'walls-openings', label: '锁定门窗' },
   { value: 'fixed-furniture', label: '锁定固定家具' },
   { value: 'floor-material', label: '锁定地面' },
   { value: 'ceiling', label: '锁定天花' },
   { value: 'main-color', label: '锁定主色调' },
 ];
+
+const strictKeepOptions = variantLockOptions.slice(0, 4);
 
 export function DesignVariantsPanel({
   state,
@@ -123,18 +122,13 @@ export function DesignVariantsPanel({
   const [isDownloadingAll, setIsDownloadingAll] = useState(false);
   const [downloadAllMessage, setDownloadAllMessage] = useState<string | null>(null);
   const batchCount = readBatchCount(state.config.batchCount);
-  const variantStrategy = state.config.variantStrategy || 'style-matrix';
-  const stylePackId = state.config.stylePackId || 'interior-common';
-  const selectedStyles = resolveSelectedStyles(state.config, batchCount);
+  const selectedStylePresets = useMemo(() => assignDesignVariantStylePresets(batchCount, state.config.variantStyles), [batchCount, state.config.variantStyles]);
+  const selectedStyles = useMemo(() => selectedStylePresets.map(preset => preset.id), [selectedStylePresets]);
   const variantNames = resolveVariantNames(state.config, batchCount);
-  const variantChangeScope = readVariantChangeScope(state.config.variantChangeScope);
   const variantLocks = resolveVariantLocks(state.config.variantLocks);
   const variantStrategyNotes = resolveVariantStrategyNotes(state.config, batchCount);
-  const variantDiversity = readDesignVariantDiversity(state.config.variantDiversity);
+  const activeMatrixVariables = resolveAllowedChanges(state.config.variantMatrixVariables);
   const variantMatrix = useMemo(() => resolveDesignVariantMatrix(state.config, batchCount), [batchCount, state.config]);
-  const activeMatrixVariables = state.config.variantMatrixVariables || designVariantVariableDefinitions.map(item => item.key);
-  const lockedMatrixVariables = state.config.variantVariableLocks || [];
-  const similarPairs = useMemo(() => findSimilarDesignVariantPairs(variantMatrix), [variantMatrix]);
   const selectedResult = resultOptions.find(result => result.id === selectedResultId) || resultOptions.find(result => result.isSelected) || resultOptions[0] || null;
   const sourceImageUrl = readAssetImageUrl(state.inputImage) || null;
   const normalizedResult = normalizeStepGenerationResult(state, {
@@ -144,31 +138,79 @@ export function DesignVariantsPanel({
     resultAssetId: getOriginalResultAssetId(selectedResult),
   });
 
+  useEffect(() => {
+    const patch: Partial<GenerationConfig> = {};
+    if (state.config.batchCount !== batchCount) patch.batchCount = batchCount;
+    if (state.config.variantStrategy !== 'style-matrix') patch.variantStrategy = 'style-matrix';
+    if (!areStringArraysEqual(state.config.variantStyles, selectedStyles)) patch.variantStyles = selectedStyles;
+    if (!Array.isArray(state.config.variantNames) || state.config.variantNames.length !== batchCount) patch.variantNames = variantNames;
+    if (!Array.isArray(state.config.variantMatrixVariables)) patch.variantMatrixVariables = activeMatrixVariables;
+    if (!Array.isArray(state.config.variantVariableLocks)) patch.variantVariableLocks = [];
+    if (!Array.isArray(state.config.variantLocks)) patch.variantLocks = variantLocks;
+    if (state.config.apiyiImageSize !== '4K') patch.apiyiImageSize = '4K';
+    if (state.config.qualityMode !== 'high') patch.qualityMode = 'high';
+    if (Object.keys(patch).length === 0) return;
+    const nextConfig = { ...state.config, ...patch, variantMatrix: undefined };
+    onUpdateConfig({
+      ...patch,
+      variantMatrix: resolveDesignVariantMatrix(nextConfig, batchCount),
+    });
+  }, [activeMatrixVariables, batchCount, onUpdateConfig, selectedStyles, state.config, variantLocks, variantNames]);
+
   const handleBatchCountChange = (nextBatchCount: DesignVariantBatchCount) => {
-    const pack = getDesignVariantPack(stylePackId);
-    const patch: Partial<GenerationConfig> = {
+    const nextPresets = assignDesignVariantStylePresets(nextBatchCount, selectedStyles);
+    const nextStyles = nextPresets.map(preset => preset.id);
+    const nextConfig = {
+      ...state.config,
       batchCount: nextBatchCount,
-      variantStyles: resolveSelectedStyles({ ...state.config, batchCount: nextBatchCount, variantStyles: pack.styles }, nextBatchCount),
-      variantNames: resolveVariantNames({ ...state.config, batchCount: nextBatchCount }, nextBatchCount),
-      variantStrategyNotes: resolveVariantStrategyNotes({ ...state.config, batchCount: nextBatchCount }, nextBatchCount),
+      variantStyles: nextStyles,
+      variantMatrix: undefined,
     };
-    onUpdateConfig({ ...patch, variantMatrix: resolveDesignVariantMatrix({ ...state.config, ...patch, variantMatrix: undefined }, nextBatchCount) });
+    onUpdateConfig({
+      batchCount: nextBatchCount,
+      variantStyles: nextStyles,
+      variantNames: resolveVariantNames(nextConfig, nextBatchCount),
+      variantMatrix: resolveDesignVariantMatrix(nextConfig, nextBatchCount),
+      apiyiImageSize: '4K',
+      qualityMode: 'high',
+    });
   };
 
-  const handlePackChange = (nextPackId: string) => {
-    const pack = getDesignVariantPack(nextPackId);
-    const patch: Partial<GenerationConfig> = {
-      stylePackId: pack.id,
-      variantStyles: pack.styles.slice(0, batchCount),
-    };
-    onUpdateConfig({ ...patch, variantMatrix: resolveDesignVariantMatrix({ ...state.config, ...patch, variantMatrix: undefined }, batchCount) });
+  const handleAutoAssignStyles = () => {
+    const nextStyles = assignDesignVariantStylePresets(batchCount, []).map(preset => preset.id);
+    const nextConfig = { ...state.config, batchCount, variantStyles: nextStyles, variantMatrix: undefined };
+    onUpdateConfig({
+      batchCount,
+      variantStyles: nextStyles,
+      variantMatrix: resolveDesignVariantMatrix(nextConfig, batchCount),
+      apiyiImageSize: '4K',
+      qualityMode: 'high',
+    });
   };
 
   const handleStyleChange = (index: number, style: VariantStyleKey) => {
     const next = [...selectedStyles];
+    const existingIndex = next.findIndex((item, itemIndex) => item === style && itemIndex !== index);
+    if (existingIndex >= 0) next[existingIndex] = next[index];
     next[index] = style;
-    const styles = next.slice(0, batchCount);
-    onUpdateConfig({ variantStyles: styles, variantMatrix: resolveDesignVariantMatrix({ ...state.config, variantStyles: styles, variantMatrix: undefined }, batchCount) });
+    const styles = assignDesignVariantStylePresets(batchCount, next).map(preset => preset.id);
+    const nextConfig = {
+      ...state.config,
+      batchCount,
+      variantStrategy: 'style-matrix' as const,
+      variantStyles: styles,
+      variantNames,
+      variantMatrix: undefined,
+    };
+    onUpdateConfig({
+      batchCount,
+      variantStrategy: 'style-matrix',
+      variantStyles: styles,
+      variantNames,
+      variantMatrix: resolveDesignVariantMatrix(nextConfig, batchCount),
+      apiyiImageSize: '4K',
+      qualityMode: 'high',
+    });
   };
 
   const handleConfigNameChange = (index: number, name: string) => {
@@ -187,28 +229,21 @@ export function DesignVariantsPanel({
     const next = checked
       ? Array.from(new Set([...variantLocks, lock]))
       : variantLocks.filter(item => item !== lock);
-    onUpdateConfig({ variantLocks: next });
+    const nextConfig = { ...state.config, batchCount, variantLocks: next, variantMatrix: undefined };
+    onUpdateConfig({ batchCount, variantLocks: next, variantMatrix: resolveDesignVariantMatrix(nextConfig, batchCount) });
   };
 
-  const handleDiversityChange = (value: DesignVariantDiversity) => {
-    const nextConfig = { ...state.config, variantDiversity: value, variantMatrix: undefined };
-    onUpdateConfig({ variantDiversity: value, variantMatrix: resolveDesignVariantMatrix(nextConfig, batchCount) });
-  };
-
-  const handleMatrixVariableChange = (key: DesignVariantVariableKey, enabled: boolean) => {
-    const nextVariables = enabled
+  const handleAllowedChangeChange = (key: DesignVariantVariableKey, checked: boolean) => {
+    const nextVariables = checked
       ? Array.from(new Set([...activeMatrixVariables, key]))
       : activeMatrixVariables.filter(item => item !== key);
-    const nextLocks = enabled ? lockedMatrixVariables.filter(item => item !== key) : lockedMatrixVariables;
-    const nextConfig = { ...state.config, variantMatrixVariables: nextVariables, variantVariableLocks: nextLocks, variantMatrix: undefined };
-    onUpdateConfig({ variantMatrixVariables: nextVariables, variantVariableLocks: nextLocks, variantMatrix: resolveDesignVariantMatrix(nextConfig, batchCount) });
-  };
-
-  const handleMatrixVariableLock = (key: DesignVariantVariableKey, locked: boolean) => {
-    const nextLocks = locked ? Array.from(new Set([...lockedMatrixVariables, key])) : lockedMatrixVariables.filter(item => item !== key);
-    const nextVariables = locked ? activeMatrixVariables.filter(item => item !== key) : activeMatrixVariables;
-    const nextConfig = { ...state.config, variantMatrixVariables: nextVariables, variantVariableLocks: nextLocks, variantMatrix: undefined };
-    onUpdateConfig({ variantMatrixVariables: nextVariables, variantVariableLocks: nextLocks, variantMatrix: resolveDesignVariantMatrix(nextConfig, batchCount) });
+    const nextConfig = { ...state.config, batchCount, variantMatrixVariables: nextVariables, variantVariableLocks: [], variantMatrix: undefined };
+    onUpdateConfig({
+      batchCount,
+      variantMatrixVariables: nextVariables,
+      variantVariableLocks: [],
+      variantMatrix: resolveDesignVariantMatrix(nextConfig, batchCount),
+    });
   };
 
   const handleCompareToggle = (resultId: string) => {
@@ -300,102 +335,69 @@ export function DesignVariantsPanel({
             </div>
 
             <ControlGroup title="生成数量">
-              <SegmentedButton active={batchCount === 1} onClick={() => handleBatchCountChange(1)} label="1 张" />
-              <SegmentedButton active={batchCount === 2} onClick={() => handleBatchCountChange(2)} label="2 张" />
-              <SegmentedButton active={batchCount === 4} onClick={() => handleBatchCountChange(4)} label="4 张" />
-              <SegmentedButton active={batchCount === 8} onClick={() => handleBatchCountChange(8)} label="8 张" />
-            </ControlGroup>
-
-            <ControlGroup title="方案模式">
-              <SegmentedButton active={variantStrategy === 'style-matrix'} onClick={() => onUpdateConfig({ variantStrategy: 'style-matrix' })} label="多风格方案矩阵" />
-              <SegmentedButton active={variantStrategy === 'same-style'} onClick={() => onUpdateConfig({ variantStrategy: 'same-style' })} label="同一风格多方案" />
-            </ControlGroup>
-
-            <ControlGroup title="多样性强度">
-              <SegmentedButton active={variantDiversity === 'low'} onClick={() => handleDiversityChange('low')} label="低：相近方案" />
-              <SegmentedButton active={variantDiversity === 'balanced'} onClick={() => handleDiversityChange('balanced')} label="中：平衡差异" />
-              <SegmentedButton active={variantDiversity === 'high'} onClick={() => handleDiversityChange('high')} label="高：拉开方向" />
+              <div className="grid grid-cols-5 gap-2">
+                {designVariantCounts.map(count => (
+                  <SegmentedButton
+                    key={count}
+                    active={batchCount === count}
+                    onClick={() => handleBatchCountChange(count)}
+                    label={`${count}张`}
+                  />
+                ))}
+              </div>
             </ControlGroup>
 
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-xs font-bold text-slate-500">设计变量矩阵</p>
-                  <p className="mt-1 text-[11px] leading-5 text-slate-400">“变化”进入本方案差异，“锁定”要求所有方案保持稳定。</p>
+                  <p className="text-xs font-bold text-slate-500">风格分配</p>
+                  <p className="mt-1 text-[11px] leading-5 text-slate-400">每个方案使用一个独立风格，系统会优先跨风格簇补齐。</p>
                 </div>
-                <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700">8 类变量</span>
+                <button type="button" onClick={handleAutoAssignStyles} className="shrink-0 rounded-md bg-blue-50 px-2.5 py-1.5 text-[11px] font-black text-blue-700 hover:bg-blue-100">智能推荐风格</button>
               </div>
               <div className="mt-3 space-y-2">
-                {designVariantVariableDefinitions.map(variable => {
-                  const changed = activeMatrixVariables.includes(variable.key);
-                  const locked = lockedMatrixVariables.includes(variable.key);
-                  return (
-                    <div key={variable.key} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-1 rounded-lg bg-slate-50 px-2 py-2">
-                      <span className="truncate text-xs font-bold text-slate-700">{variable.label}</span>
-                      <button type="button" onClick={() => handleMatrixVariableChange(variable.key, !changed)} className={`rounded-md px-2 py-1 text-[10px] font-black ${changed ? 'bg-blue-600 text-white' : 'bg-white text-slate-400'}`}>变化</button>
-                      <button type="button" onClick={() => handleMatrixVariableLock(variable.key, !locked)} className={`rounded-md px-2 py-1 text-[10px] font-black ${locked ? 'bg-amber-500 text-white' : 'bg-white text-slate-400'}`}>锁定</button>
-                    </div>
-                  );
-                })}
-              </div>
-              {similarPairs.length > 0 ? (
-                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
-                  相似方案提示：{similarPairs.slice(0, 3).map(pair => `方案 ${String.fromCharCode(65 + pair.leftIndex)} 与方案 ${String.fromCharCode(65 + pair.rightIndex)} 相似度 ${Math.round(pair.similarity * 100)}%`).join('；')}。可提高多样性或增加变化变量。
-                </div>
-              ) : null}
-            </div>
-
-            <ControlGroup title="变化范围">
-              {variantChangeScopeOptions.map(option => (
-                <SegmentedButton
-                  key={option.value}
-                  active={variantChangeScope === option.value}
-                  onClick={() => onUpdateConfig({ variantChangeScope: option.value })}
-                  label={option.label}
-                />
-              ))}
-            </ControlGroup>
-
-            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <p className="text-xs font-bold text-slate-500">锁定项</p>
-              <div className="mt-3 grid gap-2">
-                {variantLockOptions.map(option => (
-                  <label key={option.value} className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700">
-                    <span>{option.label}</span>
-                    <input
-                      type="checkbox"
-                      checked={variantLocks.includes(option.value)}
-                      onChange={event => handleVariantLockChange(option.value, event.currentTarget.checked)}
-                      className="h-4 w-4 rounded border-slate-300 text-slate-900"
-                    />
-                  </label>
+                {selectedStylePresets.map((preset, index) => (
+                  <StyleAssignmentRow
+                    key={`${index}-${preset.id}`}
+                    index={index}
+                    preset={preset}
+                    selectedStyles={selectedStyles}
+                    onChange={style => handleStyleChange(index, style)}
+                  />
                 ))}
               </div>
             </div>
 
-            <SmartPromptAssistant
-              mode="design-variants"
-              config={state.config}
-              compact
-              fields={['buildingType', 'spaceType', 'smartMaterial', 'lighting', 'changeStrength']}
-              onUpdateConfig={onUpdateConfig}
-            />
-
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <p className="text-xs font-bold text-slate-500">风格包</p>
+              <p className="text-xs font-bold text-slate-500">允许变化</p>
               <div className="mt-3 grid gap-2">
-                {designVariantPacks.map(pack => (
-                  <button key={pack.id} type="button" onClick={() => handlePackChange(pack.id)} className={`rounded-md border px-3 py-2 text-left ${stylePackId === pack.id ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'}`}>
-                    <span className="block text-sm font-bold">{pack.label}</span>
-                    <span className={`mt-0.5 block text-xs ${stylePackId === pack.id ? 'text-slate-200' : 'text-slate-500'}`}>{pack.description}</span>
-                  </button>
+                {variantAllowedChangeOptions.map(option => (
+                  <CheckboxOption
+                    key={option.key}
+                    label={option.label}
+                    checked={activeMatrixVariables.includes(option.key)}
+                    onChange={checked => handleAllowedChangeChange(option.key, checked)}
+                  />
                 ))}
               </div>
-              <p className="mt-3 text-xs font-semibold text-slate-500">应用风格包后，可单独调整每个方案方向。</p>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <p className="text-xs font-bold text-slate-500">严格保持</p>
+              <div className="mt-3 grid gap-2">
+                {strictKeepOptions.map(option => (
+                  <CheckboxOption
+                    key={option.value}
+                    label={option.label}
+                    checked={variantLocks.includes(option.value)}
+                    onChange={checked => handleVariantLockChange(option.value, checked)}
+                  />
+                ))}
+              </div>
             </div>
 
             <label className="block rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <span className="text-xs font-bold text-slate-500">额外补充要求</span>
+              <span className="text-xs font-bold text-slate-500">Prompt</span>
               <div className="mt-3">
                 <PromptVoiceAssistant
                   generationStep={GenerationStep.DesignVariants}
@@ -406,6 +408,25 @@ export function DesignVariantsPanel({
               </div>
               <textarea value={state.config.customPrompt || ''} onChange={event => onUpdateConfig({ customPrompt: event.currentTarget.value })} placeholder="可选，例如：保留原始结构和相机角度，强化自然采光。" className="mt-3 h-24 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-blue-300" />
             </label>
+
+            <div className="sticky bottom-0 space-y-2 rounded-lg border border-slate-200 bg-white/95 p-4 shadow-lg backdrop-blur">
+              <div className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] leading-5 text-slate-600">
+                <p><span className="font-bold text-slate-800">生成数量：</span>{batchCount}张</p>
+                {selectedStylePresets.map((preset, index) => (
+                  <p key={preset.id}><span className="font-bold text-slate-800">方案{index + 1}：</span>{preset.name}</p>
+                ))}
+                <p><span className="font-bold text-slate-800">允许变化：</span>{readAllowedChangesLabel(activeMatrixVariables)}</p>
+                <p><span className="font-bold text-slate-800">严格保持：</span>{readStrictKeepLabel(variantLocks)}</p>
+                <p><span className="font-bold text-slate-800">质量策略：</span>电影级高质量 / 4K输出</p>
+              </div>
+              {!state.inputImage ? <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">请先上传原图。</p> : null}
+              {disabledReason && !canGenerate && !state.isGenerating ? <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">{disabledReason}</p> : null}
+              {state.generationError ? <p className="rounded-lg bg-rose-50 px-3 py-2 text-xs font-bold leading-5 text-rose-700">{state.generationError}</p> : null}
+              <button type="button" onClick={onGenerate} disabled={!canGenerate} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45">
+                <Sparkles className={`h-4 w-4 ${state.isGenerating ? 'animate-pulse' : ''}`} />
+                {state.isGenerating ? `正在生成 ${batchCount} 张方案` : resultOptions.length ? '重新生成方案' : '生成方案'}
+              </button>
+            </div>
           </aside>
 
           <main className="variant-center-panel min-h-0 min-w-0 space-y-4 overflow-y-auto pr-1 custom-scrollbar">
@@ -440,7 +461,7 @@ export function DesignVariantsPanel({
 
             {resultOptions.length > 0 ? <DesignVariantComparison results={resultOptions} selectedIds={compareResultIds} onToggle={handleCompareToggle} /> : null}
 
-            <div className={`grid gap-3 ${batchCount === 1 ? 'grid-cols-1' : batchCount === 2 ? 'lg:grid-cols-2' : batchCount === 8 ? 'md:grid-cols-2 2xl:grid-cols-4' : 'lg:grid-cols-2'}`}>
+            <div className={`grid gap-3 ${readVariantGridClass(batchCount)}`}>
               {resultOptions.length > 0 ? resultOptions.map((result, index) => {
                 const variantIndex = typeof result.variantIndex === 'number' ? result.variantIndex : index;
                 return (
@@ -477,24 +498,18 @@ export function DesignVariantsPanel({
               </div>
               <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-50 p-3 text-xs">
                 <SummaryItem label="方案数量" value={`${batchCount} 张`} />
-                <SummaryItem label="方案模式" value={variantStrategy === 'style-matrix' ? '多风格矩阵' : '同风格变化'} />
+                <SummaryItem label="方案风格" value={selectedStylePresets.map(preset => preset.name).join('、')} />
                 <SummaryItem label="预计算力点" value={`${batchCount} 点`} />
                 <SummaryItem label="输出比例" value={state.config.targetAspectRatio || state.config.aspectRatio || '16:9'} />
-                <SummaryItem label="输出尺寸" value={state.config.apiyiImageSize || '1K'} />
+                <SummaryItem label="输出尺寸" value="4K" />
+                <SummaryItem label="质量策略" value={designVariantQualityPreset} />
                 <SummaryItem label="当前项目" value={projectName || '未命名项目'} />
               </div>
               <NormalizedGenerationProgress result={normalizedResult} />
               <GenerationResultActions result={normalizedResult} featureName="方案变体" projectName={projectName} />
-              {!state.inputImage ? <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">请先上传原图。</p> : null}
-              {disabledReason && !canGenerate && !state.isGenerating ? <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">{disabledReason}</p> : null}
-              {state.generationError ? <p className="rounded-lg bg-rose-50 px-3 py-2 text-xs font-bold leading-5 text-rose-700">{state.generationError}</p> : null}
               {downloadAllMessage ? <p className="text-xs font-semibold text-slate-600">{downloadAllMessage}</p> : null}
             </div>
             <div className="variant-right-panel-footer space-y-2 border-t border-slate-200 bg-white p-4">
-              <button type="button" onClick={onGenerate} disabled={!canGenerate} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45">
-                <Sparkles className={`h-4 w-4 ${state.isGenerating ? 'animate-pulse' : ''}`} />
-                {state.isGenerating ? `正在生成 ${batchCount} 个方案` : resultOptions.length ? '重新生成方案组' : '生成方案组'}
-              </button>
               <div className="grid grid-cols-2 gap-2">
                 <button type="button" onClick={() => void handleDownloadAll()} disabled={resultOptions.length === 0 || isDownloadingAll} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-700 disabled:opacity-40"><Download className="h-4 w-4" />{isDownloadingAll ? '保存中' : '保存全部'}</button>
                 {state.isGenerating && state.generationJobId ? <button type="button" onClick={onCancelGeneration} className="h-10 rounded-lg bg-rose-50 text-xs font-bold text-rose-700">取消任务</button> : <button type="button" onClick={onReset} disabled={state.isGenerating} className="h-10 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 disabled:opacity-40">重置</button>}
@@ -513,7 +528,7 @@ function PlaceholderCard({ index, style, name, note, matrixItem, onNameChange, o
     <div className="flex h-full flex-col space-y-3 rounded-xl border border-dashed border-slate-200 bg-white p-3">
       <input value={name} onChange={event => onNameChange(event.currentTarget.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm font-bold text-slate-900 outline-none focus:border-blue-300" />
       <select value={style} onChange={event => onStyleChange(event.currentTarget.value as VariantStyleKey)} className="w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
-        {variantStyleOptions.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}
+        {designVariantStylePresets.map(option => <option key={option.id} value={option.id}>{option.name}</option>)}
       </select>
       <textarea
         value={note}
@@ -806,17 +821,89 @@ function SegmentedButton({ active, label, onClick }: { active: boolean; label: s
   return <button type="button" onClick={onClick} className={`rounded-md px-3 py-2 text-sm font-bold ${active ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{label}</button>;
 }
 
-function readBatchCount(value: GenerationConfig['batchCount']): DesignVariantBatchCount {
-  return value === 2 || value === 4 || value === 8 ? value : 1;
+function StyleAssignmentRow({ index, preset, selectedStyles, onChange }: { index: number; preset: StylePreset; selectedStyles: VariantStyleKey[]; onChange: (style: VariantStyleKey) => void }) {
+  const usedByOther = new Set(selectedStyles.filter((style, styleIndex) => styleIndex !== index));
+  return (
+    <div className="rounded-lg bg-slate-50 p-2">
+      <div className="flex items-center gap-2">
+        <span className="shrink-0 rounded-md bg-white px-2 py-1 text-[11px] font-black text-slate-500">方案{index + 1}</span>
+        <select value={preset.id} onChange={event => onChange(event.currentTarget.value as VariantStyleKey)} className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-700 outline-none focus:border-blue-300">
+          {designVariantStylePresets.map(option => (
+            <option key={option.id} value={option.id} disabled={usedByOther.has(option.id)}>
+              {option.name}{usedByOther.has(option.id) ? '（已使用）' : ''}
+            </option>
+          ))}
+        </select>
+        <span className="shrink-0 rounded-full bg-blue-50 px-2 py-1 text-[10px] font-black text-blue-700">{readClusterLabel(preset.cluster)}</span>
+      </div>
+      <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-slate-500">{preset.description}</p>
+    </div>
+  );
 }
 
-function resolveSelectedStyles(config: GenerationConfig, batchCount: DesignVariantBatchCount): VariantStyleKey[] {
-  const styles = Array.isArray(config.variantStyles) && config.variantStyles.length > 0 ? [...config.variantStyles] : getDesignVariantPack(config.stylePackId).styles;
-  for (const style of defaultStylesByCount[batchCount]) {
-    if (styles.length >= batchCount) break;
-    if (!styles.includes(style)) styles.push(style);
-  }
-  return styles.slice(0, batchCount);
+function CheckboxOption({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) {
+  return (
+    <label className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700">
+      <span>{label}</span>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={event => onChange(event.currentTarget.checked)}
+        className="h-4 w-4 rounded border-slate-300 text-slate-900"
+      />
+    </label>
+  );
+}
+
+function resolveAllowedChanges(value: GenerationConfig['variantMatrixVariables']): DesignVariantVariableKey[] {
+  if (!Array.isArray(value)) return variantAllowedChangeOptions.map(option => option.key);
+  const allowed = new Set(variantAllowedChangeOptions.map(option => option.key));
+  return Array.from(new Set(value.filter((item): item is DesignVariantVariableKey => allowed.has(item))));
+}
+
+function readAllowedChangesLabel(values: DesignVariantVariableKey[]): string {
+  const labels = values
+    .map(value => variantAllowedChangeOptions.find(option => option.key === value)?.label)
+    .filter((value): value is string => Boolean(value));
+  return labels.length > 0 ? labels.join('、') : '无';
+}
+
+function readStrictKeepLabel(values: VariantLock[]): string {
+  const labels = values
+    .map(value => strictKeepOptions.find(option => option.value === value)?.label)
+    .filter((value): value is string => Boolean(value));
+  return labels.length > 0 ? labels.join('、') : '无';
+}
+
+function areStringArraysEqual(left: unknown, right: string[]): boolean {
+  if (!Array.isArray(left) || left.length !== right.length) return false;
+  return left.every((item, index) => item === right[index]);
+}
+
+function readClusterLabel(cluster: StylePreset['cluster']): string {
+  const labels: Record<StylePreset['cluster'], string> = {
+    modern: '现代',
+    oriental: '东方',
+    luxury: '奢华',
+    natural: '自然',
+    regional: '地域',
+    industrial: '工业',
+    classic: '经典',
+    technology: '科技',
+  };
+  return labels[cluster] || cluster;
+}
+
+function readVariantGridClass(batchCount: DesignVariantBatchCount): string {
+  if (batchCount === 1) return 'grid-cols-1';
+  if (batchCount === 2) return 'lg:grid-cols-2';
+  if (batchCount === 6) return 'md:grid-cols-2 2xl:grid-cols-3';
+  if (batchCount === 8) return 'md:grid-cols-2 2xl:grid-cols-4';
+  return 'lg:grid-cols-2';
+}
+
+function readBatchCount(value: GenerationConfig['batchCount']): DesignVariantBatchCount {
+  return readDesignVariantCount(value);
 }
 
 function resolveVariantNames(config: GenerationConfig, batchCount: DesignVariantBatchCount): string[] {
@@ -833,12 +920,8 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
   return <div className="min-w-0"><p className="text-[10px] font-bold text-slate-400">{label}</p><p className="mt-1 truncate font-black text-slate-800" title={value}>{value}</p></div>;
 }
 
-function readVariantChangeScope(value: GenerationConfig['variantChangeScope']): VariantChangeScope {
-  return variantChangeScopeOptions.some(option => option.value === value) ? value : 'full-design';
-}
-
 function resolveVariantLocks(value: GenerationConfig['variantLocks']): VariantLock[] {
-  const locks = Array.isArray(value) ? value : ['structure', 'camera', 'walls-openings'];
+  const locks = Array.isArray(value) ? value : strictKeepOptions.map(option => option.value);
   return locks.filter((lock): lock is VariantLock => variantLockOptions.some(option => option.value === lock));
 }
 
@@ -847,5 +930,6 @@ function readVariantLabel(index: number): string {
 }
 
 function readVariantStyleLabel(style: VariantStyleKey | string | undefined): string {
-  return variantStyleOptions.find(option => option.key === style)?.label || '设计方向';
+  if (!style) return '设计方向';
+  return readDesignVariantStylePresetName(style);
 }

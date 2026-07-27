@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { DEV_AUTH_USER_ID } from './auth';
 import type { app as ExpressApp } from './index';
@@ -26,6 +26,61 @@ let app: App;
 let storage: StorageModule;
 let generationService: GenerationServiceModule;
 let tempRoot: string;
+let originalFetch: typeof fetch;
+const apiYiRequestBodies: unknown[] = [];
+
+function createApiYiFetchMock(fallbackFetch: typeof fetch): typeof fetch {
+  return vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    const targetUrl = String(url);
+    if (targetUrl.includes('api.apiyi.com')) {
+      if (typeof init?.body === 'string') {
+        try {
+          apiYiRequestBodies.push(JSON.parse(init.body));
+        } catch {
+          apiYiRequestBodies.push(init.body);
+        }
+      }
+      return new Response(JSON.stringify({
+        candidates: [{
+          content: {
+            parts: [{
+              inlineData: {
+                mimeType: 'image/png',
+                data: validOnePixelPng.toString('base64'),
+              },
+            }],
+          },
+        }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return fallbackFetch(url, init);
+  }) as unknown as typeof fetch;
+}
+
+function readApiYiRequestPrompt(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  const contents = 'contents' in value ? (value as { contents?: unknown }).contents : undefined;
+  if (!Array.isArray(contents)) return '';
+  const parts = contents.flatMap(content => {
+    if (!content || typeof content !== 'object') return [];
+    const rawParts = 'parts' in content ? (content as { parts?: unknown }).parts : undefined;
+    return Array.isArray(rawParts) ? rawParts : [];
+  });
+  return parts
+    .map(part => part && typeof part === 'object' && 'text' in part ? (part as { text?: unknown }).text : undefined)
+    .filter((item): item is string => typeof item === 'string')
+    .join('\n');
+}
+
+function readApiYiRequestImageSize(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const generationConfig = 'generationConfig' in value ? (value as { generationConfig?: unknown }).generationConfig : undefined;
+  if (!generationConfig || typeof generationConfig !== 'object') return undefined;
+  const imageConfig = 'imageConfig' in generationConfig ? (generationConfig as { imageConfig?: unknown }).imageConfig : undefined;
+  if (!imageConfig || typeof imageConfig !== 'object') return undefined;
+  const imageSize = 'imageSize' in imageConfig ? (imageConfig as { imageSize?: unknown }).imageSize : undefined;
+  return typeof imageSize === 'string' ? imageSize : undefined;
+}
 
 beforeAll(async () => {
   tempRoot = await mkdtemp(path.join(os.tmpdir(), 'archai-generation-jobs-'));
@@ -40,8 +95,11 @@ beforeAll(async () => {
   process.env.GENERATION_JOB_RATE_LIMIT_PER_MINUTE = '1000';
   process.env.MAX_IMAGE_MB = '0.0001';
   process.env.MAX_MODEL_MB = '600';
+  process.env.APIYI_API_KEY = 'test-key';
   process.env.DATA_DIR = path.join(tempRoot, 'data');
   process.env.UPLOADS_DIR = path.join(tempRoot, 'uploads');
+  originalFetch = globalThis.fetch;
+  vi.stubGlobal('fetch', createApiYiFetchMock(originalFetch));
 
   [{ app }, storage, generationService] = await Promise.all([
     import('./index'),
@@ -51,39 +109,55 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  vi.unstubAllGlobals();
   await rm(tempRoot, { recursive: true, force: true });
 });
 
 describe('POST /api/generation-jobs asset ownership', () => {
-  it('returns the environment-derived provider list', async () => {
-    const previousGenerationProvider = process.env.GENERATION_PROVIDER;
-    const previousAiProvider = process.env.AI_PROVIDER;
+  it('returns the fixed API易 provider list', async () => {
     const previousApiKey = process.env.APIYI_API_KEY;
-    process.env.GENERATION_PROVIDER = 'apiyi';
-    process.env.AI_PROVIDER = 'apiyi-nano-banana2-edit';
     process.env.APIYI_API_KEY = 'test-key';
 
     const response = await request(app).get('/api/ai-providers');
 
-    if (previousGenerationProvider === undefined) delete process.env.GENERATION_PROVIDER;
-    else process.env.GENERATION_PROVIDER = previousGenerationProvider;
-    if (previousAiProvider === undefined) delete process.env.AI_PROVIDER;
-    else process.env.AI_PROVIDER = previousAiProvider;
     if (previousApiKey === undefined) delete process.env.APIYI_API_KEY;
     else process.env.APIYI_API_KEY = previousApiKey;
     expect(response.status).toBe(200);
-    expect(response.body.data.defaultProvider).toBe('apiyi-nano-banana2-edit');
-    expect(response.body.data.providers).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        value: 'apiyi-nano-banana2-edit',
+    expect(response.body.data).toEqual({
+      defaultProvider: 'apiyi',
+      providers: [{
+        value: 'apiyi',
+        label: 'API易 Nano Banana 2',
         enabled: true,
         missingConfig: [],
-      }),
-    ]));
+      }],
+    });
   });
 
-  it('persists the per-job API provider selection', async () => {
-    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'APIYi provider selection' });
+  it('reports APIYI_API_KEY as the only missing provider secret', async () => {
+    const previousApiKey = process.env.APIYI_API_KEY;
+    delete process.env.APIYI_API_KEY;
+
+    const response = await request(app).get('/api/ai-providers');
+
+    if (previousApiKey === undefined) delete process.env.APIYI_API_KEY;
+    else process.env.APIYI_API_KEY = previousApiKey;
+    expect(response.status).toBe(200);
+    expect(response.body.data).toMatchObject({
+      defaultProvider: 'apiyi',
+      providers: [
+        {
+          value: 'apiyi',
+          label: 'API易 Nano Banana 2',
+          enabled: false,
+          missingConfig: ['APIYI_API_KEY'],
+        },
+      ],
+    });
+  });
+
+  it('ignores client provider/model fields and persists the fixed API易 provider', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Fixed APIYi provider' });
     const inputAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
 
     const response = await request(app)
@@ -92,25 +166,41 @@ describe('POST /api/generation-jobs asset ownership', () => {
         projectId: project.id,
         mode: 'style-render',
         step: 'free_reference_image',
-        provider: 'apiyi',
-        prompt: 'APIYi provider selection',
+        provider: 'missing-provider',
+        model: 'wrong-model',
+        api_key: 'client-key-should-not-survive',
+        api_url: 'https://client.example.invalid',
+        prompt: 'Fixed APIYi provider',
         config: {
           step: 'free_reference_image',
           sourceImageAssetId: inputAsset.id,
+          aiProvider: 'grsai-banana2',
+          selectedProvider: 'mock',
+          provider: 'mock',
+          model: 'wrong-model',
+          api_key: 'client-key-should-not-survive',
+          api_url: 'https://client.example.invalid',
         },
         inputAssetIds: [inputAsset.id],
       });
 
     expect(response.status).toBe(201);
-    expect(response.body.data.job.provider).toBe('apiyi-nano-banana2-edit');
-    expect(response.body.data.job.config.aiProvider).toBe('apiyi-nano-banana2-edit');
-    expect(response.body.data.job.config.targetAspectRatio).toBe('16:9');
-    expect(response.body.data.job.config.aspectRatio).toBe('16:9');
-    expect(response.body.data.job.config.apiyiAspectRatio).toBe('16:9');
+    expect(response.body.data.job.provider).toBe('apiyi');
+    expect(response.body.data.job.config).toMatchObject({
+      model: 'nano-banana2',
+      targetAspectRatio: '16:9',
+      aspectRatio: '16:9',
+      apiyiAspectRatio: '16:9',
+    });
+    expect(response.body.data.job.config).not.toHaveProperty('aiProvider');
+    expect(response.body.data.job.config).not.toHaveProperty('selectedProvider');
+    expect(response.body.data.job.config).not.toHaveProperty('provider');
+    expect(response.body.data.job.config).not.toHaveProperty('api_key');
+    expect(response.body.data.job.config).not.toHaveProperty('api_url');
   });
 
-  it('returns PROVIDER_NOT_REGISTERED for an unknown provider', async () => {
-    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Unknown provider' });
+  it('ignores unknown client provider values instead of rejecting the task', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Unknown provider ignored' });
     const inputAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
 
     const response = await request(app)
@@ -124,9 +214,13 @@ describe('POST /api/generation-jobs asset ownership', () => {
         inputAssetIds: [inputAsset.id],
       });
 
-    expect(response.status).toBe(400);
-    expect(response.body.error.code).toBe('PROVIDER_NOT_REGISTERED');
-    expect(response.body.error.message).toContain('missing-provider');
+    expect(response.status).toBe(201);
+    expect(response.body.data.job).toMatchObject({
+      provider: 'apiyi',
+      config: expect.objectContaining({
+        model: 'nano-banana2',
+      }),
+    });
   });
 
   it('uses an idempotency key to create and charge one generation job', async () => {
@@ -279,6 +373,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
   it('preserves planar graphic locked placement size metadata in object_insert jobs', async () => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Planar graphic placement lock' });
     const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const referenceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
     const previewAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
     const edgeMaskAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
     const placement = {
@@ -322,7 +417,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
               insertElementKind: 'planar-graphic',
               elementType: 'planar-graphic',
               planarSizeLocked: true,
-              referenceAssetIds: ['logo-reference-asset'],
+              referenceAssetIds: [referenceAsset.id],
               placementPreviewAssetId: previewAsset.id,
               placementMaskAssetId: edgeMaskAsset.id,
               objectInsertSurface: 'wall',
@@ -335,17 +430,19 @@ describe('POST /api/generation-jobs asset ownership', () => {
             }],
           },
         },
-        inputAssetIds: [sourceAsset.id, previewAsset.id, edgeMaskAsset.id],
+        inputAssetIds: [sourceAsset.id, referenceAsset.id, previewAsset.id, edgeMaskAsset.id],
       });
 
     expect(response.status).toBe(201);
     expect(response.body.data.job.config).toMatchObject({
       objectType: 'logo',
       insertElementKind: 'planar-graphic',
+      objectReferenceAssetId: referenceAsset.id,
       maskMode: 'asset-mask',
       maskAssetId: edgeMaskAsset.id,
       objectInsert: {
         insertElementKind: 'planar-graphic',
+        objectReferenceAssetId: referenceAsset.id,
         maskAssetId: edgeMaskAsset.id,
         fusionStrategy: 'deterministic-planar-composite',
         aiEditableRegion: 'edge-band-only',
@@ -354,6 +451,7 @@ describe('POST /api/generation-jobs asset ownership', () => {
           objectType: 'logo',
           insertElementKind: 'planar-graphic',
           elementType: 'planar-graphic',
+          referenceAssetIds: [referenceAsset.id],
           planarSizeLocked: true,
           placementMode: 'strict',
           placementConstraintMode: 'strict',
@@ -532,6 +630,9 @@ describe('POST /api/generation-jobs asset ownership', () => {
         strength: 'balanced',
       },
     });
+    expect(response.body.data.job.config.materialReplacementMode).toBe('smart-select');
+    expect(response.body.data.job.config.materialReplaceMode).toBe('smart-select');
+    expect(response.body.data.job.config.targetObjectCategory).toBeUndefined();
     expect(response.body.data.job.config.targetObjectType).toBeUndefined();
     expect(response.body.data.job.config.replacementTarget).toBeUndefined();
     expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 1);
@@ -602,6 +703,93 @@ describe('POST /api/generation-jobs asset ownership', () => {
     });
   });
 
+  it('creates an all-scene material-category replacement job without requiring an object target', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Wood material category replacement' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          editMode: 'smart-type',
+          selectionMode: 'semantic-auto',
+          maskWorkflowMode: 'none',
+          sourceImageAssetId: sourceAsset.id,
+          materialReplacementMode: 'material-category',
+          materialCategory: 'wood',
+          replacementScope: 'all-scene',
+          targetMaterial: 'walnut',
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).toMatchObject({
+      materialReplacementMode: 'material-category',
+      materialCategory: 'wood',
+      replacementScope: 'all-scene',
+      selectionMode: 'semantic-auto',
+      maskWorkflowMode: 'none',
+      editingScope: 'semantic-auto',
+      replacementStrategy: 'replace-existing',
+      targetMaterial: 'walnut',
+    });
+    expect(response.body.data.job.config.materialReplaceMode).toBe('material-category');
+    expect(response.body.data.job.config.targetObjectCategory).toBeUndefined();
+    expect(response.body.data.job.config.targetObjectType).toBeUndefined();
+    expect(response.body.data.job.config.replacementTarget).toBeUndefined();
+  });
+
+  it('keeps selected-region material-category replacement scoped to a confirmed smart mask', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Wood selected region material category replacement' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+    const maskAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          editMode: 'mask',
+          selectionMode: 'smart-select',
+          maskWorkflowMode: 'smart',
+          maskSelectionMode: 'smart',
+          smartMaskConfirmed: true,
+          sourceImageAssetId: sourceAsset.id,
+          maskMode: 'asset-mask',
+          maskAssetId: maskAsset.id,
+          materialReplacementMode: 'material-category',
+          materialCategory: 'wood',
+          replacementScope: 'selected-region',
+          targetMaterial: 'dark-wood',
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config).toMatchObject({
+      materialReplacementMode: 'material-category',
+      materialCategory: 'wood',
+      replacementScope: 'selected-region',
+      selectionMode: 'smart-select',
+      maskWorkflowMode: 'smart',
+      maskSelectionMode: 'smart',
+      maskMode: 'asset-mask',
+      maskAssetId: maskAsset.id,
+      confirmedSmartMaskAssetId: maskAsset.id,
+      editingScope: 'masked',
+      replacementStrategy: 'replace-masked',
+    });
+    expect(response.body.data.job.config.confirmedSelectionMask).toBe(true);
+    expect(response.body.data.job.config.targetObjectType).toBeUndefined();
+    expect(response.body.data.job.config.replacementTarget).toBeUndefined();
+  });
+
   it('rejects invalid material replacement target values instead of silently using floor', async () => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Invalid material target' });
     const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
@@ -623,6 +811,31 @@ describe('POST /api/generation-jobs asset ownership', () => {
 
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe('GENERATION_JOB_REPLACEMENT_TARGET_INVALID');
+  });
+
+  it('rejects material-category replacement without a material category', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Missing material category' });
+    const sourceAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'material-replace',
+        prompt: '',
+        config: {
+          editMode: 'smart-type',
+          selectionMode: 'semantic-auto',
+          sourceImageAssetId: sourceAsset.id,
+          materialReplacementMode: 'material-category',
+          replacementScope: 'all-scene',
+          targetMaterial: 'walnut',
+        },
+        inputAssetIds: [sourceAsset.id],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('GENERATION_JOB_MATERIAL_CATEGORY_REQUIRED');
   });
 
   it('creates a multi-candidate material job with semantic controls and a protected mask', async () => {
@@ -1220,6 +1433,45 @@ describe('POST /api/generation-jobs asset ownership', () => {
         panoramaAssetId: panoramaAsset.id,
         sourceModelAssetId: modelAsset.id,
         targetAspectRatio: '2:1',
+        taskType: 'panorama-generation',
+        panoramaTaskType: 'panorama-generation',
+      },
+    });
+  });
+
+  it('normalizes panorama-generation task requests to the panorama worker branch', async () => {
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Panorama generation task project' });
+    const panoramaAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'panorama-generation',
+        prompt: 'render the uploaded panorama',
+        config: {
+          sourceImageAssetId: panoramaAsset.id,
+          panoramaAssetId: panoramaAsset.id,
+          targetAspectRatio: '16:9',
+          apiyiAspectRatio: '16:9',
+        },
+        inputAssetIds: [panoramaAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job).toMatchObject({
+      mode: 'panorama-roam-render',
+      step: 'panorama_quick_render',
+      inputAssetIds: [panoramaAsset.id],
+      config: {
+        sourceImageAssetId: panoramaAsset.id,
+        panoramaAssetId: panoramaAsset.id,
+        taskType: 'panorama-generation',
+        panoramaTaskType: 'panorama-generation',
+        generationKind: 'panorama-generation',
+        targetAspectRatio: '2:1',
+        aspectRatio: '2:1',
+        apiyiAspectRatio: '2:1',
       },
     });
   });
@@ -1554,7 +1806,6 @@ describe('POST /api/generation-jobs asset ownership', () => {
       projectId: project.id,
       mode: 'plan-colorize',
       step: 'plan_colorize',
-      provider: 'apiyi-nano-banana2-edit',
       prompt: '',
       inputAssetIds: [source.id, control.id, material.id],
       config: {
@@ -1860,7 +2111,15 @@ describe('generation job credits', () => {
     expect(response.body.data.job.config).toMatchObject({
       batchCount: 2,
       variantStrategy: 'style-matrix',
-      variantStyles: ['modern-minimal', 'natural-wood'],
+      variantStyles: ['modern-minimal', 'light-luxury'],
+      selectedStyleIds: ['modern-minimal', 'light-luxury'],
+      qualityPreset: 'cinematic-4k',
+      apiyiImageSize: '4K',
+      preserveArchitecture: true,
+      preserveSpatialLayout: true,
+      preserveCamera: true,
+      preserveHardscapeFramework: true,
+      preserveFurnitureLayout: true,
     });
     expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 2);
   });
@@ -1884,6 +2143,28 @@ describe('generation job credits', () => {
     expect(response.body.data.job.config.batchCount).toBe(1);
     expect(response.body.data.job.config.variantStyles).toEqual(['modern-minimal']);
     expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 1);
+  });
+
+  it('creates design-variants jobs with batchCount 6 and charges six outputs', async () => {
+    const originalBalance = await storage.getCreditBalance(DEV_AUTH_USER_ID);
+    const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Design variants six' });
+    const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
+
+    const response = await request(app)
+      .post('/api/generation-jobs')
+      .send({
+        projectId: project.id,
+        mode: 'design-variants',
+        prompt: '',
+        config: { batchCount: 6, variantStrategy: 'style-matrix', variantStyles: ['modern-minimal', 'modern-minimal'] },
+        inputAssetIds: [ownAsset.id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.config.batchCount).toBe(6);
+    expect(response.body.data.job.config.variantStyles).toHaveLength(6);
+    expect(new Set(response.body.data.job.config.variantStyles).size).toBe(6);
+    expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 6);
   });
 
   it('creates design-variants jobs with batchCount 8 and charges eight outputs', async () => {
@@ -1911,12 +2192,15 @@ describe('generation job credits', () => {
       batchCount: 8,
       stylePackId: 'hotel',
       variantNames: ['Modern A', 'Natural B'],
+      qualityPreset: 'cinematic-4k',
+      apiyiImageSize: '4K',
     });
     expect(response.body.data.job.config.variantStyles).toHaveLength(8);
+    expect(new Set(response.body.data.job.config.variantStyles).size).toBe(8);
     expect((await storage.getCreditBalance(DEV_AUTH_USER_ID)).balance).toBe(originalBalance.balance - 8);
   });
 
-  it.each([3, 5, 9])('rejects invalid design-variants batchCount %s', async (batchCount) => {
+  it.each([3, 5, 7, 9])('rejects invalid design-variants batchCount %s', async (batchCount) => {
     const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: `Invalid variant ${batchCount}` });
     const ownAsset = await createImageAssetForUser(DEV_AUTH_USER_ID);
 
@@ -1963,6 +2247,7 @@ describe('generation job credits', () => {
   it('generates and saves all design-variants results sequentially with mock provider', async () => {
     const originalWorkerDisabled = process.env.ARCHAI_DISABLE_GENERATION_WORKER;
     process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'false';
+    apiYiRequestBodies.length = 0;
 
     try {
       const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Variant worker project' });
@@ -1984,7 +2269,7 @@ describe('generation job credits', () => {
             batchCount: 8,
             variantStrategy: 'style-matrix',
             stylePackId: 'interior-common',
-            variantStyles: ['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby'],
+            variantStyles: ['modern-minimal', 'light-luxury', 'modern-oriental', 'new-chinese', 'mediterranean', 'japanese-wabi-sabi', 'industrial', 'french-modern'],
             variantNames: ['Scheme A', 'Scheme B', 'Scheme C', 'Scheme D', 'Scheme E', 'Scheme F', 'Scheme G', 'Scheme H'],
             variantDiversity: 'high',
             variantMatrixVariables: ['material-system', 'color-system', 'lighting-atmosphere', 'overall-design-style'],
@@ -2019,13 +2304,32 @@ describe('generation job credits', () => {
       expect(job.outputAssetIds).toHaveLength(8);
       expect(job.outputAssetId).toBe(job.outputAssetIds?.[0]);
       expect(results).toHaveLength(8);
+      expect(apiYiRequestBodies).toHaveLength(8);
+      const requestPrompts = apiYiRequestBodies.map(readApiYiRequestPrompt);
+      expect(new Set(requestPrompts).size).toBe(8);
+      expect(requestPrompts[0]).toContain('StylePresetId: modern-minimal');
+      expect(requestPrompts[0]).toContain('严格保持建筑主体结构不变');
+      expect(requestPrompts[0]).toContain('电影级高端建筑可视化渲染');
+      expect(requestPrompts[0]).toContain('4K超高清');
+      expect(readApiYiRequestImageSize(apiYiRequestBodies[0])).toBe('4K');
       expect(results[0]).toMatchObject({ isSelected: true, isFavorite: false });
       expect(results[1]).toMatchObject({ isSelected: false, isFavorite: false });
-      expect(results.map(result => result.metadata?.variantStyle)).toEqual(['modern-minimal', 'cream-style', 'wabi-sabi', 'light-luxury', 'natural-wood', 'premium-gray', 'industrial', 'hotel-lobby']);
+      expect(results.map(result => result.metadata?.variantStyle)).toEqual(['modern-minimal', 'light-luxury', 'modern-oriental', 'new-chinese', 'mediterranean', 'japanese-wabi-sabi', 'industrial', 'french-modern']);
       expect(results[0].metadata).toMatchObject({
         variantIndex: 0,
         variantCode: 'A',
         variantName: 'Scheme A',
+        stylePresetId: 'modern-minimal',
+        selectedStyleName: '现代简约',
+        styleCluster: 'modern',
+        qualityPreset: 'cinematic-4k',
+        requestedImageSize: '4K',
+        imageSize: '4K',
+        generatedWidth: 1,
+        generatedHeight: 1,
+        finalWidth: 1,
+        finalHeight: 1,
+        upscaled: false,
         stylePackId: 'interior-common',
         variantDiversity: 'high',
         changedVariables: ['material-system', 'color-system', 'lighting-atmosphere', 'overall-design-style'],
@@ -2375,6 +2679,8 @@ describe('generation job credits', () => {
 describe('generation worker image inputs', () => {
   it('downloads a Supabase-style public image URL before sending provider input', async () => {
     const originalWorkerDisabled = process.env.ARCHAI_DISABLE_GENERATION_WORKER;
+    const originalApiKey = process.env.APIYI_API_KEY;
+    const originalFetch = globalThis.fetch;
     const imageServer = createServer((req, res) => {
       if (req.url === '/storage/v1/object/public/archai-assets/users/dev-user/images/input.png') {
         res.writeHead(200, { 'Content-Type': 'image/png' });
@@ -2390,6 +2696,25 @@ describe('generation worker image inputs', () => {
 
     try {
       process.env.ARCHAI_DISABLE_GENERATION_WORKER = 'false';
+      process.env.APIYI_API_KEY = 'test-key';
+      vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        const targetUrl = String(url);
+        if (targetUrl.includes('api.apiyi.com')) {
+          return new Response(JSON.stringify({
+            candidates: [{
+              content: {
+                parts: [{
+                  inlineData: {
+                    mimeType: 'image/png',
+                    data: validOnePixelPng.toString('base64'),
+                  },
+                }],
+              },
+            }],
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        return originalFetch(url, init);
+      }) as typeof fetch);
       const address = imageServer.address() as AddressInfo;
       const publicImageUrl = `http://127.0.0.1:${address.port}/storage/v1/object/public/archai-assets/users/dev-user/images/input.png`;
       const project = await storage.createProject({ userId: DEV_AUTH_USER_ID, name: 'Remote storage input' });
@@ -2422,13 +2747,16 @@ describe('generation worker image inputs', () => {
       expect(job.diagnostics?.images?.referenceCount).toBe(0);
       expect(job.diagnostics?.timing?.providerMs).toEqual(expect.any(Number));
       expect(job.diagnostics?.provider?.providerMs).toEqual(expect.any(Number));
-      expect(job.diagnostics?.provider?.name).toBe('mock');
+      expect(job.diagnostics?.provider?.name).toBe('apiyi');
       expect(job.diagnostics?.images?.prepared?.[0]).toMatchObject({
         role: 'input',
         mime: expect.stringMatching(/^image\//u),
       });
     } finally {
       process.env.ARCHAI_DISABLE_GENERATION_WORKER = originalWorkerDisabled;
+      if (originalApiKey === undefined) delete process.env.APIYI_API_KEY;
+      else process.env.APIYI_API_KEY = originalApiKey;
+      vi.unstubAllGlobals();
       await new Promise<void>((resolve, reject) => {
         imageServer.close(error => (error ? reject(error) : resolve()));
       });
@@ -2437,9 +2765,23 @@ describe('generation worker image inputs', () => {
 });
 
 describe('legacy generation endpoints', () => {
-  it('remain available for explicit dev mock debugging', async () => {
+  it('remain available only when explicitly enabled and use the fixed API易 provider', async () => {
     const originalLegacyFlag = process.env.ENABLE_LEGACY_GENERATION_ENDPOINTS;
+    const originalApiKey = process.env.APIYI_API_KEY;
     process.env.ENABLE_LEGACY_GENERATION_ENDPOINTS = 'true';
+    process.env.APIYI_API_KEY = 'test-key';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      candidates: [{
+        content: {
+          parts: [{
+            inlineData: {
+              mimeType: 'image/png',
+              data: validOnePixelPng.toString('base64'),
+            },
+          }],
+        },
+      }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch);
 
     try {
       const response = await request(app)
@@ -2452,15 +2794,18 @@ describe('legacy generation endpoints', () => {
 
       expect(response.status).toBe(200);
       expect(response.body).toMatchObject({
-        provider: 'mock',
+        provider: 'apiyi',
       });
-      expect(response.body.imageDataUrl).toMatch(/^data:image\/svg\+xml;base64,/u);
+      expect(response.body.imageDataUrl).toMatch(/^data:image\/png;base64,/u);
     } finally {
       if (originalLegacyFlag === undefined) {
         delete process.env.ENABLE_LEGACY_GENERATION_ENDPOINTS;
       } else {
         process.env.ENABLE_LEGACY_GENERATION_ENDPOINTS = originalLegacyFlag;
       }
+      if (originalApiKey === undefined) delete process.env.APIYI_API_KEY;
+      else process.env.APIYI_API_KEY = originalApiKey;
+      vi.unstubAllGlobals();
     }
   });
 

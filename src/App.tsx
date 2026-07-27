@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, lazy, useState, useCallback, useEffect, useRef } from 'react';
+import React, { Suspense, lazy, useState, useCallback, useEffect } from 'react';
 import { Sidebar, Stepper } from './components/Navigation';
 import { HistoryView } from './components/HistoryView';
 import { SettingsModal } from './components/SettingsModal';
@@ -27,9 +27,7 @@ import {
   getImageAsset,
   getEditSession,
   deleteProject,
-  getAiProviders,
   listPromptTemplates,
-  type AiProviderOption,
   type ImageAsset,
   updateGenerationResult,
   uploadImageAsset,
@@ -46,14 +44,7 @@ import { buildSecondaryEditConfigPatch } from './utils/secondaryEdit';
 import { getOriginalResultAssetId, getOriginalResultImageUrl } from './utils/resultImage';
 import { resolveAssetUrl } from './utils/assetUrl';
 import { promptTemplateRecordToTemplate } from './utils/savedPromptTemplates';
-import { readSelectedImageProvider, writeSelectedImageProvider } from './utils/aiProviderPreference';
 import { getScenarioWorkflow } from './constants/productWorkflows';
-import {
-  ApiConnectionStatus,
-  getReadableApiConnectionError,
-  isAbortError,
-  sleep,
-} from './utils/apiConnectionStatus';
 import { motion, AnimatePresence } from 'motion/react';
 
 const MainWorkspace = lazy(() => import('./components/MainWorkspace').then(module => ({ default: module.MainWorkspace })));
@@ -65,8 +56,6 @@ const PublicSharePreview = lazy(() => import('./components/PublicSharePreview').
 const PanoramaSharePage = lazy(() => import('./components/PanoramaSharePage').then(module => ({ default: module.PanoramaSharePage })));
 const AdminPage = lazy(() => import('./components/AdminPage').then(module => ({ default: module.AdminPage })));
 const ImageEditSessionWorkspace = lazy(() => import('./components/ImageEditSessionWorkspace').then(module => ({ default: module.ImageEditSessionWorkspace })));
-const apiStatusRetryDelays = [300, 800, 1500];
-const fallbackAiProvider: AiProviderOption = { value: 'grsai-banana2', label: 'Grsai Banana2', enabled: true, missingConfig: [] };
 const backendUnavailableMessage = '后端服务暂不可用，请稍后重试或检查部署配置。';
 const activeEditSessionStorageKey = 'archai:active-edit-session-id';
 
@@ -108,31 +97,17 @@ export default function App() {
     resetWorkflow,
   } = useGenerationWorkflow(() => setActiveTab('generate'));
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [selectedImageProvider, setSelectedImageProvider] = useState<AiProviderOption['value'] | undefined>(fallbackAiProvider.value);
-  const [defaultImageProvider, setDefaultImageProvider] = useState<AiProviderOption['value'] | null>(fallbackAiProvider.value);
-  const [imageProviders, setImageProviders] = useState<AiProviderOption[]>([fallbackAiProvider]);
-  const [apiConnectionStatus, setApiConnectionStatus] = useState<ApiConnectionStatus>('checking');
-  const [apiConnectionError, setApiConnectionError] = useState<string | null>(null);
   const [historyItems, setHistoryItems] = useState<GenerationHistoryItem[]>(() => listGenerationRecords());
   const [promptTemplates, setPromptTemplates] = useState(() => [] as ReturnType<typeof promptTemplateRecordToTemplate>[]);
   const [queuedSecondaryGenerationId, setQueuedSecondaryGenerationId] = useState<string | null>(null);
   const [editSessionDetail, setEditSessionDetail] = useState<EditSessionDetail | null>(null);
   const [activeScenarioId, setActiveScenarioId] = useState<string | null>(null);
-  const apiProviderRequestIdRef = useRef(0);
   const { backendHealth, refreshBackendHealth } = useBackendHealth(isSettingsOpen);
   const { creditBalance, creditError, refreshCreditBalance } = useCreditBalance(Boolean(currentUser));
   const panoramaShareId = readPanoramaShareId();
   const publicShareToken = readPublicShareToken();
   const isAdminPath = currentPath === '/admin';
-  const selectedProviderInfo = imageProviders.find(provider => provider.value === selectedImageProvider);
-  const providerUnavailableReason = selectedProviderInfo && !selectedProviderInfo.enabled
-    ? selectedImageProvider === 'apiyi-nano-banana2-edit'
-      ? '未配置 API易 API Key，请在后端 .env 中配置 APIYI_API_KEY。'
-      : `当前 AI 接口缺少配置：${selectedProviderInfo.missingConfig.join('、')}。`
-    : apiConnectionStatus === 'failed'
-      ? apiConnectionError || '无法连接后端服务，请确认本地服务已启动或刷新重试。'
-      : null;
-  const isProviderConfigLoading = apiConnectionStatus === 'checking';
+  const providerUnavailableReason = null;
 
   const refreshPromptTemplates = useCallback(async () => {
     try {
@@ -261,7 +236,7 @@ export default function App() {
     } catch (error) {
       console.error('[continuous-edit] create session failed', { assetId: image.assetId, error });
       const message = error instanceof Error ? error.message : '连续修改会话创建失败。';
-      setApiConnectionError(message);
+      console.warn('[continuous-edit] create session failed message', message);
       throw error;
     }
   }, [currentUser, ensureActiveProject, setActiveTab]);
@@ -290,84 +265,6 @@ export default function App() {
     setQueuedSecondaryGenerationId(null);
     void handleGenerate();
   }, [handleGenerate, queuedSecondaryGenerationId]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const requestId = ++apiProviderRequestIdRef.current;
-
-    const loadProviders = async () => {
-      console.debug('[api-status] checking');
-      setApiConnectionStatus('checking');
-      setApiConnectionError(null);
-
-      for (let attempt = 0; attempt < apiStatusRetryDelays.length; attempt += 1) {
-        try {
-          const config = await getAiProviders({ signal: controller.signal });
-          if (requestId !== apiProviderRequestIdRef.current) return;
-          const selectedProvider = readSelectedImageProvider(
-            config.defaultProvider,
-            config.providers.map(provider => provider.value),
-          );
-          const hasDisabledProvider = config.providers.some(provider => !provider.enabled);
-          setDefaultImageProvider(config.defaultProvider);
-          setImageProviders(config.providers);
-          setSelectedImageProvider(selectedProvider);
-          setApiConnectionStatus(hasDisabledProvider ? 'degraded' : 'connected');
-          setApiConnectionError(null);
-          console.debug(hasDisabledProvider ? '[api-status] connected: degraded provider config' : '[api-status] connected');
-          return;
-        } catch (error) {
-          if (requestId !== apiProviderRequestIdRef.current) return;
-          if (isAbortError(error)) {
-            console.debug('[api-status] request aborted, ignored');
-            return;
-          }
-
-          if (attempt < apiStatusRetryDelays.length - 1) {
-            console.warn('[api-status] retry', { attempt: attempt + 1, message: getReadableApiConnectionError(error) });
-            await sleep(apiStatusRetryDelays[attempt]);
-            continue;
-          }
-
-          console.warn('[api-status] failed', getReadableApiConnectionError(error));
-          setDefaultImageProvider(fallbackAiProvider.value);
-          setImageProviders([fallbackAiProvider]);
-          setSelectedImageProvider(fallbackAiProvider.value);
-          setApiConnectionStatus('failed');
-          setApiConnectionError(backendUnavailableMessage);
-        }
-      }
-    };
-
-    void loadProviders();
-    return () => {
-      controller.abort();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!selectedImageProvider) return;
-    setStepStates(previous => {
-      const next = { ...previous };
-      for (const step of Object.values(GenerationStep).filter((value): value is GenerationStep => typeof value === 'number')) {
-        next[step] = {
-          ...previous[step],
-          config: {
-            ...previous[step].config,
-            aiProvider: selectedImageProvider,
-          },
-        };
-      }
-      return next;
-    });
-  }, [selectedImageProvider, setStepStates]);
-
-  const handleImageProviderChange = useCallback((provider: AiProviderOption['value']) => {
-    setSelectedImageProvider(provider);
-    if (defaultImageProvider) {
-      writeSelectedImageProvider(provider, defaultImageProvider);
-    }
-  }, [defaultImageProvider]);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -591,9 +488,7 @@ export default function App() {
           assetId: result.assetId,
           error,
         });
-        setApiConnectionError(
-          error instanceof Error ? error.message : '无法从当前结果创建连续修改会话。',
-        );
+        console.warn('[continuous-edit] create session from result failed message', error instanceof Error ? error.message : '无法从当前结果创建连续修改会话。');
       });
       return;
     }
@@ -760,7 +655,7 @@ export default function App() {
         };
       });
     })().catch(error => {
-      setApiConnectionError(error instanceof Error ? error.message : '结果发送失败，请稍后重试。');
+      console.warn('[send-result] failed', error instanceof Error ? error.message : '结果发送失败，请稍后重试。');
     });
   }, [
     currentStep,
@@ -1064,10 +959,6 @@ export default function App() {
                 currentStep={currentStep}
                 onStepChange={setCurrentStep}
                 creditBalance={creditBalance?.balance ?? null}
-                selectedProvider={selectedImageProvider}
-                providers={imageProviders}
-                isProviderLoading={isProviderConfigLoading}
-                onProviderChange={handleImageProviderChange}
               />
               {getScenarioWorkflow(activeScenarioId) ? (
                 <ScenarioWorkflowBanner scenarioId={activeScenarioId as string} onClose={() => setActiveScenarioId(null)} />
@@ -1178,14 +1069,7 @@ export default function App() {
       </main>
       <SettingsModal
         isOpen={isSettingsOpen}
-        providerMode={backendHealth.data?.provider || '未知'}
         backendHealth={backendHealth.message}
-        providerSource={backendHealth.data?.provider === 'gemini'
-          || backendHealth.data?.provider === 'grsai-banana2'
-          || backendHealth.data?.provider === 'grsai-nano-banana'
-          || backendHealth.data?.provider === 'apiyi-nano-banana2-edit'
-          ? 'Real provider'
-          : backendHealth.data?.provider === 'mock' ? 'Mock provider' : '未知（后端未连接）'}
         currentUser={currentUser}
         currentUserStatus={isUserLoading ? '正在读取当前用户' : currentUserError || creditError || `剩余额度：${creditBalance?.balance ?? '读取中'} credits`}
         onSignOut={handleSignOut}

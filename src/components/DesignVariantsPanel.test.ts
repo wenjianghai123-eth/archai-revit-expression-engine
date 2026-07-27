@@ -32,7 +32,7 @@ describe('DesignVariantsPanel', () => {
     expect(html).not.toContain('方案 B');
   });
 
-  it('renders the design variants controls and 4-slot matrix by default', () => {
+  it('renders the design variants controls and 4-slot matrix with style assignment', () => {
     const html = renderToStaticMarkup(React.createElement(DesignVariantsPanel, {
       ...defaultProps,
       state: createState({ batchCount: 4 }),
@@ -40,15 +40,19 @@ describe('DesignVariantsPanel', () => {
 
     expect(html).toContain('方案变体');
     expect(html).toContain('生成数量');
-    expect(html).toContain('多风格方案矩阵');
+    expect(html).toContain('风格分配');
+    expect(html).toContain('智能推荐风格');
     expect(html).toContain('方案 A');
     expect(html).toContain('方案 D');
-    expect(html).toContain('风格包');
-    expect(html).toContain('8 张');
-    expect(html).toContain('设计变量矩阵');
+    expect(html).toContain('8张');
+    expect(html).toContain('现代简约');
+    expect(html).toContain('轻奢');
+    expect(html).toContain('现代东方');
+    expect(html).toContain('地中海');
     expect(html).toContain('材质体系');
-    expect(html).toContain('家具布局');
-    expect(html).toContain('多样性强度');
+    expect(html).toContain('装饰细节');
+    expect(html).toContain('cinematic-4k');
+    expect(html).toContain('4K');
   });
 
   it('renders a 2-result variant matrix with selected and favorite actions', () => {
@@ -90,7 +94,20 @@ describe('DesignVariantsPanel', () => {
     expect(html).toContain('variant-right-panel');
     expect(html).toContain('生成任务');
     expect(html).toContain('请先上传原图');
-    expect(html).toContain('生成方案组');
+    expect(html).toContain('生成方案');
+  });
+
+  it('renders six independent style slots', () => {
+    const html = renderToStaticMarkup(React.createElement(DesignVariantsPanel, {
+      ...defaultProps,
+      state: createState({ batchCount: 6 }),
+    }));
+
+    expect(html).toContain('方案 F');
+    expect(html).toContain('日式侘寂');
+    expect(html).toContain('工业风');
+    expect(html).toContain('3');
+    expect(html).toContain('2xl:grid-cols-3');
   });
 
   it('renders an 8-slot matrix and export actions', () => {

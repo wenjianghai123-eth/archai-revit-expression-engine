@@ -1,11 +1,12 @@
 import crypto from 'node:crypto';
+import sharp from 'sharp';
 import { loadAssetAsInlineData, type ApiYiInlineData } from './apiyiImageInput';
 import type { GenerateImageInput, GenerateImageOutput, ImageGenerationProvider } from './types';
 
-const providerName = 'apiyi-nano-banana2-edit' as const;
+const providerName = 'apiyi' as const;
 const defaultBaseUrl = 'https://api.apiyi.com';
 const defaultModel = 'gemini-3.1-flash-image-preview';
-const defaultTimeoutMs = 300_000;
+const defaultTimeoutMs = 900_000;
 const supportedAspectRatios = new Set(['1:1', '4:3', '3:4', '16:9', '9:16', '5:4', '4:5', '3:2', '2:3', '2:1', '21:9']);
 const supportedImageSizes = new Set(['512', '1K', '2K', '4K']);
 const floorplanTextLanguageRequirement = [
@@ -36,6 +37,16 @@ interface ApiYiPart {
 interface ApiYiResponse {
   responseId?: string;
   createTime?: string;
+  traceId?: string;
+  trace_id?: string;
+  requestId?: string;
+  request_id?: string;
+  error?: {
+    message?: string;
+    code?: string | number;
+    status?: string;
+    details?: unknown;
+  };
   candidates?: Array<{
     content?: {
       parts?: ApiYiPart[];
@@ -45,9 +56,9 @@ interface ApiYiResponse {
 
 export function createApiYiNanoBanana2Provider(options: ApiYiProviderOptions = {}): ImageGenerationProvider {
   const baseUrl = normalizeBaseUrl(options.baseUrl || process.env.APIYI_API_BASE_URL || defaultBaseUrl);
-  const model = options.model || process.env.APIYI_IMAGE_MODEL || defaultModel;
+  const model = options.model || defaultModel;
   const timeoutMs = options.timeoutMs || readPositiveInteger(process.env.APIYI_IMAGE_TIMEOUT_MS, defaultTimeoutMs);
-  const fetchImpl = options.fetchImpl || fetch;
+  const fetchImpl = options.fetchImpl;
 
   return {
     name: providerName,
@@ -81,29 +92,26 @@ export function createApiYiNanoBanana2Provider(options: ApiYiProviderOptions = {
       const aspectRatio = resolveAspectRatio(input);
       const imageSize = resolveImageSize(input);
       const parts = buildApiYiParts(prompt, inlineImages);
+      const requestId = readConfigString(input.config.__requestId) || crypto.randomUUID();
+      validateApiYiParts(parts);
       const requestStartedAt = Date.now();
-      const requestId = crypto.randomUUID();
+      const endpoint = `/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+      const requestUrl = `${baseUrl}${endpoint}`;
+      const debugContext = buildApiYiDebugContext({
+        taskType: readApiYiTaskType(input),
+        route: requestUrl,
+        provider: providerName,
+        model,
+        inlineImages,
+        promptLength: prompt.length,
+        timeoutMs,
+      });
 
       if (process.env.NODE_ENV !== 'production') {
-        console.debug({
-          event: 'apiyi_request_prepare',
-          jobId: typeof input.config.__generationJobId === 'string' ? input.config.__generationJobId : undefined,
-          provider: providerName,
-          model,
-          inputImageCount: inlineImages.length,
-          aspectRatio,
-          imageSize,
-          promptLength: prompt.length,
-          hasApiKey: Boolean(apiKey),
-          requestId,
-        });
-        console.debug({
-          event: 'provider_request_prepare',
-          provider: providerName,
-          step: input.step,
-          aspectRatio,
-          imageSize,
-          inputImageCount: inlineImages.length,
+        console.debug('[APIYi] generation request', {
+          ...debugContext,
+          upstreamStatus: undefined,
+          traceId: requestId,
         });
       }
 
@@ -111,7 +119,7 @@ export function createApiYiNanoBanana2Provider(options: ApiYiProviderOptions = {
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
       let response: Response;
       try {
-        response = await fetchImpl(`${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+        response = await (fetchImpl || fetch)(requestUrl, {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${apiKey}`,
@@ -145,29 +153,53 @@ export function createApiYiNanoBanana2Provider(options: ApiYiProviderOptions = {
 
       const rawText = await response.text();
       const parsedBody = tryParseApiYiJson(rawText);
+      const upstreamTraceId = readApiYiTraceId(response, parsedBody) || requestId;
       if (!response.ok) {
         const errorBody = parsedBody || { responseText: rawText.slice(0, 400) };
+        logApiYiUpstreamError({
+          ...debugContext,
+          upstreamStatus: response.status,
+          traceId: upstreamTraceId,
+          responseBody: errorBody,
+        });
         if (response.status === 401 || response.status === 403) {
-          throw createApiYiError('APIYI_UNAUTHORIZED', `API易认证失败：HTTP ${response.status}`, 'API易认证失败，请检查后端 APIYI_API_KEY。', response.status, errorBody);
+          throw createApiYiError('APIYI_UNAUTHORIZED', `API易认证失败：HTTP ${response.status}`, 'API易图片编辑失败，请稍后重试。', response.status, errorBody, upstreamTraceId);
         }
         if (response.status === 429) {
-          throw createApiYiError('APIYI_RATE_LIMITED', 'API易请求被限流。', 'API易请求过于频繁，请稍后重试。', response.status, errorBody);
+          throw createApiYiError('APIYI_RATE_LIMITED', 'API易请求被限流。', 'API易请求过于频繁，请稍后重试。', response.status, errorBody, upstreamTraceId);
         }
-        throw createApiYiError('APIYI_REQUEST_FAILED', `API易请求失败：HTTP ${response.status}`, undefined, response.status, errorBody);
+        throw createApiYiError('APIYI_REQUEST_FAILED', `API易请求失败：HTTP ${response.status}`, undefined, response.status, errorBody, upstreamTraceId);
       }
       if (!parsedBody) {
-        throw createApiYiError('APIYI_BAD_RESPONSE', 'API易返回了无法解析的 JSON 响应。', undefined, response.status);
+        logApiYiUpstreamError({
+          ...debugContext,
+          upstreamStatus: response.status,
+          traceId: upstreamTraceId,
+          responseBody: { responseText: rawText.slice(0, 400) },
+          errorCode: 'APIYI_BAD_RESPONSE',
+          errorMessage: 'API易返回了无法解析的 JSON 响应。',
+        });
+        throw createApiYiError('APIYI_BAD_RESPONSE', 'API易返回了无法解析的 JSON 响应。', undefined, response.status, undefined, upstreamTraceId);
       }
       const body = parsedBody;
 
       const image = extractApiYiImage(body);
       if (!image) {
+        logApiYiUpstreamError({
+          ...debugContext,
+          upstreamStatus: response.status,
+          traceId: upstreamTraceId,
+          responseBody: body,
+          errorCode: 'APIYI_IMAGE_RESULT_NOT_FOUND',
+          errorMessage: 'API易响应中没有找到图片结果。',
+        });
         throw createApiYiError(
           'APIYI_IMAGE_RESULT_NOT_FOUND',
           'API易响应中没有找到 candidates[].content.parts[].inlineData.data。',
           'API易图片编辑失败，响应中没有图片结果，请稍后重试。',
           response.status,
           body,
+          upstreamTraceId,
         );
       }
 
@@ -182,13 +214,14 @@ export function createApiYiNanoBanana2Provider(options: ApiYiProviderOptions = {
       }
 
       const mimeType = normalizeOutputMimeType(image.mimeType);
+      const outputMetadata = await sharp(content).metadata().catch(() => null);
+      const generatedWidth = outputMetadata?.width;
+      const generatedHeight = outputMetadata?.height;
       if (process.env.NODE_ENV !== 'production') {
-        console.debug('[APIYi] image edit response', {
-          provider: providerName,
-          status: response.status,
-          hasInlineImage: true,
-          mimeType,
-          outputSizeBytes: content.length,
+        console.debug('[APIYi] generation response', {
+          ...debugContext,
+          upstreamStatus: response.status,
+          traceId: upstreamTraceId,
         });
       }
 
@@ -204,6 +237,7 @@ export function createApiYiNanoBanana2Provider(options: ApiYiProviderOptions = {
         metadata: {
           model,
           requestId,
+          traceId: upstreamTraceId,
           providerTaskId: typeof body.responseId === 'string' ? body.responseId : requestId,
           providerDurationMs: Date.now() - requestStartedAt,
           httpStatus: response.status,
@@ -212,6 +246,13 @@ export function createApiYiNanoBanana2Provider(options: ApiYiProviderOptions = {
           referenceImageCount: Math.max(0, inlineImages.length - 1),
           aspectRatio,
           imageSize,
+          originalWidth: input.config.sourceImageWidth,
+          originalHeight: input.config.sourceImageHeight,
+          generatedWidth,
+          generatedHeight,
+          finalWidth: generatedWidth,
+          finalHeight: generatedHeight,
+          upscaled: false,
           outputSizeBytes: content.length,
         },
         createdAt: typeof body.createTime === 'string' ? body.createTime : new Date().toISOString(),
@@ -239,7 +280,11 @@ export function collectApiYiImageSources(input: GenerateImageInput): string[] {
   }
   const isPreviewFusion = isObjectInsertPreviewFusion(input);
   if (isPreviewFusion) {
-    return [input.inputImageDataUrl, ...(input.referenceImageDataUrls || []).slice(0, 1)].filter(Boolean);
+    const references = input.referenceImageDataUrls || [];
+    return [
+      input.inputImageDataUrl,
+      ...(hasPlanarGraphicObjectInsert(input.config) ? references : references.slice(0, 1)),
+    ].filter(Boolean);
   }
 
   if (isFreeReferenceImage(input)) {
@@ -266,16 +311,21 @@ export function collectApiYiImageSources(input: GenerateImageInput): string[] {
 function buildApiYiPrompt(input: GenerateImageInput): string {
   if (isObjectInsertPreviewFusion(input)) {
     if (hasPlanarGraphicObjectInsert(input.config)) {
+      const referenceCount = readPlanarGraphicReferenceCount(input.config);
+      const placementPreviewIndex = Math.max(2, 2 + referenceCount);
       return [
         'Image 1 is the original scene.',
-        'Image 2 is the clean placement preview showing the exact planar graphic placement target.',
+        referenceCount > 0
+          ? `Image 2${referenceCount > 1 ? ` to Image ${1 + referenceCount}` : ''} ${referenceCount > 1 ? 'are' : 'is'} the user-uploaded planar graphic reference image(s): logo, text, wayfinding, poster, signage, or screen content. The inserted graphic must come from these reference image(s), not from imagination.`
+          : 'The user-uploaded planar graphic reference image is required. If it is missing, do not invent a similar logo or text.',
+        `Image ${placementPreviewIndex} is the clean placement preview showing the exact planar graphic placement target and deterministic preview composite.`,
         buildObjectInsertImmutableScenePrompt(),
         buildPlanarGraphicInsertionRulesPrompt(),
         buildPlanarGraphicPlacementLockPrompt(input.config),
         buildPlanarGraphicDeterministicFusionPrompt(input.config),
         '',
-        'Insert only the requested planar graphic content at the indicated wall/screen/surface position.',
-        'Use deterministic planar compositing as the main method: keep the graphic core exactly from the placement preview/reference, then perform only minimal edge/contact/environment fusion.',
+        'Only add the user-uploaded planar graphic to the specified placement. This planar graphic is explicitly allowed and must appear in the final image.',
+        'Use deterministic planar compositing as the main method: keep the graphic core exactly from the reference image and placement preview, then perform only minimal edge/contact/environment fusion.',
         'Do not use the ordinary volumetric-object insertion strategy for this item.',
         'Do not AI-redraw the planar graphic core. If a mask is provided, treat the white mask as edgeBand/contact only; never repaint the graphic body or surrounding wall.',
         'Do not let the model decide a new size. The placement box width and height are hard constraints.',
@@ -301,6 +351,23 @@ function buildApiYiPrompt(input: GenerateImageInput): string {
       'For multiple objects, keep every object near its own overlay position. Do not omit objects and do not swap their positions.',
       'Do not redesign the whole room. Do not move unrelated furniture. Do not change wall/floor/ceiling/countertop/furniture/equipment/signage/screen materials or content. Do not add extra copies of the object. Do not create a collage or split-screen.',
       buildObjectInsertUnrequestedContentPrompt(input.config),
+      input.prompt,
+    ].join('\n');
+  }
+
+  if (isPanoramaGeneration(input)) {
+    const referenceCount = input.referenceImageDataUrls?.length || 0;
+    return [
+      'Task type: panorama-generation.',
+      'Image 1 is the source 2:1 equirectangular 360 panorama. It must remain the geometric and camera authority.',
+      referenceCount > 0
+        ? `Images 2 to ${referenceCount + 1} are optional visual references for material, lighting, style, color, or design details. They must not override the source panorama geometry.`
+        : 'No optional reference images are provided.',
+      'Generate one final equirectangular 360 panorama image.',
+      'The output must be a seamless 2:1 panorama suitable for a 360 panorama viewer.',
+      'Preserve full 360 continuity, horizon alignment, camera position, perspective, room/building layout, openings, structural geometry, and main object positions.',
+      'Do not output a normal perspective render, collage, split-screen, cropped view, fisheye circle, UI, border, watermark, or 16:9 image.',
+      'Keep the exact panorama canvas intent: 2:1 width-to-height ratio, continuous left/right seam, and no black bars.',
       input.prompt,
     ].join('\n');
   }
@@ -436,6 +503,23 @@ function readPlanarGraphicPlacementItems(config: Record<string, unknown>): Array
   }];
 }
 
+function readPlanarGraphicReferenceCount(config: Record<string, unknown>): number {
+  const nested = isRecord(config.objectInsert) ? config.objectInsert : {};
+  const items = Array.isArray(nested.objectItems) ? nested.objectItems.filter(isRecord) : [];
+  const count = items
+    .filter(item => readInsertElementKind(
+      item.insertElementKind || item.elementType,
+      readConfigString(item.objectType) || readConfigString(nested.objectType) || readConfigString(config.objectType),
+      { ...config, objectInsert: { ...nested, ...item } },
+    ) === 'planar-graphic')
+    .reduce((total, item) => total + (Array.isArray(item.referenceAssetIds) ? item.referenceAssetIds.filter(value => typeof value === 'string' && value.trim()).length : 0), 0);
+  if (count > 0) return Math.min(6, count);
+  const legacyReferences = Array.isArray(nested.objectReferenceAssetIds)
+    ? nested.objectReferenceAssetIds.filter(value => typeof value === 'string' && value.trim()).length
+    : 0;
+  return Math.min(6, legacyReferences + (readConfigString(nested.objectReferenceAssetId) || readConfigString(config.objectReferenceAssetId) ? 1 : 0));
+}
+
 function formatPlanarPlacementForPrompt(placement: Record<string, unknown> | undefined): string {
   if (!placement) return 'placement box missing; use Image 2 placement preview as the exact hard box';
   const normalizedBox = isRecord(placement.normalizedBox) ? placement.normalizedBox : undefined;
@@ -533,7 +617,27 @@ function isImagePolish(input: GenerateImageInput): boolean {
     || input.config.featureKey === 'image_polish';
 }
 
+function isPanoramaGeneration(input: GenerateImageInput): boolean {
+  return input.mode === 'panorama-roam-render'
+    || input.step === 'panorama_quick_render'
+    || input.config.step === 'panorama_quick_render'
+    || input.config.generationStep === 'panorama_quick_render'
+    || input.config.taskType === 'panorama-generation'
+    || input.config.panoramaTaskType === 'panorama-generation';
+}
+
+function readApiYiTaskType(input: GenerateImageInput): string {
+  if (isPanoramaGeneration(input)) return 'panorama-generation';
+  if (isObjectInsertPreviewFusion(input)) return hasPlanarGraphicObjectInsert(input.config) ? 'object-insert-planar-preview-fusion' : 'object-insert-preview-fusion';
+  if (isFreeReferenceImage(input)) return 'free-reference-image';
+  if (isImagePolish(input)) return 'image-polish';
+  return typeof input.config.taskType === 'string' && input.config.taskType.trim()
+    ? input.config.taskType.trim()
+    : input.step || input.mode || 'image-edit';
+}
+
 function resolveAspectRatio(input: GenerateImageInput): string {
+  if (isPanoramaGeneration(input)) return '2:1';
   const candidates = [
     input.targetAspectRatio,
     typeof input.config.aspectRatio === 'string' ? input.config.aspectRatio : undefined,
@@ -588,12 +692,141 @@ function tryParseApiYiJson(rawText: string): ApiYiResponse | null {
   }
 }
 
+function buildApiYiDebugContext(input: {
+  taskType: string;
+  route: string;
+  provider: string;
+  model: string;
+  inlineImages: ApiYiInlineData[];
+  promptLength: number;
+  timeoutMs: number;
+}): {
+  taskType: string;
+  route: string;
+  provider: string;
+  model: string;
+  sourceMimeType?: string;
+  sourceBytes?: number;
+  referenceMimeType?: string;
+  referenceBytes?: number;
+  imageCount: number;
+  promptLength: number;
+  timeout: number;
+} {
+  const source = input.inlineImages[0];
+  const reference = input.inlineImages[1];
+  return {
+    taskType: input.taskType,
+    route: input.route,
+    provider: input.provider,
+    model: input.model,
+    sourceMimeType: source?.mimeType,
+    sourceBytes: source ? base64ByteLength(source.data) : undefined,
+    referenceMimeType: reference?.mimeType,
+    referenceBytes: reference ? base64ByteLength(reference.data) : undefined,
+    imageCount: input.inlineImages.length,
+    promptLength: input.promptLength,
+    timeout: input.timeoutMs,
+  };
+}
+
+function validateApiYiParts(parts: ApiYiPart[]): void {
+  if (!parts[0] || typeof parts[0].text !== 'string' || 'inlineData' in parts[0]) {
+    throw createApiYiError('APIYI_REQUEST_INVALID', 'API易请求 parts[0] must contain text only.', 'API易图片编辑失败，请稍后重试。');
+  }
+  for (const [index, part] of parts.slice(1).entries()) {
+    const inlineData = part.inlineData;
+    if (!inlineData || 'text' in part) {
+      throw createApiYiError('APIYI_REQUEST_INVALID', `API易请求图片 part ${index + 2} must contain inlineData only.`, 'API易图片编辑失败，请稍后重试。');
+    }
+    if (inlineData.mimeType !== 'image/png' && inlineData.mimeType !== 'image/jpeg') {
+      throw createApiYiError('APIYI_REQUEST_INVALID', `API易请求图片 part ${index + 2} has unsupported mimeType: ${inlineData.mimeType || 'missing'}`, 'API易图片编辑失败，请稍后重试。');
+    }
+    if (!inlineData.data || inlineData.data.startsWith('data:image/') || !isValidBase64(inlineData.data)) {
+      throw createApiYiError('APIYI_REQUEST_INVALID', `API易请求图片 part ${index + 2} has invalid inlineData.data.`, 'API易图片编辑失败，请稍后重试。');
+    }
+  }
+}
+
+function logApiYiUpstreamError(input: ReturnType<typeof buildApiYiDebugContext> & {
+  upstreamStatus?: number;
+  traceId?: string;
+  responseBody?: unknown;
+  errorCode?: string;
+  errorMessage?: string;
+}): void {
+  const responseBody = sanitizeApiYiResponseBody(input.responseBody);
+  const upstreamError = readApiYiError(input.responseBody);
+  const errorStack = process.env.NODE_ENV !== 'production'
+    ? new Error(input.errorMessage || String(upstreamError.message || 'APIYi upstream error')).stack
+    : undefined;
+  console.error('[APIYi] upstream error', {
+    taskType: input.taskType,
+    route: input.route,
+    provider: input.provider,
+    model: input.model,
+    sourceMimeType: input.sourceMimeType,
+    sourceBytes: input.sourceBytes,
+    referenceMimeType: input.referenceMimeType,
+    referenceBytes: input.referenceBytes,
+    imageCount: input.imageCount,
+    promptLength: input.promptLength,
+    timeout: input.timeout,
+    upstreamStatus: input.upstreamStatus,
+    traceId: input.traceId,
+    errorCode: input.errorCode || upstreamError.code,
+    errorMessage: input.errorMessage || upstreamError.message,
+    error: {
+      message: input.errorMessage || upstreamError.message,
+      code: input.errorCode || upstreamError.code,
+    },
+    responseBody,
+    errorStack,
+  });
+}
+
+function readApiYiTraceId(response: Response, body: ApiYiResponse | null): string | undefined {
+  return response.headers.get('x-trace-id')
+    || response.headers.get('trace-id')
+    || response.headers.get('x-request-id')
+    || response.headers.get('x-apiyi-trace-id')
+    || (typeof body?.traceId === 'string' ? body.traceId : undefined)
+    || (typeof body?.trace_id === 'string' ? body.trace_id : undefined)
+    || (typeof body?.requestId === 'string' ? body.requestId : undefined)
+    || (typeof body?.request_id === 'string' ? body.request_id : undefined);
+}
+
+function readApiYiError(value: unknown): { message?: string; code?: string | number } {
+  if (isRecord(value) && isRecord(value.error)) {
+    return {
+      message: typeof value.error.message === 'string' ? value.error.message : undefined,
+      code: typeof value.error.code === 'string' || typeof value.error.code === 'number' ? value.error.code : undefined,
+    };
+  }
+  return {};
+}
+
+function sanitizeApiYiResponseBody(value: unknown): unknown {
+  return JSON.parse(sanitizeResponseSnippet(value || {})) as unknown;
+}
+
+function base64ByteLength(value: string): number {
+  return Buffer.from(value, 'base64').length;
+}
+
+function isValidBase64(value: string): boolean {
+  if (!value.trim() || value.startsWith('data:')) return false;
+  if (!/^[a-z0-9+/]+={0,2}$/iu.test(value)) return false;
+  return Buffer.from(value, 'base64').length > 0;
+}
+
 function createApiYiError(
   code: string,
   message: string,
   userMessage = 'API易图片编辑失败，请检查 API Key、图片格式或稍后重试。',
   statusCode?: number,
   rawResponse?: unknown,
+  traceId?: string,
 ): Error {
   const error = new Error(message) as Error & {
     provider?: string;
@@ -601,26 +834,49 @@ function createApiYiError(
     providerStatus?: string;
     userMessage?: string;
     statusCode?: number;
+    traceId?: string;
     rawSnippet?: string;
   };
   error.provider = providerName;
   error.providerError = code;
   error.providerStatus = 'failed';
-  error.userMessage = userMessage;
+  error.userMessage = userMessage.includes('API Key') ? 'API易图片编辑失败，请稍后重试。' : userMessage;
+  if (process.env.NODE_ENV === 'development') {
+    error.userMessage = [
+      error.userMessage || userMessage,
+      `错误码：${code}`,
+      typeof statusCode === 'number' ? `HTTP状态：${statusCode}` : undefined,
+      traceId ? `traceId：${traceId}` : undefined,
+    ].filter((part): part is string => Boolean(part)).join('\n');
+  }
+  if (process.env.NODE_ENV === 'development' && traceId && !error.userMessage?.includes('traceId=')) {
+    error.userMessage = [error.userMessage, `traceId=${traceId}`].filter(Boolean).join('\n');
+  }
   error.statusCode = statusCode;
-  if (rawResponse !== undefined) error.rawSnippet = sanitizeResponseSnippet(rawResponse);
+  error.traceId = traceId;
+  if (rawResponse !== undefined) {
+    error.rawSnippet = sanitizeResponseSnippet(rawResponse);
+  }
   return error;
 }
 
 function sanitizeResponseSnippet(value: unknown): string {
   try {
     return (JSON.stringify(value, (_key, child) => {
-      if (typeof child === 'string' && child.length > 400) return `${child.slice(0, 120)}...[omitted,length=${child.length}]`;
+      if (typeof child === 'string') {
+        if (/^data:image\/[^;]+;base64,/iu.test(child)) return `[omitted data-url,length=${child.length}]`;
+        if (looksLikeBase64ImagePayload(child)) return `[omitted base64,length=${child.length}]`;
+        if (child.length > 400) return `${child.slice(0, 120)}...[omitted,length=${child.length}]`;
+      }
       return child;
     }) || '').slice(0, 800);
   } catch {
     return '';
   }
+}
+
+function looksLikeBase64ImagePayload(value: string): boolean {
+  return value.length > 64 && /^[a-z0-9+/=\s]+$/iu.test(value);
 }
 
 function normalizeBaseUrl(value: string): string {

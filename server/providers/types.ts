@@ -11,7 +11,7 @@ export type GenerationJobStep =
   | 'object_insert'
   | 'free_reference_image'
   | 'image_polish';
-export type ProviderName = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana' | 'apiyi-nano-banana2-edit';
+export type ProviderName = 'mock' | 'gemini' | 'grsai-banana2' | 'grsai-nano-banana' | 'apiyi' | 'apiyi-nano-banana2-edit';
 export type MaskMode = 'asset-mask' | 'full-image';
 export type QualityMode = 'draft' | 'fast' | 'balanced' | 'high';
 

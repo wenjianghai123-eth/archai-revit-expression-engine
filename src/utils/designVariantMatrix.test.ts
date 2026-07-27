@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { buildDesignVariantMatrixPrompt, buildDesignVariantReportNarrative, findSimilarDesignVariantPairs, resolveDesignVariantMatrix } from './designVariantMatrix';
 
 describe('design variant matrix', () => {
-  it('resolves all eight design variables for every option', () => {
+  it('resolves all design variables for every option', () => {
     const matrix = resolveDesignVariantMatrix({ stylePackId: 'interior-common', variantDiversity: 'high' }, 4);
 
     expect(matrix).toHaveLength(4);
-    expect(Object.keys(matrix[0].values)).toHaveLength(8);
-    expect(matrix[0].changedVariables).toHaveLength(8);
+    expect(Object.keys(matrix[0].values)).toHaveLength(9);
+    expect(matrix[0].changedVariables).toHaveLength(9);
     expect(matrix[0].differenceSummary).toContain('材质体系');
   });
 
@@ -33,7 +33,7 @@ describe('design variant matrix', () => {
     const prompt = buildDesignVariantMatrixPrompt(matrix[0], 'low');
     const report = buildDesignVariantReportNarrative(matrix[0], '方案 A');
 
-    expect(pairs).toContainEqual(expect.objectContaining({ leftIndex: 0, rightIndex: 1, similarity: expect.closeTo(0.875) }));
+    expect(pairs).toContainEqual(expect.objectContaining({ leftIndex: 0, rightIndex: 1, similarity: expect.closeTo(0.8888888889) }));
     expect(prompt).toContain('Design-variable matrix');
     expect(prompt).toContain('材质体系');
     expect(prompt).toContain(matrix[0].differenceSummary);

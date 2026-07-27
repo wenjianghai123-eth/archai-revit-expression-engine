@@ -55,7 +55,7 @@ describe('API易 Nano Banana 2 provider', () => {
     const request = requests[0];
     const body = JSON.parse(String(request.init?.body)) as {
       contents: Array<{ parts: Array<Record<string, unknown>> }>;
-      generationConfig: { imageConfig: { aspectRatio: string; imageSize: string } };
+      generationConfig: { responseModalities: string[]; imageConfig: { aspectRatio: string; imageSize: string } };
     };
     const parts = body.contents[0].parts;
 
@@ -68,8 +68,9 @@ describe('API易 Nano Banana 2 provider', () => {
       const inlineData = part.inlineData as { data: string };
       return !inlineData.data.startsWith('data:image/');
     })).toBe(true);
+    expect(body.generationConfig.responseModalities).toEqual(['IMAGE']);
     expect(body.generationConfig.imageConfig).toEqual({ aspectRatio: '16:9', imageSize: '2K' });
-    expect(output.provider).toBe('apiyi-nano-banana2-edit');
+    expect(output.provider).toBe('apiyi');
     expect(output.dataUrl).toBe(onePixelPng);
   });
 
@@ -87,6 +88,44 @@ describe('API易 Nano Banana 2 provider', () => {
     expect(body.generationConfig.imageConfig.aspectRatio).toBe('2:1');
   });
 
+  it('uses the panorama-generation branch with a locked 2:1 APIYI request', async () => {
+    const requests: RequestInit[] = [];
+    const provider = createApiYiNanoBanana2Provider({
+      apiKey: 'test-key',
+      fetchImpl: vi.fn(async (_url, init) => {
+        requests.push(init || {});
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: onePixelPng.replace(/^data:image\/png;base64,/u, '') } }] } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }) as typeof fetch,
+    });
+
+    await provider.generateImage(createInput({
+      mode: 'panorama-roam-render',
+      step: 'panorama_quick_render',
+      referenceImageDataUrls: [onePixelPng],
+      targetAspectRatio: '16:9',
+      prompt: 'Render a seamless panorama.',
+      config: {
+        step: 'panorama_quick_render',
+        taskType: 'panorama-generation',
+        panoramaTaskType: 'panorama-generation',
+        aspectRatio: '16:9',
+        apiyiAspectRatio: '16:9',
+        apiyiImageSize: '4K',
+      },
+    }));
+
+    const body = JSON.parse(String(requests[0].body)) as {
+      contents: Array<{ parts: Array<{ text?: string; inlineData?: unknown }> }>;
+      generationConfig: { imageConfig: { aspectRatio: string; imageSize: string } };
+    };
+    const text = body.contents[0].parts[0].text || '';
+    expect(body.generationConfig.imageConfig).toEqual({ aspectRatio: '2:1', imageSize: '4K' });
+    expect(body.contents[0].parts).toHaveLength(3);
+    expect(text).toContain('Task type: panorama-generation');
+    expect(text).toContain('equirectangular 360 panorama');
+    expect(text).toContain('Do not output a normal perspective render');
+  });
+
   it('sends only source image and placement preview for object_insert_preview_fusion', () => {
     const sources = collectApiYiImageSources(createInput({
       mode: 'inpaint',
@@ -101,6 +140,35 @@ describe('API易 Nano Banana 2 provider', () => {
       },
     }));
     expect(sources).toEqual([onePixelPng, onePixelPng]);
+  });
+
+  it('keeps planar graphic reference images and placement preview for object_insert_preview_fusion', () => {
+    const reference = 'data:image/png;base64,cmVmZXJlbmNl';
+    const preview = 'data:image/png;base64,cHJldmlldw==';
+    const sources = collectApiYiImageSources(createInput({
+      mode: 'inpaint',
+      step: 'object_insert',
+      referenceImageDataUrls: [reference, preview],
+      maskImageDataUrl: onePixelPng,
+      config: {
+        step: 'object_insert',
+        objectInsertMode: 'object_insert_preview_fusion',
+        insertElementKind: 'planar-graphic',
+        objectInsert: {
+          mode: 'object_insert_preview_fusion',
+          insertElementKind: 'planar-graphic',
+          objectItems: [{
+            id: 'logo-1',
+            objectType: 'logo',
+            insertElementKind: 'planar-graphic',
+            referenceAssetIds: ['asset-logo'],
+            placementPreviewAssetId: 'asset-preview',
+            placement: { x: 10, y: 12, width: 80, height: 24, rotation: 0 },
+          }],
+        },
+      },
+    }));
+    expect(sources).toEqual([onePixelPng, reference, preview]);
   });
 
   it('uses element-only preservation prompts for volumetric object insertion', async () => {
@@ -120,7 +188,7 @@ describe('API易 Nano Banana 2 provider', () => {
       mode: 'inpaint',
       step: 'object_insert',
       prompt: 'Insert a plant near the sofa.',
-      referenceImageDataUrls: [onePixelPng],
+      referenceImageDataUrls: [onePixelPng, onePixelPng],
       materialReferenceImageDataUrls: [],
       config: {
         step: 'object_insert',
@@ -174,7 +242,7 @@ describe('API易 Nano Banana 2 provider', () => {
       mode: 'inpaint',
       step: 'object_insert',
       prompt: 'Place the hospital logo on the wall.',
-      referenceImageDataUrls: [onePixelPng],
+      referenceImageDataUrls: [onePixelPng, onePixelPng],
       materialReferenceImageDataUrls: [],
       config: {
         step: 'object_insert',
@@ -221,10 +289,13 @@ describe('API易 Nano Banana 2 provider', () => {
     }));
 
     const body = JSON.parse(String(requests[0].init?.body)) as {
-      contents: Array<{ parts: Array<{ text?: string }> }>;
+      contents: Array<{ parts: Array<{ text?: string; inlineData?: { data: string } }> }>;
     };
+    expect(body.contents[0].parts).toHaveLength(4);
     const text = body.contents[0].parts[0].text || '';
     expect(text).toContain('Planar graphic insertion branch');
+    expect(text).toContain('Image 2 is the user-uploaded planar graphic reference image');
+    expect(text).toContain('Image 3 is the clean placement preview');
     expect(text).toContain('Planar graphic size lock');
     expect(text).toContain('width=240');
     expect(text).toContain('height=80');
@@ -375,7 +446,7 @@ describe('API易 Nano Banana 2 provider', () => {
     try {
       await expect(provider.generateImage(createInput())).rejects.toMatchObject({
         providerError: 'APIYI_API_KEY_MISSING',
-        userMessage: '未配置 API易 API Key，请在后端 .env 中配置 APIYI_API_KEY。',
+        userMessage: 'API易图片编辑失败，请稍后重试。',
       });
     } finally {
       if (previous === undefined) delete process.env.APIYI_API_KEY;
@@ -395,6 +466,46 @@ describe('API易 Nano Banana 2 provider', () => {
       providerError: 'APIYI_UNAUTHORIZED',
       statusCode: 401,
     });
+  });
+
+  it('logs upstream status, error body, and trace id without image payloads', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const provider = createApiYiNanoBanana2Provider({
+      apiKey: 'invalid-key',
+      fetchImpl: vi.fn(async () => new Response(JSON.stringify({
+        traceId: 'trace-400',
+        error: {
+          message: 'invalid inline image',
+          code: 'INVALID_ARGUMENT',
+          details: {
+            image: onePixelPng,
+            raw: onePixelPng.replace(/^data:image\/png;base64,/u, ''),
+          },
+        },
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', 'x-trace-id': 'trace-header-400' },
+      })) as typeof fetch,
+    });
+
+    await expect(provider.generateImage(createInput())).rejects.toMatchObject({
+      providerError: 'APIYI_REQUEST_FAILED',
+      statusCode: 400,
+      traceId: 'trace-header-400',
+    });
+    const [, logged] = errorSpy.mock.calls[0];
+    expect(logged).toMatchObject({
+      model: 'gemini-3.1-flash-image-preview',
+      upstreamStatus: 400,
+      traceId: 'trace-header-400',
+      imageCount: 3,
+      error: { message: 'invalid inline image', code: 'INVALID_ARGUMENT' },
+    });
+    const serialized = JSON.stringify(logged);
+    expect(serialized).not.toContain('data:image/');
+    expect(serialized).not.toContain(onePixelPng.replace(/^data:image\/png;base64,/u, ''));
+    expect(serialized).toContain('[omitted');
+    errorSpy.mockRestore();
   });
 
   it('fails with APIYI_IMAGE_RESULT_NOT_FOUND when candidates contain no image', async () => {

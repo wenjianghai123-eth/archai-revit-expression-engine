@@ -1450,10 +1450,22 @@ export function ObjectInsertPanel({
     setMessage('正在准备多元素植入素材...');
     try {
       const previewFusionSourceUpload = await ensureUploadedImageAsset(sourceImage, 'object-insert-preview-fusion-source');
-      const previewFusionItems = candidateItems.map(item => ({
-        ...item,
-        placement: item.id === activeObjectItem?.id ? placement : item.placement,
-      }));
+      const previewFusionItems: ObjectInsertDraftItem[] = [];
+      for (const [index, item] of candidateItems.entries()) {
+        const referenceUploads = await Promise.all(item.referenceImages.slice(0, maxReferencesPerObject).map((image, referenceIndex) => (
+          ensureUploadedImageAsset(image, `object-insert-preview-fusion-reference-${index + 1}-${referenceIndex + 1}`)
+        )));
+        if (!referenceUploads[0]) continue;
+        previewFusionItems.push({
+          ...item,
+          referenceImages: referenceUploads.map(upload => upload.image),
+          placement: item.id === activeObjectItem?.id ? placement : item.placement,
+        });
+      }
+      if (previewFusionItems.length === 0) {
+        setMessage('二维平面图形参考图上传失败，请重试。');
+        return;
+      }
       const placementPreview = await exportCompositePlacementPreview(
         previewFusionSourceUpload.image,
         previewFusionItems.map(item => ({
@@ -1526,6 +1538,7 @@ export function ObjectInsertPanel({
         };
       });
       logPlanarGraphicPlacementDebug(previewFusionObjectItemConfigs);
+      const previewFusionReferenceAssetIds = Array.from(new Set(previewFusionObjectItemConfigs.flatMap(item => item.referenceAssetIds)));
       const previewFusionConfigPatch: GenerationConfig = {
         ...effectivePreviewFusionConfig,
         step: 'object_insert',
@@ -1535,7 +1548,7 @@ export function ObjectInsertPanel({
         sourceImageAssetId: previewFusionSourceUpload.assetId,
         placementPreviewAssetId: placementPreviewAsset.id,
         placementGuideAssetId: placementPreviewAsset.id,
-        objectReferenceAssetId: undefined,
+        objectReferenceAssetId: hasPlanarPreviewItems ? previewFusionReferenceAssetIds[0] : undefined,
         placementMaskAssetId: planarEdgeMaskAsset?.id,
         objectPlacement: previewFusionObjectItemConfigs[0]?.placement,
         insertElementKind: previewFusionObjectItemConfigs[0]?.insertElementKind,
@@ -1556,6 +1569,8 @@ export function ObjectInsertPanel({
           objectItems: previewFusionObjectItemConfigs,
           insertElementKind: previewFusionObjectItemConfigs[0]?.insertElementKind,
           globalExtraPrompt: state.config.objectInsertExtraPrompt || state.config.customPrompt || '',
+          objectReferenceAssetId: hasPlanarPreviewItems ? previewFusionReferenceAssetIds[0] : undefined,
+          objectReferenceAssetIds: hasPlanarPreviewItems ? previewFusionReferenceAssetIds : undefined,
           previewAssetId: placementPreviewAsset.id,
           guideAssetId: placementPreviewAsset.id,
           maskAssetId: planarEdgeMaskAsset?.id,
@@ -1588,7 +1603,7 @@ export function ObjectInsertPanel({
       setExportResult({ preview: placementPreview, mask: planarEdgeMask || placementPreview, placement: previewFusionObjectItemConfigs[0]?.placement || emptyPlacement });
       setObjectItems(objectItems.map(item => {
         const prepared = previewFusionItems.find(preparedItem => preparedItem.id === item.id);
-        return prepared ? { ...item, placement: prepared.placement } : item;
+        return prepared ? { ...item, referenceImages: prepared.referenceImages, placement: prepared.placement } : item;
       }));
       onUpdateInputImage(previewFusionSourceUpload.image);
       onUpdateMaterialImage(null);
@@ -1598,21 +1613,33 @@ export function ObjectInsertPanel({
         requestMode: 'inpaint',
         objectInsertMode: 'object_insert_preview_fusion',
         configMode: previewFusionConfigPatch.objectInsert?.mode,
-        inputAssetIds: [previewFusionSourceUpload.assetId, placementPreviewAsset.id, planarEdgeMaskAsset?.id].filter(Boolean),
+        inputAssetIds: [
+          previewFusionSourceUpload.assetId,
+          ...(hasPlanarPreviewItems ? previewFusionReferenceAssetIds : []),
+          placementPreviewAsset.id,
+          planarEdgeMaskAsset?.id,
+        ].filter(Boolean),
         sourceImageAssetId: previewFusionSourceUpload.assetId,
+        referenceAssetIds: hasPlanarPreviewItems ? previewFusionReferenceAssetIds : [],
         placementPreviewAssetId: placementPreviewAsset.id,
         planarEdgeMaskAssetId: planarEdgeMaskAsset?.id,
         objectItemsCount: previewFusionObjectItemConfigs.length,
         objectItemsReferenceCount: previewFusionObjectItemConfigs.reduce((sum, item) => sum + item.referenceAssetIds.length, 0),
-        providerImageCount: planarEdgeMaskAsset?.id ? 3 : 2,
-        sendsFurnitureReferencesToProvider: false,
+        providerImageCount: 1 + (hasPlanarPreviewItems ? previewFusionReferenceAssetIds.length : 0) + 1 + (planarEdgeMaskAsset?.id ? 1 : 0),
+        sendsFurnitureReferencesToProvider: hasPlanarPreviewItems,
         placementConstraintMode: hasPlanarPreviewItems ? 'strict-planar-edge-fusion' : 'soft-anchor',
         cleanPlacementPreview: true,
       });
       console.info('[ObjectInsert] preview fusion generation job payload prepared', {
-        inputAssetIds: [previewFusionSourceUpload.assetId, placementPreviewAsset.id, planarEdgeMaskAsset?.id].filter(Boolean),
-        providerImageCount: planarEdgeMaskAsset?.id ? 3 : 2,
+        inputAssetIds: [
+          previewFusionSourceUpload.assetId,
+          ...(hasPlanarPreviewItems ? previewFusionReferenceAssetIds : []),
+          placementPreviewAsset.id,
+          planarEdgeMaskAsset?.id,
+        ].filter(Boolean),
+        providerImageCount: 1 + (hasPlanarPreviewItems ? previewFusionReferenceAssetIds.length : 0) + 1 + (planarEdgeMaskAsset?.id ? 1 : 0),
         sourceAssetId: previewFusionSourceUpload.assetId,
+        referenceAssetIds: hasPlanarPreviewItems ? previewFusionReferenceAssetIds : [],
         placementPreviewAssetId: placementPreviewAsset.id,
         planarEdgeMaskAssetId: planarEdgeMaskAsset?.id,
         placementPreview: omitDataUrl(placementPreview),

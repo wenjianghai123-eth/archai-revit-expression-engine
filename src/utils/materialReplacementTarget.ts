@@ -93,8 +93,10 @@ export function normalizeReplacementTarget(value: unknown): ReplacementTarget | 
   return legacyTargetAliases[normalized] || null;
 }
 
-export function resolveReplacementTargetFromConfig(config: { replacementTarget?: unknown; targetObjectType?: unknown }): ReplacementTarget | null {
-  return normalizeReplacementTarget(config.replacementTarget) || normalizeReplacementTarget(config.targetObjectType);
+export function resolveReplacementTargetFromConfig(config: { replacementTarget?: unknown; targetObjectCategory?: unknown; targetObjectType?: unknown }): ReplacementTarget | null {
+  return normalizeReplacementTarget(config.replacementTarget)
+    || normalizeReplacementTarget(config.targetObjectCategory)
+    || normalizeReplacementTarget(config.targetObjectType);
 }
 
 export function toMaterialReplaceTargetObject(target: ReplacementTarget): MaterialReplaceTargetObject {

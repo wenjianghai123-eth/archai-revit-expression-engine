@@ -35,6 +35,10 @@ interface Scenario {
   maskWorkflowMode?: GenerationConfig['maskWorkflowMode'];
   isGenerating?: boolean;
   editTarget?: 'general' | 'material' | 'furniture';
+  materialReplacementMode?: GenerationConfig['materialReplacementMode'];
+  materialCategory?: GenerationConfig['materialCategory'];
+  replacementScope?: GenerationConfig['replacementScope'];
+  targetObjectCategory?: GenerationConfig['targetObjectCategory'];
   targetObjectType?: GenerationConfig['targetObjectType'];
   replacementTarget?: GenerationConfig['replacementTarget'];
   replacementPrompt?: string;
@@ -54,6 +58,10 @@ function createState({
   maskWorkflowMode,
   isGenerating = false,
   editTarget = 'general',
+  materialReplacementMode,
+  materialCategory,
+  replacementScope,
+  targetObjectCategory,
   targetObjectType,
   replacementTarget,
   replacementPrompt = '',
@@ -68,6 +76,10 @@ function createState({
       editTarget,
       editMode: maskWorkflowMode === 'none' ? 'smart-type' : 'mask',
       selectionMode: resolvedSelectionMode,
+      materialReplacementMode: materialReplacementMode || (maskWorkflowMode === 'none' ? 'object-category' : 'smart-select'),
+      materialReplaceMode: materialReplacementMode || (maskWorkflowMode === 'none' ? 'object-category' : 'smart-select'),
+      materialCategory,
+      replacementScope: replacementScope || (maskWorkflowMode === 'none' ? 'current-object' : 'selected-region'),
       maskSelectionMode: maskWorkflowMode === 'none' ? undefined : maskMode,
       maskWorkflowMode,
       smartSelectionStatus: maskConfirmed ? 'confirmed' : 'idle',
@@ -76,6 +88,7 @@ function createState({
       smartMaskIsRefining: false,
       maskWorkflowActive,
       customMaterialPrompt: replacementPrompt,
+      targetObjectCategory,
       targetObjectType,
       replacementTarget,
       targetMaterial,
@@ -205,8 +218,8 @@ describe('MainWorkspace material replacement preview', () => {
       maskWorkflowMode: 'none',
     });
     expect(previewButton().disabled).toBe(false);
-    expect(view.textContent).toContain('模式：自动同类替换');
-    expect(view.textContent).toContain('自动同类替换');
+    expect(view.textContent).toContain('模式：指定对象替换');
+    expect(view.textContent).toContain('指定对象替换');
     clickPreview();
     expect(view.textContent).not.toContain('请选择需要替换的材质区域');
     expect(onGenerate).toHaveBeenCalledTimes(1);
@@ -316,9 +329,9 @@ describe('MainWorkspace material replacement preview', () => {
       });
 
       const summary = view.querySelector('[data-testid="material-replacement-task-summary"]');
-      expect(summary?.textContent).toContain('模式：自动同类替换');
-      expect(summary?.textContent).toContain(`目标区域：${label}`);
-      expect(summary?.textContent).toContain('替换范围：所有同类型元素');
+      expect(summary?.textContent).toContain('模式：指定对象替换');
+      expect(summary?.textContent).toContain(`目标：${label}`);
+      expect(summary?.textContent).toContain('替换范围：当前对象');
       expect(summary?.textContent).toContain('参考图：已上传');
       expect(summary?.textContent).toContain('控图约束：已内置');
     },
@@ -335,8 +348,8 @@ describe('MainWorkspace material replacement preview', () => {
     });
 
     const summary = view.querySelector('[data-testid="material-replacement-task-summary"]');
-    expect(summary?.textContent).toContain('模式：智能选区');
-    expect(summary?.textContent).toContain('目标区域：根据选区识别');
+    expect(summary?.textContent).toContain('模式：智能选区替换');
+    expect(summary?.textContent).toContain('目标：根据选区识别');
     expect(summary?.textContent).toContain('语义识别：已开启');
     expect(summary?.textContent).toContain('替换范围：仅确认选区');
     expect(summary?.textContent).toContain('控图约束：已内置');

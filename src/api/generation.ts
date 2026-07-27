@@ -42,7 +42,10 @@ async function postGeneration(endpoint: string, request: GenerationRequest): Pro
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(request),
+      body: JSON.stringify({
+        ...request,
+        config: sanitizeGenerationRequestConfig(request.config as unknown as Record<string, unknown>),
+      }),
     });
   } catch {
     throw new Error(backendUnavailableMessage);
@@ -113,7 +116,23 @@ function isGenerationProvider(value: unknown): value is GenerationProvider {
     || value === 'gemini'
     || value === 'grsai-banana2'
     || value === 'grsai-nano-banana'
+    || value === 'apiyi'
     || value === 'apiyi-nano-banana2-edit';
+}
+
+function sanitizeGenerationRequestConfig(config: Record<string, unknown>): Record<string, unknown> {
+  const {
+    aiProvider: _aiProvider,
+    selectedProvider: _selectedProvider,
+    provider: _provider,
+    model: _model,
+    api_url: _apiUrlSnake,
+    api_key: _apiKeySnake,
+    apiUrl: _apiUrl,
+    apiKey: _apiKey,
+    ...safeConfig
+  } = config;
+  return safeConfig;
 }
 
 function isLikelySpaFallbackResponse(response: Response): boolean {

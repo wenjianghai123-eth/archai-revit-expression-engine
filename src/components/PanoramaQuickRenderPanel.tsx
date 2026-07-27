@@ -34,7 +34,7 @@ import { GenerationResultActions } from './common/GenerationResultActions';
 import { GenerationProgress } from './common/GenerationProgress';
 import { normalizeGenerationTaskStatus, readGenerationProgressLabel, type NormalizedGenerationResult } from '../utils/normalizeGenerationResult';
 import { IMAGE_UPLOAD_ACCEPT } from '../utils/imageValidation';
-import { validateImageFile } from '../utils/file';
+import { createUploadedImage, validateImageFile } from '../utils/file';
 import { resolveAssetUrl, warnImageLoadFailure } from '../utils/assetUrl';
 
 interface PanoramaQuickRenderPanelProps {
@@ -89,6 +89,7 @@ const MAX_MODEL_SIZE_MB = 600;
 const MAX_MODEL_SIZE_BYTES = MAX_MODEL_SIZE_MB * 1024 * 1024;
 const PANORAMA_SLOT_INDICES = [1, 2, 3, 4] as const;
 const PANORAMA_SLOT_STORAGE_PREFIX = 'archai:panorama-quick-render-slots:v1';
+const UPLOADED_PANORAMA_SLOT_MODEL_ID = 'uploaded-panorama';
 const MAX_PANORAMA_REFERENCE_IMAGES = 6;
 const referenceTypeOptions: Array<{ value: PanoramaReferenceType; label: string }> = [
   { value: 'revit_screenshot', label: 'Revit 截图' },
@@ -124,6 +125,7 @@ export function PanoramaQuickRenderPanel({
   onHistoryRecord,
 }: PanoramaQuickRenderPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const panoramaFileInputRef = useRef<HTMLInputElement>(null);
   const referenceFileInputRef = useRef<HTMLInputElement>(null);
   const viewerRef = useRef<ModelViewerHandle>(null);
   const [model, setModel] = useState<AssetModel | null>(null);
@@ -229,12 +231,16 @@ export function PanoramaQuickRenderPanel({
     setPanoramaPreviewKind(nextPreviewKind === 'rendered' && slot.renderResult ? 'rendered' : 'raw');
     onUpdateInputImage(normalizedRawImage);
     onUpdateConfig({
-      sourceModelAssetId: slot.modelId,
+      sourceModelAssetId: slot.modelId || undefined,
       sourceImageAssetId: sourceAssetId,
       panoramaAssetId: sourceAssetId,
       targetWidth: normalizedRawImage.width,
       targetHeight: normalizedRawImage.height,
       targetAspectRatio: '2:1',
+      aspectRatio: '2:1',
+      apiyiAspectRatio: '2:1',
+      taskType: 'panorama-generation',
+      panoramaTaskType: 'panorama-generation',
       qualityMode: 'high',
       panoramaQuality: slot.capture.panoramaQuality || panoramaQuality,
       panoramaChangeStrength,
@@ -266,7 +272,7 @@ export function PanoramaQuickRenderPanel({
 
     const slotReferences = normalizePanoramaReferenceImages(slot.referenceImages?.length ? slot.referenceImages : referenceImages);
     if (slotReferences.length > 0 && !providerSupportsReferences) {
-      setMessage('当前 provider 不支持参考图增强。请切换到 Gemini、GRS Banana2/Nano Banana 或移除参考图后再渲染。');
+      setMessage('当前生成通道暂不支持参考图增强，请移除参考图后再渲染。');
       return false;
     }
 
@@ -316,17 +322,7 @@ export function PanoramaQuickRenderPanel({
   }, []);
 
   useEffect(() => {
-    if (!model?.id) {
-      setSlots([]);
-      setSlotsStorageKey('');
-      setActiveSlotIndex(1);
-      setCaptureSlotIndex(1);
-      setSelectedSlotIndices([]);
-      setReferenceImages([]);
-      return;
-    }
-
-    const key = getPanoramaSlotStorageKey(projectId, model.id);
+    const key = getPanoramaSlotStorageKey(projectId, model?.id || UPLOADED_PANORAMA_SLOT_MODEL_ID);
     const storedSlots = readStoredPanoramaSlots(key);
     setSlots(storedSlots);
     setSlotsStorageKey(key);
@@ -340,8 +336,9 @@ export function PanoramaQuickRenderPanel({
   }, [model?.id, projectId]);
 
   useEffect(() => {
-    if (!model?.id || !slotsStorageKey) return;
-    if (slotsStorageKey !== getPanoramaSlotStorageKey(projectId, model.id)) return;
+    if (!slotsStorageKey) return;
+    const storageModelId = model?.id || UPLOADED_PANORAMA_SLOT_MODEL_ID;
+    if (slotsStorageKey !== getPanoramaSlotStorageKey(projectId, storageModelId)) return;
     writeStoredPanoramaSlots(slotsStorageKey, slots);
   }, [model?.id, projectId, slots, slotsStorageKey]);
 
@@ -506,6 +503,149 @@ export function PanoramaQuickRenderPanel({
     }
   };
 
+  const handleExistingPanoramaUpload = async (fileList: FileList | null) => {
+    const file = fileList?.[0];
+    if (!file) return;
+
+    const validationError = validateImageFile(file, 'panorama:source');
+    if (validationError) {
+      setMessage(validationError);
+      return;
+    }
+
+    setIsUploading(true);
+    setMessage(null);
+    try {
+      const localImage = await createUploadedImage(file);
+      const ratio = localImage.width && localImage.height ? localImage.width / localImage.height : 0;
+      if (!ratio || Math.abs(ratio - 2) > 0.12) {
+        setMessage('请上传 2:1 等距柱状全景图，例如 4096×2048 或 2048×1024。');
+        return;
+      }
+
+      const imageAsset = await uploadImageAsset(file, file.name);
+      const uploadedPanorama: UploadedImage = {
+        ...localImage,
+        id: imageAsset.id,
+        name: file.name || imageAsset.filename,
+        type: file.type || imageAsset.mimeType,
+        size: file.size || imageAsset.size,
+        url: imageAsset.url,
+        publicUrl: imageAsset.publicUrl,
+        thumbnailUrl: imageAsset.thumbnailUrl,
+        assetId: imageAsset.id,
+        uploadStatus: 'uploaded',
+        uploadProgress: 100,
+      };
+      const capturedAt = new Date().toISOString();
+      const payload: PanoramaCapturePayload = {
+        captureType: 'panorama-viewpoint',
+        sourceModelAssetId: '',
+        camera: {},
+        panoramaQuality: uploadedPanorama.width && uploadedPanorama.width <= 2048 ? 'standard' : 'high',
+        capturedAt,
+      };
+      const record: PanoramaRecord = {
+        id: `panorama-upload-${Date.now()}`,
+        projectId,
+        modelUrl: '',
+        cameraState: {},
+        panoramaUrl: imageAsset.url || localImage.dataUrl,
+        thumbnailUrl: imageAsset.thumbnailUrl || imageAsset.url || localImage.dataUrl,
+        shareId: createShareId(),
+        createdAt: capturedAt,
+      };
+      const targetSlotIndex = captureSlotIndex;
+      savePanoramaRecord(record);
+      const historyRecord = saveGenerationRecord({
+        id: record.id,
+        projectId,
+        step: GenerationStep.PanoramaQuickRender,
+        prompt: '上传已有 2:1 全景图并创建漫游预览',
+        style: '已有全景图漫游',
+        createdAt: record.createdAt,
+        provider: 'mock',
+        outputImage: record.panoramaUrl,
+        inputImageUrl: record.panoramaUrl,
+        inputImageAssetId: imageAsset.id,
+        config: {
+          ...config,
+          sourceModelAssetId: undefined,
+          sourceImageAssetId: imageAsset.id,
+          panoramaAssetId: imageAsset.id,
+          targetWidth: uploadedPanorama.width,
+          targetHeight: uploadedPanorama.height,
+          targetAspectRatio: '2:1',
+          aspectRatio: '2:1',
+          apiyiAspectRatio: '2:1',
+          inputSource: 'uploaded-panorama',
+          taskType: 'panorama-upload',
+          panoramaTaskType: 'panorama-upload',
+          qualityMode: 'high',
+          panoramaQuality: payload.panoramaQuality,
+          panoramaChangeStrength,
+          panoramaCapture: payload,
+          ...buildPanoramaReferenceConfig(imageAsset.id, referenceImages, panoramaReferenceStrength),
+        },
+        snapshotAssetId: imageAsset.id,
+        panoramaRecord: record,
+      });
+      const nextSlot: PanoramaCaptureSlot = {
+        slotIndex: targetSlotIndex,
+        title: `位置 ${targetSlotIndex}`,
+        rawImage: uploadedPanorama,
+        capture: payload,
+        panoramaRecord: record,
+        modelId: '',
+        projectId,
+        createdAt: capturedAt,
+        updatedAt: capturedAt,
+        referenceAssetIds: readReferenceAssetIds(referenceImages),
+        referenceTypes: readReferenceTypes(referenceImages),
+        referenceImages,
+      };
+      setSlots(previous => upsertPanoramaSlot(previous, nextSlot));
+      setActiveSlotIndex(targetSlotIndex);
+      setSelectedSlotIndices(previous => previous.includes(targetSlotIndex) ? previous : [...previous, targetSlotIndex]);
+      setPanoramaRecord(record);
+      setPanoramaPreviewKind('raw');
+      setPreviewMode('360');
+      setPrimaryPreviewTab('panorama');
+      onHistoryRecord?.(historyRecord);
+      onUpdateInputImage(uploadedPanorama);
+      onUpdateConfig({
+        sourceModelAssetId: undefined,
+        sourceImageAssetId: imageAsset.id,
+        panoramaAssetId: imageAsset.id,
+        targetWidth: uploadedPanorama.width,
+        targetHeight: uploadedPanorama.height,
+        targetAspectRatio: '2:1',
+        aspectRatio: '2:1',
+        apiyiAspectRatio: '2:1',
+        inputSource: 'uploaded-panorama',
+        taskType: 'panorama-upload',
+        panoramaTaskType: 'panorama-upload',
+        qualityMode: 'high',
+        panoramaQuality: payload.panoramaQuality,
+        panoramaChangeStrength,
+        panoramaCapture: payload,
+        ...buildPanoramaReferenceConfig(imageAsset.id, referenceImages, panoramaReferenceStrength),
+      });
+      debugPanoramaRender('uploaded existing panorama without AI generation', {
+        assetId: imageAsset.id,
+        width: uploadedPanorama.width,
+        height: uploadedPanorama.height,
+        ratio,
+        willCallGenerate: false,
+      });
+      setMessage('已上传 2:1 全景图，已进入全景预览；未调用 AI 图片编辑接口。');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '全景图上传失败，请重试。');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const handleCaptureViewpoint = async () => {
     if (!model) {
       setMessage('请先选择或上传一个 3D 模型。');
@@ -591,6 +731,11 @@ export function PanoramaQuickRenderPanel({
           targetWidth: capture.width,
           targetHeight: capture.height,
           targetAspectRatio: '2:1',
+          aspectRatio: '2:1',
+          apiyiAspectRatio: '2:1',
+          inputSource: 'panorama-capture',
+          taskType: 'panorama-generation',
+          panoramaTaskType: 'panorama-generation',
           qualityMode: 'high',
           panoramaQuality: actualPanoramaQuality,
           panoramaChangeStrength,
@@ -634,6 +779,11 @@ export function PanoramaQuickRenderPanel({
         targetWidth: capture.width,
         targetHeight: capture.height,
         targetAspectRatio: '2:1',
+        aspectRatio: '2:1',
+        apiyiAspectRatio: '2:1',
+        inputSource: 'panorama-capture',
+        taskType: 'panorama-generation',
+        panoramaTaskType: 'panorama-generation',
         qualityMode: 'high',
         panoramaQuality: actualPanoramaQuality,
         panoramaChangeStrength,
@@ -809,6 +959,16 @@ export function PanoramaQuickRenderPanel({
         className="hidden"
         onChange={event => {
           void handleModelUpload(event.currentTarget.files);
+          event.currentTarget.value = '';
+        }}
+      />
+      <input
+        ref={panoramaFileInputRef}
+        type="file"
+        accept={IMAGE_UPLOAD_ACCEPT}
+        className="hidden"
+        onChange={event => {
+          void handleExistingPanoramaUpload(event.currentTarget.files);
           event.currentTarget.value = '';
         }}
       />
@@ -1007,6 +1167,15 @@ export function PanoramaQuickRenderPanel({
                     </button>
                   ))}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => panoramaFileInputRef.current?.click()}
+                  disabled={isUploading}
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 disabled:opacity-50"
+                >
+                  <ImageIcon className="h-4 w-4" />
+                  上传已有全景图
+                </button>
               </div>
             </div>
 
@@ -1029,7 +1198,7 @@ export function PanoramaQuickRenderPanel({
 
               {referenceImages.length > 0 && !providerSupportsReferences ? (
                 <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[11px] leading-5 text-red-700">
-                  当前 provider 不支持参考图增强，请切换到 Gemini、GRS Banana2/Nano Banana 或移除参考图。
+                  当前生成通道暂不支持参考图增强，请移除参考图后再渲染。
                 </div>
               ) : null}
 
@@ -1597,6 +1766,7 @@ function providerSupportsPanoramaReferences(provider: GenerationProvider | null)
   return provider === 'gemini'
     || provider === 'grsai-banana2'
     || provider === 'grsai-nano-banana'
+    || provider === 'apiyi'
     || provider === 'apiyi-nano-banana2-edit';
 }
 

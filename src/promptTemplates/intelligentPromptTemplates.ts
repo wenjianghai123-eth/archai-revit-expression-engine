@@ -173,7 +173,7 @@ const materialReplaceBuiltInControlConstraints = [
   '5. 严格保持构图不变。',
   '6. 严格保持非目标区域不变。',
   '7. 不修改无关家具、设备、装饰、导视和远景元素。',
-  '8. 仅替换目标区域或目标对象。',
+  '8. 仅替换目标区域、目标对象或明确选择的目标材质类别。',
   '9. 原位替换，不新增无关同类元素。',
   '10. 不保留旧目标再叠加新目标。',
 ].join('\n');
@@ -248,6 +248,38 @@ const targetMaterialLabels: Record<string, string> = {
   custom: '自定义材质',
 };
 
+const materialCategoryLabels: Record<string, string> = {
+  wood: 'wood / 木材',
+  stone: 'stone / 石材',
+  metal: 'metal / 金属',
+  glass: 'glass / 玻璃',
+  fabric: 'fabric / 布艺',
+  leather: 'leather / 皮革',
+  tile: 'tile / 瓷砖',
+  paint: 'paint / 涂料',
+  concrete: 'concrete / 混凝土',
+  custom: 'custom material category / 自定义材质类别',
+};
+
+const materialCategoryExamples: Record<string, string> = {
+  wood: '木饰面、木梁、木柜、木门、木桌、木椅、木地板、木格栅 and all visible wood-grain or timber material surfaces',
+  stone: '大理石、岩板、水磨石、石材墙地面、石材台面、石材柱面 and all natural/artificial stone material surfaces',
+  metal: '金属框架、金属饰面、金属踢脚、五金、金属灯具外壳 and all metallic material surfaces',
+  glass: '玻璃隔断、窗玻璃、玻璃栏板、玻璃屏风、展示玻璃 and all transparent or translucent glass material surfaces',
+  fabric: '窗帘、软包、布艺沙发、坐垫、织物地毯 and all textile/fabric material surfaces',
+  leather: '皮革沙发、皮革座椅、皮革软包、皮革装饰面 and all leather material surfaces',
+  tile: '墙砖、地砖、马赛克、瓷砖铺贴面 and all ceramic/tile material surfaces',
+  paint: '乳胶漆墙面、艺术涂料、漆面板、涂装天花 and all painted/coated material surfaces',
+  concrete: '清水混凝土、微水泥、水泥砂浆、水泥质感墙地面 and all concrete/cementitious material surfaces',
+  custom: 'the material category described by the user supplement and reference images',
+};
+
+const materialTargetScopeLabels: Record<string, string> = {
+  'all-scene': 'all-scene / 全场景同类材质',
+  'selected-region': 'selected-region / 指定区域内同类材质',
+  'current-object': 'current-object / 当前对象',
+};
+
 const materialPatternScalePrompts: Record<string, string> = {
   small: 'Texture scale: small. Use fine-grained material texture with compact pattern scale, suitable for close interior detail.',
   medium: 'Texture scale: medium. Use balanced, realistic material pattern scale that matches architectural surfaces.',
@@ -294,6 +326,34 @@ function readReplacementTarget(config: object | undefined, targetObjectKey: stri
   return normalizeReplacementTarget(readConfigString(config, 'replacementTarget')) || normalizeReplacementTarget(targetObjectKey) || 'decor';
 }
 
+function readMaterialReplaceTargetMode(config: object | undefined, selectionMode: 'semantic-auto' | 'smart-select'): 'object-category' | 'material-category' | 'smart-select' {
+  const mode = readConfigString(config, 'materialReplacementMode') || readConfigString(config, 'materialReplaceMode');
+  if (mode === 'object-category' || mode === 'material-category' || mode === 'smart-select') return mode;
+  if (mode === 'object-target') return 'object-category';
+  if (mode === 'smart-selection') return 'smart-select';
+  return selectionMode === 'smart-select' ? 'smart-select' : 'object-category';
+}
+
+function readMaterialCategory(config: object | undefined): string {
+  const category = readConfigString(config, 'materialCategory');
+  return materialCategoryLabels[category] ? category : 'custom';
+}
+
+function readMaterialReplacementTargetScope(
+  config: object | undefined,
+  mode: 'object-category' | 'material-category' | 'smart-select',
+  selectionMode: 'semantic-auto' | 'smart-select',
+): 'all-scene' | 'selected-region' | 'current-object' {
+  const scope = readConfigString(config, 'replacementScope');
+  if (scope === 'all-scene' || scope === 'selected-region' || scope === 'current-object') return scope;
+  if (scope === 'all_scene') return 'all-scene';
+  if (scope === 'selected_region') return 'selected-region';
+  if (scope === 'current_object') return 'current-object';
+  if (mode === 'material-category') return selectionMode === 'smart-select' ? 'selected-region' : 'all-scene';
+  if (mode === 'object-category') return 'current-object';
+  return 'selected-region';
+}
+
 function readTargetDirectionPrompt(target: ReplacementTarget, materialDirection: string): string {
   if (target === 'floor') {
     return materialDirectionPrompts[materialDirection] || materialDirectionPrompts.auto;
@@ -313,6 +373,20 @@ function readTextureOriginPrompt(target: ReplacementTarget, textureAlignment: st
     return `Texture alignment mode: ${textureAlignment}. Texture origin: ${origin} in normalized source-image coordinates. Do not create unrelated room-surface material changes for this target.`;
   }
   return `Texture alignment mode: ${textureAlignment}. Texture origin: ${origin} in normalized source-image coordinates. Do not create floor paving, flooring seams, or ground material changes for this target.`;
+}
+
+function readMaterialCategoryDirectionPrompt(category: string, materialDirection: string): string {
+  const label = materialCategoryLabels[category] || materialCategoryLabels.custom;
+  const direction = materialDirection === 'horizontal' || materialDirection === 'vertical' || materialDirection === 'diagonal' || materialDirection === 'herringbone'
+    ? materialDirection
+    : 'auto';
+  return `Texture or grain direction: ${direction}. Align the replacement material naturally on each identified ${label} surface according to that surface perspective; do not apply texture direction to non-target materials.`;
+}
+
+function readMaterialCategoryTextureOriginPrompt(category: string, textureAlignment: string, textureOrigin: { x: number; y: number }, enablePhysicalMaterialLayout: boolean): string {
+  const label = materialCategoryLabels[category] || materialCategoryLabels.custom;
+  const origin = `(${textureOrigin.x.toFixed(3)}, ${textureOrigin.y.toFixed(3)})`;
+  return `Texture alignment mode: ${textureAlignment}. Texture origin: ${origin} in normalized source-image coordinates for identified ${label} surfaces only.${enablePhysicalMaterialLayout ? ' Keep repeated units and seams continuous inside each same-material target surface.' : ''}`;
 }
 
 function readPhysicalLayoutPrompt(target: ReplacementTarget, realSizeMm: number, jointWidthMm: number): string {
@@ -354,6 +428,82 @@ function buildExistingReplacementTargetPrompt(target: ReplacementTarget, strateg
     'Remove the old visual appearance of the matched target before applying the new reference material or style; do not keep the old target and stack a new target on top of it.',
     'Do not add extra objects or surfaces of the same type. Do not place the target in a new position. Do not redesign, move, enlarge, merge, split, or duplicate the target.',
     'Strictly preserve every non-target area: unrelated furniture, people, plants, walls, floors, ceilings, artwork, decorations, building structure, camera angle, perspective, composition, lighting relationship, and spatial relationship.',
+  ].join('\n');
+}
+
+function buildObjectTargetScopePrompt(target: ReplacementTarget, scope: string, semanticSelections: Array<{ objectType: string; x: number; y: number }>): string {
+  if (scope === 'current-object') {
+    const targetName = readReplacementTargetPluralName(target);
+    return [
+      'Specified-object replacement scope: current-object.',
+      semanticSelections.length > 0
+        ? 'Use the provided semantic object anchors as the current object targets.'
+        : `Use the currently selected ${targetName} as the only replacement target.`,
+      'Remove the old visual appearance of the current target before applying the new reference material or style; do not stack a new layer over the old target.',
+      'Keep the current target silhouette, position, size, object count, edges, orientation, and contact relationship unchanged.',
+      `Do not replace other ${targetName} elsewhere in the scene unless they are explicitly selected as current-object anchors.`,
+    ].join('\n');
+  }
+
+  if (scope === 'selected-region') {
+    return [
+      'Specified-object replacement scope: selected-region.',
+      `Only replace existing ${readReplacementTargetPluralName(target)} inside the confirmed selected region.`,
+      'Objects or surfaces of the same type outside the selected region must remain unchanged.',
+    ].join('\n');
+  }
+
+  return [
+    'Specified-object replacement scope: all-scene.',
+    `Replace all existing ${readReplacementTargetPluralName(target)} of this selected object category throughout the scene.`,
+  ].join('\n');
+}
+
+function buildMaterialCategoryReplacementPrompt(
+  category: string,
+  scope: string,
+  targetMaterialLabel: string,
+  userPrompt: string,
+): string {
+  const categoryLabel = materialCategoryLabels[category] || materialCategoryLabels.custom;
+  const examples = materialCategoryExamples[category] || materialCategoryExamples.custom;
+  const scopeLabel = materialTargetScopeLabels[scope] || materialTargetScopeLabels['all-scene'];
+  const categoryDescriptor = category === 'custom'
+    ? `${categoryLabel}${userPrompt ? ` defined by user supplement: ${userPrompt}` : ' defined by the reference images and user supplement'}`
+    : categoryLabel;
+  const woodHardConstraint = category === 'wood'
+    ? '自动识别并替换原图中所有木质表面，包括木饰面、木构件、木柜、木桌、木椅等；只替换材质贴图、颜色、纹理、光泽和粗糙度，不改变对象结构、轮廓、位置、尺寸和非木质区域。'
+    : undefined;
+  const scopeInstruction = scope === 'selected-region'
+    ? [
+        `Replacement scope: ${scopeLabel}.`,
+        `Only inside the user-confirmed selected region, automatically identify surfaces belonging to ${categoryDescriptor}.`,
+        `Within that selected region, replace only the identified ${category} material regions with ${targetMaterialLabel}.`,
+        `Inside the selected region, non-${category} materials must remain unchanged. Outside the selected region, all materials and objects must remain unchanged.`,
+      ].join('\n')
+    : scope === 'current-object'
+      ? [
+          `Replacement scope: ${scopeLabel}.`,
+          `Only on the current selected object, identify surfaces belonging to ${categoryDescriptor}.`,
+          `Replace only those ${category} material surfaces on the current object with ${targetMaterialLabel}.`,
+          `Same-category ${category} materials on other objects must remain unchanged unless they are part of the current object selection.`,
+        ].join('\n')
+      : [
+          `Replacement scope: ${scopeLabel}.`,
+          `Automatically identify all ${categoryDescriptor} material regions in the whole source image.`,
+          `将所有识别出的${category}材质区域替换为参考材质 / target material: ${targetMaterialLabel}.`,
+        ].join('\n');
+
+  return [
+    'Material category replacement mode: 同类材质替换.',
+    `Selected MaterialCategory: ${category}. Category meaning: ${categoryLabel}.`,
+    `Recognition examples for this category: ${examples}.`,
+    woodHardConstraint,
+    scopeInstruction,
+    'The user should not need to manually write the target category; derive all target recognition from MaterialCategory, replacementScope, reference images, and structured parameters.',
+    '严格保持建筑结构、空间关系、物体轮廓、位置、尺寸、相机机位、透视、构图不变。',
+    'Strictly preserve all non-target materials unchanged. Do not change material categories that do not match the selected MaterialCategory.',
+    'Only change the visual material appearance of the identified target-category surfaces; do not move, resize, deform, split, merge, duplicate, add, or remove objects.',
   ].join('\n');
 }
 
@@ -766,16 +916,28 @@ function readDesignVariantStrategyNote(config: object | undefined, index: number
 }
 
 function buildMaterialReplacePrompt(input: BuildSmartPromptInput, userPrompt: string): string {
-  const selectionMode = isSmartSelectionMode(input.config) ? 'smart-select' : 'semantic-auto';
-  const targetObjectKey = readConfigString(input.config, 'targetObjectType') || 'other';
-  const replacementTarget = selectionMode === 'semantic-auto' ? readReplacementTarget(input.config, targetObjectKey) : null;
+  const initialSelectionMode = isSmartSelectionMode(input.config) ? 'smart-select' : 'semantic-auto';
+  const targetMode = readMaterialReplaceTargetMode(input.config, initialSelectionMode);
+  const materialCategory = readMaterialCategory(input.config);
+  const targetScope = readMaterialReplacementTargetScope(input.config, targetMode, initialSelectionMode);
+  const selectionMode = targetMode === 'smart-select' || targetScope === 'selected-region' ? 'smart-select' : 'semantic-auto';
+  const targetObjectKey = readConfigString(input.config, 'targetObjectCategory') || readConfigString(input.config, 'targetObjectType') || 'other';
+  const replacementTarget = targetMode === 'object-category' && selectionMode === 'semantic-auto'
+    ? readReplacementTarget(input.config, targetObjectKey)
+    : null;
   const targetMaterialKey = readConfigString(input.config, 'targetMaterial') || 'custom';
   const targetObjectTypeLabel = replacementTarget
     ? targetObjectLabels[targetObjectKey] || targetObjectLabels.other
-    : 'confirmed selected local object / material region（确认选区覆盖的局部对象或区域）';
+    : targetMode === 'material-category'
+      ? `${materialCategoryLabels[materialCategory] || materialCategoryLabels.custom} material regions（同类材质区域）`
+      : 'confirmed selected local object / material region（确认选区覆盖的局部对象或区域）';
   const targetMaterialLabel = targetMaterialLabels[targetMaterialKey] || readSmartMaterial(input.config) || targetMaterialLabels.custom;
   const replacementStrategy: ReplacementStrategy = selectionMode === 'smart-select' ? 'replace-masked' : 'replace-existing';
-  const basePrompt = selectionMode === 'smart-select' ? materialReplaceMaskPrompt : materialReplaceSmartPrompt;
+  const basePrompt = targetMode === 'material-category'
+    ? buildMaterialCategoryReplacementPrompt(materialCategory, targetScope, targetMaterialLabel, userPrompt)
+    : selectionMode === 'smart-select'
+      ? materialReplaceMaskPrompt
+      : materialReplaceSmartPrompt;
   const patternScale = readConfigString(input.config, 'materialPatternScale') || 'medium';
   const materialDirection = readConfigString(input.config, 'materialDirection') || 'auto';
   const materialFinish = readConfigString(input.config, 'materialFinish') || 'matte';
@@ -791,31 +953,43 @@ function buildMaterialReplacePrompt(input: BuildSmartPromptInput, userPrompt: st
   const materialControlTarget: ReplacementTarget = replacementTarget || 'decor';
 
   return joinPrompt([
-    basePrompt
-      .replace('{targetObjectTypeLabel}', targetObjectTypeLabel)
-      .replace('{targetMaterialLabel}', targetMaterialLabel),
+    targetMode === 'material-category'
+      ? basePrompt
+      : basePrompt
+        .replace('{targetObjectTypeLabel}', targetObjectTypeLabel)
+        .replace('{targetMaterialLabel}', targetMaterialLabel),
     materialReplaceBuiltInControlConstraints,
-    selectionMode === 'smart-select'
+    selectionMode === 'smart-select' && targetMode !== 'material-category'
       ? smartSelectionOnlyPrompt
       : undefined,
     selectionMode === 'smart-select' && semanticAssistFromSelection
       ? 'Semantic assist from selection is enabled: infer the object or local material boundary from the user brush point, a few brush strokes, the user extra requirement, and reference images. Do not require or use a separate target-area category.'
       : undefined,
+    targetMode === 'material-category' && targetScope === 'selected-region'
+      ? 'Mask has the highest spatial priority for the selected-region scope: only pixels inside the confirmed white smart-selection mask may be considered for same-material recognition. Similar material outside the mask must remain unchanged.'
+      : undefined,
     replacementTarget ? replacementTargetPrompts[replacementTarget] : undefined,
-    replacementTarget ? buildExistingReplacementTargetPrompt(replacementTarget, replacementStrategy) : undefined,
+    replacementTarget && targetScope !== 'current-object' ? buildExistingReplacementTargetPrompt(replacementTarget, replacementStrategy) : undefined,
+    replacementTarget ? buildObjectTargetScopePrompt(replacementTarget, targetScope, semanticSelections) : undefined,
     replacementTarget
       ? readNoMaskAutoTargetPrompt(replacementTarget)
-      : 'Mask has the highest spatial priority. Only pixels inside the confirmed white smart-selection mask may be edited. Never ignore the confirmed selection to replace floors, walls, furniture, plants, lighting, artwork, decor, or similar objects elsewhere in the image.',
+      : targetMode === 'material-category'
+        ? undefined
+        : 'Mask has the highest spatial priority. Only pixels inside the confirmed white smart-selection mask may be edited. Never ignore the confirmed selection to replace floors, walls, furniture, plants, lighting, artwork, decor, or similar objects elsewhere in the image.',
     replacementTarget === 'furniture' ? strictFurnitureUnmaskedProtectionPrompt : strictUnmaskedProtectionPrompt,
     input.hasMaterialReferences ? 'Use the material reference only for texture, color, finish, and material feeling. Do not copy its composition or objects.' : undefined,
     materialPatternScalePrompts[patternScale] || materialPatternScalePrompts.medium,
-    readTargetDirectionPrompt(materialControlTarget, materialDirection),
+    targetMode === 'material-category'
+      ? readMaterialCategoryDirectionPrompt(materialCategory, materialDirection)
+      : readTargetDirectionPrompt(materialControlTarget, materialDirection),
     materialFinishPrompts[materialFinish] || materialFinishPrompts.matte,
     materialReplaceScopePrompts[replaceScope] || materialReplaceScopePrompts['material-only'],
     enablePhysicalMaterialLayout
       ? readPhysicalLayoutPrompt(materialControlTarget, realSizeMm, jointWidthMm)
       : undefined,
-    readTextureOriginPrompt(materialControlTarget, textureAlignment, textureOrigin, enablePhysicalMaterialLayout),
+    targetMode === 'material-category'
+      ? readMaterialCategoryTextureOriginPrompt(materialCategory, textureAlignment, textureOrigin, enablePhysicalMaterialLayout)
+      : readTextureOriginPrompt(materialControlTarget, textureAlignment, textureOrigin, enablePhysicalMaterialLayout),
     selectionMode === 'semantic-auto' && semanticSelections.length > 0 ? `Semantic object anchors (normalized image coordinates): ${semanticSelections.map((item, index) => `${index + 1}. ${item.objectType} at (${item.x.toFixed(3)}, ${item.y.toFixed(3)})`).join('; ')}. Treat every anchor as a selected target and do not merge unrelated objects.` : undefined,
     hasProtectionMask ? 'A protection mask is supplied. Protected pixels are explicitly excluded from editing and must remain identical to the source image.' : undefined,
     buildStructuredContext(input.config, input.mode, { includeMaterial: false }),

@@ -146,6 +146,96 @@ export async function composeLocalInpaintResult(input: {
   return toImageDataUrl(composed, 'image/png');
 }
 
+export interface PlanarPreviewPlacement {
+  x?: unknown;
+  y?: unknown;
+  width?: unknown;
+  height?: unknown;
+  rotation?: unknown;
+  cornerPoints?: unknown;
+  normalizedBox?: unknown;
+}
+
+export async function composePlanarGraphicPreviewResult(input: {
+  baseImageDataUrl: string;
+  originalImageDataUrl: string;
+  placementPreviewDataUrl: string;
+  placements?: PlanarPreviewPlacement[];
+  featherRadius?: number;
+}): Promise<string> {
+  const base = parseImageDataUrl(input.baseImageDataUrl);
+  const original = parseImageDataUrl(input.originalImageDataUrl);
+  const preview = parseImageDataUrl(input.placementPreviewDataUrl);
+  const baseMetadata = await sharp(base.content).metadata();
+  const originalMetadata = await sharp(original.content).metadata();
+  if (!baseMetadata.width || !baseMetadata.height || !originalMetadata.width || !originalMetadata.height) {
+    return input.baseImageDataUrl;
+  }
+
+  const width = baseMetadata.width;
+  const height = baseMetadata.height;
+  const originalRaw = await sharp(original.content)
+    .resize(width, height, { fit: 'fill' })
+    .ensureAlpha()
+    .raw()
+    .toBuffer();
+  const previewRaw = await sharp(preview.content)
+    .resize(width, height, { fit: 'fill' })
+    .ensureAlpha()
+    .raw()
+    .toBuffer();
+  const placementMask = await renderPlanarPlacementMask({
+    width,
+    height,
+    sourceWidth: originalMetadata.width,
+    sourceHeight: originalMetadata.height,
+    placements: input.placements || [],
+  });
+  const alpha = Buffer.alloc(width * height, 0);
+  let changedPixels = 0;
+
+  for (let index = 0; index < alpha.length; index += 1) {
+    if (placementMask[index] <= 0) continue;
+    const offset = index * 4;
+    const diff = Math.max(
+      Math.abs(previewRaw[offset] - originalRaw[offset]),
+      Math.abs(previewRaw[offset + 1] - originalRaw[offset + 1]),
+      Math.abs(previewRaw[offset + 2] - originalRaw[offset + 2]),
+      Math.abs(previewRaw[offset + 3] - originalRaw[offset + 3]),
+    );
+    if (diff > 2) {
+      alpha[index] = 255;
+      changedPixels += 1;
+    }
+  }
+
+  if (changedPixels < 4 && input.placements?.length) {
+    placementMask.copy(alpha);
+    changedPixels = alpha.some(value => value > 0) ? 1 : 0;
+  }
+  if (changedPixels === 0) return input.baseImageDataUrl;
+
+  const maskRaw = await sharp(alpha, { raw: { width, height, channels: 1 } })
+    .blur(Math.max(0.3, input.featherRadius ?? 0.6))
+    .greyscale()
+    .raw()
+    .toBuffer();
+  for (let index = 0; index < maskRaw.length; index += 1) {
+    previewRaw[index * 4 + 3] = maskRaw[index];
+  }
+
+  const overlay = await sharp(previewRaw, {
+    raw: { width, height, channels: 4 },
+  }).png().toBuffer();
+  const composed = await sharp(base.content)
+    .resize(width, height, { fit: 'fill' })
+    .composite([{ input: overlay, left: 0, top: 0 }])
+    .png()
+    .toBuffer();
+
+  return toImageDataUrl(composed, 'image/png');
+}
+
 function padBoundingBox(box: MaskBoundingBox, imageWidth: number, imageHeight: number, ratio: number): MaskBoundingBox {
   const pad = Math.round(Math.max(box.width, box.height) * ratio);
   const x = Math.max(0, box.x - pad);
@@ -184,4 +274,94 @@ export async function cropImageDataUrlToBox(dataUrl: string, bbox: MaskBoundingB
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+async function renderPlanarPlacementMask(input: {
+  width: number;
+  height: number;
+  sourceWidth: number;
+  sourceHeight: number;
+  placements: PlanarPreviewPlacement[];
+}): Promise<Buffer> {
+  const polygons = input.placements
+    .map(placement => resolvePlacementPolygon(placement, input.width, input.height, input.sourceWidth, input.sourceHeight))
+    .filter((points): points is Array<{ x: number; y: number }> => points.length >= 3);
+  if (polygons.length === 0) return Buffer.alloc(input.width * input.height, 255);
+
+  const polygonMarkup = polygons
+    .map(points => `<polygon points="${points.map(point => `${point.x},${point.y}`).join(' ')}" fill="white"/>`)
+    .join('');
+  const svg = Buffer.from([
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${input.width}" height="${input.height}" viewBox="0 0 ${input.width} ${input.height}">`,
+    '<rect width="100%" height="100%" fill="black"/>',
+    polygonMarkup,
+    '</svg>',
+  ].join(''));
+  return sharp(svg).removeAlpha().greyscale().raw().toBuffer();
+}
+
+function resolvePlacementPolygon(
+  placement: PlanarPreviewPlacement,
+  width: number,
+  height: number,
+  sourceWidth: number,
+  sourceHeight: number,
+): Array<{ x: number; y: number }> {
+  const explicitCorners = Array.isArray(placement.cornerPoints)
+    ? placement.cornerPoints
+        .map(point => isRecord(point) ? { x: readFiniteNumber(point.x), y: readFiniteNumber(point.y) } : null)
+        .filter((point): point is { x: number; y: number } => Boolean(point && Number.isFinite(point.x) && Number.isFinite(point.y)))
+    : [];
+  if (explicitCorners.length >= 3) {
+    const scaleX = width / Math.max(1, sourceWidth);
+    const scaleY = height / Math.max(1, sourceHeight);
+    return explicitCorners.map(point => ({
+      x: roundMaskPoint(clamp(point.x * scaleX, 0, width)),
+      y: roundMaskPoint(clamp(point.y * scaleY, 0, height)),
+    }));
+  }
+
+  const normalizedBox = isRecord(placement.normalizedBox) ? placement.normalizedBox : null;
+  const box = normalizedBox
+    ? {
+        x: readFiniteNumber(normalizedBox.x) * width,
+        y: readFiniteNumber(normalizedBox.y) * height,
+        width: readFiniteNumber(normalizedBox.width) * width,
+        height: readFiniteNumber(normalizedBox.height) * height,
+      }
+    : {
+        x: readFiniteNumber(placement.x) * width / Math.max(1, sourceWidth),
+        y: readFiniteNumber(placement.y) * height / Math.max(1, sourceHeight),
+        width: readFiniteNumber(placement.width) * width / Math.max(1, sourceWidth),
+        height: readFiniteNumber(placement.height) * height / Math.max(1, sourceHeight),
+      };
+  if (!Number.isFinite(box.x) || !Number.isFinite(box.y) || box.width <= 0 || box.height <= 0) return [];
+
+  const rotation = readFiniteNumber(placement.rotation);
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  const radians = rotation * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return [
+    { x: -box.width / 2, y: -box.height / 2 },
+    { x: box.width / 2, y: -box.height / 2 },
+    { x: box.width / 2, y: box.height / 2 },
+    { x: -box.width / 2, y: box.height / 2 },
+  ].map(point => ({
+    x: roundMaskPoint(clamp(cx + point.x * cos - point.y * sin, 0, width)),
+    y: roundMaskPoint(clamp(cy + point.x * sin + point.y * cos, 0, height)),
+  }));
+}
+
+function readFiniteNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function roundMaskPoint(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

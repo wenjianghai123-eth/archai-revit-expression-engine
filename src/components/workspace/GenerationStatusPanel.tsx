@@ -176,27 +176,86 @@ function MaterialReplacementTaskSummary({ state }: { state: StepState }) {
   const configuredSelectionMode = state.config.selectionMode === 'semantic-auto' || state.config.selectionMode === 'smart-select'
     ? state.config.selectionMode
     : null;
-  const selectionMode = configuredSelectionMode || (state.config.maskWorkflowMode === 'none' ? 'semantic-auto' : 'smart-select');
-  const isSmartSelection = selectionMode === 'smart-select';
-  const replacementTarget = isSmartSelection ? null : resolveReplacementTargetFromConfig(state.config);
+  const baseSelectionMode = configuredSelectionMode || (state.config.maskWorkflowMode === 'none' ? 'semantic-auto' : 'smart-select');
+  const materialReplaceMode = readMaterialReplaceModeForSummary(state, baseSelectionMode === 'smart-select');
+  const replacementScope = readReplacementScopeForSummary(state, materialReplaceMode, baseSelectionMode === 'smart-select');
+  const isSmartSelection = materialReplaceMode === 'smart-select' || replacementScope === 'selected-region';
+  const replacementTarget = materialReplaceMode !== 'object-category'
+    ? null
+    : resolveReplacementTargetFromConfig(state.config);
   const hasReference = Boolean(state.materialTextures.length > 0 || state.materialImage);
   const hasMaterialPreset = Boolean(state.config.targetMaterial);
   const hasPrompt = Boolean(state.config.customMaterialPrompt?.trim() || state.config.prompt?.trim());
   const referenceLabel = hasReference ? '已上传' : hasMaterialPreset || hasPrompt ? '已选择 / 已填写' : '待补充';
-  const targetLabel = isSmartSelection ? '根据选区识别' : readReplacementTargetLabel(replacementTarget);
+  const targetLabel = materialReplaceMode === 'material-category'
+    ? readMaterialCategorySummaryLabel(state.config.materialCategory)
+    : isSmartSelection ? '根据选区识别' : readReplacementTargetLabel(replacementTarget);
   const semanticAssistLabel = state.config.semanticAssistFromSelection === false ? '未开启' : '已开启';
 
   return (
     <div data-testid="material-replacement-task-summary" className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-3 text-xs leading-5 text-emerald-900">
       <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-emerald-600">材质替换摘要</p>
-      <p>模式：<span className="font-black">{isSmartSelection ? '智能选区' : '自动同类替换'}</span></p>
-      <p>目标区域：<span className="font-black">{targetLabel}</span></p>
+      <p>模式：<span className="font-black">{readMaterialReplaceModeSummaryLabel(materialReplaceMode)}</span></p>
+      <p>目标：<span className="font-black">{targetLabel}</span></p>
       {isSmartSelection ? <p>语义识别：<span className="font-black">{semanticAssistLabel}</span></p> : null}
-      <p>替换范围：<span className="font-black">{isSmartSelection ? '仅确认选区' : '所有同类型元素'}</span></p>
+      <p>替换范围：<span className="font-black">{readReplacementScopeSummaryLabel(replacementScope, materialReplaceMode)}</span></p>
       <p>参考图：<span className="font-black">{referenceLabel}</span></p>
       <p>控图约束：<span className="font-black">已内置</span></p>
     </div>
   );
+}
+
+function readMaterialReplaceModeForSummary(
+  state: StepState,
+  isSmartSelection: boolean,
+): 'object-category' | 'material-category' | 'smart-select' {
+  const rawConfig = state.config as unknown as Record<string, unknown>;
+  const mode = rawConfig.materialReplacementMode || rawConfig.materialReplaceMode;
+  if (mode === 'object-category' || mode === 'material-category' || mode === 'smart-select') return mode;
+  if (mode === 'object-target') return 'object-category';
+  if (mode === 'smart-selection') return 'smart-select';
+  return isSmartSelection ? 'smart-select' : 'object-category';
+}
+
+function readReplacementScopeForSummary(
+  state: StepState,
+  mode: 'object-category' | 'material-category' | 'smart-select',
+  isSmartSelection: boolean,
+): 'all-scene' | 'selected-region' | 'current-object' {
+  const scope = (state.config as unknown as Record<string, unknown>).replacementScope;
+  if (scope === 'all-scene' || scope === 'selected-region' || scope === 'current-object') return scope;
+  if (scope === 'all_scene') return 'all-scene';
+  if (scope === 'selected_region') return 'selected-region';
+  if (scope === 'current_object') return 'current-object';
+  if (mode === 'material-category') return isSmartSelection ? 'selected-region' : 'all-scene';
+  if (mode === 'object-category') return 'current-object';
+  return 'selected-region';
+}
+
+function readMaterialReplaceModeSummaryLabel(mode: 'object-category' | 'material-category' | 'smart-select'): string {
+  if (mode === 'object-category') return '指定对象替换';
+  if (mode === 'material-category') return '同类材质替换';
+  return '智能选区替换';
+}
+
+function readReplacementScopeSummaryLabel(scope: 'all-scene' | 'selected-region' | 'current-object', mode: 'object-category' | 'material-category' | 'smart-select'): string {
+  if (mode === 'smart-select') return '仅确认选区';
+  if (scope === 'all-scene') return '全场景同类材质';
+  if (scope === 'selected-region') return '指定区域内同类材质';
+  return '当前对象';
+}
+
+function readMaterialCategorySummaryLabel(category: unknown): string {
+  if (category === 'wood') return '木材';
+  if (category === 'stone') return '石材';
+  if (category === 'metal') return '金属';
+  if (category === 'glass') return '玻璃';
+  if (category === 'fabric') return '布艺';
+  if (category === 'leather') return '皮革';
+  if (category === 'tile') return '瓷砖';
+  if (category === 'paint') return '涂料';
+  if (category === 'concrete') return '混凝土';
+  return '自定义材质类别';
 }
 
 interface ResultActionsProps {

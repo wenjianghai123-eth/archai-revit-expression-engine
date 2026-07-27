@@ -52,7 +52,7 @@ VITE_ENABLE_LEGACY_GENERATION_FALLBACK=false
 
 If frontend and backend are deployed separately, such as Netlify static frontend plus Render/Railway backend, `VITE_API_BASE_URL` is required and must be set to the backend origin only, for example `https://api.example.com`. The frontend will call `${VITE_API_BASE_URL}/api/...`. If it is empty, the app calls same-origin `/api/...`, which only works for single-service deployments where Express serves both `dist` and `/api`.
 
-For production deploys, put `VITE_API_BASE_URL` in the frontend host's build-time environment settings. Backend-only variables such as `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `JWT_SECRET`, and `GRSAI_API_KEY` are not injected into Vite browser code. After changing frontend env vars, run `npm run build` again and redeploy the frontend; restarting only the Express backend will not make the login page pick up new `VITE_*` values.
+For production deploys, put `VITE_API_BASE_URL` in the frontend host's build-time environment settings. Backend-only variables such as `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `JWT_SECRET`, and `APIYI_API_KEY` are not injected into Vite browser code. After changing frontend env vars, run `npm run build` again and redeploy the frontend; restarting only the Express backend will not make the login page pick up new `VITE_*` values.
 
 ## Seed the First Admin
 

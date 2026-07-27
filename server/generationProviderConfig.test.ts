@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-
 import type { GenerateImageInput } from './providers/types';
+
+const onePixelPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
 
 const input: GenerateImageInput = {
   mode: 'floorplan',
-  inputImageDataUrl: 'data:image/png;base64,aW5wdXQ=',
+  inputImageDataUrl: onePixelPng,
   prompt: 'provider config test',
   config: {},
 };
@@ -20,63 +21,74 @@ afterEach(() => {
 });
 
 describe('generation provider configuration', () => {
-  it('resolves API易 per generation job without replacing the process default provider', async () => {
+  it('always resolves image generation to API易 regardless of legacy client or env provider settings', async () => {
     vi.resetModules();
-    const generationService = await import('./generationService');
-    expect(generationService.getGenerationProviderName({ aiProvider: 'apiyi-nano-banana2-edit' })).toBe('apiyi-nano-banana2-edit');
-    expect(generationService.getGenerationProviderName({ aiProvider: 'grsai-banana2' })).toBe('grsai-banana2');
-  });
-
-  it('maps the apiyi environment alias to the registered API易 provider', async () => {
-    vi.resetModules();
-    process.env.GENERATION_PROVIDER = 'apiyi';
+    process.env.GENERATION_PROVIDER = 'mock';
+    process.env.AI_PROVIDER = 'grsai-banana2';
     const generationService = await import('./generationService');
 
-    expect(generationService.getGenerationProviderName()).toBe('apiyi-nano-banana2-edit');
+    expect(generationService.getGenerationProviderName()).toBe('apiyi');
+    expect(generationService.getGenerationProviderName({ aiProvider: 'mock' })).toBe('apiyi');
+    expect(generationService.getGenerationProviderName({ aiProvider: 'apiyi-nano-banana2-edit' })).toBe('apiyi');
+    expect(generationService.getGenerationProviderName({ selectedProvider: 'grsai-banana2' })).toBe('apiyi');
   });
 
-  it('prefers the explicit AI_PROVIDER and reports provider configuration safely', async () => {
+  it('reports a single fixed API易 Nano Banana 2 backend channel', async () => {
     vi.resetModules();
-    process.env.GENERATION_PROVIDER = 'grsai';
-    process.env.AI_PROVIDER = 'apiyi-nano-banana2-edit';
     process.env.APIYI_API_KEY = 'test-key';
     const generationService = await import('./generationService');
 
-    expect(generationService.getGenerationProviderName()).toBe('apiyi-nano-banana2-edit');
-    expect(generationService.getSelectableGenerationProviders()).toEqual(expect.objectContaining({
-      defaultProvider: 'apiyi-nano-banana2-edit',
-      providers: expect.arrayContaining([
-        expect.objectContaining({
-          value: 'apiyi-nano-banana2-edit',
+    expect(generationService.getSelectableGenerationProviders()).toEqual({
+      defaultProvider: 'apiyi',
+      providers: [
+        {
+          value: 'apiyi',
+          label: 'API易 Nano Banana 2',
           enabled: true,
           missingConfig: [],
-        }),
-      ]),
-    }));
+        },
+      ],
+    });
   });
 
-  it('fails clearly without GRSAI_API_KEY when GENERATION_PROVIDER=grsai', async () => {
+  it('requires only the backend APIYI_API_KEY for real image generation', async () => {
     vi.resetModules();
-    process.env.GENERATION_PROVIDER = 'grsai';
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      candidates: [{
+        content: {
+          parts: [{
+            inlineData: {
+              mimeType: 'image/png',
+              data: onePixelPng.replace(/^data:image\/png;base64,/u, ''),
+            },
+          }],
+        },
+      }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     vi.stubGlobal('fetch', fetchMock);
-
-    const generationService = await import('./generationService');
-
-    expect(generationService.getGenerationProviderName()).toBe('grsai-banana2');
-    await expect(generationService.generateWithFallbackResponse(input)).rejects.toThrow('GRSAI_API_KEY is required');
-    expect(fetchMock).not.toHaveBeenCalled();
-  }, 15000);
-
-  it('generates successfully with mock when GENERATION_PROVIDER=mock', async () => {
-    vi.resetModules();
+    process.env.APIYI_API_KEY = 'test-key';
     process.env.GENERATION_PROVIDER = 'mock';
 
     const generationService = await import('./generationService');
     const response = await generationService.generateWithFallbackResponse(input);
 
-    expect(generationService.getGenerationProviderName()).toBe('mock');
-    expect(response.provider).toBe('mock');
-    expect(response.imageDataUrl).toMatch(/^data:image\/svg\+xml;base64,/u);
+    expect(response.provider).toBe('apiyi');
+    expect(response.imageDataUrl).toBe(onePixelPng);
+    const firstFetchCall = fetchMock.mock.calls[0] as unknown[] | undefined;
+    expect(String(firstFetchCall?.[0])).toContain('/v1beta/models/gemini-3.1-flash-image-preview:generateContent');
+  }, 15000);
+
+  it('fails clearly when APIYI_API_KEY is missing', async () => {
+    vi.resetModules();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const generationService = await import('./generationService');
+
+    expect(generationService.getGenerationProviderName()).toBe('apiyi');
+    await expect(generationService.generateWithFallbackResponse(input)).rejects.toMatchObject({
+      providerError: 'APIYI_API_KEY_MISSING',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   }, 15000);
 });

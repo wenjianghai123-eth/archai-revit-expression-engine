@@ -38,7 +38,6 @@ export function useBackendHealth(isSettingsOpen: boolean) {
         console.debug('[api-status] connected');
         const detail = [
           health.version ? `版本 ${health.version}` : null,
-          health.provider ? `当前 provider: ${health.provider}` : null,
         ].filter(Boolean).join('，');
         setBackendHealth({
           status: 'connected',

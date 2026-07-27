@@ -1,12 +1,10 @@
 import React from 'react';
-import { Activity, LogOut, RefreshCw, Server, ShieldCheck, UserCircle, X, type LucideIcon } from 'lucide-react';
+import { Activity, LogOut, RefreshCw, UserCircle, X, type LucideIcon } from 'lucide-react';
 import { AuthUser } from '../lib/api';
 
 interface SettingsModalProps {
   isOpen: boolean;
-  providerMode: string;
   backendHealth: string;
-  providerSource: string;
   currentUser: AuthUser | null;
   currentUserStatus: string;
   onSignOut: () => void;
@@ -17,9 +15,7 @@ interface SettingsModalProps {
 
 export function SettingsModal({
   isOpen,
-  providerMode,
   backendHealth,
-  providerSource,
   currentUser,
   currentUserStatus,
   onSignOut,
@@ -35,7 +31,7 @@ export function SettingsModal({
         <div className="flex items-center justify-between border-b border-slate-100 p-5">
           <div>
             <h2 className="text-lg font-bold text-slate-900">烛照AI 设置</h2>
-            <p className="text-xs text-slate-500">运行状态与模型提供方信息</p>
+            <p className="text-xs text-slate-500">账户与后端运行状态</p>
           </div>
           <button onClick={onClose} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700" title="关闭">
             <X className="h-5 w-5" />
@@ -57,9 +53,7 @@ export function SettingsModal({
               退出登录
             </button>
           )}
-          <StatusRow icon={Server} label="生成模式" value={providerMode} />
           <StatusRow icon={Activity} label="服务状态" value={backendHealth} />
-          <StatusRow icon={ShieldCheck} label="模型来源" value={providerSource} />
           <button
             onClick={onRefresh}
             disabled={isChecking}

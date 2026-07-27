@@ -1,6 +1,6 @@
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
-import { composeLocalInpaintResult, createLocalInpaintContext, cropImageDataUrlToBox, getMaskBoundingBox, prepareEditableMask } from './localInpaint';
+import { composeLocalInpaintResult, composePlanarGraphicPreviewResult, createLocalInpaintContext, cropImageDataUrlToBox, getMaskBoundingBox, prepareEditableMask } from './localInpaint';
 import { toImageDataUrl } from './imageMetadata';
 
 describe('local inpaint image helpers', () => {
@@ -83,6 +83,30 @@ describe('local inpaint image helpers', () => {
     expect(bbox?.width).toBeGreaterThan(4);
     const raw = await sharp(Buffer.from(prepared.split(',')[1], 'base64')).greyscale().raw().toBuffer();
     expect(raw[9 * 20 + 9]).toBe(0);
+  });
+
+  it('composes planar graphic preview changes back even when the provider output kept the original core', async () => {
+    const original = await sharp({ create: { width: 80, height: 48, channels: 3, background: '#dddddd' } }).png().toBuffer();
+    const preview = await sharp(original)
+      .composite([{
+        input: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="48"><rect x="20" y="14" width="28" height="10" fill="#111111"/><text x="23" y="22" font-size="7" fill="#ffffff">LOGO</text></svg>'),
+        left: 0,
+        top: 0,
+      }])
+      .png()
+      .toBuffer();
+
+    const composed = await composePlanarGraphicPreviewResult({
+      baseImageDataUrl: toImageDataUrl(original, 'image/png'),
+      originalImageDataUrl: toImageDataUrl(original, 'image/png'),
+      placementPreviewDataUrl: toImageDataUrl(preview, 'image/png'),
+      placements: [{ x: 20, y: 14, width: 28, height: 10, rotation: 0 }],
+    });
+    const raw = await sharp(Buffer.from(composed.split(',')[1], 'base64')).ensureAlpha().raw().toBuffer();
+    const logoPixel = raw[(15 * 80 + 21) * 4];
+    const outsidePixel = raw[(4 * 80 + 4) * 4];
+    expect(logoPixel).toBeLessThan(80);
+    expect(outsidePixel).toBeGreaterThan(200);
   });
 });
 

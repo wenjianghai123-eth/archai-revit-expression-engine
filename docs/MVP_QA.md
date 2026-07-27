@@ -11,8 +11,8 @@ Use this checklist before handing off an MVP build.
 ## Env Setup
 
 - [ ] Copy `.env.example` to `.env` for local backend runs.
-- [ ] Keep `GENERATION_PROVIDER=mock` for default MVP verification.
-- [ ] For real provider testing only, set `AI_PROVIDER=gemini` and `GEMINI_API_KEY` in backend `.env`.
+- [ ] Configure backend-only `APIYI_API_KEY`; image generation is fixed to API易 / `nano-banana2`.
+- [ ] Confirm no provider/model/API key is referenced from `src/` frontend code or sent in browser task-creation requests.
 - [ ] Confirm no model API key is referenced from `src/` frontend code.
 
 ## Run Client And Server

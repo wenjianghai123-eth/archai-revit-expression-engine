@@ -348,7 +348,6 @@ export function FloorPlanMaterialPanel({ regionSet, sourceImageUrl, onBack, onRe
         step: 'plan_colorize',
         generationStep: 'plan_colorize',
         featureName: '区域材质彩平',
-        provider: 'apiyi-nano-banana2-edit',
         prompt: '',
         inputAssetIds: [regionSet.sourceAssetId, previewControlAsset.id, ...materialReferenceAssetIds],
         config: {

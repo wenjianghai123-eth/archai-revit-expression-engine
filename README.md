@@ -66,7 +66,7 @@ Deploy this repository as one Node service when the hosting platform can run the
 - Runtime service: `server/index.ts`, which serves both `/api/...` and the built `dist` frontend
 - Health check path: `/api/health`
 
-In this mode the browser and backend share the same origin, so leave `VITE_API_BASE_URL` empty. Keep backend variables such as `SUPABASE_SERVICE_ROLE_KEY`, `GRSAI_API_KEY`, `JWT_SECRET`, `DATA_BACKEND`, `FILE_STORAGE`, and `AUTH_MODE` on the Node service. Render injects `PORT`; the Express server listens on `process.env.PORT || 8787` and binds `0.0.0.0`.
+In this mode the browser and backend share the same origin, so leave `VITE_API_BASE_URL` empty. Keep backend variables such as `SUPABASE_SERVICE_ROLE_KEY`, `APIYI_API_KEY`, `JWT_SECRET`, `DATA_BACKEND`, `FILE_STORAGE`, and `AUTH_MODE` on the Node service. Render injects `PORT`; the Express server listens on `process.env.PORT || 8787` and binds `0.0.0.0`.
 
 ### Netlify Frontend + Render/Railway Backend
 
@@ -92,29 +92,22 @@ Frontend build-time variables, visible in browser bundles:
 
 Backend/runtime variables, never expose with a `VITE_` prefix:
 
-- `GENERATION_PROVIDER`: `mock` by default. Set to `grsai` to use the GRS AI Banana2 provider through the backend. Legacy `AI_PROVIDER` values (`mock`, `gemini`, `grsai-banana2`, `grsai-nano-banana`) are still accepted when `GENERATION_PROVIDER` is unset.
-- `GEMINI_API_KEY`: backend-only Gemini API key. Required only when `AI_PROVIDER=gemini`.
-- `GEMINI_IMAGE_MODEL`: optional Gemini image model. Defaults in code to `gemini-2.5-flash-image-preview`.
+- Image generation jobs are fixed in the backend to API易 / `nano-banana2`; the frontend must not choose or send provider/model fields.
 - `AUTH_MODE`: `dev` by default. Use `supabase` in production. Express verifies email/password through Supabase Auth at `/api/auth/login`, then signs its own JWT for business APIs.
 - `JWT_SECRET`: fixed backend-only secret used to sign Express access tokens. Required in production; changing it invalidates all existing logins.
 - `JWT_EXPIRES_IN`: optional access token lifetime. Defaults to `7d`.
 - `DATA_BACKEND`: `json` by default. Set to `supabase` to store metadata in Supabase tables.
 - `FILE_STORAGE`: `local` by default. Set to `supabase` to store uploaded images, models, and generated results in Supabase Storage.
-- `ENABLE_LEGACY_GENERATION_ENDPOINTS`: controls old `/api/generate/*` endpoints. Defaults to enabled outside production and disabled in production. Production keeps these endpoints disabled even if this flag is set.
+- `ENABLE_LEGACY_GENERATION_ENDPOINTS`: controls old `/api/generate/*` endpoints. Defaults to disabled; set `true` only for local diagnostics. Production keeps these endpoints disabled even if this flag is set.
 - `ENABLE_PROVIDER_FALLBACK`: controls backend fallback from a real provider to mock when the provider fails. Defaults to `true` outside production and `false` in production.
 - `SUPABASE_URL`: server-side Supabase project URL for backend adapters. This URL is not a secret, but keep service-role keys backend-only.
 - `SUPABASE_STORAGE_BUCKET`: Supabase Storage bucket name used when `FILE_STORAGE=supabase`.
 - `SUPABASE_ANON_KEY`: backend-only anon key used by Express to verify email/password through Supabase Auth. Do not expose this from the backend service.
 - `SUPABASE_SERVICE_ROLE_KEY`: backend-only Supabase service role key used for admin user creation and storage adapters. Never expose this in frontend code.
-- `APIYI_API_KEY`: backend-only API易 model API key. Required only when using `apiyi-nano-banana2-edit`. Do not expose this in frontend code.
-- `GRSAI_API_KEY`: backend-only model API key. Required only when `GENERATION_PROVIDER=grsai`, `AI_PROVIDER=grsai-banana2`, or `AI_PROVIDER=grsai-nano-banana`. Do not expose this in frontend code.
-- `GRSAI_BASE_URL`: optional Grsai API base URL. Defaults to `https://grsai.dakka.com.cn` for China direct access. Overseas deployments can use `https://grsaiapi.com`.
-- `GRSAI_MODEL`: optional Grsai model name. Defaults to `nano-banana-2`.
-- `GRSAI_IMAGE_SIZE`: optional Grsai output size. Defaults to `1K`.
-- `GRSAI_ASPECT_RATIO`: optional Grsai aspect ratio. Defaults to `auto`.
-- `GRSAI_POLL_INTERVAL_MS`: optional Grsai result polling interval. Defaults to `2500`.
-- `GRSAI_POLL_TIMEOUT_MS`: optional Grsai result polling timeout. Defaults to `180000`.
-- `GRSAI_DOWNLOAD_TIMEOUT_MS`: optional timeout for downloading Grsai temporary result URLs. Defaults to `30000`.
+- `APIYI_API_KEY`: backend-only API易 API key. Required for image generation. Do not expose this in frontend code, browser requests, localStorage, or any `VITE_*` variable.
+- `APIYI_API_BASE_URL`: optional API易 base URL. Defaults to `https://api.apiyi.com`.
+- `APIYI_IMAGE_TIMEOUT_MS`: optional API易 request timeout. Defaults to `300000`.
+- `APIYI_IMAGE_PROVIDER_ENABLED`: set to `false` only to temporarily disable the backend API易 channel.
 - `PORT`: Express backend port. Defaults to `8787`.
 - `HOST`: Express bind host. Defaults to `0.0.0.0`.
 - `DATA_DIR`: JSON backend directory. Defaults to `data`.
@@ -128,17 +121,16 @@ Backend/runtime variables, never expose with a `VITE_` prefix:
 
 All AI/model calls must go through the Express backend. The frontend should only call backend API routes.
 
-Example `.env` for local mock development:
+Example `.env` for local development:
 
 ```bash
-GENERATION_PROVIDER=mock
 AUTH_MODE=dev
 DATA_BACKEND=json
 FILE_STORAGE=local
-ENABLE_LEGACY_GENERATION_ENDPOINTS=true
-VITE_ENABLE_LEGACY_GENERATION_FALLBACK=true
-ENABLE_PROVIDER_FALLBACK=true
-GRSAI_API_KEY=
+ENABLE_LEGACY_GENERATION_ENDPOINTS=false
+VITE_ENABLE_LEGACY_GENERATION_FALLBACK=false
+ENABLE_PROVIDER_FALLBACK=false
+APIYI_API_KEY=your_backend_only_apiyi_key
 PORT=8787
 MAX_IMAGE_MB=10
 ```
@@ -146,13 +138,13 @@ MAX_IMAGE_MB=10
 Example `.env` for Supabase Auth:
 
 ```bash
-GENERATION_PROVIDER=mock
 AUTH_MODE=supabase
 DATA_BACKEND=supabase
 FILE_STORAGE=supabase
 ENABLE_LEGACY_GENERATION_ENDPOINTS=false
 VITE_ENABLE_LEGACY_GENERATION_FALLBACK=false
 ENABLE_PROVIDER_FALLBACK=false
+APIYI_API_KEY=your_backend_only_apiyi_key
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your_public_anon_key
 SUPABASE_STORAGE_BUCKET=archai-assets
@@ -165,27 +157,9 @@ MAX_IMAGE_MB=10
 
 Before using `DATA_BACKEND=supabase`, run the SQL in `docs/SUPABASE_SETUP.md`. Before using `FILE_STORAGE=supabase`, create the configured bucket and apply the storage policy guidance in that document.
 
-Example `.env` for Grsai Banana2 / Nano Banana:
+Keep `APIYI_API_KEY` only in the backend environment. The frontend should never configure or send an API key; it continues to create and poll `/api/generation-jobs`. All image generation jobs are stored with provider `apiyi` and use model `nano-banana2`.
 
-```bash
-GENERATION_PROVIDER=grsai
-AUTH_MODE=dev
-DATA_BACKEND=json
-FILE_STORAGE=local
-ENABLE_LEGACY_GENERATION_ENDPOINTS=false
-ENABLE_PROVIDER_FALLBACK=false
-GRSAI_API_KEY=your_backend_only_key
-GRSAI_BASE_URL=https://grsai.dakka.com.cn
-GRSAI_MODEL=nano-banana-2
-GRSAI_IMAGE_SIZE=1K
-GRSAI_ASPECT_RATIO=auto
-PORT=8787
-MAX_IMAGE_MB=10
-```
-
-Keep the Grsai API key only in the backend environment. The frontend should never configure or send a Grsai key; it continues to create and poll `/api/generation-jobs`. Grsai result URLs are temporary, so the backend immediately downloads the image and stores it through this project's configured asset storage before exposing the final result to history or projects.
-
-When a real provider is selected but unavailable, unsupported, or unable to return an image, the backend falls back to the mock provider only when `ENABLE_PROVIDER_FALLBACK=true` or when running outside production without an explicit fallback setting. In production, provider fallback defaults to disabled so failed real-provider jobs fail clearly and refund through the generation job flow.
+When the fixed provider is unavailable or unable to return an image, jobs fail clearly and refund through the generation job flow. Mock provider behavior is kept only for isolated provider tests and explicitly enabled local diagnostics.
 
 Provider implementations must return a valid image `dataUrl` internally before generated assets are saved. If a provider returns a remote image URL, the backend downloads it and converts it to a data URL first; a failed download is treated as provider failure, never saved as if it were image data.
 
@@ -226,7 +200,7 @@ Frontend deployment checklist:
 
 - If the frontend and backend are deployed separately, set `VITE_API_BASE_URL` to the backend origin, for example `https://api.example.com`.
 - After changing any `VITE_*` variable, run `npm run build` again and redeploy the frontend. Only restarting the backend will not update the already-built browser bundle.
-- Keep `SUPABASE_SERVICE_ROLE_KEY`, `GRSAI_API_KEY`, and any other model/provider secret only in the backend environment. Do not add them with a `VITE_` prefix.
+- Keep `SUPABASE_SERVICE_ROLE_KEY`, `APIYI_API_KEY`, and any other backend secret only in the backend environment. Do not add them with a `VITE_` prefix.
 
 ### Netlify Frontend Deployment
 
@@ -255,7 +229,7 @@ Optional proxy mode: if you intentionally want the frontend to call same-origin 
 
 The default repository config does not include this proxy because the backend domain is deployment-specific. Without that proxy, `VITE_API_BASE_URL` is required for Netlify static frontend deployments.
 
-Keep backend-only secrets such as `SUPABASE_SERVICE_ROLE_KEY` and `GRSAI_API_KEY` on the Render/Railway backend service. Do not add them to Netlify with a `VITE_` prefix.
+Keep backend-only secrets such as `SUPABASE_SERVICE_ROLE_KEY` and `APIYI_API_KEY` on the Render/Railway backend service. Do not add them to Netlify with a `VITE_` prefix.
 
 Complete AI generation deployment requires the Express backend to be deployed with:
 
@@ -268,8 +242,7 @@ Complete AI generation deployment requires the Express backend to be deployed wi
 - `SUPABASE_STORAGE_BUCKET`
 - `JWT_SECRET`
 - `CORS_ORIGIN=https://guangtian123-eth.netlify.app` or a comma-separated list that includes the Netlify frontend origin.
-- `APIYI_API_KEY` when using API易 Nano Banana2.
-- `GRSAI_API_KEY` when using Grsai Banana2.
+- `APIYI_API_KEY` for fixed API易 / `nano-banana2` image generation.
 
 The Netlify frontend build environment then needs:
 
@@ -312,7 +285,7 @@ npx playwright install msedge
 npx playwright test --project=msedge
 ```
 
-The E2E suite starts its own backend and frontend servers with `AI_PROVIDER=mock`, `AUTH_MODE=dev`, `DATA_BACKEND=json`, and isolated `e2e-data/` plus `e2e-uploads/` directories.
+The E2E suite starts its own backend and frontend servers with `AUTH_MODE=dev`, `DATA_BACKEND=json`, and isolated `e2e-data/` plus `e2e-uploads/` directories.
 
 ## Continuous Integration
 
